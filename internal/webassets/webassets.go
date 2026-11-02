@@ -1,0 +1,318 @@
+// Package webassets serves phi's web UI from an embedded tree.
+//
+// Handler answers GET/HEAD with ETag revalidation and negotiated
+// gzip/brotli compression. NewDisk serves a live directory instead and
+// disables caching so edits appear on refresh. Both handlers are
+// constructed once at startup: compression and content hashes are
+// captured then, not re-read per request.
+package webassets
+
+import (
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
+	"io/fs"
+	"log/slog"
+	"mime"
+	"net/http"
+	"os"
+	"path"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+
+	"github.com/andybalholm/brotli"
+)
+
+// asset holds startup-computed cache metadata for one file. Embedded
+// assets never change while the process runs, so compressed variants
+// are built once on first use and kept forever.
+type asset struct {
+	hash  string // unquoted hex content hash; ETag variants derive from it
+	ctype string // resolved once so compressed responses skip sniffing
+
+	gzOnce sync.Once
+	gz     []byte
+	brOnce sync.Once
+	br     []byte
+}
+
+// compressibleExts lists extensions worth encoding. woff2 is internally
+// brotli-compressed (gzip grows it) and images are already compressed;
+// bell.wav is raw PCM and shrinks ~58-68%. .mjs is text and compresses
+// ~70% with gzip; .wasm is binary but already small. .bcmap is a binary
+// cmap used by pdfjs and is already deflate-compressed (skipping gzip).
+var compressibleExts = map[string]bool{
+	".css":  true,
+	".html": true,
+	".js":   true,
+	".mjs":  true,
+	".md":   true,
+	".svg":  true,
+	".wav":  true,
+	".json": true,
+	".map":  true,
+}
+
+// mimeOverride fixes mime.TypeByExtension on platforms whose OS MIME db
+// returns wrong values. Windows in particular reports .mjs as
+// text/plain; charset=utf-8, which Chromium refuses to load as an ES
+// module. The vendored PDF.js runtime is .mjs (pdf.min.mjs,
+// pdf.worker.min.mjs) so this override is load-bearing for the file
+// viewer feature. .bcmap is application/octet-stream by default; the
+// pdfjs worker fetches it by URL and ignores the MIME, so we leave that
+// one alone.
+var mimeOverride = map[string]string{
+	".mjs":  "text/javascript; charset=utf-8",
+	".wasm": "application/wasm",
+}
+
+// Handler serves an immutable asset tree with ETag revalidation.
+type Handler struct {
+	root          fs.FS
+	files         http.Handler
+	assets        map[string]*asset
+	precompressed map[string][]byte
+	compression   bool
+}
+
+// New builds a Handler over root. precompressed holds build-time brotli
+// payloads keyed by asset path (release builds); nil in dev builds,
+// where brotli encoding happens lazily instead. compression is the
+// startup snapshot of compression_enabled — toggling it needs a
+// restart, because this path is the hottest in the server.
+func New(root fs.FS, precompressed map[string][]byte, compression bool) *Handler {
+	h := &Handler{
+		root:          root,
+		files:         http.FileServer(http.FS(root)),
+		assets:        make(map[string]*asset),
+		precompressed: precompressed,
+		compression:   compression,
+	}
+	_ = fs.WalkDir(root, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		data, rerr := fs.ReadFile(root, p)
+		if rerr != nil {
+			slog.Error("static asset unreadable; serving without cache headers", "path", p, "err", rerr)
+			return nil
+		}
+		sum := sha256.Sum256(data)
+		ext := path.Ext(p)
+		ctype := mimeOverride[ext]
+		if ctype == "" {
+			ctype = mime.TypeByExtension(ext)
+		}
+		if ctype == "" {
+			ctype = http.DetectContentType(data)
+		}
+		h.assets[p] = &asset{hash: hex.EncodeToString(sum[:8]), ctype: ctype}
+		return nil
+	})
+	return h
+}
+
+// OpenDiskRoot anchors the selected directory at startup and confines
+// subsequent file access to that tree, including through symlinks. The
+// caller owns the returned root and must close it.
+func OpenDiskRoot(dir string) (*os.Root, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	return os.OpenRoot(abs)
+}
+
+// NewDisk reads current files without the embedded caches, so edits
+// appear on refresh without a restart.
+func NewDisk(root fs.FS) http.Handler {
+	files := http.FileServer(http.FS(root))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		if ctype := mimeOverride[path.Ext(staticPath(r.URL.Path))]; ctype != "" {
+			w.Header().Set("Content-Type", ctype)
+		}
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			// Old browser validators must not hide edits with the same mtime.
+			r = r.Clone(r.Context())
+			r.Header.Del("If-Modified-Since")
+			r.Header.Del("If-None-Match")
+		}
+		files.ServeHTTP(w, r)
+	})
+}
+
+// ServeHTTP dispatches embedded assets with ETag revalidation and
+// negotiated gzip/brotli compression. Non-GET/HEAD requests retain the
+// file server's precondition behavior.
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		h.files.ServeHTTP(w, r)
+		return
+	}
+	p := staticPath(r.URL.Path)
+	a, ok := h.assets[p]
+	if !ok {
+		h.files.ServeHTTP(w, r)
+		return
+	}
+
+	w.Header().Set("Cache-Control", "no-cache")
+
+	enc := ""
+	if compressibleExts[path.Ext(p)] && h.compression {
+		// The response for this path varies by Accept-Encoding even when
+		// this particular request ends up with the identity encoding.
+		w.Header().Set("Vary", "Accept-Encoding")
+		// Byte ranges address the uncompressed body; serve them identity
+		// via ServeContent, which handles Range/If-Range properly.
+		if r.Header.Get("Range") == "" {
+			enc = NegotiateEncoding(r.Header.Get("Accept-Encoding"))
+		}
+	}
+
+	var body []byte
+	if enc != "" {
+		body = h.compressed(a, p, enc)
+	}
+	if body == nil {
+		// Identity: FileServer dispatches to ServeContent which handles
+		// Range, If-Match/If-None-Match, and Content-Type. Set
+		// Content-Type BEFORE the call: ServeContent only sets it when
+		// the header is empty, so pre-setting with our mimeOverride'd
+		// value keeps Windows from serving .mjs as text/plain.
+		w.Header().Set("Etag", a.etag(""))
+		w.Header().Set("Content-Type", a.ctype)
+		h.files.ServeHTTP(w, r)
+		return
+	}
+
+	etag := a.etag(enc)
+	w.Header().Set("Etag", etag)
+	// If-Match evaluates before If-None-Match (RFC 9110 §13.2.2) and uses
+	// strong comparison against the selected representation's tag, so a
+	// weak W/"..." member never matches. The identity path gets the same
+	// treatment from ServeContent.
+	if im := r.Header.Get("If-Match"); im != "" && !ifMatchStrong(im, etag) {
+		w.WriteHeader(http.StatusPreconditionFailed)
+		return
+	}
+	if inm := r.Header.Get("If-None-Match"); inm != "" && (inm == "*" || strings.Contains(inm, etag)) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("Content-Type", a.ctype)
+	w.Header().Set("Content-Encoding", enc)
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	if r.Method == http.MethodHead {
+		return
+	}
+	_, _ = w.Write(body)
+}
+
+// staticPath maps a request URL path to its asset file path.
+// http.FileServer serves index.html for "/", so "/" must share its ETag.
+func staticPath(urlPath string) string {
+	p := strings.TrimPrefix(path.Clean(urlPath), "/")
+	if p == "" || p == "." {
+		return "index.html"
+	}
+	return p
+}
+
+func (a *asset) etag(enc string) string {
+	if enc == "" {
+		return `"` + a.hash + `"`
+	}
+	return `"` + a.hash + "-" + enc + `"`
+}
+
+// compressed returns the cached encoded body for "gzip" or "br",
+// building it on first use. Returns nil when encoding failed or did
+// not shrink the asset — callers then fall back to identity.
+func (h *Handler) compressed(a *asset, p, enc string) []byte {
+	build := func(encode func(*bytes.Buffer, []byte) error) []byte {
+		data, err := fs.ReadFile(h.root, p)
+		if err != nil {
+			return nil
+		}
+		var buf bytes.Buffer
+		if err := encode(&buf, data); err != nil || buf.Len() >= len(data) {
+			return nil
+		}
+		return buf.Bytes()
+	}
+	switch enc {
+	case "gzip":
+		a.gzOnce.Do(func() {
+			a.gz = build(func(buf *bytes.Buffer, data []byte) error {
+				zw, err := gzip.NewWriterLevel(buf, gzip.BestCompression)
+				if err != nil {
+					return err
+				}
+				if _, err := zw.Write(data); err != nil {
+					return err
+				}
+				return zw.Close()
+			})
+		})
+		return a.gz
+	case "br":
+		a.brOnce.Do(func() {
+			if pre, ok := h.precompressed[p]; ok {
+				a.br = pre
+				return
+			}
+			// Lazy fallback for dev builds (and any file the generator
+			// skipped). q6 over q11: ~60x faster for ~12% larger bodies —
+			// release builds ship prebuilt q11 payloads instead.
+			a.br = build(func(buf *bytes.Buffer, data []byte) error {
+				bw := brotli.NewWriterLevel(buf, brotli.DefaultCompression)
+				if _, err := bw.Write(data); err != nil {
+					return err
+				}
+				return bw.Close()
+			})
+		})
+		return a.br
+	}
+	return nil
+}
+
+// NegotiateEncoding picks br over gzip from Accept-Encoding.
+// q-values are deliberately ignored (a client sending gzip;q=0 is not
+// worth the parser); unknown codings fall through to identity.
+func NegotiateEncoding(acceptEncoding string) string {
+	br, gz := false, false
+	for _, part := range strings.Split(acceptEncoding, ",") {
+		tok, _, _ := strings.Cut(strings.TrimSpace(part), ";")
+		switch strings.ToLower(strings.TrimSpace(tok)) {
+		case "br":
+			br = true
+		case "gzip":
+			gz = true
+		}
+	}
+	if br {
+		return "br"
+	}
+	if gz {
+		return "gzip"
+	}
+	return ""
+}
+
+// ifMatchStrong reports whether an If-Match header lists etag (or *),
+// comparing whole comma-separated members so substrings and weak tags
+// cannot match.
+func ifMatchStrong(im, etag string) bool {
+	for _, part := range strings.Split(im, ",") {
+		if t := strings.TrimSpace(part); t == "*" || t == etag {
+			return true
+		}
+	}
+	return false
+}

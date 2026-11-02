@@ -2,16 +2,13 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
+	"github.com/hypernewbie/phi/internal/config"
 	"github.com/hypernewbie/phi/pkg/bindaddr"
 )
 
@@ -41,101 +38,15 @@ func captureStdout(t *testing.T, fn func()) string {
 	return <-done
 }
 
-// TestServeAll_TwoListeners — two real 127.0.0.1 listeners, both must
-// serve. Each one is bound via net.Listen (no BindWithRetry needed —
-// these are ephemeral test ports), and serveAll is launched in a
-// goroutine so the test can probe them.
-func TestServeAll_TwoListeners(t *testing.T) {
-	// serveAll uses http.DefaultServeMux (nil handler). Register a
-	// /hi handler there for the test and remove it on cleanup so other
-	// tests aren't affected.
-	http.HandleFunc("/hi-test", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(200)
-		_, _ = w.Write([]byte("hello " + r.Host))
-	})
-	t.Cleanup(func() { http.DefaultServeMux = http.NewServeMux() })
-
-	ln1, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen 1: %v", err)
-	}
-	ln2, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen 2: %v", err)
-	}
-	listeners := []net.Listener{ln1, ln2}
-
-	// serveAll returns immediately with the started servers; the errCh
-	// drains as each listener's Serve returns (on Close/Shutdown).
-	servers, errCh := serveAll(listeners)
-
-	for i, ln := range listeners {
-		addr := ln.Addr().String()
-		client := &http.Client{}
-		hostPort := strings.TrimPrefix(addr, "127.0.0.1:")
-		// Replace the client transport so the Host header matches the
-		// listener's bound port (httptest patterns).
-		transport := &http.Transport{
-			DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-				var d net.Dialer
-				return d.DialContext(ctx, "tcp", addr)
-			},
-		}
-		req, _ := http.NewRequest("GET", "http://example.invalid/hi-test", nil)
-		req.Host = "127.0.0.1:" + hostPort
-		resp, err := transport.RoundTrip(req)
-		if err != nil {
-			t.Fatalf("listener %d (%s): %v", i, addr, err)
-		}
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if !bytes.Contains(body, []byte("hello 127.0.0.1:"+hostPort)) {
-			t.Errorf("listener %d: unexpected body %q", i, body)
-		}
-		_ = client
-	}
-
-	// Close the listeners; each Serve should exit cleanly via errCh. Use a
-	// watchdog so a hang in serveAll doesn't lock up the test.
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for range servers {
-			<-errCh // error path is logged inside serveAll; ignore here
-		}
-	}()
-
-	for _, srv := range servers {
-		_ = srv.Close()
-	}
-	waitDone(&wg, t, "serveAll listeners did not exit after Close")
-}
-
-// waitDone waits on wg up to a hard cap. If we exceed it, the test
-// fails. Saves writing the same select-default idiom per test.
-func waitDone(wg *sync.WaitGroup, t *testing.T, msg string) {
-	t.Helper()
-	done := make(chan struct{})
-	go func() { wg.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal(msg)
-	}
-}
-
 // TestPrintWelcomeBanner_MultiAddr — three addresses (loopback + one
 // LAN + one Tailnet). Every URL must appear in the rendered banner
 // with the correct label. Also verifies the loopback line uses
 // "local" and the others use the kind label.
 func TestPrintWelcomeBanner_MultiAddr(t *testing.T) {
-	// activeCWD is package-level; setting it via the test helper path
+	// bannerTestCWD is package-level; setting it via the test helper path
 	// would require deep plumbing. We accept whatever value the test
 	// environment has and only assert on the bind summary lines.
-	prevActiveCWD := activeCWD
-	activeCWD = "/test/cwd"
-	t.Cleanup(func() { activeCWD = prevActiveCWD })
+	bannerTestCWD := "/test/cwd"
 
 	addrs := []bindaddr.Addr{
 		{IP: net.IPv4(127, 0, 0, 1), Kind: bindaddr.Loopback},
@@ -144,7 +55,7 @@ func TestPrintWelcomeBanner_MultiAddr(t *testing.T) {
 	}
 
 	out := captureStdout(t, func() {
-		printWelcomeBanner(Config{ThemeColor: "purple"}, addrs, 7070)
+		printWelcomeBanner(config.Config{ThemeColor: "purple"}, addrs, 7070, bannerTestCWD)
 	})
 
 	// Every URL must appear, in this order.
@@ -176,13 +87,11 @@ func TestPrintWelcomeBanner_MultiAddr(t *testing.T) {
 // surface the "public reachable" warning so the user knows the
 // server is exposed on every interface.
 func TestPrintWelcomeBanner_ExplicitZero(t *testing.T) {
-	prevActiveCWD := activeCWD
-	activeCWD = "/test/cwd"
-	t.Cleanup(func() { activeCWD = prevActiveCWD })
+	bannerTestCWD := "/test/cwd"
 
 	out := captureStdout(t, func() {
-		printWelcomeBanner(Config{ThemeColor: "purple"},
-			[]bindaddr.Addr{{IP: net.IPv4zero, Kind: bindaddr.LAN}}, 7070)
+		printWelcomeBanner(config.Config{ThemeColor: "purple"},
+			[]bindaddr.Addr{{IP: net.IPv4zero, Kind: bindaddr.LAN}}, 7070, bannerTestCWD)
 	})
 
 	if !strings.Contains(out, "public reachable") {
@@ -197,13 +106,11 @@ func TestPrintWelcomeBanner_ExplicitZero(t *testing.T) {
 // interfaces are detected. Banner should still render and advertise
 // the loopback URL.
 func TestPrintWelcomeBanner_LoopbackOnly(t *testing.T) {
-	prevActiveCWD := activeCWD
-	activeCWD = "/test/cwd"
-	t.Cleanup(func() { activeCWD = prevActiveCWD })
+	bannerTestCWD := "/test/cwd"
 
 	out := captureStdout(t, func() {
-		printWelcomeBanner(Config{ThemeColor: "purple"},
-			[]bindaddr.Addr{{IP: net.IPv4(127, 0, 0, 1), Kind: bindaddr.Loopback}}, 7070)
+		printWelcomeBanner(config.Config{ThemeColor: "purple"},
+			[]bindaddr.Addr{{IP: net.IPv4(127, 0, 0, 1), Kind: bindaddr.Loopback}}, 7070, bannerTestCWD)
 	})
 	if !strings.Contains(out, "http://127.0.0.1:7070") {
 		t.Errorf("loopback-only banner missing loopback URL:\n%s", out)
@@ -214,9 +121,7 @@ func TestPrintWelcomeBanner_LoopbackOnly(t *testing.T) {
 // (127.0.0.1 and 127.0.1.1) are bound, 127.0.0.1 is rendered as the primary
 // "Server running on:" URL and 127.0.1.1 is cleanly listed with the "local:" label.
 func TestPrintWelcomeBanner_With127011(t *testing.T) {
-	prevActiveCWD := activeCWD
-	activeCWD = "/test/cwd"
-	t.Cleanup(func() { activeCWD = prevActiveCWD })
+	bannerTestCWD := "/test/cwd"
 
 	addrs := []bindaddr.Addr{
 		{IP: net.IPv4(127, 0, 0, 1), Kind: bindaddr.Loopback},
@@ -225,7 +130,7 @@ func TestPrintWelcomeBanner_With127011(t *testing.T) {
 	}
 
 	out := captureStdout(t, func() {
-		printWelcomeBanner(Config{ThemeColor: "purple"}, addrs, 7070)
+		printWelcomeBanner(config.Config{ThemeColor: "purple"}, addrs, 7070, bannerTestCWD)
 	})
 
 	for _, want := range []string{

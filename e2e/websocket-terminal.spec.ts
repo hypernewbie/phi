@@ -103,6 +103,16 @@ test('terminal pane flows over protobuf in Chromium', async ({ page }) => {
     page.on('pageerror', (err) => pageErrors.push(String(err)));
     page.on('requestfailed', (req) => {
         if (isCancelledBackgroundRead(req, phi.url)) return;
+        const url = new URL(req.url());
+        // Restarting a chime can cancel its previous media range request.
+        if (
+            req.method() === 'GET' &&
+            req.resourceType() === 'media' &&
+            url.origin === new URL(phi.url).origin &&
+            url.pathname === '/vendor/bell.wav' &&
+            req.failure()?.errorText === 'net::ERR_ABORTED'
+        )
+            return;
         // Pin synchronization can finish with an empty 200 response that
         // Chromium reports as aborted. It does not carry terminal data
         // (same filter as terminal-history-floor.spec.ts).
@@ -115,6 +125,17 @@ test('terminal pane flows over protobuf in Chromium', async ({ page }) => {
             return;
         failedRequests.push(req.url());
     });
+
+    // Keep a real asset/range check even though intentional media aborts are allowed.
+    const bell = await page.request.get(`${phi.url}/vendor/bell.wav`, {
+        headers: { Range: 'bytes=0-15' },
+    });
+    expect(bell.status()).toBe(206);
+    expect(bell.headers()['content-type']).toMatch(/^audio\/(?:x-)?wav$/);
+    expect(bell.headers()['content-range']).toMatch(/^bytes 0-15\/\d+$/);
+    const bellHeader = await bell.body();
+    expect(bellHeader).toHaveLength(16);
+    expect(bellHeader.subarray(8, 12).toString()).toBe('WAVE');
 
     // A second pane for the admission probe, away from the routed UI pane.
     const probeSpawn = await fetch(`${phi.url}/api/terminals`, {

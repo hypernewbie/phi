@@ -11615,6 +11615,7 @@ export class TabManager {
             return;
         }
         const claim = await this.attachmentStore.claimSend(snapshot.id, explicit);
+        if (tab._attachmentPendingSnapshot !== snapshot) return;
         if (!claim.claimed) {
             if (['dispatched', 'refused', 'cancelled'].includes(claim.outbox?.state)) {
                 this._finishAttachmentSnapshot(tab, snapshot, claim.outbox.state, claim.outbox.reason);

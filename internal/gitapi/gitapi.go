@@ -1,0 +1,1430 @@
+package gitapi
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"mime"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/hypernewbie/phi/pkg/diff"
+	"github.com/hypernewbie/phi/pkg/gitutil"
+	"github.com/hypernewbie/phi/pkg/obs"
+	"github.com/hypernewbie/phi/pkg/pty"
+)
+
+// notGitRepoBody is the literal response body the raw git endpoints
+// emit when cwd isn't a repo. The diff panel frontend detects this exact
+// text and renders a muted "Not a git repository" line instead of
+// feeding the raw `fatal: not a git repository ...` stderr into the
+// terminal as a giant red message.
+// API serves the git read and action endpoints. It holds the environment the
+// handlers need instead of reaching for process globals, so its tests can run
+// without a live server.
+type API struct {
+	cwd   func() string
+	pty   func() *pty.Manager
+	roots func() []string
+	// StartReadLoop attaches the pane broadcaster to a spawned diff pane.
+	StartReadLoop func(*pty.PTYInstance)
+}
+
+// New returns the git API. defaultCWD reports the cwd used when a request
+// omits one, pty backs the diff/log/status spawns, and roots lists the
+// directories a repository must live under to be trusted.
+func New(defaultCWD func() string, ptyManager func() *pty.Manager, roots func() []string) *API {
+	return &API{cwd: defaultCWD, pty: ptyManager, roots: roots}
+}
+
+func (a *API) ptyManager() *pty.Manager {
+	if a != nil && a.pty != nil {
+		return a.pty()
+	}
+	return nil
+}
+
+func (a *API) defaultCWD() string {
+	if a != nil && a.cwd != nil {
+		return a.cwd()
+	}
+	return ""
+}
+
+const notGitRepoBody = "NOT_GIT_REPO"
+
+// gitHeadCache memoises the (HEAD, branch) pair per cwd so the
+// diff-review headers don't cost two extra git subprocesses on every
+// poll of /api/git/raw-diff (the diff panel refetches this endpoint
+// frequently). TTL is short enough that a fresh commit lands within
+// one polling cycle, long enough to absorb rapid-fire refetches.
+type gitHeadCacheEntry struct {
+	head     string
+	branch   string
+	cachedAt time.Time
+}
+
+var gitHeadCache sync.Map // map[string]gitHeadCacheEntry
+
+const gitHeadCacheTTL = 5 * time.Second
+
+// gitInfoMemo remembers the staged snapshot the read path last computed for a
+// repository, so a repeated /api/git/info poll does not respawn git for bytes
+// that cannot have changed. Only an unchanged index identity and HEAD may hit,
+// and only for a short window: a config-only change (diff.orderFile, diff
+// drivers, attributes) alters the token without touching either. The commit
+// path never reads this memo; it recomputes before comparing tokens.
+type gitInfoMemoEntry struct {
+	head      string
+	indexInfo os.FileInfo
+	cachedAt  time.Time
+	hasStaged bool
+	token     string
+}
+
+const (
+	gitInfoMemoCap    = 64
+	gitInfoMemoMaxAge = 5 * time.Second
+)
+
+var (
+	gitInfoMemoMu sync.Mutex
+	gitInfoMemo   = map[string]gitInfoMemoEntry{}
+)
+
+// gitInfoMemoKey names the repository by its Git directory, which
+// inspectGitRepository already canonicalized. An unusable directory is not
+// cacheable.
+func gitInfoMemoKey(repo *gitActionRepository) (string, bool) {
+	if repo == nil || repo.gitDir == "" || !filepath.IsAbs(repo.gitDir) {
+		return "", false
+	}
+	return repo.gitDir, true
+}
+
+func sameGitIndexInfo(a, b os.FileInfo) bool {
+	return a != nil && b != nil && b.Mode().IsRegular() &&
+		os.SameFile(a, b) && a.Size() == b.Size() &&
+		a.Mode() == b.Mode() && a.ModTime().Equal(b.ModTime())
+}
+
+// gitInfoMemoLookup returns a stored snapshot for head when the index identity
+// still matches and the entry is young enough. A hit never extends the age.
+func gitInfoMemoLookup(key, head string, indexInfo os.FileInfo) (bool, string, bool) {
+	gitInfoMemoMu.Lock()
+	entry, ok := gitInfoMemo[key]
+	gitInfoMemoMu.Unlock()
+	if !ok || entry.head != head || !sameGitIndexInfo(entry.indexInfo, indexInfo) {
+		return false, "", false
+	}
+	if time.Since(entry.cachedAt) >= gitInfoMemoMaxAge {
+		return false, "", false
+	}
+	return entry.hasStaged, entry.token, true
+}
+
+// gitInfoMemoStoreAt records a snapshot. cachedAt is explicit so tests can
+// age an entry without a clock hook.
+func gitInfoMemoStoreAt(key, head string, indexInfo os.FileInfo, hasStaged bool, token string, cachedAt time.Time) {
+	gitInfoMemoMu.Lock()
+	defer gitInfoMemoMu.Unlock()
+	if _, exists := gitInfoMemo[key]; !exists && len(gitInfoMemo) >= gitInfoMemoCap {
+		clear(gitInfoMemo)
+	}
+	gitInfoMemo[key] = gitInfoMemoEntry{
+		head:      head,
+		indexInfo: indexInfo,
+		cachedAt:  cachedAt,
+		hasStaged: hasStaged,
+		token:     token,
+	}
+}
+
+// gitInfoMemoInvalidate drops a repository's entry. Any action attempt changes
+// what the next read may observe, including attempts that end in a rejection.
+func gitInfoMemoInvalidate(key string) {
+	gitInfoMemoMu.Lock()
+	delete(gitInfoMemo, key)
+	gitInfoMemoMu.Unlock()
+}
+
+// lookupGitHead returns the cached HEAD/branch pair for cwd, or
+// fetches them with two `git rev-parse` calls on cache miss. Empty
+// strings indicate a detached HEAD, unborn branch, or non-git cwd —
+// callers treat those as "unknown" rather than as errors.
+func lookupGitHead(ctx context.Context, cwd string) (string, string) {
+	if cwd == "" {
+		return "", ""
+	}
+	if v, ok := gitHeadCache.Load(cwd); ok {
+		entry := v.(gitHeadCacheEntry)
+		if time.Since(entry.cachedAt) < gitHeadCacheTTL {
+			return entry.head, entry.branch
+		}
+	}
+	head, branch := "", ""
+	if out, err := runGitRevParse(ctx, cwd, "--short", "HEAD"); err == nil {
+		head = strings.TrimSpace(string(out))
+	}
+	if out, err := runGitRevParse(ctx, cwd, "--abbrev-ref", "HEAD"); err == nil {
+		branch = strings.TrimSpace(string(out))
+	}
+	gitHeadCache.Store(cwd, gitHeadCacheEntry{
+		head:     head,
+		branch:   branch,
+		cachedAt: time.Now(),
+	})
+	return head, branch
+}
+
+func runGitRevParse(ctx context.Context, cwd string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"rev-parse"}, args...)...)
+	cmd.Dir = cwd
+	return cmd.Output()
+}
+
+func (a *API) HandleGetDiff(w http.ResponseWriter, r *http.Request) {
+	cwd := r.URL.Query().Get("cwd")
+	diffType := r.URL.Query().Get("type")
+	commit := r.URL.Query().Get("commit")
+	if cwd == "" {
+		cwd = a.defaultCWD()
+	}
+
+	if !gitutil.IsGitRepo(r.Context(), cwd) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"notGitRepo":true}`))
+		return
+	}
+
+	var inst *pty.PTYInstance
+	var err error
+
+	if diffType == "log" {
+		inst, err = diff.SpawnLog(r.Context(), cwd, a.ptyManager())
+	} else if diffType == "status" {
+		inst, err = diff.SpawnStatus(r.Context(), cwd, a.ptyManager())
+	} else {
+		inst, err = diff.SpawnDiff(r.Context(), cwd, commit, a.ptyManager())
+	}
+
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if a.StartReadLoop != nil {
+		a.StartReadLoop(inst)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"pane_id": inst.ID,
+	})
+}
+
+func appendUntrackedDiff(out []byte, fname string, content []byte, ansi bool) []byte {
+	trimmed := strings.TrimRight(string(content), "\n")
+	lines := []string{}
+	if trimmed != "" {
+		lines = strings.Split(trimmed, "\n")
+	}
+	lineCount := len(lines)
+
+	header := func(s string) string {
+		if !ansi {
+			return s
+		}
+		return "\x1b[1m" + s + "\x1b[0m"
+	}
+	oldFile := func(s string) string {
+		if !ansi {
+			return s
+		}
+		return "\x1b[31m" + s + "\x1b[0m"
+	}
+	newFile := func(s string) string {
+		if !ansi {
+			return s
+		}
+		return "\x1b[32m" + s + "\x1b[0m"
+	}
+	plusLine := func(s string) string {
+		if !ansi {
+			return s
+		}
+		return "\x1b[32m" + s + "\x1b[0m"
+	}
+
+	out = append(out, []byte(header(fmt.Sprintf("diff --git a/%s b/%s\n", fname, fname)))...)
+	out = append(out, []byte("new file mode 100644\n")...)
+	out = append(out, []byte(oldFile("--- /dev/null\n"))...)
+	out = append(out, []byte(newFile(fmt.Sprintf("+++ b/%s\n", fname)))...)
+	out = append(out, []byte(fmt.Sprintf("@@ -0,0 +1,%d @@\n", lineCount))...)
+	for _, line := range lines {
+		out = append(out, []byte(plusLine("+"+line+"\n"))...)
+	}
+	if len(lines) == 0 {
+		out = append(out, []byte("\n")...)
+	}
+	return out
+}
+
+// worktreeDiffOutput returns staged plus unstaged tracked changes as one
+// patch. With a resolvable HEAD a single `git diff HEAD` covers both
+// halves; on an unborn branch HEAD does not exist, so the staged
+// (`--cached`) and unstaged halves are concatenated instead.
+func worktreeDiffOutput(ctx context.Context, cwd, colorFlag, contextLines string) ([]byte, error) {
+	run := func(args ...string) ([]byte, error) {
+		// diff.autoRefreshIndex is separate from Git's optional-lock setting.
+		cmd := exec.CommandContext(ctx, "git", append([]string{"--no-optional-locks", "-c", "diff.autoRefreshIndex=false"}, args...)...)
+		cmd.Dir = cwd
+		return cmd.Output()
+	}
+	if _, err := run("rev-parse", "--verify", "--quiet", "HEAD"); err == nil {
+		return run("diff", "HEAD", "-w", colorFlag, "-U"+contextLines)
+	}
+	staged, err := run("diff", "--cached", "-w", colorFlag, "-U"+contextLines)
+	if err != nil {
+		return staged, err
+	}
+	unstaged, err := run("diff", "-w", colorFlag, "-U"+contextLines)
+	if err != nil {
+		return unstaged, err
+	}
+	if len(staged) > 0 && len(unstaged) > 0 && staged[len(staged)-1] != '\n' {
+		staged = append(staged, '\n')
+	}
+	return append(staged, unstaged...), nil
+}
+
+func (a *API) HandleRawDiff(w http.ResponseWriter, r *http.Request) {
+	cwd := r.URL.Query().Get("cwd")
+	commit := r.URL.Query().Get("commit")
+	contextVal := r.URL.Query().Get("context")
+	ansi := r.URL.Query().Get("ansi") == "1"
+	if cwd == "" {
+		cwd = a.defaultCWD()
+	}
+
+	if !gitutil.IsGitRepo(r.Context(), cwd) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(notGitRepoBody))
+		return
+	}
+
+	contextLines := "3"
+	if contextVal == "30" {
+		contextLines = "30"
+	}
+
+	colorFlag := "--no-color"
+	if ansi {
+		colorFlag = "--color=always"
+	}
+
+	spanName := "git.diff"
+	if commit != "" && commit != "staged" && commit != "unstaged" {
+		spanName = "git.show"
+	}
+	ctx, end := obs.Span(r.Context(), spanName, "cwd", cwd, "commit", commit)
+
+	// An empty commit selects the whole working tree (phic): staged changes
+	// (git adds) plus unstaged ones. Plain `git diff` hides the staged
+	// half, the classic gotcha. The explicit "unstaged" selector keeps
+	// plain `git diff` semantics for the web panel.
+	var out []byte
+	var err error
+	if commit == "" {
+		out, err = worktreeDiffOutput(ctx, cwd, colorFlag, contextLines)
+	} else {
+		var cmd *exec.Cmd
+		if commit == "staged" {
+			cmd = exec.CommandContext(ctx, "git", "--no-optional-locks", "-c", "diff.autoRefreshIndex=false", "diff", "--cached", "-w", colorFlag, "-U"+contextLines)
+		} else if commit == "unstaged" {
+			cmd = exec.CommandContext(ctx, "git", "--no-optional-locks", "-c", "diff.autoRefreshIndex=false", "diff", "-w", colorFlag, "-U"+contextLines)
+		} else {
+			cmd = exec.CommandContext(ctx, "git", "--no-optional-locks", "show", "-w", colorFlag, "-U"+contextLines, commit)
+		}
+		cmd.Dir = cwd
+		out, err = cmd.Output()
+	}
+	end(err)
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			http.Error(w, fmt.Sprintf("Git error: %s", string(exitErr.Stderr)), http.StatusInternalServerError)
+			return
+		}
+		http.Error(w, fmt.Sprintf("Git error: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if commit == "" || commit == "unstaged" {
+		statusCtx, statusEnd := obs.Span(r.Context(), "git.status", "cwd", cwd)
+		statusCmd := exec.CommandContext(statusCtx, "git", "--no-optional-locks", "status", "--porcelain")
+		statusCmd.Dir = cwd
+		statusOut, statusErr := statusCmd.Output()
+		statusEnd(statusErr)
+		for _, line := range strings.Split(strings.TrimSpace(string(statusOut)), "\n") {
+			if !strings.HasPrefix(line, "?? ") {
+				continue
+			}
+			fname := strings.TrimPrefix(line, "?? ")
+			content, readErr := os.ReadFile(filepath.Join(cwd, fname))
+			if readErr != nil {
+				continue
+			}
+			if len(out) > 0 && out[len(out)-1] != '\n' {
+				out = append(out, '\n')
+			}
+			out = appendUntrackedDiff(out, fname, content, ansi)
+		}
+	}
+
+	// Head + branch headers let the frontend anchor review comments to a
+	// concrete commit. Cached per-cwd so the diff panel's polling on
+	// /api/git/raw-diff doesn't spawn two git subprocesses each tick.
+	// Best-effort: a detached HEAD or unborn branch yields empty headers,
+	// which the UI treats as "unknown".
+	head, branch := lookupGitHead(ctx, cwd)
+	if head != "" {
+		w.Header().Set("X-Phi-Git-Head", head)
+	}
+	if branch != "" {
+		w.Header().Set("X-Phi-Git-Branch", branch)
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write(out)
+}
+
+func (a *API) HandleRawLog(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), gitReadTimeout)
+	defer cancel()
+	cwd := r.URL.Query().Get("cwd")
+	if cwd == "" {
+		cwd = a.defaultCWD()
+	}
+	repo, notRepo, err := inspectGitRepository(ctx, cwd)
+	if err != nil {
+		writeGitAPIError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if notRepo {
+		_, _ = w.Write([]byte(notGitRepoBody))
+		return
+	}
+	if _, _, err := gitOutput(ctx, repo.root, "rev-parse", "--verify", "--quiet", "HEAD"); err != nil {
+		if isExitCode(err, 1) && ctx.Err() == nil {
+			return
+		}
+		writeGitAPIError(w, gitReadAPIError(ctx))
+		return
+	}
+	out, _, err := gitOutput(ctx, repo.root, "--no-pager", "log", "--oneline", "-10", "--color=always")
+	if err != nil {
+		writeGitAPIError(w, gitReadAPIError(ctx))
+		return
+	}
+	_, _ = w.Write(out)
+}
+
+func (a *API) HandleRawStatus(w http.ResponseWriter, r *http.Request) {
+	cwd := r.URL.Query().Get("cwd")
+	if cwd == "" {
+		cwd = a.defaultCWD()
+	}
+
+	if !gitutil.IsGitRepo(r.Context(), cwd) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(notGitRepoBody))
+		return
+	}
+
+	ctx, end := obs.Span(r.Context(), "git.status", "cwd", cwd)
+	cmd := exec.CommandContext(ctx, "git", "--no-optional-locks", "--no-pager", "-c", "color.status=always", "status", "--short", "--branch")
+	cmd.Dir = cwd
+	out, err := cmd.CombinedOutput()
+	end(err)
+	if err != nil && len(out) == 0 {
+		http.Error(w, fmt.Sprintf("Git error: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write(out)
+}
+
+type CommitEntry struct {
+	Hash    string `json:"hash"`
+	Subject string `json:"subject"`
+}
+
+func (a *API) HandleGetCommits(w http.ResponseWriter, r *http.Request) {
+	cwd := r.URL.Query().Get("cwd")
+	if cwd == "" {
+		cwd = a.defaultCWD()
+	}
+
+	// Run git log to fetch the last 10 commits on active branch
+	ctx, end := obs.Span(r.Context(), "git.log", "cwd", cwd)
+	cmd := exec.CommandContext(ctx, "git", "log", "-10", "--format=%h|%s")
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	end(err)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]CommitEntry{})
+		return
+	}
+
+	var commits []CommitEntry
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "|", 2)
+		if len(parts) == 2 {
+			commits = append(commits, CommitEntry{
+				Hash:    parts[0],
+				Subject: parts[1],
+			})
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(commits)
+}
+
+const (
+	gitReadTimeout     = 5 * time.Second
+	gitMutationTimeout = 120 * time.Second
+	gitActionBodyLimit = 64 << 10
+)
+
+type gitActionTarget struct {
+	Root        string `json:"root"`
+	Head        string `json:"head"`
+	Branch      string `json:"branch"`
+	Remote      string `json:"remote"`
+	RemoteRef   string `json:"remote_ref"`
+	RemoteToken string `json:"remote_token"`
+}
+
+type gitInfoResponse struct {
+	NotGitRepo   bool             `json:"notGitRepo"`
+	Target       *gitActionTarget `json:"target"`
+	CanPullPush  bool             `json:"can_pull_push"`
+	Reason       string           `json:"reason"`
+	HasStaged    bool             `json:"has_staged"`
+	IndexToken   string           `json:"index_token"`
+	CanCommit    bool             `json:"can_commit"`
+	CommitReason string           `json:"commit_reason"`
+	CanStage     bool             `json:"can_stage"`
+}
+
+type gitActionRequest struct {
+	Cwd        string          `json:"cwd"`
+	Action     string          `json:"action"`
+	Target     gitActionTarget `json:"target"`
+	Message    string          `json:"message"`
+	IndexToken string          `json:"index_token"`
+	Paths      []string        `json:"paths"`
+}
+
+type gitStatusFileEntry struct {
+	Path     string `json:"path"`
+	Index    string `json:"index"`
+	Worktree string `json:"worktree"`
+}
+
+type gitStatusFilesResponse struct {
+	NotGitRepo bool                 `json:"notGitRepo"`
+	Files      []gitStatusFileEntry `json:"files"`
+	Truncated  bool                 `json:"truncated"`
+}
+
+// gitActionPathLimit bounds one stage or unstage request. The UI sends the
+// selection it already rendered, so a large repository never exceeds it.
+const gitActionPathLimit = 200
+
+// gitStatusFilesLimit bounds the file list, mirroring the browse endpoint.
+// A repository without a .gitignore can hold tens of thousands of untracked
+// files; the drawer renders one row per entry, so the list stops here.
+const gitStatusFilesLimit = 1000
+
+// gitActionPathAllowed rejects anything the server did not read from its own
+// status output. Paths arrive as repository-relative names, so an absolute
+// path, a parent segment, a leading dash or pathspec colon, and a NUL byte all
+// signal a forged request rather than a real file.
+func gitActionPathAllowed(path string) bool {
+	if path == "" || path == "." || path == ".." || len(path) > 4096 {
+		return false
+	}
+	if strings.ContainsAny(path, "\x00\r\n") {
+		return false
+	}
+	if strings.HasPrefix(path, "-") || strings.HasPrefix(path, ":") {
+		return false
+	}
+	if filepath.IsAbs(path) {
+		return false
+	}
+	for _, segment := range strings.Split(path, "/") {
+		// Git never lists the repository metadata directory, and add
+		// accepts a forged .git path as a silent no-op. Refuse it outright.
+		if segment == ".." || segment == ".git" {
+			return false
+		}
+	}
+	return true
+}
+
+func parseGitStatusFiles(output []byte) []gitStatusFileEntry {
+	files := make([]gitStatusFileEntry, 0, 16)
+	for _, field := range bytes.Split(output, []byte{0}) {
+		if len(field) < 4 {
+			continue
+		}
+		files = append(files, gitStatusFileEntry{
+			Index:    string(field[0:1]),
+			Worktree: string(field[1:2]),
+			Path:     string(field[3:]),
+		})
+	}
+	return files
+}
+
+// handleGitStatusFiles returns the working tree as structured entries so the
+// drawer can offer per-file staging without parsing colored text.
+func (a *API) HandleGitStatusFiles(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), gitReadTimeout)
+	defer cancel()
+	repo, notRepo, err := a.resolveAuthorizedGitRepository(ctx, r.URL.Query().Get("cwd"))
+	if err != nil {
+		writeGitAPIError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if notRepo {
+		_ = json.NewEncoder(w).Encode(gitStatusFilesResponse{NotGitRepo: true, Files: []gitStatusFileEntry{}})
+		return
+	}
+	out, _, statusErr := gitOutput(ctx, repo.root,
+		"--no-optional-locks", "-c", "status.renames=false",
+		"status", "--porcelain", "--untracked-files=all", "--no-renames",
+		"--ignore-submodules=none", "-z",
+	)
+	if statusErr != nil {
+		writeGitAPIError(w, gitReadAPIError(ctx))
+		return
+	}
+	files := parseGitStatusFiles(out)
+	truncated := len(files) > gitStatusFilesLimit
+	if truncated {
+		files = files[:gitStatusFilesLimit]
+	}
+	_ = json.NewEncoder(w).Encode(gitStatusFilesResponse{Files: files, Truncated: truncated})
+}
+
+func gitHeadExists(ctx context.Context, root string) bool {
+	_, _, err := gitOutput(ctx, root, "rev-parse", "--verify", "--quiet", "HEAD")
+	return err == nil
+}
+
+type gitActionRepository struct {
+	root      string
+	commonDir string
+	gitDir    string
+	bare      bool
+}
+
+type gitAPIError struct {
+	status  int
+	message string
+}
+
+func (e *gitAPIError) Error() string { return e.message }
+
+func gitAPIErrorf(status int, message string) *gitAPIError {
+	return &gitAPIError{status: status, message: message}
+}
+
+func gitReadAPIError(ctx context.Context) *gitAPIError {
+	if ctx.Err() != nil {
+		return gitAPIErrorf(http.StatusGatewayTimeout, "Git information timed out")
+	}
+	return gitAPIErrorf(http.StatusInternalServerError, "Git information unavailable")
+}
+
+func writeGitAPIError(w http.ResponseWriter, err error) {
+	var apiErr *gitAPIError
+	if errors.As(err, &apiErr) {
+		http.Error(w, apiErr.message, apiErr.status)
+		return
+	}
+	http.Error(w, "Git information unavailable", http.StatusInternalServerError)
+}
+
+func gitEnvironment() []string {
+	blocked := map[string]bool{
+		"GIT_DIR": true, "GIT_WORK_TREE": true, "GIT_COMMON_DIR": true,
+		"GIT_INDEX_FILE": true, "GIT_OBJECT_DIRECTORY": true,
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES": true, "GIT_NAMESPACE": true,
+		"GIT_CONFIG": true, "GIT_CONFIG_COUNT": true,
+		"GIT_CONFIG_PARAMETERS": true, "GIT_TERMINAL_PROMPT": true,
+		"GCM_INTERACTIVE": true, "SSH_ASKPASS_REQUIRE": true,
+		"GIT_ASKPASS": true, "SSH_ASKPASS": true,
+	}
+	env := make([]string, 0, len(os.Environ())+5)
+	for _, entry := range os.Environ() {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok || blocked[key] || strings.HasPrefix(key, "GIT_CONFIG_KEY_") || strings.HasPrefix(key, "GIT_CONFIG_VALUE_") {
+			continue
+		}
+		env = append(env, entry)
+	}
+	return append(env,
+		"GIT_TERMINAL_PROMPT=0",
+		"GCM_INTERACTIVE=Never",
+		"SSH_ASKPASS_REQUIRE=never",
+		"GIT_ASKPASS=",
+		"SSH_ASKPASS=",
+	)
+}
+
+func gitCommand(ctx context.Context, cwd string, args ...string) *exec.Cmd {
+	fullArgs := append([]string{"-c", "credential.interactive=false", "-c", "core.askPass="}, args...)
+	cmd := exec.CommandContext(ctx, "git", fullArgs...)
+	cmd.Dir = cwd
+	cmd.Env = gitEnvironment()
+	cmd.WaitDelay = 2 * time.Second
+	return cmd
+}
+
+func gitOutput(ctx context.Context, cwd string, args ...string) ([]byte, []byte, error) {
+	cmd := gitCommand(ctx, cwd, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return stdout.Bytes(), stderr.Bytes(), err
+}
+
+func isGitNotRepository(err error, stderr []byte) bool {
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == 128 && bytes.Contains(stderr, []byte("not a git repository"))
+}
+
+func outputLine(data []byte) string {
+	return strings.TrimSuffix(string(data), "\n")
+}
+
+func canonicalGitDirectory(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(real)
+	if err != nil || !info.IsDir() {
+		if err == nil {
+			err = fmt.Errorf("not a directory")
+		}
+		return "", err
+	}
+	return real, nil
+}
+
+func gitPathWithin(path, root string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || filepath.IsAbs(rel) {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+func gitPathWithinAny(path string, roots []string) bool {
+	for _, root := range roots {
+		if gitPathWithin(path, root) {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *API) trustedRoots() []string {
+	seen := make(map[string]bool)
+	var roots []string
+	var candidates []string
+	if a != nil && a.roots != nil {
+		candidates = a.roots()
+	}
+	for _, root := range candidates {
+		canonical, err := canonicalGitDirectory(root)
+		if err != nil || seen[canonical] {
+			continue
+		}
+		seen[canonical] = true
+		roots = append(roots, canonical)
+	}
+	return roots
+}
+
+func inspectGitRepository(ctx context.Context, cwd string) (*gitActionRepository, bool, error) {
+	bareOut, stderr, err := gitOutput(ctx, cwd, "rev-parse", "--is-bare-repository")
+	if err != nil {
+		if isGitNotRepository(err, stderr) {
+			return nil, true, nil
+		}
+		return nil, false, gitReadAPIError(ctx)
+	}
+	bare := outputLine(bareOut) == "true"
+	if !bare && outputLine(bareOut) != "false" {
+		return nil, false, gitAPIErrorf(http.StatusInternalServerError, "Git information unavailable")
+	}
+	if bare {
+		return &gitActionRepository{bare: true}, false, nil
+	}
+	topOut, stderr, err := gitOutput(ctx, cwd, "rev-parse", "--show-toplevel")
+	if err != nil {
+		if isGitNotRepository(err, stderr) {
+			return nil, true, nil
+		}
+		return nil, false, gitReadAPIError(ctx)
+	}
+	root, err := canonicalGitDirectory(outputLine(topOut))
+	if err != nil {
+		return nil, false, gitReadAPIError(ctx)
+	}
+	commonOut, _, err := gitOutput(ctx, root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return nil, false, gitReadAPIError(ctx)
+	}
+	commonDir, err := canonicalGitDirectory(outputLine(commonOut))
+	if err != nil {
+		return nil, false, gitReadAPIError(ctx)
+	}
+	gitDirOut, _, err := gitOutput(ctx, root, "rev-parse", "--path-format=absolute", "--git-dir")
+	if err != nil {
+		return nil, false, gitReadAPIError(ctx)
+	}
+	gitDir, err := canonicalGitDirectory(outputLine(gitDirOut))
+	if err != nil {
+		return nil, false, gitReadAPIError(ctx)
+	}
+	return &gitActionRepository{root: root, commonDir: commonDir, gitDir: gitDir}, false, nil
+}
+
+func parseGitWorktreeRoots(output []byte) []string {
+	seen := make(map[string]bool)
+	var roots []string
+	delim := byte(0)
+	if !bytes.Contains(output, []byte{0}) {
+		delim = '\n'
+	}
+	for _, field := range bytes.Split(output, []byte{delim}) {
+		field = bytes.TrimRight(field, "\r")
+		if !bytes.HasPrefix(field, []byte("worktree ")) {
+			continue
+		}
+		root := string(field[len("worktree "):])
+		if root != "" && !seen[root] {
+			seen[root] = true
+			roots = append(roots, root)
+		}
+	}
+	return roots
+}
+
+func registeredGitWorktrees(ctx context.Context, trustedRoots []string) ([]string, error) {
+	seen := make(map[string]bool)
+	var registered []string
+	for _, trusted := range trustedRoots {
+		out, stderr, err := gitOutput(ctx, trusted, "worktree", "list", "--porcelain", "-z")
+		if err != nil && isExitCode(err, 129) {
+			out, stderr, err = gitOutput(ctx, trusted, "worktree", "list", "--porcelain")
+		}
+		if err != nil {
+			if isGitNotRepository(err, stderr) {
+				continue
+			}
+			if ctx.Err() != nil {
+				return nil, gitAPIErrorf(http.StatusGatewayTimeout, "Git information timed out")
+			}
+			return nil, gitAPIErrorf(http.StatusInternalServerError, "Git information unavailable")
+		}
+		source, notRepo, sourceErr := inspectGitRepository(ctx, trusted)
+		if sourceErr != nil {
+			return nil, sourceErr
+		}
+		if notRepo || source == nil || source.bare {
+			continue
+		}
+		for _, listed := range parseGitWorktreeRoots(out) {
+			root, err := canonicalGitDirectory(listed)
+			if err != nil || seen[root] {
+				continue
+			}
+			candidate, notRepo, candidateErr := inspectGitRepository(ctx, root)
+			if candidateErr != nil {
+				if ctx.Err() != nil {
+					return nil, gitReadAPIError(ctx)
+				}
+				continue
+			}
+			if notRepo || candidate == nil || candidate.bare || candidate.root != root || candidate.commonDir != source.commonDir {
+				continue
+			}
+			seen[root] = true
+			registered = append(registered, root)
+		}
+	}
+	return registered, nil
+}
+
+func (a *API) resolveAuthorizedGitRepository(ctx context.Context, cwd string) (*gitActionRepository, bool, error) {
+	if cwd == "" {
+		cwd = a.defaultCWD()
+	}
+	if cwd == "" {
+		return nil, false, gitAPIErrorf(http.StatusNotFound, "Git workspace not found")
+	}
+	requested, err := canonicalGitDirectory(cwd)
+	if err != nil {
+		return nil, false, gitAPIErrorf(http.StatusNotFound, "Git workspace not found")
+	}
+	trusted := a.trustedRoots()
+	var allowedRoots []string
+	insideTrusted := gitPathWithinAny(requested, trusted)
+	if insideTrusted {
+		allowedRoots = trusted
+	} else {
+		registered, err := registeredGitWorktrees(ctx, trusted)
+		if err != nil {
+			return nil, false, err
+		}
+		if !gitPathWithinAny(requested, registered) {
+			return nil, false, gitAPIErrorf(http.StatusForbidden, "Git workspace is not authorized")
+		}
+		allowedRoots = registered
+	}
+	repo, notRepo, err := inspectGitRepository(ctx, requested)
+	if err != nil {
+		return nil, false, err
+	}
+	if notRepo {
+		return nil, true, nil
+	}
+	if repo.bare {
+		return nil, false, gitAPIErrorf(http.StatusForbidden, "Git actions require a working tree")
+	}
+	if !gitPathWithinAny(repo.root, allowedRoots) {
+		return nil, false, gitAPIErrorf(http.StatusForbidden, "Git workspace is not authorized")
+	}
+	return repo, false, nil
+}
+
+func targetForGitRepository(ctx context.Context, repo *gitActionRepository) (gitActionTarget, bool, string, error) {
+	target := gitActionTarget{Root: repo.root}
+	headOut, headErrOut, headErr := gitOutput(ctx, repo.root, "rev-parse", "--verify", "--quiet", "HEAD")
+	branchOut, branchErrOut, branchErr := gitOutput(ctx, repo.root, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if ctx.Err() != nil {
+		return target, false, "", gitReadAPIError(ctx)
+	}
+	if headErr == nil {
+		target.Head = outputLine(headOut)
+		if target.Head == "" {
+			return target, false, "", gitReadAPIError(ctx)
+		}
+	} else if branchErr == nil {
+		target.Branch = outputLine(branchOut)
+		if target.Branch == "" {
+			return target, false, "", gitReadAPIError(ctx)
+		}
+		ref := "refs/heads/" + target.Branch
+		_, showErrOut, showErr := gitOutput(ctx, repo.root, "show-ref", "--verify", "--quiet", ref)
+		if showErr == nil || !isExitCode(showErr, 1) || len(showErrOut) != 0 {
+			return target, false, "", gitReadAPIError(ctx)
+		}
+	} else {
+		if !isExitCode(headErr, 1) || len(headErrOut) != 0 || !isExitCode(branchErr, 1) || len(branchErrOut) != 0 {
+			return target, false, "", gitReadAPIError(ctx)
+		}
+		return target, false, "Git HEAD is invalid.", nil
+	}
+	if branchErr == nil {
+		target.Branch = outputLine(branchOut)
+	} else if !isExitCode(branchErr, 1) || len(branchErrOut) != 0 {
+		return target, false, "", gitReadAPIError(ctx)
+	}
+	if target.Head == "" {
+		return target, false, "This branch has no commits yet.", nil
+	}
+	if target.Branch == "" {
+		return target, false, "Check out a branch before Pull or Push.", nil
+	}
+	upstreamOut, _, err := gitOutput(ctx, repo.root, "for-each-ref", "--format=%(upstream:remotename)%00%(upstream:remoteref)", "refs/heads/"+target.Branch)
+	if err != nil {
+		return target, false, "", gitReadAPIError(ctx)
+	}
+	upstream := outputLine(upstreamOut)
+	parts := strings.SplitN(upstream, "\x00", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[0] == "." || parts[1] == "" || !strings.HasPrefix(parts[1], "refs/heads/") || strings.ContainsAny(parts[0]+parts[1], "\r\n") {
+		return target, false, "This branch has no supported remote upstream.", nil
+	}
+	target.Remote = parts[0]
+	target.RemoteRef = parts[1]
+	if _, _, err := gitOutput(ctx, repo.root, "check-ref-format", target.RemoteRef); err != nil {
+		if ctx.Err() != nil {
+			return target, false, "", gitReadAPIError(ctx)
+		}
+		return target, false, "The upstream branch is not supported.", nil
+	}
+	fetchURLs, _, fetchErr := gitOutput(ctx, repo.root, "remote", "get-url", "--all", "--", target.Remote)
+	pushURLs, _, pushErr := gitOutput(ctx, repo.root, "remote", "get-url", "--push", "--all", "--", target.Remote)
+	if fetchErr != nil || pushErr != nil {
+		if ctx.Err() != nil {
+			return target, false, "", gitReadAPIError(ctx)
+		}
+		return target, false, "The upstream remote has no usable URL.", nil
+	}
+	if !oneGitURL(fetchURLs) || !oneGitURL(pushURLs) {
+		return target, false, "The upstream remote has multiple or invalid destinations.", nil
+	}
+	h := sha256.New()
+	_, _ = h.Write(fetchURLs)
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write(pushURLs)
+	target.RemoteToken = hex.EncodeToString(h.Sum(nil))
+	if reason, err := gitMutationPrecondition(ctx, repo, "Pull or Push"); err != nil {
+		return target, false, "", err
+	} else if reason != "" {
+		return target, false, reason, nil
+	}
+	return target, true, "", nil
+}
+
+func oneGitURL(output []byte) bool {
+	line := outputLine(output)
+	return len(line) > 0 && !strings.ContainsAny(line, "\r\n")
+}
+
+func isExitCode(err error, code int) bool {
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == code
+}
+
+func gitIndexSnapshot(ctx context.Context, repo *gitActionRepository) (bool, string, *gitAPIError) {
+	return gitIndexSnapshotForHead(ctx, repo, "")
+}
+
+// gitIndexSnapshotForHead hashes the staged state as seen against head. An
+// empty head keeps the implicit-HEAD behavior of plain `git diff --cached`.
+// Pinning a resolved commit keeps the result consistent with the HEAD a caller
+// already reported, even if the branch moves during the scan.
+func gitIndexSnapshotForHead(ctx context.Context, repo *gitActionRepository, head string) (bool, string, *gitAPIError) {
+	stageHash := sha256.New()
+	stageCmd := gitCommand(ctx, repo.root, "ls-files", "--stage", "-z")
+	stageCmd.Stdout = stageHash
+	stageCmd.Stderr = io.Discard
+	if err := stageCmd.Run(); err != nil {
+		return false, "", gitReadAPIError(ctx)
+	}
+
+	deltaHash := sha256.New()
+	diffArgs := []string{
+		"diff", "--cached", "--raw", "--no-abbrev", "--no-renames",
+		"--no-ext-diff", "--no-textconv", "--ita-invisible-in-index",
+		"--ignore-submodules=none", "-z", "--exit-code",
+	}
+	if head != "" {
+		diffArgs = append(diffArgs, head)
+	}
+	diffArgs = append(diffArgs, "--")
+	deltaCmd := gitCommand(ctx, repo.root, diffArgs...)
+	deltaCmd.Stdout = deltaHash
+	deltaCmd.Stderr = io.Discard
+	deltaErr := deltaCmd.Run()
+	hasStaged := deltaErr != nil
+	if deltaErr != nil && !isExitCode(deltaErr, 1) {
+		return false, "", gitReadAPIError(ctx)
+	}
+
+	combined := sha256.Sum256([]byte(fmt.Sprintf("%x:%x", stageHash.Sum(nil), deltaHash.Sum(nil))))
+	return hasStaged, hex.EncodeToString(combined[:]), nil
+}
+
+// gitInfoIndexSnapshot serves the staged snapshot for the read path. A recent
+// result is reused only while the index identity, HEAD, and age all match.
+// Repeated polls of /api/git/info were the most expensive handler measured.
+func gitInfoIndexSnapshot(ctx context.Context, repo *gitActionRepository, target gitActionTarget) (bool, string, *gitAPIError) {
+	return gitInfoMemoRead(ctx, repo, target, func(ctx context.Context) (bool, string, *gitAPIError) {
+		return gitIndexSnapshotForHead(ctx, repo, target.Head)
+	})
+}
+
+// gitInfoMemoRead is gitInfoIndexSnapshot with the computation supplied by the
+// caller, so tests can count loads and drive HEAD/index changes mid-load.
+func gitInfoMemoRead(ctx context.Context, repo *gitActionRepository, target gitActionTarget, load func(context.Context) (bool, string, *gitAPIError)) (bool, string, *gitAPIError) {
+	key, cacheable := gitInfoMemoKey(repo)
+	var indexPath string
+	var before os.FileInfo
+	if cacheable && target.Head != "" {
+		indexPath = filepath.Join(repo.gitDir, "index")
+		if info, err := os.Lstat(indexPath); err == nil && info.Mode().IsRegular() {
+			before = info
+			if hasStaged, token, hit := gitInfoMemoLookup(key, target.Head, before); hit {
+				if ctx.Err() != nil {
+					return false, "", gitReadAPIError(ctx)
+				}
+				return hasStaged, token, nil
+			}
+		}
+	}
+
+	hasStaged, token, err := load(ctx)
+	if err != nil {
+		return hasStaged, token, err
+	}
+	// A canceled request must not populate the memo, and an index that moved
+	// during the scan leaves the result unpinned from its own metadata.
+	if before == nil || ctx.Err() != nil {
+		return hasStaged, token, nil
+	}
+	if after, statErr := os.Lstat(indexPath); statErr == nil && sameGitIndexInfo(before, after) {
+		gitInfoMemoStoreAt(key, target.Head, after, hasStaged, token, time.Now())
+	}
+	return hasStaged, token, nil
+}
+
+func gitCommitTarget(target gitActionTarget) gitActionTarget {
+	target.Remote = ""
+	target.RemoteRef = ""
+	target.RemoteToken = ""
+	return target
+}
+
+func gitCanCommit(ctx context.Context, repo *gitActionRepository, target gitActionTarget, hasStaged bool) (bool, string, *gitAPIError) {
+	if target.Branch == "" {
+		return false, "Check out a branch before Commit.", nil
+	}
+	if reason, err := gitMutationPrecondition(ctx, repo, "Commit"); err != nil {
+		return false, "", err
+	} else if reason != "" {
+		return false, reason, nil
+	}
+	if !hasStaged {
+		return false, "Stage changes in Git before committing.", nil
+	}
+	return true, "", nil
+}
+
+func gitMutationPrecondition(ctx context.Context, repo *gitActionRepository, action string) (string, *gitAPIError) {
+	// Marker paths resolve against the per-worktree Git directory, not the
+	// shared common directory: a rebase or cherry-pick in one worktree must
+	// not block actions in another.
+	if repo.gitDir == "" || !filepath.IsAbs(repo.gitDir) {
+		return "", gitReadAPIError(ctx)
+	}
+	if ctx.Err() != nil {
+		return "", gitReadAPIError(ctx)
+	}
+	for _, marker := range []string{
+		"MERGE_HEAD",
+		"CHERRY_PICK_HEAD",
+		"REVERT_HEAD",
+		"rebase-apply",
+		"rebase-merge",
+		"sequencer",
+	} {
+		if _, err := os.Lstat(filepath.Join(repo.gitDir, marker)); err == nil {
+			return fmt.Sprintf("Finish the current Git operation before %s.", action), nil
+		} else if !os.IsNotExist(err) {
+			return "", gitReadAPIError(ctx)
+		}
+	}
+	unmerged, _, err := gitOutput(ctx, repo.root, "ls-files", "--unmerged", "-z")
+	if err != nil {
+		return "", gitReadAPIError(ctx)
+	}
+	if len(unmerged) != 0 {
+		return fmt.Sprintf("Resolve unmerged files before %s.", action), nil
+	}
+	return "", nil
+}
+
+func (a *API) HandleGitInfo(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), gitReadTimeout)
+	defer cancel()
+	repo, notRepo, err := a.resolveAuthorizedGitRepository(ctx, r.URL.Query().Get("cwd"))
+	if err != nil {
+		writeGitAPIError(w, err)
+		return
+	}
+	if notRepo {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"notGitRepo": true})
+		return
+	}
+	target, canPullPush, reason, err := targetForGitRepository(ctx, repo)
+	if err != nil {
+		writeGitAPIError(w, err)
+		return
+	}
+	hasStaged, indexToken, indexErr := gitInfoIndexSnapshot(ctx, repo, target)
+	if indexErr != nil {
+		writeGitAPIError(w, indexErr)
+		return
+	}
+	canCommit, commitReason, commitErr := gitCanCommit(ctx, repo, target, hasStaged)
+	if commitErr != nil {
+		writeGitAPIError(w, commitErr)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(gitInfoResponse{
+		Target:       &target,
+		CanPullPush:  canPullPush,
+		Reason:       reason,
+		HasStaged:    hasStaged,
+		IndexToken:   indexToken,
+		CanCommit:    canCommit,
+		CommitReason: commitReason,
+		CanStage:     true,
+	})
+}
+
+func decodeGitActionRequest(w http.ResponseWriter, r *http.Request) (gitActionRequest, int, string) {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		return gitActionRequest{}, http.StatusUnsupportedMediaType, "Content-Type must be application/json"
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, gitActionBodyLimit))
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			return gitActionRequest{}, http.StatusRequestEntityTooLarge, "Request body is too large"
+		}
+		return gitActionRequest{}, http.StatusBadRequest, "Invalid request body"
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	var req gitActionRequest
+	if err := decoder.Decode(&req); err != nil {
+		return gitActionRequest{}, http.StatusBadRequest, "Invalid request body"
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return gitActionRequest{}, http.StatusBadRequest, "Request must contain one JSON object"
+	}
+	if req.Action == "commit" {
+		if req.Target.Root == "" || req.Target.Branch == "" ||
+			strings.TrimSpace(req.Message) == "" || strings.ContainsRune(req.Message, '\x00') ||
+			req.Target.Remote != "" || req.Target.RemoteRef != "" || req.Target.RemoteToken != "" ||
+			len(req.IndexToken) != sha256.Size*2 {
+			return gitActionRequest{}, http.StatusBadRequest, "A commit message and complete local Git target are required"
+		}
+		if _, err := hex.DecodeString(req.IndexToken); err != nil {
+			return gitActionRequest{}, http.StatusBadRequest, "A commit message and complete local Git target are required"
+		}
+		return req, 0, ""
+	}
+	if req.Action == "stage" || req.Action == "unstage" {
+		if req.Target.Root == "" || (req.Target.Head == "" && req.Target.Branch == "") ||
+			req.Target.Remote != "" || req.Target.RemoteRef != "" || req.Target.RemoteToken != "" ||
+			req.Message != "" || len(req.IndexToken) != sha256.Size*2 {
+			return gitActionRequest{}, http.StatusBadRequest, "A local Git target and index token are required"
+		}
+		if _, err := hex.DecodeString(req.IndexToken); err != nil {
+			return gitActionRequest{}, http.StatusBadRequest, "A local Git target and index token are required"
+		}
+		if len(req.Paths) == 0 || len(req.Paths) > gitActionPathLimit {
+			return gitActionRequest{}, http.StatusBadRequest, "A file list is required"
+		}
+		for _, path := range req.Paths {
+			if !gitActionPathAllowed(path) {
+				return gitActionRequest{}, http.StatusBadRequest, "Invalid file path"
+			}
+		}
+		return req, 0, ""
+	}
+	if req.Action != "pull" && req.Action != "push" {
+		return gitActionRequest{}, http.StatusBadRequest, "Unsupported Git action"
+	}
+	if req.Target.Root == "" || req.Target.Head == "" || req.Target.Branch == "" || req.Target.Remote == "" || req.Target.RemoteRef == "" || len(req.Target.RemoteToken) != sha256.Size*2 {
+		return gitActionRequest{}, http.StatusBadRequest, "A complete Git target is required"
+	}
+	if _, err := hex.DecodeString(req.Target.RemoteToken); err != nil {
+		return gitActionRequest{}, http.StatusBadRequest, "A complete Git target is required"
+	}
+	return req, 0, ""
+}
+
+func gitActionLock(commonDir string) *sync.Mutex {
+	value, _ := gitActionLocks.LoadOrStore(commonDir, &sync.Mutex{})
+	return value.(*sync.Mutex)
+}
+
+var gitActionLocks sync.Map
+
+func (a *API) HandleGitAction(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	req, status, message := decodeGitActionRequest(w, r)
+	if status != 0 {
+		http.Error(w, message, status)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), gitMutationTimeout)
+	defer cancel()
+	repo, notRepo, err := a.resolveAuthorizedGitRepository(ctx, req.Cwd)
+	if err != nil {
+		writeGitAPIError(w, err)
+		return
+	}
+	if notRepo {
+		http.Error(w, "Not a Git repository", http.StatusNotFound)
+		return
+	}
+	lock := gitActionLock(repo.commonDir)
+	if !lock.TryLock() {
+		http.Error(w, "Git action already in progress", http.StatusConflict)
+		return
+	}
+	defer lock.Unlock()
+	// Every action attempt can change what the next read observes, including
+	// attempts that end in a stale-token rejection or a partial failure.
+	if key, ok := gitInfoMemoKey(repo); ok {
+		defer gitInfoMemoInvalidate(key)
+	}
+	fresh, canPullPush, reason, err := targetForGitRepository(ctx, repo)
+	if err != nil {
+		writeGitAPIError(w, err)
+		return
+	}
+	if req.Action == "commit" || req.Action == "stage" || req.Action == "unstage" {
+		fresh = gitCommitTarget(fresh)
+		if fresh != req.Target {
+			http.Error(w, "Git target changed; refresh before trying again", http.StatusConflict)
+			return
+		}
+		hasStaged, indexToken, indexErr := gitIndexSnapshot(ctx, repo)
+		if indexErr != nil {
+			writeGitAPIError(w, indexErr)
+			return
+		}
+		if indexToken != req.IndexToken {
+			if req.Action == "commit" {
+				http.Error(w, "Git index changed; refresh before committing", http.StatusConflict)
+			} else {
+				http.Error(w, "Git index changed; refresh before trying again", http.StatusConflict)
+			}
+			return
+		}
+		if req.Action == "commit" {
+			canCommit, commitReason, commitErr := gitCanCommit(ctx, repo, fresh, hasStaged)
+			if commitErr != nil {
+				writeGitAPIError(w, commitErr)
+				return
+			}
+			if !canCommit {
+				http.Error(w, commitReason, http.StatusConflict)
+				return
+			}
+		}
+	} else {
+		if fresh != req.Target {
+			http.Error(w, "Git target changed; refresh before trying again", http.StatusConflict)
+			return
+		}
+		if !canPullPush {
+			http.Error(w, reason, http.StatusConflict)
+			return
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		http.Error(w, "Git result unconfirmed. Inspect Git state before running again.", http.StatusGatewayTimeout)
+		return
+	}
+	var cmd *exec.Cmd
+	switch req.Action {
+	case "pull":
+		cmd = gitCommand(ctx, repo.root, "pull", "--ff-only", "--no-rebase", "--no-autostash", "--no-recurse-submodules", "--", fresh.Remote, fresh.RemoteRef)
+	case "push":
+		cmd = gitCommand(ctx, repo.root, "-c", "remote."+fresh.Remote+".mirror=false", "push", "--no-force", "--no-follow-tags", "--recurse-submodules=no", "--", fresh.Remote, "HEAD:"+fresh.RemoteRef)
+	case "commit":
+		cmd = gitCommand(ctx, repo.root, "commit", "--file=-")
+		cmd.Stdin = strings.NewReader(req.Message)
+	case "stage":
+		cmd = gitCommand(ctx, repo.root, append([]string{"add", "--"}, req.Paths...)...)
+	case "unstage":
+		if gitHeadExists(ctx, repo.root) {
+			cmd = gitCommand(ctx, repo.root, append([]string{"restore", "--staged", "--"}, req.Paths...)...)
+		} else {
+			// An unborn branch has no HEAD to restore from, so the index
+			// entries are dropped directly. --cached keeps working files.
+			cmd = gitCommand(ctx, repo.root, append([]string{"rm", "--cached", "--quiet", "--force", "--"}, req.Paths...)...)
+		}
+	}
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	err = cmd.Run()
+	gitHeadCache.Clear()
+	if err != nil {
+		if ctx.Err() != nil {
+			http.Error(w, "Git result unconfirmed. Inspect Git state before running again.", http.StatusGatewayTimeout)
+			return
+		}
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() >= 0 {
+			http.Error(w, fmt.Sprintf("Git %s failed. Partial effects are possible. Inspect Git before running again.", req.Action), http.StatusInternalServerError)
+			return
+		}
+		http.Error(w, "Git result unconfirmed. Inspect Git state before running again.", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"action": req.Action,
+		"root":   fresh.Root,
+		"output": strings.ToUpper(req.Action[:1]) + req.Action[1:] + " completed.",
+	})
+}
