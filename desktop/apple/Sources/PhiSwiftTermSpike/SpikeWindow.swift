@@ -11,6 +11,9 @@ import SwiftTerm
 final class SpikeWindow: NSWindowController, NSWindowDelegate {
   private let rootView = NSView()
   private let terminalContainer = NSView()
+  /// Phi insets the terminal from the window edge: `.term-container .xterm`
+  /// uses an 8px padding in `web/style.css`.
+  static let terminalPadding: CGFloat = 8
   private let composer = PhiComposerView()
   private let statusStrip = PhiStatusStrip()
   /// The pane this window shows, used to focus an already open window and to
@@ -59,7 +62,7 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     terminalContainer.clipsToBounds = true
     rootView.addSubview(terminalContainer)
     terminalView = SpikeTerminalView()
-    terminalView.frame = terminalContainer.bounds
+    terminalView.frame = viewportBounds
     terminalView.autoresizingMask = [.minYMargin]
     terminalContainer.addSubview(terminalView)
     statusStrip.text = "connecting"
@@ -161,8 +164,8 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     let current = terminalView.terminalDimensions
     let optimal = terminalView.getOptimalFrameSize()
     guard optimal.width > 0, optimal.height > 0 else { return }
-    let cols = max(2, Int(terminalContainer.bounds.width / (optimal.width / CGFloat(current.cols))))
-    let rows = max(1, Int(terminalContainer.bounds.height / (optimal.height / CGFloat(current.rows))))
+    let cols = max(2, Int(viewportBounds.width / (optimal.width / CGFloat(current.cols))))
+    let rows = max(1, Int(viewportBounds.height / (optimal.height / CGFloat(current.rows))))
     if terminalView.connectionID == nil || liveConnection == terminalView.connectionID {
       fitTerminalToViewport()
     } else {
@@ -434,20 +437,30 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     let dimensions = view.terminalDimensions
     let optimal = view.getOptimalFrameSize()
     let minimum = NSSize(
-      width: max(optimal.width / CGFloat(dimensions.cols) * 2, PhiComposerView.minimumWidth),
+      width: max(
+        optimal.width / CGFloat(dimensions.cols) * 2 + Self.terminalPadding * 2,
+        PhiComposerView.minimumWidth),
       height: optimal.height / CGFloat(dimensions.rows) + PhiStatusStrip.height
         + PhiComposerView.barHeight)
     window?.contentMinSize = minimum
   }
 
+  /// The area the terminal may fill, inset from the window edges the way the web
+  /// app insets `.xterm`.
+  private var viewportBounds: NSRect {
+    terminalContainer.bounds.insetBy(
+      dx: Self.terminalPadding, dy: Self.terminalPadding)
+  }
+
   private func fitTerminalToViewport() {
-    terminalView.setFrameSize(terminalContainer.bounds.size)
+    terminalView.setFrameSize(viewportBounds.size)
     positionTerminal()
   }
 
   private func positionTerminal() {
     terminalView.setFrameOrigin(NSPoint(
-      x: 0, y: terminalContainer.bounds.height - terminalView.frame.height))
+      x: Self.terminalPadding,
+      y: terminalContainer.bounds.height - terminalView.frame.height - Self.terminalPadding))
   }
 }
 

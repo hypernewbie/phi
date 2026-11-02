@@ -123,7 +123,9 @@ final class ComposerLayoutTests: XCTestCase {
     XCTAssertEqual(composer.frame.minY, 22, accuracy: 0.5, "the status strip keeps the bottom")
     XCTAssertEqual(composer.frame.height, PhiComposerView.barHeight, accuracy: 0.5)
     XCTAssertLessThanOrEqual(strip.frame.maxY, composer.frame.minY)
-    XCTAssertEqual(terminalFrame.minY, composer.frame.maxY, accuracy: 0.5)
+    XCTAssertEqual(
+      terminalFrame.minY, composer.frame.maxY + SpikeWindow.terminalPadding, accuracy: 0.5,
+      "the terminal keeps the same inset from the composer as from the window edges")
   }
 }
 
