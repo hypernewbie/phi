@@ -1,6 +1,7 @@
 package access
 
 import (
+	"crypto/sha256"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -22,6 +23,39 @@ var (
 	testWriter           config.Writer
 	Default              = NewManager(testConfigStore, testSocketHub)
 )
+
+// TestMain runs the package's tests behind a cheap KDF. Every login fixture in
+// this package derives a verifier, and at the production 600k iterations each
+// derivation costs a full-strength PBKDF2: the package spent 208s of the Go
+// test job doing nothing else. The stand-in keeps the record format, the
+// iteration counts, and the rehash rule exactly as production has them, so the
+// assertions about those still hold; only the bytes of the derivation change.
+// Tests that verify a real derivation call useRealAccessHash.
+func TestMain(m *testing.M) {
+	accessPasswordDerive = testAccessStubHash
+	os.Exit(m.Run())
+}
+
+// testAccessStubHash satisfies deriveAccessVerifier's contract (a fixed-size
+// verifier that depends on both the password and the salt) without the work
+// factor. It ignores iterations because the tests that read that value assert
+// on the record's field, not on the derivation cost.
+func testAccessStubHash(password string, salt []byte, _ int) ([]byte, error) {
+	digest := sha256.New()
+	digest.Write([]byte(password))
+	digest.Write([]byte{0})
+	digest.Write(salt)
+	return digest.Sum(nil), nil
+}
+
+// useRealAccessHash restores PBKDF2 for the duration of one test, for the
+// cases where matching a frozen derivation vector is the point.
+func useRealAccessHash(t *testing.T) {
+	t.Helper()
+	previous := accessPasswordDerive
+	accessPasswordDerive = deriveAccessVerifier
+	t.Cleanup(func() { accessPasswordDerive = previous })
+}
 
 func testConfigStore() *config.Store { return testStore }
 

@@ -169,6 +169,14 @@ func deriveAccessVerifier(password string, salt []byte, iterations int) ([]byte,
 	return pbkdf2.Key(sha256.New, password, salt, iterations, accessPasswordVerifierBytes)
 }
 
+// accessPasswordDerive is the KDF that builds and checks password records. It
+// is a var so the test binary can substitute a cheap stand-in: at the
+// production 600k iterations every login test paid a full-strength PBKDF2, and
+// this package alone was 208s of the Go test job. The record format, iteration
+// counts, and rehash rule all keep their production values, so tests that
+// assert those still see 600k; only the cost of one derivation drops.
+var accessPasswordDerive = deriveAccessVerifier
+
 // newAccessPasswordRecord builds a record at the current parameters from a raw
 // password. The salt is fresh, so an identical password yields a new verifier.
 func newAccessPasswordRecord(password string) (*accessPasswordRecord, error) {
@@ -176,7 +184,7 @@ func newAccessPasswordRecord(password string) (*accessPasswordRecord, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return nil, err
 	}
-	verifier, err := deriveAccessVerifier(password, salt, accessPasswordHashIterations)
+	verifier, err := accessPasswordDerive(password, salt, accessPasswordHashIterations)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +194,7 @@ func newAccessPasswordRecord(password string) (*accessPasswordRecord, error) {
 // matchesPassword compares a raw password with the stored verifier at the
 // record's iteration count in constant time.
 func (r accessPasswordRecord) matchesPassword(password string) (bool, error) {
-	candidate, err := deriveAccessVerifier(password, r.Salt, r.Iterations)
+	candidate, err := accessPasswordDerive(password, r.Salt, r.Iterations)
 	if err != nil {
 		return false, err
 	}
