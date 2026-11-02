@@ -17,6 +17,7 @@ export interface PiRpcStatus {
     contextWindowTokens?: number | null;
     cacheReadTokens?: number | null;
     cacheWriteTokens?: number | null;
+    cost?: number | null;
     skills?: string[] | null;
     /** Backend-published resume path. Empty until Pi's session file
      * exists; the backend only ever publishes a file-backed path. */
@@ -32,6 +33,10 @@ export interface PiRpcStatusDisplay {
     context: string;
     cacheRead: string;
     cacheWrite: string;
+    /** `$0.123` when the backend reports a cost, else '—'. */
+    cost: string;
+    /** Session title, empty when none is known. */
+    title: string;
     skills: string;
 }
 
@@ -66,6 +71,12 @@ export function formatPiRpcStatus(
                 : `${numberOrDash(status?.contextUsedTokens)} / ${numberOrDash(status?.contextWindowTokens)}`,
         cacheRead: numberOrDash(status?.cacheReadTokens),
         cacheWrite: numberOrDash(status?.cacheWriteTokens),
+        // Pi's footer prints the session cost as $0.123 (footer.js).
+        cost:
+            typeof status?.cost === 'number' && Number.isFinite(status.cost)
+                ? `$${status.cost.toFixed(3)}`
+                : '—',
+        title: typeof status?.title === 'string' ? status.title : '',
         skills:
             status?.skills == null
                 ? '—'

@@ -113,6 +113,7 @@ function mergeState(status, state, canonical = false) {
         'contextWindowTokens',
         'cacheReadTokens',
         'cacheWriteTokens',
+        'cost',
     ];
     for (const field of numbers) {
         if (!Object.hasOwn(source, field))
@@ -365,6 +366,7 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
         hasTranscript: buffer.getMessageCount() > 0,
         model: localStatus.model ?? '',
         thinking: localStatus.thinking ?? '',
+        skills: localStatus.skills ? [...localStatus.skills] : [],
     });
     const applyState = (state) => {
         const source = state;
@@ -460,6 +462,7 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
         hasTranscript: false,
         model: '',
         thinking: '',
+        skills: [],
     });
     const view = createReviewTranscriptView(root, {
         title: 'Pi RPC',
