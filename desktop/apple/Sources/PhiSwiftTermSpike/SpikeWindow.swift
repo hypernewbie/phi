@@ -44,6 +44,7 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     window.backgroundColor = PhiTheme.base
     window.delegate = self
     window.isReleasedWhenClosed = false
+    rootView.wantsLayer = true
     rootView.autoresizingMask = [.width, .height]
     window.contentView = rootView
 
@@ -169,6 +170,9 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
   /// its own layer, and a window-level capture returns the background alone.
   /// Rendering is unsuspended first, so an occluded window still yields its
   /// current screen.
+  /// Captures the whole window, not only the terminal view: the view draws in
+  /// its own layer, and the footer strip lives beside it, so a window-level
+  /// cache would show neither. `rootView` is layer-backed for this reason.
   func writeUIDumpPNG(to path: URL) async throws -> (bytes: Int, width: Int, height: Int) {
     guard let view = terminalView else { throw SpikeWindowError.staleConnection }
     let originalSuspension = view.suspendsRenderingWhenNotVisible
@@ -180,8 +184,9 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     while view.diagnostics.frames <= initialFrames, ContinuousClock().now < deadline {
       try? await Task.sleep(for: .milliseconds(16))
     }
-    let bytes = try SpikeUIDump.writePNG(of: view, to: path)
-    return (bytes, Int(view.bounds.width), Int(view.bounds.height))
+    rootView.layoutSubtreeIfNeeded()
+    let bytes = try SpikeUIDump.writePNG(of: rootView, compositing: [view], to: path)
+    return (bytes, Int(rootView.bounds.width), Int(rootView.bounds.height))
   }
   #endif
 

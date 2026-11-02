@@ -75,6 +75,7 @@ final class SpikeCatalogWindow: NSWindowController, NSWindowDelegate,
     let fieldWidth = width - fieldX - inset
 
     let root = PhiBackgroundView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+    root.wantsLayer = true
     root.autoresizingMask = [.width, .height]
     root.fillColor = PhiTheme.base
     window?.contentView = root

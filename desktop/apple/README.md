@@ -143,7 +143,8 @@ PHI_SPIKE_UI_ATTACH=1 \
 | `PHI_SPIKE_UI_ATTACH` | `1` attaches the first listed pane and lets it connect before the capture |
 
 The app writes the catalog PNG plus one PNG per terminal window, a JSON sidecar with window size, pane count, status, and file names, then exits.
-A terminal window is captured as its terminal view, not as the whole window: SwiftTerm draws in its own layer, and a window-level capture returns the empty background.
+A terminal window is captured as a whole: the window's layers first, then the terminal view's own layer drawn into it, because SwiftTerm hosts its pixels in a layer that an ancestor render does not include.
+The capture needs a display pass to have run; without one the layer tree carries no pixels and the PNG comes out empty.
 The PNGs show visible terminal text and must remain private.
 Nothing is uploaded or written anywhere else, and Release builds contain none of this code.
 

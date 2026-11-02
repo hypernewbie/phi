@@ -84,11 +84,22 @@ enum SpikeUIDump {
 
   /// Writes `view`'s current pixels as PNG and returns the byte count.
   ///
-  /// The window background is painted into the bitmap first: a plain content
-  /// view draws nothing behind its labels, so a bare cache would leave transparent
-  /// pixels that read as black and hide dark text.
-  static func writePNG(of view: NSView, to path: URL) throws -> Int {
+  /// A layer-backed view is rendered through its layer, which is the only way to
+  /// capture children that draw in their own layer, such as the terminal view.
+  /// A plain view falls back to AppKit's cached display, with the window
+  /// background painted first: a bare content view draws nothing behind its
+  /// labels, so the scanout would be transparent and read as black.
+  static func writePNG(of view: NSView, compositing overlays: [NSView] = [], to path: URL) throws -> Int {
     view.layoutSubtreeIfNeeded()
+    // Layers only carry pixels after a display pass; a window shown without one
+    // renders empty.
+    view.displayIfNeeded()
+    view.window?.displayIfNeeded()
+    if view.wantsLayer, view.layer != nil, view.window != nil {
+      let data = try renderLayer(of: view, compositing: overlays)
+      try data.write(to: path, options: .atomic)
+      return data.count
+    }
     guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
       throw Failure.noBitmap
     }
@@ -106,6 +117,65 @@ enum SpikeUIDump {
     }
     try data.write(to: path, options: .atomic)
     return data.count
+  }
+
+  /// Renders one view's layer alone, at its own backing scale.
+  private static func renderImage(of view: NSView) throws -> CGImage {
+    let scale = view.window?.backingScaleFactor ?? 2
+    let width = Int((view.bounds.width * scale).rounded())
+    let height = Int((view.bounds.height * scale).rounded())
+    guard width > 0, height > 0,
+          let space = CGColorSpace(name: CGColorSpace.sRGB),
+          let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: 0, space: space,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+          let layer = view.layer
+    else { throw Failure.noBitmap }
+    context.scaleBy(x: scale, y: scale)
+    layer.render(in: context)
+    guard let image = context.makeImage() else { throw Failure.noImageData }
+    return image
+  }
+
+  /// Renders `view`'s layer tree, then draws each overlay's own layer at its
+  /// frame. A layer that hosts its content itself, such as the terminal, does
+  /// not come through an ancestor render, so it is drawn explicitly.
+  private static func renderLayer(of view: NSView, compositing overlays: [NSView]) throws -> Data {
+    let scale = view.window?.backingScaleFactor ?? 2
+    let width = Int((view.bounds.width * scale).rounded())
+    let height = Int((view.bounds.height * scale).rounded())
+    guard width > 0, height > 0,
+          let space = CGColorSpace(name: CGColorSpace.sRGB),
+          let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: 0, space: space,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+          let layer = view.layer
+    else { throw Failure.noBitmap }
+    context.setFillColor(
+      (PhiTheme.base.usingColorSpace(.sRGB) ?? .black).cgColor)
+    context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+    context.saveGState()
+    context.scaleBy(x: scale, y: scale)
+    layer.render(in: context)
+    context.restoreGState()
+    for overlay in overlays {
+      guard let overlayImage = try? renderImage(of: overlay) else { continue }
+      let frame = overlay.convert(overlay.bounds, to: view)
+      // The overlay carries its own pixel scale; place it by its pixel size.
+      let rect = CGRect(
+        x: frame.minX * scale,
+        y: frame.minY * scale,
+        width: CGFloat(overlayImage.width),
+        height: CGFloat(overlayImage.height))
+      context.draw(overlayImage, in: rect)
+    }
+    guard let image = context.makeImage(),
+          let data = NSBitmapImageRep(cgImage: image).representation(
+            using: .png, properties: [: ])
+    else { throw Failure.noImageData }
+    return data
   }
 
   enum Failure: Error {
