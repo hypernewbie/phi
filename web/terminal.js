@@ -830,6 +830,7 @@ export class TabManager {
         this._piRpcModelNextByPane = new Map();
         this._piRpcModelInflight = new Map();
         this._piRpcModelQuery = '';
+        this._piRpcSkillQuery = '';
         this._piRpcModelExpandedGroup = null;
         this._piBridgeSkills = null;
         this._piBridgeSkillQuery = '';
@@ -5252,6 +5253,9 @@ export class TabManager {
             display.cacheWrite !== '0.0'
         )
             tokens.push(`W${display.cacheWrite}`);
+        // Pi's footer appends the running cost after the token counts
+        // (footer.js: $0.123), so the same slot carries it here.
+        if (display.cost !== '—') tokens.push(display.cost);
         const leftText = tokens.join('  ');
         const modelRight =
             display.model !== '—'
@@ -5312,7 +5316,11 @@ export class TabManager {
         if (activeTab?.coder === 'pi') bar.classList.add('hidden');
         const cwdEl = document.createElement('div');
         cwdEl.className = 'pi-rpc-status-cwd';
-        cwdEl.textContent = cwdDisplay;
+        // Pi's footer line is `cwd (branch) • session-name`; the RPC state
+        // has no branch, so the title joins the cwd with the same separator.
+        cwdEl.textContent = display.title
+            ? `${cwdDisplay} • ${display.title}`
+            : cwdDisplay;
         cwdEl.title = raw?.cwd || display.cwd;
 
         const mainRow = document.createElement('div');
@@ -5543,6 +5551,11 @@ export class TabManager {
             hasTranscript: state?.hasTranscript === true,
             model: typeof state?.model === 'string' ? state.model : '',
             thinking: typeof state?.thinking === 'string' ? state.thinking : '',
+            skills: Array.isArray(state?.skills)
+                ? state.skills.filter(
+                      (item) => typeof item === 'string' && item !== '',
+                  )
+                : [],
         };
     }
 
@@ -6470,10 +6483,99 @@ export class TabManager {
         throw new Error('Skill send failed');
     }
 
+    // Pi RPC skills: the control state already carries the skill command
+    // names the session published, so the picker renders locally and a pick
+    // sends the /name command through the ordinary prompt path (Pi executes
+    // commands on session.prompt, the same way the TUI does).
+    _renderPiRpcLocalSkills(dropup, activeTab, preserve) {
+        const state = this._piRpcControlsFor(activeTab);
+        const skills = state.skills;
+        if (skills.length === 0) {
+            this._closePiRpcDropups(true);
+            return;
+        }
+        if (!preserve) {
+            this._piRpcSkillQuery = '';
+            const sticky = document.createElement('div');
+            sticky.className = 'pi-rpc-model-sticky';
+            const header = document.createElement('div');
+            header.className = 'dropup-header';
+            header.textContent = 'Skills';
+            const search = document.createElement('input');
+            search.type = 'search';
+            search.className = 'pi-rpc-model-search';
+            search.setAttribute('aria-label', 'Filter Pi skills');
+            search.placeholder = 'Filter skills…';
+            search.addEventListener('input', (event) => {
+                if (event.isComposing) return;
+                if (
+                    typeof event.inputType === 'string' &&
+                    event.inputType.startsWith('insertComposition')
+                )
+                    return;
+                this._piRpcSkillQuery = search.value.toLowerCase();
+                this._buildPiRpcSkillsRows(dropup, activeTab, skills);
+            });
+            search.addEventListener('compositionend', () => {
+                this._piRpcSkillQuery = search.value.toLowerCase();
+                this._buildPiRpcSkillsRows(dropup, activeTab, skills);
+            });
+            sticky.append(header, search);
+            const listContainer = document.createElement('div');
+            listContainer.className = 'pi-rpc-model-list-container';
+            dropup.replaceChildren(sticky, listContainer);
+        }
+        this._buildPiRpcSkillsRows(dropup, activeTab, skills);
+    }
+
+    _buildPiRpcSkillsRows(dropup, activeTab, skills) {
+        const listContainer = dropup.querySelector(
+            '.pi-rpc-model-list-container',
+        );
+        if (!listContainer) return;
+        const query = this._piRpcSkillQuery || '';
+        const visible = query
+            ? skills.filter((name) => name.toLowerCase().includes(query))
+            : skills;
+        listContainer.replaceChildren();
+        if (visible.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'pi-rpc-model-empty';
+            empty.textContent = 'No matching skills';
+            listContainer.appendChild(empty);
+            return;
+        }
+        for (const name of visible) {
+            const row = document.createElement('div');
+            row.className = 'dropup-row';
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'dropup-model-btn';
+            btn.textContent = name;
+            btn.title = `Run /${name} in this Pi session`;
+            btn.addEventListener('click', () => {
+                this._closePiRpcDropups(true);
+                if (this.getActiveTab()?.paneId !== activeTab.paneId) return;
+                const sent = rpcChatSend(activeTab.paneId, `/${name}`);
+                if (!sent)
+                    this.app?.showToast?.('pi chat: not ready', {
+                        type: 'error',
+                    });
+            });
+            row.appendChild(btn);
+            listContainer.appendChild(row);
+        }
+    }
+
     _renderPiRpcSkillsDropup(preserve = false) {
         const dropup = document.getElementById('pi-rpc-skills-dropup');
         const activeTab = this.getActiveTab();
-        if (!dropup || !activeTab || activeTab.coder !== 'pi') return;
+        if (!dropup || !activeTab) return;
+        if (activeTab.coder === 'pi-rpc') {
+            this._renderPiRpcLocalSkills(dropup, activeTab, preserve);
+            return;
+        }
+        if (activeTab.coder !== 'pi') return;
         if (!this._piBridgeSkillsEligible(activeTab)) {
             this._closePiRpcDropups(true);
             return;
@@ -7717,6 +7819,29 @@ export class TabManager {
             );
         });
 
+        // Same knob the bridge gives the Pi (term) tab: no list, no button,
+        // so a session without skills never shows a dead control.
+        let skillsButton = null;
+        if (state.skills.length > 0) {
+            skillsButton = document.createElement('button');
+            skillsButton.type = 'button';
+            skillsButton.className =
+                'preset-btn model-trigger-btn pi-rpc-skills-trigger';
+            skillsButton.textContent = 'Skills ▾';
+            skillsButton.title = 'Send a Pi skill to the session';
+            skillsButton.setAttribute('aria-label', 'Send a Pi skill');
+            skillsButton.disabled = menuDisabled;
+            skillsButton.addEventListener('click', (event) => {
+                event.stopPropagation();
+                if (skillsButton.disabled) return;
+                this._toggleDropup(
+                    'pi-rpc-skills-dropup',
+                    skillsButton,
+                    () => this._renderPiRpcSkillsDropup(),
+                );
+            });
+        }
+
         this.presetsContainer.append(
             compactButton,
             resetButton,
@@ -7725,6 +7850,7 @@ export class TabManager {
             modelButton,
             thinkingButton,
         );
+        if (skillsButton) this.presetsContainer.appendChild(skillsButton);
         const qcDropup = document.getElementById('quick-commands-dropup');
         if (qcDropup && !qcDropup.classList.contains('hidden'))
             this.renderQuickCmdsDropup();
@@ -7734,6 +7860,9 @@ export class TabManager {
         const tDropup = document.getElementById('pi-rpc-thinking-dropup');
         if (tDropup && !tDropup.classList.contains('hidden'))
             this._renderPiRpcThinkingDropup();
+        const sDropup = document.getElementById('pi-rpc-skills-dropup');
+        if (sDropup && !sDropup.classList.contains('hidden'))
+            this._renderPiRpcSkillsDropup(true);
         // Keep open pickers on top of the rebuit row's current height.
         document
             .querySelectorAll('.model-presets-dropup:not(.hidden)')
