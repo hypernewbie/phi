@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -82,15 +83,22 @@ func assertNoQueueCommand(t *testing.T, fp *fakeProc) {
 	}
 }
 
+// queueImageResolver is a test double, but the manager calls it from its
+// read-loop goroutine while the test goroutine asserts on the recorded
+// releases, so its fields need the same care as production state.
 type queueImageResolver struct {
+	mu          sync.Mutex
 	attachments []QueueAttachment
 	released    []string
 }
 
 func (r *queueImageResolver) ResolveAttachments(_ context.Context, _ string, _ string, _ string, _ string, refs []string) ([]QueueAttachment, error) {
+	r.mu.Lock()
+	attachments := append([]QueueAttachment(nil), r.attachments...)
+	r.mu.Unlock()
 	out := make([]QueueAttachment, len(refs))
 	for index, ref := range refs {
-		for _, attachment := range r.attachments {
+		for _, attachment := range attachments {
 			if attachment.Ref == ref {
 				out[index] = cloneQueueItem(QueueItem{Attachments: []QueueAttachment{attachment}}).Attachments[0]
 				break
@@ -104,8 +112,34 @@ func (r *queueImageResolver) ResolveAttachments(_ context.Context, _ string, _ s
 }
 
 func (r *queueImageResolver) ReleaseAttachments(_ context.Context, _ string, _ string, _ string, _ string, refs []string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.released = append(r.released, refs...)
 	return nil
+}
+
+// releasedRefs snapshots the recorded releases so assertions cannot race the
+// read-loop goroutine or observe a half-appended slice.
+func (r *queueImageResolver) releasedRefs() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.released...)
+}
+
+// assertReleasedRefs fails unless the resolver recorded exactly wantRefs, in
+// order. One snapshot per assertion: the manager can append from its read-loop
+// goroutine at any moment.
+func assertReleasedRefs(t *testing.T, r *queueImageResolver, wantRefs ...string) {
+	t.Helper()
+	got := r.releasedRefs()
+	if len(got) != len(wantRefs) {
+		t.Fatalf("released refs = %v, want %v", got, wantRefs)
+	}
+	for index := range wantRefs {
+		if got[index] != wantRefs[index] {
+			t.Fatalf("released refs = %v, want %v", got, wantRefs)
+		}
+	}
 }
 
 func (r *queueImageResolver) CopyAttachments(_ context.Context, _ string, _ string, _ string, _ string, source []QueueAttachment) ([]QueueAttachment, error) {
@@ -183,16 +217,14 @@ func TestQueueClaimReleasesAtAgentSettled(t *testing.T) {
 	command := nextQueueCommand(t, fp)
 	writeQueueResponse(t, fp, command, true, "", `{}`)
 	waitQueueState(t, inst, "settled", QueueAccepted)
-	if len(resolver.released) != 0 {
-		t.Fatalf("accepted queue claim released before settlement: %v", resolver.released)
+	if len(resolver.releasedRefs()) != 0 {
+		t.Fatalf("accepted queue claim released before settlement: %v", resolver.releasedRefs())
 	}
 	if _, err := fp.stdoutW.Write([]byte(`{"type":"agent_settled"}` + "\n")); err != nil {
 		t.Fatal(err)
 	}
 	waitQueueState(t, inst, "settled", QueueConsumed)
-	if len(resolver.released) != 1 || resolver.released[0] != "settled-ref" {
-		t.Fatalf("settled claim releases=%v", resolver.released)
-	}
+	assertReleasedRefs(t, resolver, "settled-ref")
 	statsCommand := nextQueueCommand(t, fp)
 	if statsCommand["type"] != "get_session_stats" {
 		t.Fatalf("settled refresh command = %#v", statsCommand)
@@ -268,9 +300,7 @@ func TestQueueAcceptanceAfterSettlementConsumesAndPumps(t *testing.T) {
 
 	inst.finishQueueAcceptance("race-first", false)
 	first = waitQueueState(t, inst, "race-first", QueueConsumed)
-	if len(resolver.released) != 1 || resolver.released[0] != "race-ref" {
-		t.Fatalf("race claim releases = %v", resolver.released)
-	}
+	assertReleasedRefs(t, resolver, "race-ref")
 
 	secondCommand := nextQueueCommand(t, fp)
 	if secondCommand["type"] != "prompt" || secondCommand["message"] != "second" {
@@ -339,8 +369,8 @@ func TestPromotedPromptSettlementBeforeResponseConsumesAndPumpsOnce(t *testing.T
 	if got := queueItemByID(t, inst, "promoted-first").State; got != QueuePromoted {
 		t.Fatalf("promoted item settled before response as %q", got)
 	}
-	if len(resolver.released) != 0 {
-		t.Fatalf("promoted claim released before response: %v", resolver.released)
+	if len(resolver.releasedRefs()) != 0 {
+		t.Fatalf("promoted claim released before response: %v", resolver.releasedRefs())
 	}
 	inst.queueMu.Lock()
 	stillSending := inst.queueSending
@@ -365,9 +395,7 @@ func TestPromotedPromptSettlementBeforeResponseConsumesAndPumpsOnce(t *testing.T
 		t.Fatal("promoted dispatch did not finish")
 	}
 	waitQueueState(t, inst, "promoted-first", QueueConsumed)
-	if len(resolver.released) != 1 || resolver.released[0] != "promoted-first-ref" {
-		t.Fatalf("promoted claim releases = %v", resolver.released)
-	}
+	assertReleasedRefs(t, resolver, "promoted-first-ref")
 
 	// agent_settled also issues a stats refresh. Answer it while waiting for
 	// the one and only pumped local prompt; either command may arrive first.
@@ -448,8 +476,8 @@ func TestQueueSettlementBeforeNormalPromptWriteKeepsAcceptance(t *testing.T) {
 	}
 	writeQueueResponse(t, fp, command, true, "", `{}`)
 	accepted := waitQueueState(t, inst, "write-boundary", QueueAccepted)
-	if len(resolver.released) != 0 {
-		t.Fatalf("pre-write settlement released accepted claim: %v", resolver.released)
+	if len(resolver.releasedRefs()) != 0 {
+		t.Fatalf("pre-write settlement released accepted claim: %v", resolver.releasedRefs())
 	}
 	select {
 	case <-done:
@@ -462,9 +490,7 @@ func TestQueueSettlementBeforeNormalPromptWriteKeepsAcceptance(t *testing.T) {
 
 	inst.settleAcceptedQueueItems()
 	waitQueueState(t, inst, "write-boundary", QueueConsumed)
-	if len(resolver.released) != 1 || resolver.released[0] != "write-boundary-ref" {
-		t.Fatalf("write-boundary release = %v", resolver.released)
-	}
+	assertReleasedRefs(t, resolver, "write-boundary-ref")
 }
 
 func TestQueueSettlementBeforePromotedPromptWriteKeepsAcceptance(t *testing.T) {
@@ -519,8 +545,8 @@ func TestQueueSettlementBeforePromotedPromptWriteKeepsAcceptance(t *testing.T) {
 	}
 	writeQueueResponse(t, fp, command, true, "", `{}`)
 	promoted := waitQueueState(t, inst, "promoted-write", QueueAccepted)
-	if len(resolver.released) != 0 {
-		t.Fatalf("pre-write settlement released promoted claim: %v", resolver.released)
+	if len(resolver.releasedRefs()) != 0 {
+		t.Fatalf("pre-write settlement released promoted claim: %v", resolver.releasedRefs())
 	}
 	select {
 	case <-done:
@@ -540,9 +566,7 @@ func TestQueueSettlementBeforePromotedPromptWriteKeepsAcceptance(t *testing.T) {
 
 	inst.settleAcceptedQueueItems()
 	waitQueueState(t, inst, "promoted-write", QueueConsumed)
-	if len(resolver.released) != 1 || resolver.released[0] != "promoted-write-ref" {
-		t.Fatalf("promoted write release = %v", resolver.released)
-	}
+	assertReleasedRefs(t, resolver, "promoted-write-ref")
 }
 
 func TestQueueSubmitIdempotentDuplicateSendsOnePiCommand(t *testing.T) {
@@ -846,8 +870,8 @@ func TestQueueRejectedSteerPromotionSnapshotsSettlementGeneration(t *testing.T) 
 	if promoted.State != QueueAccepted {
 		t.Fatalf("accepted promoted item = %+v", promoted)
 	}
-	if len(resolver.released) != 0 {
-		t.Fatalf("promoted claim released before subsequent settlement: %v", resolver.released)
+	if len(resolver.releasedRefs()) != 0 {
+		t.Fatalf("promoted claim released before subsequent settlement: %v", resolver.releasedRefs())
 	}
 	if !statsAnswered {
 		statsCommand := nextQueueCommand(t, fp)
@@ -861,9 +885,7 @@ func TestQueueRejectedSteerPromotionSnapshotsSettlementGeneration(t *testing.T) 
 		t.Fatal(err)
 	}
 	waitQueueState(t, inst, "steer-promoted", QueueConsumed)
-	if len(resolver.released) != 1 || resolver.released[0] != "promoted-ref" {
-		t.Fatalf("promoted claim releases after settlement = %v", resolver.released)
-	}
+	assertReleasedRefs(t, resolver, "promoted-ref")
 	statsCommand := nextQueueCommand(t, fp)
 	if statsCommand["type"] != "get_session_stats" {
 		t.Fatalf("second settled refresh command = %#v", statsCommand)
@@ -968,9 +990,7 @@ func TestQueueUncertainReleasesOriginalClaimAndCopiesFreshRefs(t *testing.T) {
 	}
 	_ = nextQueueCommand(t, fp)
 	waitQueueState(t, inst, "uncertain-image", QueueUncertain)
-	if len(resolver.released) != 1 || resolver.released[0] != "uncertain-ref" {
-		t.Fatalf("uncertain claim releases=%v", resolver.released)
-	}
+	assertReleasedRefs(t, resolver, "uncertain-ref")
 	copyResult, err := inst.QueueCopy("uncertain-image", epoch, QueueSubmitOptions{Owner: "owner", Resolver: resolver})
 	if err != nil {
 		t.Fatal(err)
