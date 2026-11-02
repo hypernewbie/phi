@@ -45,12 +45,95 @@ func stateToWire(st rpc.State) *wspb.ControlState {
 		ContextWindowTokens: optionalInt64(st.ContextWindowTokens),
 		CacheReadTokens:     optionalInt64(st.CacheReadTokens),
 		CacheWriteTokens:    optionalInt64(st.CacheWriteTokens),
+		Cost:                st.Cost,
 		Skills:              st.Skills,
 		Busy:                st.Busy,
 		Status:              st.Status,
 		QueueDepth:          uint32(st.QueueDepth),
 		SessionPath:         optionalString(st.SessionPath),
 	}
+}
+
+func queueItemToWire(item rpc.QueueItem) *wspb.QueueItem {
+	out := &wspb.QueueItem{
+		Id:           item.ID,
+		Sid:          item.Sid,
+		SessionEpoch: item.SessionEpoch,
+		Message:      item.Message,
+		Delivery:     string(item.Delivery),
+		State:        string(item.State),
+		Error:        optionalString(item.Error),
+		CreatedAt:    item.CreatedAt,
+	}
+	for _, attachment := range item.Attachments {
+		out.Attachments = append(out.Attachments, &wspb.QueueAttachment{
+			Ref:       attachment.Ref,
+			Name:      attachment.Name,
+			MimeType:  attachment.MimeType,
+			SizeBytes: attachment.SizeBytes,
+		})
+	}
+	return out
+}
+
+func queueSnapshotToWire(snapshot rpc.QueueSnapshot) *wspb.QueueSnapshot {
+	out := &wspb.QueueSnapshot{SessionEpoch: snapshot.SessionEpoch}
+	for _, item := range snapshot.Items {
+		out.Items = append(out.Items, queueItemToWire(item))
+	}
+	return out
+}
+
+func queueRestoreToWire(result rpc.QueueRestoreResult) *wspb.QueueRestoreResult {
+	out := &wspb.QueueRestoreResult{Restored: result.Restored, Reason: optionalString(result.Reason)}
+	if result.Item.ID != "" {
+		out.Item = queueItemToWire(result.Item)
+	}
+	return out
+}
+
+func queueCopyToWire(result rpc.QueueCopyResult) *wspb.QueueCopyResult {
+	out := &wspb.QueueCopyResult{
+		Copied:         result.Copied,
+		Message:        optionalString(result.Message),
+		AttachmentRefs: result.AttachmentRefs,
+		Reason:         optionalString(result.Reason),
+	}
+	for _, attachment := range result.Attachments {
+		out.Attachments = append(out.Attachments, &wspb.QueueAttachment{
+			Ref:       attachment.Ref,
+			Name:      attachment.Name,
+			MimeType:  attachment.MimeType,
+			SizeBytes: attachment.SizeBytes,
+		})
+	}
+	return out
+}
+
+func queueDiscardToWire(result rpc.QueueDiscardResult) *wspb.QueueDiscardResult {
+	out := &wspb.QueueDiscardResult{Discarded: result.Discarded, Reason: optionalString(result.Reason)}
+	if result.Item.ID != "" {
+		out.Item = queueItemToWire(result.Item)
+	}
+	return out
+}
+
+func dialogsToWire(dialogs []rpc.ExtensionUIDialog) []*wspb.ExtensionUIDialog {
+	out := make([]*wspb.ExtensionUIDialog, 0, len(dialogs))
+	for _, dialog := range dialogs {
+		out = append(out, &wspb.ExtensionUIDialog{
+			Id:          dialog.ID,
+			Method:      dialog.Method,
+			Title:       dialog.Title,
+			Options:     dialog.Options,
+			Message:     optionalString(dialog.Message),
+			Placeholder: optionalString(dialog.Placeholder),
+			Prefill:     optionalString(dialog.Prefill),
+			Timeout:     int32(dialog.Timeout),
+			CreatedAt:   dialog.CreatedAt,
+		})
+	}
+	return out
 }
 
 func optionalString(v string) *string {
@@ -239,6 +322,39 @@ func eventToWire(ev rpc.Event) (*wspb.ControlEvent, error) {
 		}
 		out.Event = &wspb.ControlEvent_ExtensionError{ExtensionError: &wspb.ExtensionErrorEvent{
 			Error: optionalString(rawString(raw["error"])),
+		}}
+	case rpc.EvtQueueChanged:
+		snapshot, ok := ev.Data.(rpc.QueueSnapshot)
+		if !ok {
+			return nil, fmt.Errorf("unexpected queue snapshot type %T", ev.Data)
+		}
+		out.Event = &wspb.ControlEvent_QueueChanged{QueueChanged: &wspb.QueueChangedEvent{
+			Queue: queueSnapshotToWire(snapshot),
+		}}
+	case rpc.EvtExtensionUIRequest:
+		request, err := externalFromAny(ev.Data)
+		if err != nil {
+			return nil, err
+		}
+		out.Event = &wspb.ControlEvent_ExtensionUiRequest{ExtensionUiRequest: &wspb.ExtensionUIRequestEvent{
+			Request: request,
+		}}
+	case rpc.EvtExtensionUIClosed:
+		raw, err := rawRecord(ev.Data)
+		if err != nil {
+			return nil, err
+		}
+		out.Event = &wspb.ControlEvent_ExtensionUiClosed{ExtensionUiClosed: &wspb.ExtensionUIClosedEvent{
+			Id:     rawString(raw["id"]),
+			Reason: optionalString(rawString(raw["reason"])),
+		}}
+	case rpc.EvtToolExecutionUpdate:
+		payload, err := externalFromAny(ev.Data)
+		if err != nil {
+			return nil, err
+		}
+		out.Event = &wspb.ControlEvent_ToolExecutionUpdate{ToolExecutionUpdate: &wspb.ToolExecutionUpdateEvent{
+			Payload: payload,
 		}}
 	default:
 		return nil, fmt.Errorf("unknown event %q", ev.Evt)

@@ -517,6 +517,52 @@ func TestBusyLifecycleAndAgentSettledClearing(t *testing.T) {
 	}
 }
 
+func TestIdleAgentSettledPublishesStateChanged(t *testing.T) {
+	fp, inst, sub := wireFixture(t)
+	t.Cleanup(inst.Kill)
+
+	if state := inst.StateCopy(); state.Busy {
+		t.Fatalf("fixture unexpectedly busy: %+v", state)
+	}
+	if _, err := fp.stdoutW.Write([]byte(`{"type":"agent_settled"}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	event := nextWireEvent(t, sub)
+	if event.Evt != EvtStateChanged {
+		t.Fatalf("idle agent_settled did not publish stateChanged: %+v", event)
+	}
+	state, ok := event.Data.(State)
+	if !ok || state.Busy {
+		t.Fatalf("idle settled stateChanged data = %#v", event.Data)
+	}
+	if state := inst.StateCopy(); state.Busy {
+		t.Fatalf("idle agent_settled changed Busy unexpectedly: %+v", state)
+	}
+
+	// The lifecycle event also refreshes session stats; answer that request so
+	// the fixture has no pending waiter when the test exits.
+	select {
+	case command := <-fp.commands:
+		if command["type"] != "get_session_stats" {
+			t.Fatalf("unexpected idle settled refresh: %#v", command)
+		}
+		id, ok := command["id"].(string)
+		if !ok || id == "" {
+			t.Fatalf("idle settled refresh missing id: %#v", command)
+		}
+		line := fmt.Sprintf(`{"type":"response","id":%q,"command":"get_session_stats","success":true,"data":{}}`+"\n", id)
+		if _, err := fp.stdoutW.Write([]byte(line)); err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("idle agent_settled did not refresh stats")
+	}
+	event = nextWireEvent(t, sub)
+	if event.Evt != EvtStateChanged {
+		t.Fatalf("idle settled stats response event = %+v", event)
+	}
+}
+
 func TestPiRejectionUnblocksRequestAndRemovesWaiter(t *testing.T) {
 	fp, inst, _ := wireFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -564,7 +610,7 @@ func TestMetadataResponsesMergeState(t *testing.T) {
 	if state = inst.StateCopy(); state.Model != "fallback-id" {
 		t.Fatalf("model id fallback not merged: %+v", state)
 	}
-	wireResponse(t, fp, inst, "get_session_stats", `{"tokens":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextUsage":{"tokens":42000,"contextWindow":200000}}`)
+	wireResponse(t, fp, inst, "get_session_stats", `{"tokens":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"cost":0.45,"contextUsage":{"tokens":42000,"contextWindow":200000}}`)
 	nextWireEvent(t, sub)
 	state = inst.StateCopy()
 	if state.InputTokens == nil || *state.InputTokens != 0 ||
@@ -572,8 +618,21 @@ func TestMetadataResponsesMergeState(t *testing.T) {
 		state.CacheReadTokens == nil || *state.CacheReadTokens != 0 ||
 		state.CacheWriteTokens == nil || *state.CacheWriteTokens != 0 ||
 		state.ContextUsedTokens == nil || *state.ContextUsedTokens != 42000 ||
-		state.ContextWindowTokens == nil || *state.ContextWindowTokens != 200000 {
+		state.ContextWindowTokens == nil || *state.ContextWindowTokens != 200000 ||
+		state.Cost == nil || *state.Cost != 0.45 {
 		t.Fatalf("stats metadata not merged: %+v", state)
+	}
+	wireResponse(t, fp, inst, "get_session_stats", `{"cost":0}`)
+	nextWireEvent(t, sub)
+	state = inst.StateCopy()
+	if state.Cost == nil || *state.Cost != 0 {
+		t.Fatalf("zero cost was not preserved: %+v", state)
+	}
+	wireResponse(t, fp, inst, "get_session_stats", `{}`)
+	nextWireEvent(t, sub)
+	state = inst.StateCopy()
+	if state.Cost != nil {
+		t.Fatalf("omitted cost should clear cached cost: %+v", state)
 	}
 	wireResponse(t, fp, inst, "get_commands", `{"commands":[{"source":"skill","name":"one","path":"/secret"},{"source":"extension","name":"nope"},{"source":"skill","name":"one"},{"source":"skill","name":"two"}]}`)
 	nextWireEvent(t, sub)
@@ -877,11 +936,11 @@ func TestMessageEndCapturesStopReasonAndErrorMessage(t *testing.T) {
 }
 
 // TestPassthroughEventsAdvanceSequenceWithoutMutatingSnapshot pins down
-// the Milestone 1 contract for the six new error/control events:
-//   - each maps to its named sequenced Evt (autoRetryStart, autoRetryEnd,
-//     extensionError, summarizationRetryScheduled, summarizationRetryFinished)
+// the Milestone 1 contract for raw control events:
+//   - each maps to its named sequenced Evt
 //   - each is a raw passthrough (msg=nil): the snapshot messages list is
 //     unchanged and only lastSeq advances
+//   - tool_execution_start/end remain ignored
 //   - compaction_end is its own case (handled above) and is NOT covered here
 func TestPassthroughEventsAdvanceSequenceWithoutMutatingSnapshot(t *testing.T) {
 	cases := []struct {
@@ -898,6 +957,11 @@ func TestPassthroughEventsAdvanceSequenceWithoutMutatingSnapshot(t *testing.T) {
 			piEvent: "auto_retry_end",
 			phiEvt:  EvtAutoRetryEnd,
 			line:    `{"type":"auto_retry_end","success":false,"finalError":"boom"}`,
+		},
+		{
+			piEvent: "tool_execution_update",
+			phiEvt:  EvtToolExecutionUpdate,
+			line:    `{"type":"tool_execution_update","toolCallId":"call-1","partialResult":{"content":[{"type":"text","text":"out"}]}}`,
 		},
 		{
 			piEvent: "extension_error",
@@ -931,15 +995,156 @@ func TestPassthroughEventsAdvanceSequenceWithoutMutatingSnapshot(t *testing.T) {
 			if event.Seq != inst.SnapshotCopy().LastSeq {
 				t.Fatalf("%s seq %d does not match snapshot lastSeq %d", tc.piEvent, event.Seq, inst.SnapshotCopy().LastSeq)
 			}
-			// Raw passthrough: data is the full JSONL line, mutable.
+			// Raw passthrough: data is the copied full JSONL line.
 			raw, ok := event.Data.(json.RawMessage)
 			if !ok {
 				t.Fatalf("%s data type = %T, want json.RawMessage", tc.piEvent, event.Data)
 			}
-			if !strings.Contains(string(raw), `"type":"`+tc.piEvent+`"`) {
-				t.Fatalf("%s raw payload lost type field: %s", tc.piEvent, raw)
+			if string(raw) != tc.line {
+				t.Fatalf("%s raw payload changed: got %s want %s", tc.piEvent, raw, tc.line)
 			}
 		})
+	}
+}
+
+func TestToolAndQueuePassthroughEventsAdvanceConsecutiveSequence(t *testing.T) {
+	fp, inst, sub := wireFixture(t)
+	lines := []string{
+		`{"type":"tool_execution_update","toolCallId":"call-1","partialResult":{"content":[{"type":"text","text":"first"}]}}`,
+		`{"type":"queue_update","steering":["one"],"followUp":["two"]}`,
+	}
+	if _, err := fp.stdoutW.Write([]byte(strings.Join(lines, "\n") + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	// queue_update carries no item identity the control protocol can carry, so
+	// it is dropped server-side: emitting it would fail event conversion and
+	// close the control socket. Only the tool update is published.
+	wantEvents := []string{EvtToolExecutionUpdate}
+	for index, want := range wantEvents {
+		event := nextWireEvent(t, sub)
+		if event.Evt != want || event.Seq != uint64(index+1) {
+			t.Fatalf("event[%d] = %+v, want evt=%s seq=%d", index, event, want, index+1)
+		}
+		raw, ok := event.Data.(json.RawMessage)
+		if !ok || string(raw) != lines[index] {
+			t.Fatalf("event[%d] payload = %T %s, want %s", index, event.Data, raw, lines[index])
+		}
+	}
+	if snapshot := inst.SnapshotCopy(); len(snapshot.Messages) != 0 || snapshot.LastSeq != 1 {
+		t.Fatalf("tool/queue passthrough changed snapshot: %+v", snapshot)
+	}
+}
+
+func TestExtensionUIRequestIsRetainedAndSequenced(t *testing.T) {
+	cases := []struct {
+		name   string
+		line   string
+		method string
+		check  func(*testing.T, ExtensionUIDialog)
+	}{
+		{
+			name:   "select",
+			line:   `{"type":"extension_ui_request","id":"select-1","method":"select","title":"Pick","options":["a","b"],"message":"ignored","prefill":"ignored","timeout":10000}`,
+			method: "select",
+			check: func(t *testing.T, dialog ExtensionUIDialog) {
+				if len(dialog.Options) != 2 || dialog.Options[1] != "b" || dialog.Timeout != 10000 || dialog.Message != "" || dialog.Prefill != "" {
+					t.Fatalf("select dialog fields = %+v", dialog)
+				}
+			},
+		},
+		{
+			name:   "confirm",
+			line:   `{"type":"extension_ui_request","id":"confirm-1","method":"confirm","title":"Continue?","message":"Please confirm","timeout":5000}`,
+			method: "confirm",
+			check: func(t *testing.T, dialog ExtensionUIDialog) {
+				if dialog.Message != "Please confirm" || dialog.Timeout != 5000 {
+					t.Fatalf("confirm dialog fields = %+v", dialog)
+				}
+			},
+		},
+		{
+			name:   "input",
+			line:   `{"type":"extension_ui_request","id":"input-1","method":"input","title":"Value","placeholder":"type here"}`,
+			method: "input",
+			check: func(t *testing.T, dialog ExtensionUIDialog) {
+				if dialog.Placeholder != "type here" {
+					t.Fatalf("input dialog fields = %+v", dialog)
+				}
+			},
+		},
+		{
+			name:   "editor",
+			line:   `{"type":"extension_ui_request","id":"editor-1","method":"editor","title":"Edit","prefill":"line 1\nline 2"}`,
+			method: "editor",
+			check: func(t *testing.T, dialog ExtensionUIDialog) {
+				if dialog.Prefill != "line 1\nline 2" {
+					t.Fatalf("editor dialog fields = %+v", dialog)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fp, inst, sub := wireFixture(t)
+			if _, err := fp.stdoutW.Write([]byte(tc.line + "\n")); err != nil {
+				t.Fatal(err)
+			}
+			event := nextWireEvent(t, sub)
+			if event.Evt != EvtExtensionUIRequest || event.Seq != 1 {
+				t.Fatalf("extension request event = %+v", event)
+			}
+			raw, ok := event.Data.(json.RawMessage)
+			if !ok || string(raw) != tc.line {
+				t.Fatalf("extension request payload = %T %s, want %s", event.Data, raw, tc.line)
+			}
+			if len(inst.SnapshotCopy().Messages) != 0 || inst.SnapshotCopy().LastSeq != 1 {
+				t.Fatalf("extension request mutated snapshot: %+v", inst.SnapshotCopy())
+			}
+			dialogs := inst.ExtensionUIDialogsCopy()
+			if len(dialogs) != 1 || dialogs[0].Method != tc.method || dialogs[0].CreatedAt <= 0 {
+				t.Fatalf("retained dialogs = %+v", dialogs)
+			}
+			tc.check(t, dialogs[0])
+		})
+	}
+}
+
+func TestExtensionUIUnknownMethodDoesNotBlock(t *testing.T) {
+	fp, inst, sub := wireFixture(t)
+	lines := []string{
+		`{"type":"extension_ui_request","id":"unknown-1","method":"unknown_dialog","title":"Unsupported"}`,
+		`{"type":"message_end","message":{"role":"assistant","content":"still parses"}}`,
+	}
+	go func() { _, _ = fp.stdoutW.Write([]byte(strings.Join(lines, "\n") + "\n")) }()
+	var sawClose, sawMessage bool
+	for !sawMessage {
+		event := nextWireEvent(t, sub)
+		switch event.Evt {
+		case EvtExtensionUIClosed:
+			sawClose = true
+			data, _ := json.Marshal(event.Data)
+			if string(data) != `{"id":"unknown-1","reason":"unsupported"}` {
+				t.Fatalf("unknown close data = %s", data)
+			}
+		case EvtMessageEnd:
+			sawMessage = true
+		default:
+			t.Fatalf("unexpected event after unknown dialog: %+v", event)
+		}
+	}
+	if !sawClose {
+		t.Fatal("unknown dialog did not emit extensionUiClosed")
+	}
+	select {
+	case command := <-fp.commands:
+		if command["type"] != "extension_ui_response" || command["id"] != "unknown-1" || command["cancelled"] != true {
+			t.Fatalf("unknown dialog cancellation command = %#v", command)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("unknown dialog did not receive cancellation")
+	}
+	if len(inst.SnapshotCopy().Messages) != 1 {
+		t.Fatalf("following message_end was not retained: %+v", inst.SnapshotCopy().Messages)
 	}
 }
 
@@ -1043,7 +1248,7 @@ func TestSubagentFleetForwardsSnapshot(t *testing.T) {
 func TestSubagentFleetIgnoresOtherWidgets(t *testing.T) {
 	lines := []string{
 		`{"type":"extension_ui_request","id":"a1","method":"setWidget","widgetKey":"other-widget","widgetLines":["x"]}`,
-		`{"type":"extension_ui_request","id":"a2","method":"select","title":"pick one","options":["a","b"]}`,
+		`{"type":"extension_ui_request","id":"a2","method":"notify","message":"ignored"}`,
 		fleetLine(t, `{not json`),
 	}
 	fp, inst, sub := wireFixture(t)

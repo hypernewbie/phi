@@ -103,6 +103,24 @@ export interface ControlCall {
     } | {
         $case: "activateTab";
         value: ActivateTabCall;
+    } | {
+        $case: "queueSubmit";
+        value: QueueSubmitCall;
+    } | {
+        $case: "queueRestore";
+        value: QueueRestoreCall;
+    } | {
+        $case: "queueCopy";
+        value: QueueCopyCall;
+    } | {
+        $case: "queueDiscard";
+        value: QueueDiscardCall;
+    } | {
+        $case: "extensionUiResponse";
+        value: ExtensionUIResponseCall;
+    } | {
+        $case: "extensionUiCancel";
+        value: ExtensionUICancelCall;
     } | undefined;
 }
 /**
@@ -177,6 +195,24 @@ export interface ControlResponse {
     } | {
         $case: "activateTab";
         value: StubResult;
+    } | {
+        $case: "queueSubmit";
+        value: QueueItemResult;
+    } | {
+        $case: "queueRestore";
+        value: QueueRestoreResult;
+    } | {
+        $case: "queueCopy";
+        value: QueueCopyResult;
+    } | {
+        $case: "queueDiscard";
+        value: QueueDiscardResult;
+    } | {
+        $case: "extensionUiResponse";
+        value: ExtensionUIResponseResult;
+    } | {
+        $case: "extensionUiCancel";
+        value: ExtensionUICancelResult;
     } | undefined;
 }
 export interface ControlError {
@@ -225,6 +261,18 @@ export interface ControlEvent {
     } | {
         $case: "extensionError";
         value: ExtensionErrorEvent;
+    } | {
+        $case: "queueChanged";
+        value: QueueChangedEvent;
+    } | {
+        $case: "extensionUiRequest";
+        value: ExtensionUIRequestEvent;
+    } | {
+        $case: "extensionUiClosed";
+        value: ExtensionUIClosedEvent;
+    } | {
+        $case: "toolExecutionUpdate";
+        value: ToolExecutionUpdateEvent;
     } | undefined;
 }
 /**
@@ -250,6 +298,11 @@ export interface ControlState {
     status: string;
     queueDepth: number;
     sessionPath?: string | undefined;
+    /**
+     * cost is the session's accumulated spend as Pi reports it. Absent until
+     * the first get_session_stats response carries a value.
+     */
+    cost?: number | undefined;
 }
 /**
  * Message is one transcript entry. message_end carries the authoritative
@@ -285,6 +338,11 @@ export interface TranscriptSnapshot {
 export interface SpawnCall {
     cwd?: string | undefined;
     sessionPath?: string | undefined;
+    /**
+     * spawn_id makes a retried spawn idempotent: the same id with the same
+     * arguments reuses the existing child instead of starting a second one.
+     */
+    spawnId?: string | undefined;
 }
 export interface ListSessionsCall {
 }
@@ -352,6 +410,119 @@ export interface DlgClosedCall {
 export interface ActivateTabCall {
     sid?: string | undefined;
 }
+/**
+ * QueueAttachment is one opaque browser-owned attachment bound to a queued
+ * message. The bytes stay process-local; only this metadata crosses the wire.
+ */
+export interface QueueAttachment {
+    ref: string;
+    name: string;
+    mimeType: string;
+    sizeBytes: bigint;
+}
+/**
+ * QueueItem is one process-local delivery record. state keeps the ledger
+ * vocabulary: local, sending, accepted, uncertain, consumed, cancelled,
+ * promoted. error is present only for a failed or uncertain delivery.
+ */
+export interface QueueItem {
+    id: string;
+    sid: string;
+    sessionEpoch: string;
+    message: string;
+    delivery: string;
+    attachments: QueueAttachment[];
+    state: string;
+    error?: string | undefined;
+    createdAt: bigint;
+}
+/** QueueSnapshot is the hydrate, state, and queue_changed queue payload. */
+export interface QueueSnapshot {
+    sessionEpoch: string;
+    items: QueueItem[];
+}
+export interface QueueSubmitCall {
+    sid: string;
+    itemId: string;
+    sessionEpoch: string;
+    message: string;
+    delivery: string;
+    attachmentRefs: string[];
+}
+export interface QueueRestoreCall {
+    sid: string;
+    itemId: string;
+    sessionEpoch: string;
+}
+export interface QueueCopyCall {
+    sid: string;
+    itemId: string;
+    sessionEpoch: string;
+}
+export interface QueueDiscardCall {
+    sid: string;
+    itemId: string;
+    sessionEpoch: string;
+}
+export interface QueueItemResult {
+    item: QueueItem | undefined;
+}
+/** QueueRestoreResult reports draft recovery for a Phi-owned local item. */
+export interface QueueRestoreResult {
+    restored: boolean;
+    item: QueueItem | undefined;
+    reason?: string | undefined;
+}
+/**
+ * QueueCopyResult returns a fresh unsent draft for an uncertain item. The
+ * copied message is never resubmitted by the server.
+ */
+export interface QueueCopyResult {
+    copied: boolean;
+    message?: string | undefined;
+    attachmentRefs: string[];
+    attachments: QueueAttachment[];
+    reason?: string | undefined;
+}
+export interface QueueDiscardResult {
+    discarded: boolean;
+    item: QueueItem | undefined;
+    reason?: string | undefined;
+}
+/**
+ * ExtensionUIDialog is one retained blocking Pi dialog. Optional fields are
+ * populated only for the matching method: options for select, message for
+ * confirm, placeholder for input, prefill for editor.
+ */
+export interface ExtensionUIDialog {
+    id: string;
+    method: string;
+    title: string;
+    options: string[];
+    message?: string | undefined;
+    placeholder?: string | undefined;
+    prefill?: string | undefined;
+    timeout: number;
+    createdAt: bigint;
+}
+export interface ExtensionUIResponseCall {
+    sid: string;
+    requestId: string;
+    value?: string | undefined;
+    confirmed?: boolean | undefined;
+    cancelled: boolean;
+}
+export interface ExtensionUIResponseResult {
+    resolved: boolean;
+}
+export interface ExtensionUICancelCall {
+    sid: string;
+    /** reason keeps the existing tabClosed/server vocabulary. */
+    reason: string;
+}
+export interface ExtensionUICancelResult {
+    cancelled: number;
+}
 export interface SpawnResult {
     sid: string;
     title: string;
@@ -364,9 +535,13 @@ export interface ListSessionsResult {
 }
 export interface StateResult {
     state: ControlState | undefined;
+    queue: QueueSnapshot | undefined;
+    dialogs: ExtensionUIDialog[];
 }
 export interface TranscriptResult {
     session: TranscriptSnapshot | undefined;
+    queue: QueueSnapshot | undefined;
+    dialogs: ExtensionUIDialog[];
 }
 export interface PromptResult {
     accepted: boolean;
@@ -499,6 +674,35 @@ export interface ExtensionErrorEvent {
     error?: string | undefined;
 }
 /**
+ * QueueChangedEvent carries the whole delivery ledger after a change. Clients
+ * replace their ledger with this snapshot rather than patching item by item.
+ */
+export interface QueueChangedEvent {
+    queue: QueueSnapshot | undefined;
+}
+/**
+ * ExtensionUIRequestEvent carries Pi's blocking dialog request verbatim so the
+ * browser keeps the existing method-specific shape.
+ */
+export interface ExtensionUIRequestEvent {
+    request?: ExternalValue | undefined;
+}
+/**
+ * ExtensionUIClosedEvent retires one retained dialog. reason keeps the
+ * timeout, childExit, tabClosed, server, and unsupported values.
+ */
+export interface ExtensionUIClosedEvent {
+    id: string;
+    reason?: string | undefined;
+}
+/**
+ * ToolExecutionUpdateEvent is Pi's tool progress payload, passed through as
+ * external data because its shape is owned by Pi.
+ */
+export interface ToolExecutionUpdateEvent {
+    payload?: ExternalValue | undefined;
+}
+/**
  * ExternalValue represents open-ended Pi, tool, provider, or extension data.
  * Objects use repeated key/value entries rather than a protobuf map so
  * arbitrary keys, including reserved ones such as __proto__, survive a
@@ -573,6 +777,22 @@ export declare const WaitViewReadyCall: MessageFns<WaitViewReadyCall>;
 export declare const DlgCall: MessageFns<DlgCall>;
 export declare const DlgClosedCall: MessageFns<DlgClosedCall>;
 export declare const ActivateTabCall: MessageFns<ActivateTabCall>;
+export declare const QueueAttachment: MessageFns<QueueAttachment>;
+export declare const QueueItem: MessageFns<QueueItem>;
+export declare const QueueSnapshot: MessageFns<QueueSnapshot>;
+export declare const QueueSubmitCall: MessageFns<QueueSubmitCall>;
+export declare const QueueRestoreCall: MessageFns<QueueRestoreCall>;
+export declare const QueueCopyCall: MessageFns<QueueCopyCall>;
+export declare const QueueDiscardCall: MessageFns<QueueDiscardCall>;
+export declare const QueueItemResult: MessageFns<QueueItemResult>;
+export declare const QueueRestoreResult: MessageFns<QueueRestoreResult>;
+export declare const QueueCopyResult: MessageFns<QueueCopyResult>;
+export declare const QueueDiscardResult: MessageFns<QueueDiscardResult>;
+export declare const ExtensionUIDialog: MessageFns<ExtensionUIDialog>;
+export declare const ExtensionUIResponseCall: MessageFns<ExtensionUIResponseCall>;
+export declare const ExtensionUIResponseResult: MessageFns<ExtensionUIResponseResult>;
+export declare const ExtensionUICancelCall: MessageFns<ExtensionUICancelCall>;
+export declare const ExtensionUICancelResult: MessageFns<ExtensionUICancelResult>;
 export declare const SpawnResult: MessageFns<SpawnResult>;
 export declare const ListSessionsResult: MessageFns<ListSessionsResult>;
 export declare const StateResult: MessageFns<StateResult>;
@@ -600,6 +820,10 @@ export declare const SummarizationRetryScheduledEvent: MessageFns<SummarizationR
 export declare const SummarizationRetryFinishedEvent: MessageFns<SummarizationRetryFinishedEvent>;
 export declare const CompactionEndEvent: MessageFns<CompactionEndEvent>;
 export declare const ExtensionErrorEvent: MessageFns<ExtensionErrorEvent>;
+export declare const QueueChangedEvent: MessageFns<QueueChangedEvent>;
+export declare const ExtensionUIRequestEvent: MessageFns<ExtensionUIRequestEvent>;
+export declare const ExtensionUIClosedEvent: MessageFns<ExtensionUIClosedEvent>;
+export declare const ToolExecutionUpdateEvent: MessageFns<ToolExecutionUpdateEvent>;
 export declare const ExternalValue: MessageFns<ExternalValue>;
 export declare const ExternalNull: MessageFns<ExternalNull>;
 export declare const ExternalList: MessageFns<ExternalList>;

@@ -321,6 +321,12 @@ type ControlCall struct {
 	//	*ControlCall_Dlg
 	//	*ControlCall_DlgClosed
 	//	*ControlCall_ActivateTab
+	//	*ControlCall_QueueSubmit
+	//	*ControlCall_QueueRestore
+	//	*ControlCall_QueueCopy
+	//	*ControlCall_QueueDiscard
+	//	*ControlCall_ExtensionUiResponse
+	//	*ControlCall_ExtensionUiCancel
 	Call          isControlCall_Call `protobuf_oneof:"call"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -559,6 +565,60 @@ func (x *ControlCall) GetActivateTab() *ActivateTabCall {
 	return nil
 }
 
+func (x *ControlCall) GetQueueSubmit() *QueueSubmitCall {
+	if x != nil {
+		if x, ok := x.Call.(*ControlCall_QueueSubmit); ok {
+			return x.QueueSubmit
+		}
+	}
+	return nil
+}
+
+func (x *ControlCall) GetQueueRestore() *QueueRestoreCall {
+	if x != nil {
+		if x, ok := x.Call.(*ControlCall_QueueRestore); ok {
+			return x.QueueRestore
+		}
+	}
+	return nil
+}
+
+func (x *ControlCall) GetQueueCopy() *QueueCopyCall {
+	if x != nil {
+		if x, ok := x.Call.(*ControlCall_QueueCopy); ok {
+			return x.QueueCopy
+		}
+	}
+	return nil
+}
+
+func (x *ControlCall) GetQueueDiscard() *QueueDiscardCall {
+	if x != nil {
+		if x, ok := x.Call.(*ControlCall_QueueDiscard); ok {
+			return x.QueueDiscard
+		}
+	}
+	return nil
+}
+
+func (x *ControlCall) GetExtensionUiResponse() *ExtensionUIResponseCall {
+	if x != nil {
+		if x, ok := x.Call.(*ControlCall_ExtensionUiResponse); ok {
+			return x.ExtensionUiResponse
+		}
+	}
+	return nil
+}
+
+func (x *ControlCall) GetExtensionUiCancel() *ExtensionUICancelCall {
+	if x != nil {
+		if x, ok := x.Call.(*ControlCall_ExtensionUiCancel); ok {
+			return x.ExtensionUiCancel
+		}
+	}
+	return nil
+}
+
 type isControlCall_Call interface {
 	isControlCall_Call()
 }
@@ -647,6 +707,30 @@ type ControlCall_ActivateTab struct {
 	ActivateTab *ActivateTabCall `protobuf:"bytes,30,opt,name=activate_tab,json=activateTab,proto3,oneof"`
 }
 
+type ControlCall_QueueSubmit struct {
+	QueueSubmit *QueueSubmitCall `protobuf:"bytes,31,opt,name=queue_submit,json=queueSubmit,proto3,oneof"`
+}
+
+type ControlCall_QueueRestore struct {
+	QueueRestore *QueueRestoreCall `protobuf:"bytes,32,opt,name=queue_restore,json=queueRestore,proto3,oneof"`
+}
+
+type ControlCall_QueueCopy struct {
+	QueueCopy *QueueCopyCall `protobuf:"bytes,33,opt,name=queue_copy,json=queueCopy,proto3,oneof"`
+}
+
+type ControlCall_QueueDiscard struct {
+	QueueDiscard *QueueDiscardCall `protobuf:"bytes,34,opt,name=queue_discard,json=queueDiscard,proto3,oneof"`
+}
+
+type ControlCall_ExtensionUiResponse struct {
+	ExtensionUiResponse *ExtensionUIResponseCall `protobuf:"bytes,35,opt,name=extension_ui_response,json=extensionUiResponse,proto3,oneof"`
+}
+
+type ControlCall_ExtensionUiCancel struct {
+	ExtensionUiCancel *ExtensionUICancelCall `protobuf:"bytes,36,opt,name=extension_ui_cancel,json=extensionUiCancel,proto3,oneof"`
+}
+
 func (*ControlCall_Spawn) isControlCall_Call() {}
 
 func (*ControlCall_ListSessions) isControlCall_Call() {}
@@ -689,6 +773,18 @@ func (*ControlCall_DlgClosed) isControlCall_Call() {}
 
 func (*ControlCall_ActivateTab) isControlCall_Call() {}
 
+func (*ControlCall_QueueSubmit) isControlCall_Call() {}
+
+func (*ControlCall_QueueRestore) isControlCall_Call() {}
+
+func (*ControlCall_QueueCopy) isControlCall_Call() {}
+
+func (*ControlCall_QueueDiscard) isControlCall_Call() {}
+
+func (*ControlCall_ExtensionUiResponse) isControlCall_Call() {}
+
+func (*ControlCall_ExtensionUiCancel) isControlCall_Call() {}
+
 // ControlResponse correlates one reply with one call id. Exactly one result
 // variant is set; error carries a fixed reason without source payloads.
 type ControlResponse struct {
@@ -718,6 +814,12 @@ type ControlResponse struct {
 	//	*ControlResponse_Dlg
 	//	*ControlResponse_DlgClosed
 	//	*ControlResponse_ActivateTab
+	//	*ControlResponse_QueueSubmit
+	//	*ControlResponse_QueueRestore
+	//	*ControlResponse_QueueCopy
+	//	*ControlResponse_QueueDiscard
+	//	*ControlResponse_ExtensionUiResponse
+	//	*ControlResponse_ExtensionUiCancel
 	Result        isControlResponse_Result `protobuf_oneof:"result"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -965,6 +1067,60 @@ func (x *ControlResponse) GetActivateTab() *StubResult {
 	return nil
 }
 
+func (x *ControlResponse) GetQueueSubmit() *QueueItemResult {
+	if x != nil {
+		if x, ok := x.Result.(*ControlResponse_QueueSubmit); ok {
+			return x.QueueSubmit
+		}
+	}
+	return nil
+}
+
+func (x *ControlResponse) GetQueueRestore() *QueueRestoreResult {
+	if x != nil {
+		if x, ok := x.Result.(*ControlResponse_QueueRestore); ok {
+			return x.QueueRestore
+		}
+	}
+	return nil
+}
+
+func (x *ControlResponse) GetQueueCopy() *QueueCopyResult {
+	if x != nil {
+		if x, ok := x.Result.(*ControlResponse_QueueCopy); ok {
+			return x.QueueCopy
+		}
+	}
+	return nil
+}
+
+func (x *ControlResponse) GetQueueDiscard() *QueueDiscardResult {
+	if x != nil {
+		if x, ok := x.Result.(*ControlResponse_QueueDiscard); ok {
+			return x.QueueDiscard
+		}
+	}
+	return nil
+}
+
+func (x *ControlResponse) GetExtensionUiResponse() *ExtensionUIResponseResult {
+	if x != nil {
+		if x, ok := x.Result.(*ControlResponse_ExtensionUiResponse); ok {
+			return x.ExtensionUiResponse
+		}
+	}
+	return nil
+}
+
+func (x *ControlResponse) GetExtensionUiCancel() *ExtensionUICancelResult {
+	if x != nil {
+		if x, ok := x.Result.(*ControlResponse_ExtensionUiCancel); ok {
+			return x.ExtensionUiCancel
+		}
+	}
+	return nil
+}
+
 type isControlResponse_Result interface {
 	isControlResponse_Result()
 }
@@ -1057,6 +1213,30 @@ type ControlResponse_ActivateTab struct {
 	ActivateTab *StubResult `protobuf:"bytes,30,opt,name=activate_tab,json=activateTab,proto3,oneof"`
 }
 
+type ControlResponse_QueueSubmit struct {
+	QueueSubmit *QueueItemResult `protobuf:"bytes,31,opt,name=queue_submit,json=queueSubmit,proto3,oneof"`
+}
+
+type ControlResponse_QueueRestore struct {
+	QueueRestore *QueueRestoreResult `protobuf:"bytes,32,opt,name=queue_restore,json=queueRestore,proto3,oneof"`
+}
+
+type ControlResponse_QueueCopy struct {
+	QueueCopy *QueueCopyResult `protobuf:"bytes,33,opt,name=queue_copy,json=queueCopy,proto3,oneof"`
+}
+
+type ControlResponse_QueueDiscard struct {
+	QueueDiscard *QueueDiscardResult `protobuf:"bytes,34,opt,name=queue_discard,json=queueDiscard,proto3,oneof"`
+}
+
+type ControlResponse_ExtensionUiResponse struct {
+	ExtensionUiResponse *ExtensionUIResponseResult `protobuf:"bytes,35,opt,name=extension_ui_response,json=extensionUiResponse,proto3,oneof"`
+}
+
+type ControlResponse_ExtensionUiCancel struct {
+	ExtensionUiCancel *ExtensionUICancelResult `protobuf:"bytes,36,opt,name=extension_ui_cancel,json=extensionUiCancel,proto3,oneof"`
+}
+
 func (*ControlResponse_Error) isControlResponse_Result() {}
 
 func (*ControlResponse_Spawn) isControlResponse_Result() {}
@@ -1100,6 +1280,18 @@ func (*ControlResponse_Dlg) isControlResponse_Result() {}
 func (*ControlResponse_DlgClosed) isControlResponse_Result() {}
 
 func (*ControlResponse_ActivateTab) isControlResponse_Result() {}
+
+func (*ControlResponse_QueueSubmit) isControlResponse_Result() {}
+
+func (*ControlResponse_QueueRestore) isControlResponse_Result() {}
+
+func (*ControlResponse_QueueCopy) isControlResponse_Result() {}
+
+func (*ControlResponse_QueueDiscard) isControlResponse_Result() {}
+
+func (*ControlResponse_ExtensionUiResponse) isControlResponse_Result() {}
+
+func (*ControlResponse_ExtensionUiCancel) isControlResponse_Result() {}
 
 type ControlError struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1165,6 +1357,10 @@ type ControlEvent struct {
 	//	*ControlEvent_SummarizationRetryFinished
 	//	*ControlEvent_CompactionEnd
 	//	*ControlEvent_ExtensionError
+	//	*ControlEvent_QueueChanged
+	//	*ControlEvent_ExtensionUiRequest
+	//	*ControlEvent_ExtensionUiClosed
+	//	*ControlEvent_ToolExecutionUpdate
 	Event         isControlEvent_Event `protobuf_oneof:"event"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1338,6 +1534,42 @@ func (x *ControlEvent) GetExtensionError() *ExtensionErrorEvent {
 	return nil
 }
 
+func (x *ControlEvent) GetQueueChanged() *QueueChangedEvent {
+	if x != nil {
+		if x, ok := x.Event.(*ControlEvent_QueueChanged); ok {
+			return x.QueueChanged
+		}
+	}
+	return nil
+}
+
+func (x *ControlEvent) GetExtensionUiRequest() *ExtensionUIRequestEvent {
+	if x != nil {
+		if x, ok := x.Event.(*ControlEvent_ExtensionUiRequest); ok {
+			return x.ExtensionUiRequest
+		}
+	}
+	return nil
+}
+
+func (x *ControlEvent) GetExtensionUiClosed() *ExtensionUIClosedEvent {
+	if x != nil {
+		if x, ok := x.Event.(*ControlEvent_ExtensionUiClosed); ok {
+			return x.ExtensionUiClosed
+		}
+	}
+	return nil
+}
+
+func (x *ControlEvent) GetToolExecutionUpdate() *ToolExecutionUpdateEvent {
+	if x != nil {
+		if x, ok := x.Event.(*ControlEvent_ToolExecutionUpdate); ok {
+			return x.ToolExecutionUpdate
+		}
+	}
+	return nil
+}
+
 type isControlEvent_Event interface {
 	isControlEvent_Event()
 }
@@ -1394,6 +1626,22 @@ type ControlEvent_ExtensionError struct {
 	ExtensionError *ExtensionErrorEvent `protobuf:"bytes,22,opt,name=extension_error,json=extensionError,proto3,oneof"`
 }
 
+type ControlEvent_QueueChanged struct {
+	QueueChanged *QueueChangedEvent `protobuf:"bytes,23,opt,name=queue_changed,json=queueChanged,proto3,oneof"`
+}
+
+type ControlEvent_ExtensionUiRequest struct {
+	ExtensionUiRequest *ExtensionUIRequestEvent `protobuf:"bytes,24,opt,name=extension_ui_request,json=extensionUiRequest,proto3,oneof"`
+}
+
+type ControlEvent_ExtensionUiClosed struct {
+	ExtensionUiClosed *ExtensionUIClosedEvent `protobuf:"bytes,25,opt,name=extension_ui_closed,json=extensionUiClosed,proto3,oneof"`
+}
+
+type ControlEvent_ToolExecutionUpdate struct {
+	ToolExecutionUpdate *ToolExecutionUpdateEvent `protobuf:"bytes,26,opt,name=tool_execution_update,json=toolExecutionUpdate,proto3,oneof"`
+}
+
 func (*ControlEvent_StateChanged) isControlEvent_Event() {}
 
 func (*ControlEvent_MessageStart) isControlEvent_Event() {}
@@ -1420,6 +1668,14 @@ func (*ControlEvent_CompactionEnd) isControlEvent_Event() {}
 
 func (*ControlEvent_ExtensionError) isControlEvent_Event() {}
 
+func (*ControlEvent_QueueChanged) isControlEvent_Event() {}
+
+func (*ControlEvent_ExtensionUiRequest) isControlEvent_Event() {}
+
+func (*ControlEvent_ExtensionUiClosed) isControlEvent_Event() {}
+
+func (*ControlEvent_ToolExecutionUpdate) isControlEvent_Event() {}
+
 // ControlState is the known Phi-owned session state. Nullable counters stay
 // optional: an absent counter maps to the UI's null, not to zero. Status
 // keeps the existing "live"/"exited" values. session_path is the published
@@ -1442,8 +1698,11 @@ type ControlState struct {
 	Status              string                 `protobuf:"bytes,14,opt,name=status,proto3" json:"status,omitempty"`
 	QueueDepth          uint32                 `protobuf:"varint,15,opt,name=queue_depth,json=queueDepth,proto3" json:"queue_depth,omitempty"`
 	SessionPath         *string                `protobuf:"bytes,16,opt,name=session_path,json=sessionPath,proto3,oneof" json:"session_path,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// cost is the session's accumulated spend as Pi reports it. Absent until
+	// the first get_session_stats response carries a value.
+	Cost          *float64 `protobuf:"fixed64,17,opt,name=cost,proto3,oneof" json:"cost,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ControlState) Reset() {
@@ -1586,6 +1845,13 @@ func (x *ControlState) GetSessionPath() string {
 		return *x.SessionPath
 	}
 	return ""
+}
+
+func (x *ControlState) GetCost() float64 {
+	if x != nil && x.Cost != nil {
+		return *x.Cost
+	}
+	return 0
 }
 
 // Message is one transcript entry. message_end carries the authoritative
@@ -1830,9 +2096,12 @@ func (x *TranscriptSnapshot) GetState() *ControlState {
 // sid scopes one call to one live session. Operations that resolve a session
 // by identity (spawn, listSessions, subagentTranscript) do not carry one.
 type SpawnCall struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Cwd           *string                `protobuf:"bytes,1,opt,name=cwd,proto3,oneof" json:"cwd,omitempty"`
-	SessionPath   *string                `protobuf:"bytes,2,opt,name=session_path,json=sessionPath,proto3,oneof" json:"session_path,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Cwd         *string                `protobuf:"bytes,1,opt,name=cwd,proto3,oneof" json:"cwd,omitempty"`
+	SessionPath *string                `protobuf:"bytes,2,opt,name=session_path,json=sessionPath,proto3,oneof" json:"session_path,omitempty"`
+	// spawn_id makes a retried spawn idempotent: the same id with the same
+	// arguments reuses the existing child instead of starting a second one.
+	SpawnId       *string `protobuf:"bytes,3,opt,name=spawn_id,json=spawnId,proto3,oneof" json:"spawn_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1877,6 +2146,13 @@ func (x *SpawnCall) GetCwd() string {
 func (x *SpawnCall) GetSessionPath() string {
 	if x != nil && x.SessionPath != nil {
 		return *x.SessionPath
+	}
+	return ""
+}
+
+func (x *SpawnCall) GetSpawnId() string {
+	if x != nil && x.SpawnId != nil {
+		return *x.SpawnId
 	}
 	return ""
 }
@@ -2802,6 +3078,1075 @@ func (x *ActivateTabCall) GetSid() string {
 	return ""
 }
 
+// QueueAttachment is one opaque browser-owned attachment bound to a queued
+// message. The bytes stay process-local; only this metadata crosses the wire.
+type QueueAttachment struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ref           string                 `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	MimeType      string                 `protobuf:"bytes,3,opt,name=mime_type,json=mimeType,proto3" json:"mime_type,omitempty"`
+	SizeBytes     int64                  `protobuf:"varint,4,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QueueAttachment) Reset() {
+	*x = QueueAttachment{}
+	mi := &file_control_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueueAttachment) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueueAttachment) ProtoMessage() {}
+
+func (x *QueueAttachment) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueueAttachment.ProtoReflect.Descriptor instead.
+func (*QueueAttachment) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *QueueAttachment) GetRef() string {
+	if x != nil {
+		return x.Ref
+	}
+	return ""
+}
+
+func (x *QueueAttachment) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *QueueAttachment) GetMimeType() string {
+	if x != nil {
+		return x.MimeType
+	}
+	return ""
+}
+
+func (x *QueueAttachment) GetSizeBytes() int64 {
+	if x != nil {
+		return x.SizeBytes
+	}
+	return 0
+}
+
+// QueueItem is one process-local delivery record. state keeps the ledger
+// vocabulary: local, sending, accepted, uncertain, consumed, cancelled,
+// promoted. error is present only for a failed or uncertain delivery.
+type QueueItem struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Sid           string                 `protobuf:"bytes,2,opt,name=sid,proto3" json:"sid,omitempty"`
+	SessionEpoch  string                 `protobuf:"bytes,3,opt,name=session_epoch,json=sessionEpoch,proto3" json:"session_epoch,omitempty"`
+	Message       string                 `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
+	Delivery      string                 `protobuf:"bytes,5,opt,name=delivery,proto3" json:"delivery,omitempty"`
+	Attachments   []*QueueAttachment     `protobuf:"bytes,6,rep,name=attachments,proto3" json:"attachments,omitempty"`
+	State         string                 `protobuf:"bytes,7,opt,name=state,proto3" json:"state,omitempty"`
+	Error         *string                `protobuf:"bytes,8,opt,name=error,proto3,oneof" json:"error,omitempty"`
+	CreatedAt     int64                  `protobuf:"varint,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QueueItem) Reset() {
+	*x = QueueItem{}
+	mi := &file_control_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueueItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueueItem) ProtoMessage() {}
+
+func (x *QueueItem) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueueItem.ProtoReflect.Descriptor instead.
+func (*QueueItem) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *QueueItem) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *QueueItem) GetSid() string {
+	if x != nil {
+		return x.Sid
+	}
+	return ""
+}
+
+func (x *QueueItem) GetSessionEpoch() string {
+	if x != nil {
+		return x.SessionEpoch
+	}
+	return ""
+}
+
+func (x *QueueItem) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *QueueItem) GetDelivery() string {
+	if x != nil {
+		return x.Delivery
+	}
+	return ""
+}
+
+func (x *QueueItem) GetAttachments() []*QueueAttachment {
+	if x != nil {
+		return x.Attachments
+	}
+	return nil
+}
+
+func (x *QueueItem) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *QueueItem) GetError() string {
+	if x != nil && x.Error != nil {
+		return *x.Error
+	}
+	return ""
+}
+
+func (x *QueueItem) GetCreatedAt() int64 {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return 0
+}
+
+// QueueSnapshot is the hydrate, state, and queue_changed queue payload.
+type QueueSnapshot struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionEpoch  string                 `protobuf:"bytes,1,opt,name=session_epoch,json=sessionEpoch,proto3" json:"session_epoch,omitempty"`
+	Items         []*QueueItem           `protobuf:"bytes,2,rep,name=items,proto3" json:"items,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QueueSnapshot) Reset() {
+	*x = QueueSnapshot{}
+	mi := &file_control_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueueSnapshot) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueueSnapshot) ProtoMessage() {}
+
+func (x *QueueSnapshot) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueueSnapshot.ProtoReflect.Descriptor instead.
+func (*QueueSnapshot) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *QueueSnapshot) GetSessionEpoch() string {
+	if x != nil {
+		return x.SessionEpoch
+	}
+	return ""
+}
+
+func (x *QueueSnapshot) GetItems() []*QueueItem {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
+type QueueSubmitCall struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Sid            string                 `protobuf:"bytes,1,opt,name=sid,proto3" json:"sid,omitempty"`
+	ItemId         string                 `protobuf:"bytes,2,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"`
+	SessionEpoch   string                 `protobuf:"bytes,3,opt,name=session_epoch,json=sessionEpoch,proto3" json:"session_epoch,omitempty"`
+	Message        string                 `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
+	Delivery       string                 `protobuf:"bytes,5,opt,name=delivery,proto3" json:"delivery,omitempty"`
+	AttachmentRefs []string               `protobuf:"bytes,6,rep,name=attachment_refs,json=attachmentRefs,proto3" json:"attachment_refs,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *QueueSubmitCall) Reset() {
+	*x = QueueSubmitCall{}
+	mi := &file_control_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueueSubmitCall) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueueSubmitCall) ProtoMessage() {}
+
+func (x *QueueSubmitCall) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueueSubmitCall.ProtoReflect.Descriptor instead.
+func (*QueueSubmitCall) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *QueueSubmitCall) GetSid() string {
+	if x != nil {
+		return x.Sid
+	}
+	return ""
+}
+
+func (x *QueueSubmitCall) GetItemId() string {
+	if x != nil {
+		return x.ItemId
+	}
+	return ""
+}
+
+func (x *QueueSubmitCall) GetSessionEpoch() string {
+	if x != nil {
+		return x.SessionEpoch
+	}
+	return ""
+}
+
+func (x *QueueSubmitCall) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *QueueSubmitCall) GetDelivery() string {
+	if x != nil {
+		return x.Delivery
+	}
+	return ""
+}
+
+func (x *QueueSubmitCall) GetAttachmentRefs() []string {
+	if x != nil {
+		return x.AttachmentRefs
+	}
+	return nil
+}
+
+type QueueRestoreCall struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Sid           string                 `protobuf:"bytes,1,opt,name=sid,proto3" json:"sid,omitempty"`
+	ItemId        string                 `protobuf:"bytes,2,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"`
+	SessionEpoch  string                 `protobuf:"bytes,3,opt,name=session_epoch,json=sessionEpoch,proto3" json:"session_epoch,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QueueRestoreCall) Reset() {
+	*x = QueueRestoreCall{}
+	mi := &file_control_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueueRestoreCall) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueueRestoreCall) ProtoMessage() {}
+
+func (x *QueueRestoreCall) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueueRestoreCall.ProtoReflect.Descriptor instead.
+func (*QueueRestoreCall) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *QueueRestoreCall) GetSid() string {
+	if x != nil {
+		return x.Sid
+	}
+	return ""
+}
+
+func (x *QueueRestoreCall) GetItemId() string {
+	if x != nil {
+		return x.ItemId
+	}
+	return ""
+}
+
+func (x *QueueRestoreCall) GetSessionEpoch() string {
+	if x != nil {
+		return x.SessionEpoch
+	}
+	return ""
+}
+
+type QueueCopyCall struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Sid           string                 `protobuf:"bytes,1,opt,name=sid,proto3" json:"sid,omitempty"`
+	ItemId        string                 `protobuf:"bytes,2,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"`
+	SessionEpoch  string                 `protobuf:"bytes,3,opt,name=session_epoch,json=sessionEpoch,proto3" json:"session_epoch,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QueueCopyCall) Reset() {
+	*x = QueueCopyCall{}
+	mi := &file_control_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueueCopyCall) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueueCopyCall) ProtoMessage() {}
+
+func (x *QueueCopyCall) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueueCopyCall.ProtoReflect.Descriptor instead.
+func (*QueueCopyCall) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *QueueCopyCall) GetSid() string {
+	if x != nil {
+		return x.Sid
+	}
+	return ""
+}
+
+func (x *QueueCopyCall) GetItemId() string {
+	if x != nil {
+		return x.ItemId
+	}
+	return ""
+}
+
+func (x *QueueCopyCall) GetSessionEpoch() string {
+	if x != nil {
+		return x.SessionEpoch
+	}
+	return ""
+}
+
+type QueueDiscardCall struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Sid           string                 `protobuf:"bytes,1,opt,name=sid,proto3" json:"sid,omitempty"`
+	ItemId        string                 `protobuf:"bytes,2,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"`
+	SessionEpoch  string                 `protobuf:"bytes,3,opt,name=session_epoch,json=sessionEpoch,proto3" json:"session_epoch,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QueueDiscardCall) Reset() {
+	*x = QueueDiscardCall{}
+	mi := &file_control_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueueDiscardCall) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueueDiscardCall) ProtoMessage() {}
+
+func (x *QueueDiscardCall) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueueDiscardCall.ProtoReflect.Descriptor instead.
+func (*QueueDiscardCall) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *QueueDiscardCall) GetSid() string {
+	if x != nil {
+		return x.Sid
+	}
+	return ""
+}
+
+func (x *QueueDiscardCall) GetItemId() string {
+	if x != nil {
+		return x.ItemId
+	}
+	return ""
+}
+
+func (x *QueueDiscardCall) GetSessionEpoch() string {
+	if x != nil {
+		return x.SessionEpoch
+	}
+	return ""
+}
+
+type QueueItemResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Item          *QueueItem             `protobuf:"bytes,1,opt,name=item,proto3" json:"item,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QueueItemResult) Reset() {
+	*x = QueueItemResult{}
+	mi := &file_control_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueueItemResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueueItemResult) ProtoMessage() {}
+
+func (x *QueueItemResult) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueueItemResult.ProtoReflect.Descriptor instead.
+func (*QueueItemResult) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *QueueItemResult) GetItem() *QueueItem {
+	if x != nil {
+		return x.Item
+	}
+	return nil
+}
+
+// QueueRestoreResult reports draft recovery for a Phi-owned local item.
+type QueueRestoreResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Restored      bool                   `protobuf:"varint,1,opt,name=restored,proto3" json:"restored,omitempty"`
+	Item          *QueueItem             `protobuf:"bytes,2,opt,name=item,proto3" json:"item,omitempty"`
+	Reason        *string                `protobuf:"bytes,3,opt,name=reason,proto3,oneof" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QueueRestoreResult) Reset() {
+	*x = QueueRestoreResult{}
+	mi := &file_control_proto_msgTypes[41]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueueRestoreResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueueRestoreResult) ProtoMessage() {}
+
+func (x *QueueRestoreResult) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[41]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueueRestoreResult.ProtoReflect.Descriptor instead.
+func (*QueueRestoreResult) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *QueueRestoreResult) GetRestored() bool {
+	if x != nil {
+		return x.Restored
+	}
+	return false
+}
+
+func (x *QueueRestoreResult) GetItem() *QueueItem {
+	if x != nil {
+		return x.Item
+	}
+	return nil
+}
+
+func (x *QueueRestoreResult) GetReason() string {
+	if x != nil && x.Reason != nil {
+		return *x.Reason
+	}
+	return ""
+}
+
+// QueueCopyResult returns a fresh unsent draft for an uncertain item. The
+// copied message is never resubmitted by the server.
+type QueueCopyResult struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Copied         bool                   `protobuf:"varint,1,opt,name=copied,proto3" json:"copied,omitempty"`
+	Message        *string                `protobuf:"bytes,2,opt,name=message,proto3,oneof" json:"message,omitempty"`
+	AttachmentRefs []string               `protobuf:"bytes,3,rep,name=attachment_refs,json=attachmentRefs,proto3" json:"attachment_refs,omitempty"`
+	Attachments    []*QueueAttachment     `protobuf:"bytes,4,rep,name=attachments,proto3" json:"attachments,omitempty"`
+	Reason         *string                `protobuf:"bytes,5,opt,name=reason,proto3,oneof" json:"reason,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *QueueCopyResult) Reset() {
+	*x = QueueCopyResult{}
+	mi := &file_control_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueueCopyResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueueCopyResult) ProtoMessage() {}
+
+func (x *QueueCopyResult) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueueCopyResult.ProtoReflect.Descriptor instead.
+func (*QueueCopyResult) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{42}
+}
+
+func (x *QueueCopyResult) GetCopied() bool {
+	if x != nil {
+		return x.Copied
+	}
+	return false
+}
+
+func (x *QueueCopyResult) GetMessage() string {
+	if x != nil && x.Message != nil {
+		return *x.Message
+	}
+	return ""
+}
+
+func (x *QueueCopyResult) GetAttachmentRefs() []string {
+	if x != nil {
+		return x.AttachmentRefs
+	}
+	return nil
+}
+
+func (x *QueueCopyResult) GetAttachments() []*QueueAttachment {
+	if x != nil {
+		return x.Attachments
+	}
+	return nil
+}
+
+func (x *QueueCopyResult) GetReason() string {
+	if x != nil && x.Reason != nil {
+		return *x.Reason
+	}
+	return ""
+}
+
+type QueueDiscardResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Discarded     bool                   `protobuf:"varint,1,opt,name=discarded,proto3" json:"discarded,omitempty"`
+	Item          *QueueItem             `protobuf:"bytes,2,opt,name=item,proto3" json:"item,omitempty"`
+	Reason        *string                `protobuf:"bytes,3,opt,name=reason,proto3,oneof" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QueueDiscardResult) Reset() {
+	*x = QueueDiscardResult{}
+	mi := &file_control_proto_msgTypes[43]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueueDiscardResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueueDiscardResult) ProtoMessage() {}
+
+func (x *QueueDiscardResult) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[43]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueueDiscardResult.ProtoReflect.Descriptor instead.
+func (*QueueDiscardResult) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *QueueDiscardResult) GetDiscarded() bool {
+	if x != nil {
+		return x.Discarded
+	}
+	return false
+}
+
+func (x *QueueDiscardResult) GetItem() *QueueItem {
+	if x != nil {
+		return x.Item
+	}
+	return nil
+}
+
+func (x *QueueDiscardResult) GetReason() string {
+	if x != nil && x.Reason != nil {
+		return *x.Reason
+	}
+	return ""
+}
+
+// ExtensionUIDialog is one retained blocking Pi dialog. Optional fields are
+// populated only for the matching method: options for select, message for
+// confirm, placeholder for input, prefill for editor.
+type ExtensionUIDialog struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Method        string                 `protobuf:"bytes,2,opt,name=method,proto3" json:"method,omitempty"`
+	Title         string                 `protobuf:"bytes,3,opt,name=title,proto3" json:"title,omitempty"`
+	Options       []string               `protobuf:"bytes,4,rep,name=options,proto3" json:"options,omitempty"`
+	Message       *string                `protobuf:"bytes,5,opt,name=message,proto3,oneof" json:"message,omitempty"`
+	Placeholder   *string                `protobuf:"bytes,6,opt,name=placeholder,proto3,oneof" json:"placeholder,omitempty"`
+	Prefill       *string                `protobuf:"bytes,7,opt,name=prefill,proto3,oneof" json:"prefill,omitempty"`
+	Timeout       int32                  `protobuf:"varint,8,opt,name=timeout,proto3" json:"timeout,omitempty"`
+	CreatedAt     int64                  `protobuf:"varint,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExtensionUIDialog) Reset() {
+	*x = ExtensionUIDialog{}
+	mi := &file_control_proto_msgTypes[44]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExtensionUIDialog) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExtensionUIDialog) ProtoMessage() {}
+
+func (x *ExtensionUIDialog) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[44]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExtensionUIDialog.ProtoReflect.Descriptor instead.
+func (*ExtensionUIDialog) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{44}
+}
+
+func (x *ExtensionUIDialog) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ExtensionUIDialog) GetMethod() string {
+	if x != nil {
+		return x.Method
+	}
+	return ""
+}
+
+func (x *ExtensionUIDialog) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *ExtensionUIDialog) GetOptions() []string {
+	if x != nil {
+		return x.Options
+	}
+	return nil
+}
+
+func (x *ExtensionUIDialog) GetMessage() string {
+	if x != nil && x.Message != nil {
+		return *x.Message
+	}
+	return ""
+}
+
+func (x *ExtensionUIDialog) GetPlaceholder() string {
+	if x != nil && x.Placeholder != nil {
+		return *x.Placeholder
+	}
+	return ""
+}
+
+func (x *ExtensionUIDialog) GetPrefill() string {
+	if x != nil && x.Prefill != nil {
+		return *x.Prefill
+	}
+	return ""
+}
+
+func (x *ExtensionUIDialog) GetTimeout() int32 {
+	if x != nil {
+		return x.Timeout
+	}
+	return 0
+}
+
+func (x *ExtensionUIDialog) GetCreatedAt() int64 {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return 0
+}
+
+type ExtensionUIResponseCall struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Sid           string                 `protobuf:"bytes,1,opt,name=sid,proto3" json:"sid,omitempty"`
+	RequestId     string                 `protobuf:"bytes,2,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Value         *string                `protobuf:"bytes,3,opt,name=value,proto3,oneof" json:"value,omitempty"`
+	Confirmed     *bool                  `protobuf:"varint,4,opt,name=confirmed,proto3,oneof" json:"confirmed,omitempty"`
+	Cancelled     bool                   `protobuf:"varint,5,opt,name=cancelled,proto3" json:"cancelled,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExtensionUIResponseCall) Reset() {
+	*x = ExtensionUIResponseCall{}
+	mi := &file_control_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExtensionUIResponseCall) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExtensionUIResponseCall) ProtoMessage() {}
+
+func (x *ExtensionUIResponseCall) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExtensionUIResponseCall.ProtoReflect.Descriptor instead.
+func (*ExtensionUIResponseCall) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *ExtensionUIResponseCall) GetSid() string {
+	if x != nil {
+		return x.Sid
+	}
+	return ""
+}
+
+func (x *ExtensionUIResponseCall) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ExtensionUIResponseCall) GetValue() string {
+	if x != nil && x.Value != nil {
+		return *x.Value
+	}
+	return ""
+}
+
+func (x *ExtensionUIResponseCall) GetConfirmed() bool {
+	if x != nil && x.Confirmed != nil {
+		return *x.Confirmed
+	}
+	return false
+}
+
+func (x *ExtensionUIResponseCall) GetCancelled() bool {
+	if x != nil {
+		return x.Cancelled
+	}
+	return false
+}
+
+type ExtensionUIResponseResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Resolved      bool                   `protobuf:"varint,1,opt,name=resolved,proto3" json:"resolved,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExtensionUIResponseResult) Reset() {
+	*x = ExtensionUIResponseResult{}
+	mi := &file_control_proto_msgTypes[46]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExtensionUIResponseResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExtensionUIResponseResult) ProtoMessage() {}
+
+func (x *ExtensionUIResponseResult) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[46]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExtensionUIResponseResult.ProtoReflect.Descriptor instead.
+func (*ExtensionUIResponseResult) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{46}
+}
+
+func (x *ExtensionUIResponseResult) GetResolved() bool {
+	if x != nil {
+		return x.Resolved
+	}
+	return false
+}
+
+type ExtensionUICancelCall struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Sid   string                 `protobuf:"bytes,1,opt,name=sid,proto3" json:"sid,omitempty"`
+	// reason keeps the existing tabClosed/server vocabulary.
+	Reason        string `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExtensionUICancelCall) Reset() {
+	*x = ExtensionUICancelCall{}
+	mi := &file_control_proto_msgTypes[47]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExtensionUICancelCall) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExtensionUICancelCall) ProtoMessage() {}
+
+func (x *ExtensionUICancelCall) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[47]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExtensionUICancelCall.ProtoReflect.Descriptor instead.
+func (*ExtensionUICancelCall) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{47}
+}
+
+func (x *ExtensionUICancelCall) GetSid() string {
+	if x != nil {
+		return x.Sid
+	}
+	return ""
+}
+
+func (x *ExtensionUICancelCall) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+type ExtensionUICancelResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Cancelled     uint32                 `protobuf:"varint,1,opt,name=cancelled,proto3" json:"cancelled,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExtensionUICancelResult) Reset() {
+	*x = ExtensionUICancelResult{}
+	mi := &file_control_proto_msgTypes[48]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExtensionUICancelResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExtensionUICancelResult) ProtoMessage() {}
+
+func (x *ExtensionUICancelResult) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[48]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExtensionUICancelResult.ProtoReflect.Descriptor instead.
+func (*ExtensionUICancelResult) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{48}
+}
+
+func (x *ExtensionUICancelResult) GetCancelled() uint32 {
+	if x != nil {
+		return x.Cancelled
+	}
+	return 0
+}
+
 type SpawnResult struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Sid           string                 `protobuf:"bytes,1,opt,name=sid,proto3" json:"sid,omitempty"`
@@ -2815,7 +4160,7 @@ type SpawnResult struct {
 
 func (x *SpawnResult) Reset() {
 	*x = SpawnResult{}
-	mi := &file_control_proto_msgTypes[33]
+	mi := &file_control_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2827,7 +4172,7 @@ func (x *SpawnResult) String() string {
 func (*SpawnResult) ProtoMessage() {}
 
 func (x *SpawnResult) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[33]
+	mi := &file_control_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2840,7 +4185,7 @@ func (x *SpawnResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SpawnResult.ProtoReflect.Descriptor instead.
 func (*SpawnResult) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{33}
+	return file_control_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *SpawnResult) GetSid() string {
@@ -2887,7 +4232,7 @@ type ListSessionsResult struct {
 
 func (x *ListSessionsResult) Reset() {
 	*x = ListSessionsResult{}
-	mi := &file_control_proto_msgTypes[34]
+	mi := &file_control_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2899,7 +4244,7 @@ func (x *ListSessionsResult) String() string {
 func (*ListSessionsResult) ProtoMessage() {}
 
 func (x *ListSessionsResult) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[34]
+	mi := &file_control_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2912,7 +4257,7 @@ func (x *ListSessionsResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSessionsResult.ProtoReflect.Descriptor instead.
 func (*ListSessionsResult) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{34}
+	return file_control_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *ListSessionsResult) GetSessions() []*SessionSummary {
@@ -2925,13 +4270,15 @@ func (x *ListSessionsResult) GetSessions() []*SessionSummary {
 type StateResult struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	State         *ControlState          `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
+	Queue         *QueueSnapshot         `protobuf:"bytes,2,opt,name=queue,proto3" json:"queue,omitempty"`
+	Dialogs       []*ExtensionUIDialog   `protobuf:"bytes,3,rep,name=dialogs,proto3" json:"dialogs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *StateResult) Reset() {
 	*x = StateResult{}
-	mi := &file_control_proto_msgTypes[35]
+	mi := &file_control_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2943,7 +4290,7 @@ func (x *StateResult) String() string {
 func (*StateResult) ProtoMessage() {}
 
 func (x *StateResult) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[35]
+	mi := &file_control_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2956,7 +4303,7 @@ func (x *StateResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StateResult.ProtoReflect.Descriptor instead.
 func (*StateResult) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{35}
+	return file_control_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *StateResult) GetState() *ControlState {
@@ -2966,16 +4313,32 @@ func (x *StateResult) GetState() *ControlState {
 	return nil
 }
 
+func (x *StateResult) GetQueue() *QueueSnapshot {
+	if x != nil {
+		return x.Queue
+	}
+	return nil
+}
+
+func (x *StateResult) GetDialogs() []*ExtensionUIDialog {
+	if x != nil {
+		return x.Dialogs
+	}
+	return nil
+}
+
 type TranscriptResult struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Session       *TranscriptSnapshot    `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
+	Queue         *QueueSnapshot         `protobuf:"bytes,2,opt,name=queue,proto3" json:"queue,omitempty"`
+	Dialogs       []*ExtensionUIDialog   `protobuf:"bytes,3,rep,name=dialogs,proto3" json:"dialogs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TranscriptResult) Reset() {
 	*x = TranscriptResult{}
-	mi := &file_control_proto_msgTypes[36]
+	mi := &file_control_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2987,7 +4350,7 @@ func (x *TranscriptResult) String() string {
 func (*TranscriptResult) ProtoMessage() {}
 
 func (x *TranscriptResult) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[36]
+	mi := &file_control_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3000,12 +4363,26 @@ func (x *TranscriptResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TranscriptResult.ProtoReflect.Descriptor instead.
 func (*TranscriptResult) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{36}
+	return file_control_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *TranscriptResult) GetSession() *TranscriptSnapshot {
 	if x != nil {
 		return x.Session
+	}
+	return nil
+}
+
+func (x *TranscriptResult) GetQueue() *QueueSnapshot {
+	if x != nil {
+		return x.Queue
+	}
+	return nil
+}
+
+func (x *TranscriptResult) GetDialogs() []*ExtensionUIDialog {
+	if x != nil {
+		return x.Dialogs
 	}
 	return nil
 }
@@ -3019,7 +4396,7 @@ type PromptResult struct {
 
 func (x *PromptResult) Reset() {
 	*x = PromptResult{}
-	mi := &file_control_proto_msgTypes[37]
+	mi := &file_control_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3031,7 +4408,7 @@ func (x *PromptResult) String() string {
 func (*PromptResult) ProtoMessage() {}
 
 func (x *PromptResult) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[37]
+	mi := &file_control_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3044,7 +4421,7 @@ func (x *PromptResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PromptResult.ProtoReflect.Descriptor instead.
 func (*PromptResult) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{37}
+	return file_control_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *PromptResult) GetAccepted() bool {
@@ -3065,7 +4442,7 @@ type ModelInfo struct {
 
 func (x *ModelInfo) Reset() {
 	*x = ModelInfo{}
-	mi := &file_control_proto_msgTypes[38]
+	mi := &file_control_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3077,7 +4454,7 @@ func (x *ModelInfo) String() string {
 func (*ModelInfo) ProtoMessage() {}
 
 func (x *ModelInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[38]
+	mi := &file_control_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3090,7 +4467,7 @@ func (x *ModelInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModelInfo.ProtoReflect.Descriptor instead.
 func (*ModelInfo) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{38}
+	return file_control_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *ModelInfo) GetProvider() string {
@@ -3123,7 +4500,7 @@ type ModelsResult struct {
 
 func (x *ModelsResult) Reset() {
 	*x = ModelsResult{}
-	mi := &file_control_proto_msgTypes[39]
+	mi := &file_control_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3135,7 +4512,7 @@ func (x *ModelsResult) String() string {
 func (*ModelsResult) ProtoMessage() {}
 
 func (x *ModelsResult) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[39]
+	mi := &file_control_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3148,7 +4525,7 @@ func (x *ModelsResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModelsResult.ProtoReflect.Descriptor instead.
 func (*ModelsResult) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{39}
+	return file_control_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *ModelsResult) GetModels() []*ModelInfo {
@@ -3167,7 +4544,7 @@ type ThinkingLevelsResult struct {
 
 func (x *ThinkingLevelsResult) Reset() {
 	*x = ThinkingLevelsResult{}
-	mi := &file_control_proto_msgTypes[40]
+	mi := &file_control_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3179,7 +4556,7 @@ func (x *ThinkingLevelsResult) String() string {
 func (*ThinkingLevelsResult) ProtoMessage() {}
 
 func (x *ThinkingLevelsResult) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[40]
+	mi := &file_control_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3192,7 +4569,7 @@ func (x *ThinkingLevelsResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ThinkingLevelsResult.ProtoReflect.Descriptor instead.
 func (*ThinkingLevelsResult) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{40}
+	return file_control_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *ThinkingLevelsResult) GetLevels() []string {
@@ -3217,7 +4594,7 @@ type NewSessionResult struct {
 
 func (x *NewSessionResult) Reset() {
 	*x = NewSessionResult{}
-	mi := &file_control_proto_msgTypes[41]
+	mi := &file_control_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3229,7 +4606,7 @@ func (x *NewSessionResult) String() string {
 func (*NewSessionResult) ProtoMessage() {}
 
 func (x *NewSessionResult) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[41]
+	mi := &file_control_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3242,7 +4619,7 @@ func (x *NewSessionResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NewSessionResult.ProtoReflect.Descriptor instead.
 func (*NewSessionResult) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{41}
+	return file_control_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *NewSessionResult) GetCancelled() bool {
@@ -3282,7 +4659,7 @@ type AbortResult struct {
 
 func (x *AbortResult) Reset() {
 	*x = AbortResult{}
-	mi := &file_control_proto_msgTypes[42]
+	mi := &file_control_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3294,7 +4671,7 @@ func (x *AbortResult) String() string {
 func (*AbortResult) ProtoMessage() {}
 
 func (x *AbortResult) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[42]
+	mi := &file_control_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3307,7 +4684,7 @@ func (x *AbortResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AbortResult.ProtoReflect.Descriptor instead.
 func (*AbortResult) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{42}
+	return file_control_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *AbortResult) GetAborted() bool {
@@ -3329,7 +4706,7 @@ type CompactResult struct {
 
 func (x *CompactResult) Reset() {
 	*x = CompactResult{}
-	mi := &file_control_proto_msgTypes[43]
+	mi := &file_control_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3341,7 +4718,7 @@ func (x *CompactResult) String() string {
 func (*CompactResult) ProtoMessage() {}
 
 func (x *CompactResult) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[43]
+	mi := &file_control_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3354,7 +4731,7 @@ func (x *CompactResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactResult.ProtoReflect.Descriptor instead.
 func (*CompactResult) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{43}
+	return file_control_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *CompactResult) GetState() *ControlState {
@@ -3382,7 +4759,7 @@ type SubagentRunStep struct {
 
 func (x *SubagentRunStep) Reset() {
 	*x = SubagentRunStep{}
-	mi := &file_control_proto_msgTypes[44]
+	mi := &file_control_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3394,7 +4771,7 @@ func (x *SubagentRunStep) String() string {
 func (*SubagentRunStep) ProtoMessage() {}
 
 func (x *SubagentRunStep) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[44]
+	mi := &file_control_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3407,7 +4784,7 @@ func (x *SubagentRunStep) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubagentRunStep.ProtoReflect.Descriptor instead.
 func (*SubagentRunStep) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{44}
+	return file_control_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *SubagentRunStep) GetLabel() string {
@@ -3441,7 +4818,7 @@ type SubagentTranscriptResult struct {
 
 func (x *SubagentTranscriptResult) Reset() {
 	*x = SubagentTranscriptResult{}
-	mi := &file_control_proto_msgTypes[45]
+	mi := &file_control_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3453,7 +4830,7 @@ func (x *SubagentTranscriptResult) String() string {
 func (*SubagentTranscriptResult) ProtoMessage() {}
 
 func (x *SubagentTranscriptResult) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[45]
+	mi := &file_control_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3466,7 +4843,7 @@ func (x *SubagentTranscriptResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubagentTranscriptResult.ProtoReflect.Descriptor instead.
 func (*SubagentTranscriptResult) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{45}
+	return file_control_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *SubagentTranscriptResult) GetRunId() string {
@@ -3492,7 +4869,7 @@ type StubResult struct {
 
 func (x *StubResult) Reset() {
 	*x = StubResult{}
-	mi := &file_control_proto_msgTypes[46]
+	mi := &file_control_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3504,7 +4881,7 @@ func (x *StubResult) String() string {
 func (*StubResult) ProtoMessage() {}
 
 func (x *StubResult) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[46]
+	mi := &file_control_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3517,7 +4894,7 @@ func (x *StubResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StubResult.ProtoReflect.Descriptor instead.
 func (*StubResult) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{46}
+	return file_control_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *StubResult) GetStubbed() bool {
@@ -3543,7 +4920,7 @@ type StateChangedEvent struct {
 
 func (x *StateChangedEvent) Reset() {
 	*x = StateChangedEvent{}
-	mi := &file_control_proto_msgTypes[47]
+	mi := &file_control_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3555,7 +4932,7 @@ func (x *StateChangedEvent) String() string {
 func (*StateChangedEvent) ProtoMessage() {}
 
 func (x *StateChangedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[47]
+	mi := &file_control_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3568,7 +4945,7 @@ func (x *StateChangedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StateChangedEvent.ProtoReflect.Descriptor instead.
 func (*StateChangedEvent) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{47}
+	return file_control_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *StateChangedEvent) GetChange() isStateChangedEvent_Change {
@@ -3624,7 +5001,7 @@ type MessageStartEvent struct {
 
 func (x *MessageStartEvent) Reset() {
 	*x = MessageStartEvent{}
-	mi := &file_control_proto_msgTypes[48]
+	mi := &file_control_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3636,7 +5013,7 @@ func (x *MessageStartEvent) String() string {
 func (*MessageStartEvent) ProtoMessage() {}
 
 func (x *MessageStartEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[48]
+	mi := &file_control_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3649,7 +5026,7 @@ func (x *MessageStartEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MessageStartEvent.ProtoReflect.Descriptor instead.
 func (*MessageStartEvent) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{48}
+	return file_control_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *MessageStartEvent) GetRole() string {
@@ -3679,7 +5056,7 @@ type MessageUpdateEvent struct {
 
 func (x *MessageUpdateEvent) Reset() {
 	*x = MessageUpdateEvent{}
-	mi := &file_control_proto_msgTypes[49]
+	mi := &file_control_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3691,7 +5068,7 @@ func (x *MessageUpdateEvent) String() string {
 func (*MessageUpdateEvent) ProtoMessage() {}
 
 func (x *MessageUpdateEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[49]
+	mi := &file_control_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3704,7 +5081,7 @@ func (x *MessageUpdateEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MessageUpdateEvent.ProtoReflect.Descriptor instead.
 func (*MessageUpdateEvent) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{49}
+	return file_control_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *MessageUpdateEvent) GetType() string {
@@ -3737,7 +5114,7 @@ type MessageEndEvent struct {
 
 func (x *MessageEndEvent) Reset() {
 	*x = MessageEndEvent{}
-	mi := &file_control_proto_msgTypes[50]
+	mi := &file_control_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3749,7 +5126,7 @@ func (x *MessageEndEvent) String() string {
 func (*MessageEndEvent) ProtoMessage() {}
 
 func (x *MessageEndEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[50]
+	mi := &file_control_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3762,7 +5139,7 @@ func (x *MessageEndEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MessageEndEvent.ProtoReflect.Descriptor instead.
 func (*MessageEndEvent) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{50}
+	return file_control_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *MessageEndEvent) GetMessage() *Message {
@@ -3780,7 +5157,7 @@ type TranscriptResetEvent struct {
 
 func (x *TranscriptResetEvent) Reset() {
 	*x = TranscriptResetEvent{}
-	mi := &file_control_proto_msgTypes[51]
+	mi := &file_control_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3792,7 +5169,7 @@ func (x *TranscriptResetEvent) String() string {
 func (*TranscriptResetEvent) ProtoMessage() {}
 
 func (x *TranscriptResetEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[51]
+	mi := &file_control_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3805,7 +5182,7 @@ func (x *TranscriptResetEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TranscriptResetEvent.ProtoReflect.Descriptor instead.
 func (*TranscriptResetEvent) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{51}
+	return file_control_proto_rawDescGZIP(), []int{67}
 }
 
 type RpcExitedEvent struct {
@@ -3817,7 +5194,7 @@ type RpcExitedEvent struct {
 
 func (x *RpcExitedEvent) Reset() {
 	*x = RpcExitedEvent{}
-	mi := &file_control_proto_msgTypes[52]
+	mi := &file_control_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3829,7 +5206,7 @@ func (x *RpcExitedEvent) String() string {
 func (*RpcExitedEvent) ProtoMessage() {}
 
 func (x *RpcExitedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[52]
+	mi := &file_control_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3842,7 +5219,7 @@ func (x *RpcExitedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RpcExitedEvent.ProtoReflect.Descriptor instead.
 func (*RpcExitedEvent) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{52}
+	return file_control_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *RpcExitedEvent) GetReason() string {
@@ -3863,7 +5240,7 @@ type SubagentFleetEvent struct {
 
 func (x *SubagentFleetEvent) Reset() {
 	*x = SubagentFleetEvent{}
-	mi := &file_control_proto_msgTypes[53]
+	mi := &file_control_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3875,7 +5252,7 @@ func (x *SubagentFleetEvent) String() string {
 func (*SubagentFleetEvent) ProtoMessage() {}
 
 func (x *SubagentFleetEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[53]
+	mi := &file_control_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3888,7 +5265,7 @@ func (x *SubagentFleetEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubagentFleetEvent.ProtoReflect.Descriptor instead.
 func (*SubagentFleetEvent) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{53}
+	return file_control_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *SubagentFleetEvent) GetFleet() *ExternalValue {
@@ -3910,7 +5287,7 @@ type AutoRetryStartEvent struct {
 
 func (x *AutoRetryStartEvent) Reset() {
 	*x = AutoRetryStartEvent{}
-	mi := &file_control_proto_msgTypes[54]
+	mi := &file_control_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3922,7 +5299,7 @@ func (x *AutoRetryStartEvent) String() string {
 func (*AutoRetryStartEvent) ProtoMessage() {}
 
 func (x *AutoRetryStartEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[54]
+	mi := &file_control_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3935,7 +5312,7 @@ func (x *AutoRetryStartEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AutoRetryStartEvent.ProtoReflect.Descriptor instead.
 func (*AutoRetryStartEvent) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{54}
+	return file_control_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *AutoRetryStartEvent) GetAttempt() int64 {
@@ -3977,7 +5354,7 @@ type AutoRetryEndEvent struct {
 
 func (x *AutoRetryEndEvent) Reset() {
 	*x = AutoRetryEndEvent{}
-	mi := &file_control_proto_msgTypes[55]
+	mi := &file_control_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3989,7 +5366,7 @@ func (x *AutoRetryEndEvent) String() string {
 func (*AutoRetryEndEvent) ProtoMessage() {}
 
 func (x *AutoRetryEndEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[55]
+	mi := &file_control_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4002,7 +5379,7 @@ func (x *AutoRetryEndEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AutoRetryEndEvent.ProtoReflect.Descriptor instead.
 func (*AutoRetryEndEvent) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{55}
+	return file_control_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *AutoRetryEndEvent) GetSuccess() bool {
@@ -4038,7 +5415,7 @@ type SummarizationRetryScheduledEvent struct {
 
 func (x *SummarizationRetryScheduledEvent) Reset() {
 	*x = SummarizationRetryScheduledEvent{}
-	mi := &file_control_proto_msgTypes[56]
+	mi := &file_control_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4050,7 +5427,7 @@ func (x *SummarizationRetryScheduledEvent) String() string {
 func (*SummarizationRetryScheduledEvent) ProtoMessage() {}
 
 func (x *SummarizationRetryScheduledEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[56]
+	mi := &file_control_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4063,7 +5440,7 @@ func (x *SummarizationRetryScheduledEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SummarizationRetryScheduledEvent.ProtoReflect.Descriptor instead.
 func (*SummarizationRetryScheduledEvent) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{56}
+	return file_control_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *SummarizationRetryScheduledEvent) GetAttempt() int64 {
@@ -4105,7 +5482,7 @@ type SummarizationRetryFinishedEvent struct {
 
 func (x *SummarizationRetryFinishedEvent) Reset() {
 	*x = SummarizationRetryFinishedEvent{}
-	mi := &file_control_proto_msgTypes[57]
+	mi := &file_control_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4117,7 +5494,7 @@ func (x *SummarizationRetryFinishedEvent) String() string {
 func (*SummarizationRetryFinishedEvent) ProtoMessage() {}
 
 func (x *SummarizationRetryFinishedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[57]
+	mi := &file_control_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4130,7 +5507,7 @@ func (x *SummarizationRetryFinishedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SummarizationRetryFinishedEvent.ProtoReflect.Descriptor instead.
 func (*SummarizationRetryFinishedEvent) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{57}
+	return file_control_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *SummarizationRetryFinishedEvent) GetSuccess() bool {
@@ -4169,7 +5546,7 @@ type CompactionEndEvent struct {
 
 func (x *CompactionEndEvent) Reset() {
 	*x = CompactionEndEvent{}
-	mi := &file_control_proto_msgTypes[58]
+	mi := &file_control_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4181,7 +5558,7 @@ func (x *CompactionEndEvent) String() string {
 func (*CompactionEndEvent) ProtoMessage() {}
 
 func (x *CompactionEndEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[58]
+	mi := &file_control_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4194,7 +5571,7 @@ func (x *CompactionEndEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactionEndEvent.ProtoReflect.Descriptor instead.
 func (*CompactionEndEvent) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{58}
+	return file_control_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *CompactionEndEvent) GetAborted() bool {
@@ -4234,7 +5611,7 @@ type ExtensionErrorEvent struct {
 
 func (x *ExtensionErrorEvent) Reset() {
 	*x = ExtensionErrorEvent{}
-	mi := &file_control_proto_msgTypes[59]
+	mi := &file_control_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4246,7 +5623,7 @@ func (x *ExtensionErrorEvent) String() string {
 func (*ExtensionErrorEvent) ProtoMessage() {}
 
 func (x *ExtensionErrorEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[59]
+	mi := &file_control_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4259,7 +5636,7 @@ func (x *ExtensionErrorEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExtensionErrorEvent.ProtoReflect.Descriptor instead.
 func (*ExtensionErrorEvent) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{59}
+	return file_control_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *ExtensionErrorEvent) GetError() string {
@@ -4267,6 +5644,198 @@ func (x *ExtensionErrorEvent) GetError() string {
 		return *x.Error
 	}
 	return ""
+}
+
+// QueueChangedEvent carries the whole delivery ledger after a change. Clients
+// replace their ledger with this snapshot rather than patching item by item.
+type QueueChangedEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Queue         *QueueSnapshot         `protobuf:"bytes,1,opt,name=queue,proto3" json:"queue,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QueueChangedEvent) Reset() {
+	*x = QueueChangedEvent{}
+	mi := &file_control_proto_msgTypes[76]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueueChangedEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueueChangedEvent) ProtoMessage() {}
+
+func (x *QueueChangedEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[76]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueueChangedEvent.ProtoReflect.Descriptor instead.
+func (*QueueChangedEvent) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{76}
+}
+
+func (x *QueueChangedEvent) GetQueue() *QueueSnapshot {
+	if x != nil {
+		return x.Queue
+	}
+	return nil
+}
+
+// ExtensionUIRequestEvent carries Pi's blocking dialog request verbatim so the
+// browser keeps the existing method-specific shape.
+type ExtensionUIRequestEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Request       *ExternalValue         `protobuf:"bytes,1,opt,name=request,proto3,oneof" json:"request,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExtensionUIRequestEvent) Reset() {
+	*x = ExtensionUIRequestEvent{}
+	mi := &file_control_proto_msgTypes[77]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExtensionUIRequestEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExtensionUIRequestEvent) ProtoMessage() {}
+
+func (x *ExtensionUIRequestEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[77]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExtensionUIRequestEvent.ProtoReflect.Descriptor instead.
+func (*ExtensionUIRequestEvent) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{77}
+}
+
+func (x *ExtensionUIRequestEvent) GetRequest() *ExternalValue {
+	if x != nil {
+		return x.Request
+	}
+	return nil
+}
+
+// ExtensionUIClosedEvent retires one retained dialog. reason keeps the
+// timeout, childExit, tabClosed, server, and unsupported values.
+type ExtensionUIClosedEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Reason        *string                `protobuf:"bytes,2,opt,name=reason,proto3,oneof" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExtensionUIClosedEvent) Reset() {
+	*x = ExtensionUIClosedEvent{}
+	mi := &file_control_proto_msgTypes[78]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExtensionUIClosedEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExtensionUIClosedEvent) ProtoMessage() {}
+
+func (x *ExtensionUIClosedEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[78]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExtensionUIClosedEvent.ProtoReflect.Descriptor instead.
+func (*ExtensionUIClosedEvent) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{78}
+}
+
+func (x *ExtensionUIClosedEvent) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ExtensionUIClosedEvent) GetReason() string {
+	if x != nil && x.Reason != nil {
+		return *x.Reason
+	}
+	return ""
+}
+
+// ToolExecutionUpdateEvent is Pi's tool progress payload, passed through as
+// external data because its shape is owned by Pi.
+type ToolExecutionUpdateEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Payload       *ExternalValue         `protobuf:"bytes,1,opt,name=payload,proto3,oneof" json:"payload,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ToolExecutionUpdateEvent) Reset() {
+	*x = ToolExecutionUpdateEvent{}
+	mi := &file_control_proto_msgTypes[79]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToolExecutionUpdateEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToolExecutionUpdateEvent) ProtoMessage() {}
+
+func (x *ToolExecutionUpdateEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[79]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToolExecutionUpdateEvent.ProtoReflect.Descriptor instead.
+func (*ToolExecutionUpdateEvent) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{79}
+}
+
+func (x *ToolExecutionUpdateEvent) GetPayload() *ExternalValue {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
 }
 
 // ExternalValue represents open-ended Pi, tool, provider, or extension data.
@@ -4291,7 +5860,7 @@ type ExternalValue struct {
 
 func (x *ExternalValue) Reset() {
 	*x = ExternalValue{}
-	mi := &file_control_proto_msgTypes[60]
+	mi := &file_control_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4303,7 +5872,7 @@ func (x *ExternalValue) String() string {
 func (*ExternalValue) ProtoMessage() {}
 
 func (x *ExternalValue) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[60]
+	mi := &file_control_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4316,7 +5885,7 @@ func (x *ExternalValue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExternalValue.ProtoReflect.Descriptor instead.
 func (*ExternalValue) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{60}
+	return file_control_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *ExternalValue) GetKind() isExternalValue_Kind {
@@ -4443,7 +6012,7 @@ type ExternalNull struct {
 
 func (x *ExternalNull) Reset() {
 	*x = ExternalNull{}
-	mi := &file_control_proto_msgTypes[61]
+	mi := &file_control_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4455,7 +6024,7 @@ func (x *ExternalNull) String() string {
 func (*ExternalNull) ProtoMessage() {}
 
 func (x *ExternalNull) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[61]
+	mi := &file_control_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4468,7 +6037,7 @@ func (x *ExternalNull) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExternalNull.ProtoReflect.Descriptor instead.
 func (*ExternalNull) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{61}
+	return file_control_proto_rawDescGZIP(), []int{81}
 }
 
 type ExternalList struct {
@@ -4480,7 +6049,7 @@ type ExternalList struct {
 
 func (x *ExternalList) Reset() {
 	*x = ExternalList{}
-	mi := &file_control_proto_msgTypes[62]
+	mi := &file_control_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4492,7 +6061,7 @@ func (x *ExternalList) String() string {
 func (*ExternalList) ProtoMessage() {}
 
 func (x *ExternalList) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[62]
+	mi := &file_control_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4505,7 +6074,7 @@ func (x *ExternalList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExternalList.ProtoReflect.Descriptor instead.
 func (*ExternalList) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{62}
+	return file_control_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *ExternalList) GetValues() []*ExternalValue {
@@ -4524,7 +6093,7 @@ type ExternalObject struct {
 
 func (x *ExternalObject) Reset() {
 	*x = ExternalObject{}
-	mi := &file_control_proto_msgTypes[63]
+	mi := &file_control_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4536,7 +6105,7 @@ func (x *ExternalObject) String() string {
 func (*ExternalObject) ProtoMessage() {}
 
 func (x *ExternalObject) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[63]
+	mi := &file_control_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4549,7 +6118,7 @@ func (x *ExternalObject) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExternalObject.ProtoReflect.Descriptor instead.
 func (*ExternalObject) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{63}
+	return file_control_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *ExternalObject) GetEntries() []*ExternalEntry {
@@ -4569,7 +6138,7 @@ type ExternalEntry struct {
 
 func (x *ExternalEntry) Reset() {
 	*x = ExternalEntry{}
-	mi := &file_control_proto_msgTypes[64]
+	mi := &file_control_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4581,7 +6150,7 @@ func (x *ExternalEntry) String() string {
 func (*ExternalEntry) ProtoMessage() {}
 
 func (x *ExternalEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[64]
+	mi := &file_control_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4594,7 +6163,7 @@ func (x *ExternalEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExternalEntry.ProtoReflect.Descriptor instead.
 func (*ExternalEntry) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{64}
+	return file_control_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *ExternalEntry) GetKey() string {
@@ -4628,7 +6197,7 @@ const file_control_proto_rawDesc = "" +
 	"\fControlHello\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\rR\aversion\"*\n" +
 	"\x0eControlWelcome\x12\x18\n" +
-	"\aversion\x18\x01 \x01(\rR\aversion\"\xa5\r\n" +
+	"\aversion\x18\x01 \x01(\rR\aversion\"\xb1\x11\n" +
 	"\vControlCall\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12;\n" +
 	"\x05spawn\x18\n" +
@@ -4655,8 +6224,15 @@ const file_control_proto_rawDesc = "" +
 	"\x03dlg\x18\x1c \x01(\v2!.phi.websocket.control.v1.DlgCallH\x00R\x03dlg\x12H\n" +
 	"\n" +
 	"dlg_closed\x18\x1d \x01(\v2'.phi.websocket.control.v1.DlgClosedCallH\x00R\tdlgClosed\x12N\n" +
-	"\factivate_tab\x18\x1e \x01(\v2).phi.websocket.control.v1.ActivateTabCallH\x00R\vactivateTabB\x06\n" +
-	"\x04call\"\xc6\r\n" +
+	"\factivate_tab\x18\x1e \x01(\v2).phi.websocket.control.v1.ActivateTabCallH\x00R\vactivateTab\x12N\n" +
+	"\fqueue_submit\x18\x1f \x01(\v2).phi.websocket.control.v1.QueueSubmitCallH\x00R\vqueueSubmit\x12Q\n" +
+	"\rqueue_restore\x18  \x01(\v2*.phi.websocket.control.v1.QueueRestoreCallH\x00R\fqueueRestore\x12H\n" +
+	"\n" +
+	"queue_copy\x18! \x01(\v2'.phi.websocket.control.v1.QueueCopyCallH\x00R\tqueueCopy\x12Q\n" +
+	"\rqueue_discard\x18\" \x01(\v2*.phi.websocket.control.v1.QueueDiscardCallH\x00R\fqueueDiscard\x12g\n" +
+	"\x15extension_ui_response\x18# \x01(\v21.phi.websocket.control.v1.ExtensionUIResponseCallH\x00R\x13extensionUiResponse\x12a\n" +
+	"\x13extension_ui_cancel\x18$ \x01(\v2/.phi.websocket.control.v1.ExtensionUICancelCallH\x00R\x11extensionUiCancelB\x06\n" +
+	"\x04call\"\xdc\x11\n" +
 	"\x0fControlResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12>\n" +
 	"\x05error\x18( \x01(\v2&.phi.websocket.control.v1.ControlErrorH\x00R\x05error\x12=\n" +
@@ -4684,10 +6260,17 @@ const file_control_proto_rawDesc = "" +
 	"\x03dlg\x18\x1c \x01(\v2$.phi.websocket.control.v1.StubResultH\x00R\x03dlg\x12E\n" +
 	"\n" +
 	"dlg_closed\x18\x1d \x01(\v2$.phi.websocket.control.v1.StubResultH\x00R\tdlgClosed\x12I\n" +
-	"\factivate_tab\x18\x1e \x01(\v2$.phi.websocket.control.v1.StubResultH\x00R\vactivateTabB\b\n" +
+	"\factivate_tab\x18\x1e \x01(\v2$.phi.websocket.control.v1.StubResultH\x00R\vactivateTab\x12N\n" +
+	"\fqueue_submit\x18\x1f \x01(\v2).phi.websocket.control.v1.QueueItemResultH\x00R\vqueueSubmit\x12S\n" +
+	"\rqueue_restore\x18  \x01(\v2,.phi.websocket.control.v1.QueueRestoreResultH\x00R\fqueueRestore\x12J\n" +
+	"\n" +
+	"queue_copy\x18! \x01(\v2).phi.websocket.control.v1.QueueCopyResultH\x00R\tqueueCopy\x12S\n" +
+	"\rqueue_discard\x18\" \x01(\v2,.phi.websocket.control.v1.QueueDiscardResultH\x00R\fqueueDiscard\x12i\n" +
+	"\x15extension_ui_response\x18# \x01(\v23.phi.websocket.control.v1.ExtensionUIResponseResultH\x00R\x13extensionUiResponse\x12c\n" +
+	"\x13extension_ui_cancel\x18$ \x01(\v21.phi.websocket.control.v1.ExtensionUICancelResultH\x00R\x11extensionUiCancelB\b\n" +
 	"\x06result\"&\n" +
 	"\fControlError\x12\x16\n" +
-	"\x06reason\x18\x01 \x01(\tR\x06reason\"\xea\t\n" +
+	"\x06reason\x18\x01 \x01(\tR\x06reason\"\xf3\f\n" +
 	"\fControlEvent\x12\x10\n" +
 	"\x03sid\x18\x01 \x01(\tR\x03sid\x12\x10\n" +
 	"\x03seq\x18\x02 \x01(\x04R\x03seq\x12R\n" +
@@ -4706,8 +6289,12 @@ const file_control_proto_rawDesc = "" +
 	"\x1dsummarization_retry_scheduled\x18\x13 \x01(\v2:.phi.websocket.control.v1.SummarizationRetryScheduledEventH\x00R\x1bsummarizationRetryScheduled\x12}\n" +
 	"\x1csummarization_retry_finished\x18\x14 \x01(\v29.phi.websocket.control.v1.SummarizationRetryFinishedEventH\x00R\x1asummarizationRetryFinished\x12U\n" +
 	"\x0ecompaction_end\x18\x15 \x01(\v2,.phi.websocket.control.v1.CompactionEndEventH\x00R\rcompactionEnd\x12X\n" +
-	"\x0fextension_error\x18\x16 \x01(\v2-.phi.websocket.control.v1.ExtensionErrorEventH\x00R\x0eextensionErrorB\a\n" +
-	"\x05event\"\xdf\x05\n" +
+	"\x0fextension_error\x18\x16 \x01(\v2-.phi.websocket.control.v1.ExtensionErrorEventH\x00R\x0eextensionError\x12R\n" +
+	"\rqueue_changed\x18\x17 \x01(\v2+.phi.websocket.control.v1.QueueChangedEventH\x00R\fqueueChanged\x12e\n" +
+	"\x14extension_ui_request\x18\x18 \x01(\v21.phi.websocket.control.v1.ExtensionUIRequestEventH\x00R\x12extensionUiRequest\x12b\n" +
+	"\x13extension_ui_closed\x18\x19 \x01(\v20.phi.websocket.control.v1.ExtensionUIClosedEventH\x00R\x11extensionUiClosed\x12h\n" +
+	"\x15tool_execution_update\x18\x1a \x01(\v22.phi.websocket.control.v1.ToolExecutionUpdateEventH\x00R\x13toolExecutionUpdateB\a\n" +
+	"\x05event\"\x81\x06\n" +
 	"\fControlState\x12\x10\n" +
 	"\x03sid\x18\x01 \x01(\tR\x03sid\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x10\n" +
@@ -4726,7 +6313,8 @@ const file_control_proto_rawDesc = "" +
 	"\x06status\x18\x0e \x01(\tR\x06status\x12\x1f\n" +
 	"\vqueue_depth\x18\x0f \x01(\rR\n" +
 	"queueDepth\x12&\n" +
-	"\fsession_path\x18\x10 \x01(\tH\bR\vsessionPath\x88\x01\x01B\b\n" +
+	"\fsession_path\x18\x10 \x01(\tH\bR\vsessionPath\x88\x01\x01\x12\x17\n" +
+	"\x04cost\x18\x11 \x01(\x01H\tR\x04cost\x88\x01\x01B\b\n" +
 	"\x06_modelB\v\n" +
 	"\t_thinkingB\x0f\n" +
 	"\r_input_tokensB\x10\n" +
@@ -4735,7 +6323,8 @@ const file_control_proto_rawDesc = "" +
 	"\x16_context_window_tokensB\x14\n" +
 	"\x12_cache_read_tokensB\x15\n" +
 	"\x13_cache_write_tokensB\x0f\n" +
-	"\r_session_path\"\xc6\x03\n" +
+	"\r_session_pathB\a\n" +
+	"\x05_cost\"\xc6\x03\n" +
 	"\aMessage\x12\x12\n" +
 	"\x04role\x18\x01 \x01(\tR\x04role\x12A\n" +
 	"\acontent\x18\x02 \x01(\v2'.phi.websocket.control.v1.ExternalValueR\acontent\x12A\n" +
@@ -4763,12 +6352,14 @@ const file_control_proto_rawDesc = "" +
 	"\x12TranscriptSnapshot\x12=\n" +
 	"\bmessages\x18\x01 \x03(\v2!.phi.websocket.control.v1.MessageR\bmessages\x12\x19\n" +
 	"\blast_seq\x18\x02 \x01(\x04R\alastSeq\x12<\n" +
-	"\x05state\x18\x03 \x01(\v2&.phi.websocket.control.v1.ControlStateR\x05state\"c\n" +
+	"\x05state\x18\x03 \x01(\v2&.phi.websocket.control.v1.ControlStateR\x05state\"\x90\x01\n" +
 	"\tSpawnCall\x12\x15\n" +
 	"\x03cwd\x18\x01 \x01(\tH\x00R\x03cwd\x88\x01\x01\x12&\n" +
-	"\fsession_path\x18\x02 \x01(\tH\x01R\vsessionPath\x88\x01\x01B\x06\n" +
+	"\fsession_path\x18\x02 \x01(\tH\x01R\vsessionPath\x88\x01\x01\x12\x1e\n" +
+	"\bspawn_id\x18\x03 \x01(\tH\x02R\aspawnId\x88\x01\x01B\x06\n" +
 	"\x04_cwdB\x0f\n" +
-	"\r_session_path\"\x12\n" +
+	"\r_session_pathB\v\n" +
+	"\t_spawn_id\"\x12\n" +
 	"\x10ListSessionsCall\" \n" +
 	"\fGetStateCall\x12\x10\n" +
 	"\x03sid\x18\x01 \x01(\tR\x03sid\"\x1f\n" +
@@ -4821,7 +6412,101 @@ const file_control_proto_rawDesc = "" +
 	"\x04_sid\"0\n" +
 	"\x0fActivateTabCall\x12\x15\n" +
 	"\x03sid\x18\x01 \x01(\tH\x00R\x03sid\x88\x01\x01B\x06\n" +
-	"\x04_sid\"\xcd\x01\n" +
+	"\x04_sid\"s\n" +
+	"\x0fQueueAttachment\x12\x10\n" +
+	"\x03ref\x18\x01 \x01(\tR\x03ref\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1b\n" +
+	"\tmime_type\x18\x03 \x01(\tR\bmimeType\x12\x1d\n" +
+	"\n" +
+	"size_bytes\x18\x04 \x01(\x03R\tsizeBytes\"\xaf\x02\n" +
+	"\tQueueItem\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x10\n" +
+	"\x03sid\x18\x02 \x01(\tR\x03sid\x12#\n" +
+	"\rsession_epoch\x18\x03 \x01(\tR\fsessionEpoch\x12\x18\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\x12\x1a\n" +
+	"\bdelivery\x18\x05 \x01(\tR\bdelivery\x12K\n" +
+	"\vattachments\x18\x06 \x03(\v2).phi.websocket.control.v1.QueueAttachmentR\vattachments\x12\x14\n" +
+	"\x05state\x18\a \x01(\tR\x05state\x12\x19\n" +
+	"\x05error\x18\b \x01(\tH\x00R\x05error\x88\x01\x01\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\t \x01(\x03R\tcreatedAtB\b\n" +
+	"\x06_error\"o\n" +
+	"\rQueueSnapshot\x12#\n" +
+	"\rsession_epoch\x18\x01 \x01(\tR\fsessionEpoch\x129\n" +
+	"\x05items\x18\x02 \x03(\v2#.phi.websocket.control.v1.QueueItemR\x05items\"\xc0\x01\n" +
+	"\x0fQueueSubmitCall\x12\x10\n" +
+	"\x03sid\x18\x01 \x01(\tR\x03sid\x12\x17\n" +
+	"\aitem_id\x18\x02 \x01(\tR\x06itemId\x12#\n" +
+	"\rsession_epoch\x18\x03 \x01(\tR\fsessionEpoch\x12\x18\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\x12\x1a\n" +
+	"\bdelivery\x18\x05 \x01(\tR\bdelivery\x12'\n" +
+	"\x0fattachment_refs\x18\x06 \x03(\tR\x0eattachmentRefs\"b\n" +
+	"\x10QueueRestoreCall\x12\x10\n" +
+	"\x03sid\x18\x01 \x01(\tR\x03sid\x12\x17\n" +
+	"\aitem_id\x18\x02 \x01(\tR\x06itemId\x12#\n" +
+	"\rsession_epoch\x18\x03 \x01(\tR\fsessionEpoch\"_\n" +
+	"\rQueueCopyCall\x12\x10\n" +
+	"\x03sid\x18\x01 \x01(\tR\x03sid\x12\x17\n" +
+	"\aitem_id\x18\x02 \x01(\tR\x06itemId\x12#\n" +
+	"\rsession_epoch\x18\x03 \x01(\tR\fsessionEpoch\"b\n" +
+	"\x10QueueDiscardCall\x12\x10\n" +
+	"\x03sid\x18\x01 \x01(\tR\x03sid\x12\x17\n" +
+	"\aitem_id\x18\x02 \x01(\tR\x06itemId\x12#\n" +
+	"\rsession_epoch\x18\x03 \x01(\tR\fsessionEpoch\"J\n" +
+	"\x0fQueueItemResult\x127\n" +
+	"\x04item\x18\x01 \x01(\v2#.phi.websocket.control.v1.QueueItemR\x04item\"\x91\x01\n" +
+	"\x12QueueRestoreResult\x12\x1a\n" +
+	"\brestored\x18\x01 \x01(\bR\brestored\x127\n" +
+	"\x04item\x18\x02 \x01(\v2#.phi.websocket.control.v1.QueueItemR\x04item\x12\x1b\n" +
+	"\x06reason\x18\x03 \x01(\tH\x00R\x06reason\x88\x01\x01B\t\n" +
+	"\a_reason\"\xf2\x01\n" +
+	"\x0fQueueCopyResult\x12\x16\n" +
+	"\x06copied\x18\x01 \x01(\bR\x06copied\x12\x1d\n" +
+	"\amessage\x18\x02 \x01(\tH\x00R\amessage\x88\x01\x01\x12'\n" +
+	"\x0fattachment_refs\x18\x03 \x03(\tR\x0eattachmentRefs\x12K\n" +
+	"\vattachments\x18\x04 \x03(\v2).phi.websocket.control.v1.QueueAttachmentR\vattachments\x12\x1b\n" +
+	"\x06reason\x18\x05 \x01(\tH\x01R\x06reason\x88\x01\x01B\n" +
+	"\n" +
+	"\b_messageB\t\n" +
+	"\a_reason\"\x93\x01\n" +
+	"\x12QueueDiscardResult\x12\x1c\n" +
+	"\tdiscarded\x18\x01 \x01(\bR\tdiscarded\x127\n" +
+	"\x04item\x18\x02 \x01(\v2#.phi.websocket.control.v1.QueueItemR\x04item\x12\x1b\n" +
+	"\x06reason\x18\x03 \x01(\tH\x00R\x06reason\x88\x01\x01B\t\n" +
+	"\a_reason\"\xb1\x02\n" +
+	"\x11ExtensionUIDialog\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
+	"\x06method\x18\x02 \x01(\tR\x06method\x12\x14\n" +
+	"\x05title\x18\x03 \x01(\tR\x05title\x12\x18\n" +
+	"\aoptions\x18\x04 \x03(\tR\aoptions\x12\x1d\n" +
+	"\amessage\x18\x05 \x01(\tH\x00R\amessage\x88\x01\x01\x12%\n" +
+	"\vplaceholder\x18\x06 \x01(\tH\x01R\vplaceholder\x88\x01\x01\x12\x1d\n" +
+	"\aprefill\x18\a \x01(\tH\x02R\aprefill\x88\x01\x01\x12\x18\n" +
+	"\atimeout\x18\b \x01(\x05R\atimeout\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\t \x01(\x03R\tcreatedAtB\n" +
+	"\n" +
+	"\b_messageB\x0e\n" +
+	"\f_placeholderB\n" +
+	"\n" +
+	"\b_prefill\"\xbe\x01\n" +
+	"\x17ExtensionUIResponseCall\x12\x10\n" +
+	"\x03sid\x18\x01 \x01(\tR\x03sid\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x02 \x01(\tR\trequestId\x12\x19\n" +
+	"\x05value\x18\x03 \x01(\tH\x00R\x05value\x88\x01\x01\x12!\n" +
+	"\tconfirmed\x18\x04 \x01(\bH\x01R\tconfirmed\x88\x01\x01\x12\x1c\n" +
+	"\tcancelled\x18\x05 \x01(\bR\tcancelledB\b\n" +
+	"\x06_valueB\f\n" +
+	"\n" +
+	"_confirmed\"7\n" +
+	"\x19ExtensionUIResponseResult\x12\x1a\n" +
+	"\bresolved\x18\x01 \x01(\bR\bresolved\"A\n" +
+	"\x15ExtensionUICancelCall\x12\x10\n" +
+	"\x03sid\x18\x01 \x01(\tR\x03sid\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"7\n" +
+	"\x17ExtensionUICancelResult\x12\x1c\n" +
+	"\tcancelled\x18\x01 \x01(\rR\tcancelled\"\xcd\x01\n" +
 	"\vSpawnResult\x12\x10\n" +
 	"\x03sid\x18\x01 \x01(\tR\x03sid\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x10\n" +
@@ -4829,11 +6514,15 @@ const file_control_proto_rawDesc = "" +
 	"\asession\x18\x04 \x01(\v2,.phi.websocket.control.v1.TranscriptSnapshotR\asession\x12<\n" +
 	"\x05state\x18\x05 \x01(\v2&.phi.websocket.control.v1.ControlStateR\x05state\"Z\n" +
 	"\x12ListSessionsResult\x12D\n" +
-	"\bsessions\x18\x01 \x03(\v2(.phi.websocket.control.v1.SessionSummaryR\bsessions\"K\n" +
+	"\bsessions\x18\x01 \x03(\v2(.phi.websocket.control.v1.SessionSummaryR\bsessions\"\xd1\x01\n" +
 	"\vStateResult\x12<\n" +
-	"\x05state\x18\x01 \x01(\v2&.phi.websocket.control.v1.ControlStateR\x05state\"Z\n" +
+	"\x05state\x18\x01 \x01(\v2&.phi.websocket.control.v1.ControlStateR\x05state\x12=\n" +
+	"\x05queue\x18\x02 \x01(\v2'.phi.websocket.control.v1.QueueSnapshotR\x05queue\x12E\n" +
+	"\adialogs\x18\x03 \x03(\v2+.phi.websocket.control.v1.ExtensionUIDialogR\adialogs\"\xe0\x01\n" +
 	"\x10TranscriptResult\x12F\n" +
-	"\asession\x18\x01 \x01(\v2,.phi.websocket.control.v1.TranscriptSnapshotR\asession\"*\n" +
+	"\asession\x18\x01 \x01(\v2,.phi.websocket.control.v1.TranscriptSnapshotR\asession\x12=\n" +
+	"\x05queue\x18\x02 \x01(\v2'.phi.websocket.control.v1.QueueSnapshotR\x05queue\x12E\n" +
+	"\adialogs\x18\x03 \x03(\v2+.phi.websocket.control.v1.ExtensionUIDialogR\adialogs\"*\n" +
 	"\fPromptResult\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\"Y\n" +
 	"\tModelInfo\x12\x1a\n" +
@@ -4947,7 +6636,21 @@ const file_control_proto_rawDesc = "" +
 	"\a_result\":\n" +
 	"\x13ExtensionErrorEvent\x12\x19\n" +
 	"\x05error\x18\x01 \x01(\tH\x00R\x05error\x88\x01\x01B\b\n" +
-	"\x06_error\"\x82\x03\n" +
+	"\x06_error\"R\n" +
+	"\x11QueueChangedEvent\x12=\n" +
+	"\x05queue\x18\x01 \x01(\v2'.phi.websocket.control.v1.QueueSnapshotR\x05queue\"m\n" +
+	"\x17ExtensionUIRequestEvent\x12F\n" +
+	"\arequest\x18\x01 \x01(\v2'.phi.websocket.control.v1.ExternalValueH\x00R\arequest\x88\x01\x01B\n" +
+	"\n" +
+	"\b_request\"P\n" +
+	"\x16ExtensionUIClosedEvent\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
+	"\x06reason\x18\x02 \x01(\tH\x00R\x06reason\x88\x01\x01B\t\n" +
+	"\a_reason\"n\n" +
+	"\x18ToolExecutionUpdateEvent\x12F\n" +
+	"\apayload\x18\x01 \x01(\v2'.phi.websocket.control.v1.ExternalValueH\x00R\apayload\x88\x01\x01B\n" +
+	"\n" +
+	"\b_payload\"\x82\x03\n" +
 	"\rExternalValue\x12G\n" +
 	"\n" +
 	"null_value\x18\x01 \x01(\v2&.phi.websocket.control.v1.ExternalNullH\x00R\tnullValue\x12\x1f\n" +
@@ -4981,7 +6684,7 @@ func file_control_proto_rawDescGZIP() []byte {
 	return file_control_proto_rawDescData
 }
 
-var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 65)
+var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 85)
 var file_control_proto_goTypes = []any{
 	(*ControlClientFrame)(nil),               // 0: phi.websocket.control.v1.ControlClientFrame
 	(*ControlServerFrame)(nil),               // 1: phi.websocket.control.v1.ControlServerFrame
@@ -5016,132 +6719,181 @@ var file_control_proto_goTypes = []any{
 	(*DlgCall)(nil),                          // 30: phi.websocket.control.v1.DlgCall
 	(*DlgClosedCall)(nil),                    // 31: phi.websocket.control.v1.DlgClosedCall
 	(*ActivateTabCall)(nil),                  // 32: phi.websocket.control.v1.ActivateTabCall
-	(*SpawnResult)(nil),                      // 33: phi.websocket.control.v1.SpawnResult
-	(*ListSessionsResult)(nil),               // 34: phi.websocket.control.v1.ListSessionsResult
-	(*StateResult)(nil),                      // 35: phi.websocket.control.v1.StateResult
-	(*TranscriptResult)(nil),                 // 36: phi.websocket.control.v1.TranscriptResult
-	(*PromptResult)(nil),                     // 37: phi.websocket.control.v1.PromptResult
-	(*ModelInfo)(nil),                        // 38: phi.websocket.control.v1.ModelInfo
-	(*ModelsResult)(nil),                     // 39: phi.websocket.control.v1.ModelsResult
-	(*ThinkingLevelsResult)(nil),             // 40: phi.websocket.control.v1.ThinkingLevelsResult
-	(*NewSessionResult)(nil),                 // 41: phi.websocket.control.v1.NewSessionResult
-	(*AbortResult)(nil),                      // 42: phi.websocket.control.v1.AbortResult
-	(*CompactResult)(nil),                    // 43: phi.websocket.control.v1.CompactResult
-	(*SubagentRunStep)(nil),                  // 44: phi.websocket.control.v1.SubagentRunStep
-	(*SubagentTranscriptResult)(nil),         // 45: phi.websocket.control.v1.SubagentTranscriptResult
-	(*StubResult)(nil),                       // 46: phi.websocket.control.v1.StubResult
-	(*StateChangedEvent)(nil),                // 47: phi.websocket.control.v1.StateChangedEvent
-	(*MessageStartEvent)(nil),                // 48: phi.websocket.control.v1.MessageStartEvent
-	(*MessageUpdateEvent)(nil),               // 49: phi.websocket.control.v1.MessageUpdateEvent
-	(*MessageEndEvent)(nil),                  // 50: phi.websocket.control.v1.MessageEndEvent
-	(*TranscriptResetEvent)(nil),             // 51: phi.websocket.control.v1.TranscriptResetEvent
-	(*RpcExitedEvent)(nil),                   // 52: phi.websocket.control.v1.RpcExitedEvent
-	(*SubagentFleetEvent)(nil),               // 53: phi.websocket.control.v1.SubagentFleetEvent
-	(*AutoRetryStartEvent)(nil),              // 54: phi.websocket.control.v1.AutoRetryStartEvent
-	(*AutoRetryEndEvent)(nil),                // 55: phi.websocket.control.v1.AutoRetryEndEvent
-	(*SummarizationRetryScheduledEvent)(nil), // 56: phi.websocket.control.v1.SummarizationRetryScheduledEvent
-	(*SummarizationRetryFinishedEvent)(nil),  // 57: phi.websocket.control.v1.SummarizationRetryFinishedEvent
-	(*CompactionEndEvent)(nil),               // 58: phi.websocket.control.v1.CompactionEndEvent
-	(*ExtensionErrorEvent)(nil),              // 59: phi.websocket.control.v1.ExtensionErrorEvent
-	(*ExternalValue)(nil),                    // 60: phi.websocket.control.v1.ExternalValue
-	(*ExternalNull)(nil),                     // 61: phi.websocket.control.v1.ExternalNull
-	(*ExternalList)(nil),                     // 62: phi.websocket.control.v1.ExternalList
-	(*ExternalObject)(nil),                   // 63: phi.websocket.control.v1.ExternalObject
-	(*ExternalEntry)(nil),                    // 64: phi.websocket.control.v1.ExternalEntry
+	(*QueueAttachment)(nil),                  // 33: phi.websocket.control.v1.QueueAttachment
+	(*QueueItem)(nil),                        // 34: phi.websocket.control.v1.QueueItem
+	(*QueueSnapshot)(nil),                    // 35: phi.websocket.control.v1.QueueSnapshot
+	(*QueueSubmitCall)(nil),                  // 36: phi.websocket.control.v1.QueueSubmitCall
+	(*QueueRestoreCall)(nil),                 // 37: phi.websocket.control.v1.QueueRestoreCall
+	(*QueueCopyCall)(nil),                    // 38: phi.websocket.control.v1.QueueCopyCall
+	(*QueueDiscardCall)(nil),                 // 39: phi.websocket.control.v1.QueueDiscardCall
+	(*QueueItemResult)(nil),                  // 40: phi.websocket.control.v1.QueueItemResult
+	(*QueueRestoreResult)(nil),               // 41: phi.websocket.control.v1.QueueRestoreResult
+	(*QueueCopyResult)(nil),                  // 42: phi.websocket.control.v1.QueueCopyResult
+	(*QueueDiscardResult)(nil),               // 43: phi.websocket.control.v1.QueueDiscardResult
+	(*ExtensionUIDialog)(nil),                // 44: phi.websocket.control.v1.ExtensionUIDialog
+	(*ExtensionUIResponseCall)(nil),          // 45: phi.websocket.control.v1.ExtensionUIResponseCall
+	(*ExtensionUIResponseResult)(nil),        // 46: phi.websocket.control.v1.ExtensionUIResponseResult
+	(*ExtensionUICancelCall)(nil),            // 47: phi.websocket.control.v1.ExtensionUICancelCall
+	(*ExtensionUICancelResult)(nil),          // 48: phi.websocket.control.v1.ExtensionUICancelResult
+	(*SpawnResult)(nil),                      // 49: phi.websocket.control.v1.SpawnResult
+	(*ListSessionsResult)(nil),               // 50: phi.websocket.control.v1.ListSessionsResult
+	(*StateResult)(nil),                      // 51: phi.websocket.control.v1.StateResult
+	(*TranscriptResult)(nil),                 // 52: phi.websocket.control.v1.TranscriptResult
+	(*PromptResult)(nil),                     // 53: phi.websocket.control.v1.PromptResult
+	(*ModelInfo)(nil),                        // 54: phi.websocket.control.v1.ModelInfo
+	(*ModelsResult)(nil),                     // 55: phi.websocket.control.v1.ModelsResult
+	(*ThinkingLevelsResult)(nil),             // 56: phi.websocket.control.v1.ThinkingLevelsResult
+	(*NewSessionResult)(nil),                 // 57: phi.websocket.control.v1.NewSessionResult
+	(*AbortResult)(nil),                      // 58: phi.websocket.control.v1.AbortResult
+	(*CompactResult)(nil),                    // 59: phi.websocket.control.v1.CompactResult
+	(*SubagentRunStep)(nil),                  // 60: phi.websocket.control.v1.SubagentRunStep
+	(*SubagentTranscriptResult)(nil),         // 61: phi.websocket.control.v1.SubagentTranscriptResult
+	(*StubResult)(nil),                       // 62: phi.websocket.control.v1.StubResult
+	(*StateChangedEvent)(nil),                // 63: phi.websocket.control.v1.StateChangedEvent
+	(*MessageStartEvent)(nil),                // 64: phi.websocket.control.v1.MessageStartEvent
+	(*MessageUpdateEvent)(nil),               // 65: phi.websocket.control.v1.MessageUpdateEvent
+	(*MessageEndEvent)(nil),                  // 66: phi.websocket.control.v1.MessageEndEvent
+	(*TranscriptResetEvent)(nil),             // 67: phi.websocket.control.v1.TranscriptResetEvent
+	(*RpcExitedEvent)(nil),                   // 68: phi.websocket.control.v1.RpcExitedEvent
+	(*SubagentFleetEvent)(nil),               // 69: phi.websocket.control.v1.SubagentFleetEvent
+	(*AutoRetryStartEvent)(nil),              // 70: phi.websocket.control.v1.AutoRetryStartEvent
+	(*AutoRetryEndEvent)(nil),                // 71: phi.websocket.control.v1.AutoRetryEndEvent
+	(*SummarizationRetryScheduledEvent)(nil), // 72: phi.websocket.control.v1.SummarizationRetryScheduledEvent
+	(*SummarizationRetryFinishedEvent)(nil),  // 73: phi.websocket.control.v1.SummarizationRetryFinishedEvent
+	(*CompactionEndEvent)(nil),               // 74: phi.websocket.control.v1.CompactionEndEvent
+	(*ExtensionErrorEvent)(nil),              // 75: phi.websocket.control.v1.ExtensionErrorEvent
+	(*QueueChangedEvent)(nil),                // 76: phi.websocket.control.v1.QueueChangedEvent
+	(*ExtensionUIRequestEvent)(nil),          // 77: phi.websocket.control.v1.ExtensionUIRequestEvent
+	(*ExtensionUIClosedEvent)(nil),           // 78: phi.websocket.control.v1.ExtensionUIClosedEvent
+	(*ToolExecutionUpdateEvent)(nil),         // 79: phi.websocket.control.v1.ToolExecutionUpdateEvent
+	(*ExternalValue)(nil),                    // 80: phi.websocket.control.v1.ExternalValue
+	(*ExternalNull)(nil),                     // 81: phi.websocket.control.v1.ExternalNull
+	(*ExternalList)(nil),                     // 82: phi.websocket.control.v1.ExternalList
+	(*ExternalObject)(nil),                   // 83: phi.websocket.control.v1.ExternalObject
+	(*ExternalEntry)(nil),                    // 84: phi.websocket.control.v1.ExternalEntry
 }
 var file_control_proto_depIdxs = []int32{
-	2,  // 0: phi.websocket.control.v1.ControlClientFrame.hello:type_name -> phi.websocket.control.v1.ControlHello
-	4,  // 1: phi.websocket.control.v1.ControlClientFrame.call:type_name -> phi.websocket.control.v1.ControlCall
-	3,  // 2: phi.websocket.control.v1.ControlServerFrame.welcome:type_name -> phi.websocket.control.v1.ControlWelcome
-	5,  // 3: phi.websocket.control.v1.ControlServerFrame.response:type_name -> phi.websocket.control.v1.ControlResponse
-	7,  // 4: phi.websocket.control.v1.ControlServerFrame.event:type_name -> phi.websocket.control.v1.ControlEvent
-	12, // 5: phi.websocket.control.v1.ControlCall.spawn:type_name -> phi.websocket.control.v1.SpawnCall
-	13, // 6: phi.websocket.control.v1.ControlCall.list_sessions:type_name -> phi.websocket.control.v1.ListSessionsCall
-	14, // 7: phi.websocket.control.v1.ControlCall.get_state:type_name -> phi.websocket.control.v1.GetStateCall
-	15, // 8: phi.websocket.control.v1.ControlCall.hydrate:type_name -> phi.websocket.control.v1.HydrateCall
-	16, // 9: phi.websocket.control.v1.ControlCall.get_messages:type_name -> phi.websocket.control.v1.GetMessagesCall
-	17, // 10: phi.websocket.control.v1.ControlCall.prompt:type_name -> phi.websocket.control.v1.PromptCall
-	18, // 11: phi.websocket.control.v1.ControlCall.get_available_models:type_name -> phi.websocket.control.v1.GetAvailableModelsCall
-	19, // 12: phi.websocket.control.v1.ControlCall.set_model:type_name -> phi.websocket.control.v1.SetModelCall
-	20, // 13: phi.websocket.control.v1.ControlCall.get_available_thinking_levels:type_name -> phi.websocket.control.v1.GetAvailableThinkingLevelsCall
-	21, // 14: phi.websocket.control.v1.ControlCall.set_thinking:type_name -> phi.websocket.control.v1.SetThinkingCall
-	22, // 15: phi.websocket.control.v1.ControlCall.new_session:type_name -> phi.websocket.control.v1.NewSessionCall
-	23, // 16: phi.websocket.control.v1.ControlCall.abort:type_name -> phi.websocket.control.v1.AbortCall
-	24, // 17: phi.websocket.control.v1.ControlCall.compact:type_name -> phi.websocket.control.v1.CompactCall
-	25, // 18: phi.websocket.control.v1.ControlCall.set_session_name:type_name -> phi.websocket.control.v1.SetSessionNameCall
-	26, // 19: phi.websocket.control.v1.ControlCall.subagent_transcript:type_name -> phi.websocket.control.v1.SubagentTranscriptCall
-	27, // 20: phi.websocket.control.v1.ControlCall.view_ready:type_name -> phi.websocket.control.v1.ViewReadyCall
-	28, // 21: phi.websocket.control.v1.ControlCall.set_capabilities:type_name -> phi.websocket.control.v1.SetCapabilitiesCall
-	29, // 22: phi.websocket.control.v1.ControlCall.wait_view_ready:type_name -> phi.websocket.control.v1.WaitViewReadyCall
-	30, // 23: phi.websocket.control.v1.ControlCall.dlg:type_name -> phi.websocket.control.v1.DlgCall
-	31, // 24: phi.websocket.control.v1.ControlCall.dlg_closed:type_name -> phi.websocket.control.v1.DlgClosedCall
-	32, // 25: phi.websocket.control.v1.ControlCall.activate_tab:type_name -> phi.websocket.control.v1.ActivateTabCall
-	6,  // 26: phi.websocket.control.v1.ControlResponse.error:type_name -> phi.websocket.control.v1.ControlError
-	33, // 27: phi.websocket.control.v1.ControlResponse.spawn:type_name -> phi.websocket.control.v1.SpawnResult
-	34, // 28: phi.websocket.control.v1.ControlResponse.list_sessions:type_name -> phi.websocket.control.v1.ListSessionsResult
-	35, // 29: phi.websocket.control.v1.ControlResponse.get_state:type_name -> phi.websocket.control.v1.StateResult
-	36, // 30: phi.websocket.control.v1.ControlResponse.hydrate:type_name -> phi.websocket.control.v1.TranscriptResult
-	36, // 31: phi.websocket.control.v1.ControlResponse.get_messages:type_name -> phi.websocket.control.v1.TranscriptResult
-	37, // 32: phi.websocket.control.v1.ControlResponse.prompt:type_name -> phi.websocket.control.v1.PromptResult
-	39, // 33: phi.websocket.control.v1.ControlResponse.get_available_models:type_name -> phi.websocket.control.v1.ModelsResult
-	35, // 34: phi.websocket.control.v1.ControlResponse.set_model:type_name -> phi.websocket.control.v1.StateResult
-	40, // 35: phi.websocket.control.v1.ControlResponse.get_available_thinking_levels:type_name -> phi.websocket.control.v1.ThinkingLevelsResult
-	35, // 36: phi.websocket.control.v1.ControlResponse.set_thinking:type_name -> phi.websocket.control.v1.StateResult
-	41, // 37: phi.websocket.control.v1.ControlResponse.new_session:type_name -> phi.websocket.control.v1.NewSessionResult
-	42, // 38: phi.websocket.control.v1.ControlResponse.abort:type_name -> phi.websocket.control.v1.AbortResult
-	43, // 39: phi.websocket.control.v1.ControlResponse.compact:type_name -> phi.websocket.control.v1.CompactResult
-	35, // 40: phi.websocket.control.v1.ControlResponse.set_session_name:type_name -> phi.websocket.control.v1.StateResult
-	45, // 41: phi.websocket.control.v1.ControlResponse.subagent_transcript:type_name -> phi.websocket.control.v1.SubagentTranscriptResult
-	46, // 42: phi.websocket.control.v1.ControlResponse.view_ready:type_name -> phi.websocket.control.v1.StubResult
-	46, // 43: phi.websocket.control.v1.ControlResponse.set_capabilities:type_name -> phi.websocket.control.v1.StubResult
-	46, // 44: phi.websocket.control.v1.ControlResponse.wait_view_ready:type_name -> phi.websocket.control.v1.StubResult
-	46, // 45: phi.websocket.control.v1.ControlResponse.dlg:type_name -> phi.websocket.control.v1.StubResult
-	46, // 46: phi.websocket.control.v1.ControlResponse.dlg_closed:type_name -> phi.websocket.control.v1.StubResult
-	46, // 47: phi.websocket.control.v1.ControlResponse.activate_tab:type_name -> phi.websocket.control.v1.StubResult
-	47, // 48: phi.websocket.control.v1.ControlEvent.state_changed:type_name -> phi.websocket.control.v1.StateChangedEvent
-	48, // 49: phi.websocket.control.v1.ControlEvent.message_start:type_name -> phi.websocket.control.v1.MessageStartEvent
-	49, // 50: phi.websocket.control.v1.ControlEvent.message_update:type_name -> phi.websocket.control.v1.MessageUpdateEvent
-	50, // 51: phi.websocket.control.v1.ControlEvent.message_end:type_name -> phi.websocket.control.v1.MessageEndEvent
-	51, // 52: phi.websocket.control.v1.ControlEvent.transcript_reset:type_name -> phi.websocket.control.v1.TranscriptResetEvent
-	52, // 53: phi.websocket.control.v1.ControlEvent.rpc_exited:type_name -> phi.websocket.control.v1.RpcExitedEvent
-	53, // 54: phi.websocket.control.v1.ControlEvent.subagent_fleet:type_name -> phi.websocket.control.v1.SubagentFleetEvent
-	54, // 55: phi.websocket.control.v1.ControlEvent.auto_retry_start:type_name -> phi.websocket.control.v1.AutoRetryStartEvent
-	55, // 56: phi.websocket.control.v1.ControlEvent.auto_retry_end:type_name -> phi.websocket.control.v1.AutoRetryEndEvent
-	56, // 57: phi.websocket.control.v1.ControlEvent.summarization_retry_scheduled:type_name -> phi.websocket.control.v1.SummarizationRetryScheduledEvent
-	57, // 58: phi.websocket.control.v1.ControlEvent.summarization_retry_finished:type_name -> phi.websocket.control.v1.SummarizationRetryFinishedEvent
-	58, // 59: phi.websocket.control.v1.ControlEvent.compaction_end:type_name -> phi.websocket.control.v1.CompactionEndEvent
-	59, // 60: phi.websocket.control.v1.ControlEvent.extension_error:type_name -> phi.websocket.control.v1.ExtensionErrorEvent
-	60, // 61: phi.websocket.control.v1.Message.content:type_name -> phi.websocket.control.v1.ExternalValue
-	60, // 62: phi.websocket.control.v1.Message.details:type_name -> phi.websocket.control.v1.ExternalValue
-	9,  // 63: phi.websocket.control.v1.TranscriptSnapshot.messages:type_name -> phi.websocket.control.v1.Message
-	8,  // 64: phi.websocket.control.v1.TranscriptSnapshot.state:type_name -> phi.websocket.control.v1.ControlState
-	11, // 65: phi.websocket.control.v1.SpawnResult.session:type_name -> phi.websocket.control.v1.TranscriptSnapshot
-	8,  // 66: phi.websocket.control.v1.SpawnResult.state:type_name -> phi.websocket.control.v1.ControlState
-	10, // 67: phi.websocket.control.v1.ListSessionsResult.sessions:type_name -> phi.websocket.control.v1.SessionSummary
-	8,  // 68: phi.websocket.control.v1.StateResult.state:type_name -> phi.websocket.control.v1.ControlState
-	11, // 69: phi.websocket.control.v1.TranscriptResult.session:type_name -> phi.websocket.control.v1.TranscriptSnapshot
-	38, // 70: phi.websocket.control.v1.ModelsResult.models:type_name -> phi.websocket.control.v1.ModelInfo
-	8,  // 71: phi.websocket.control.v1.NewSessionResult.state:type_name -> phi.websocket.control.v1.ControlState
-	8,  // 72: phi.websocket.control.v1.CompactResult.state:type_name -> phi.websocket.control.v1.ControlState
-	9,  // 73: phi.websocket.control.v1.SubagentRunStep.messages:type_name -> phi.websocket.control.v1.Message
-	44, // 74: phi.websocket.control.v1.SubagentTranscriptResult.steps:type_name -> phi.websocket.control.v1.SubagentRunStep
-	8,  // 75: phi.websocket.control.v1.StateChangedEvent.state:type_name -> phi.websocket.control.v1.ControlState
-	6,  // 76: phi.websocket.control.v1.StateChangedEvent.error:type_name -> phi.websocket.control.v1.ControlError
-	60, // 77: phi.websocket.control.v1.MessageStartEvent.message:type_name -> phi.websocket.control.v1.ExternalValue
-	9,  // 78: phi.websocket.control.v1.MessageEndEvent.message:type_name -> phi.websocket.control.v1.Message
-	60, // 79: phi.websocket.control.v1.SubagentFleetEvent.fleet:type_name -> phi.websocket.control.v1.ExternalValue
-	60, // 80: phi.websocket.control.v1.CompactionEndEvent.result:type_name -> phi.websocket.control.v1.ExternalValue
-	61, // 81: phi.websocket.control.v1.ExternalValue.null_value:type_name -> phi.websocket.control.v1.ExternalNull
-	62, // 82: phi.websocket.control.v1.ExternalValue.list_value:type_name -> phi.websocket.control.v1.ExternalList
-	63, // 83: phi.websocket.control.v1.ExternalValue.object_value:type_name -> phi.websocket.control.v1.ExternalObject
-	60, // 84: phi.websocket.control.v1.ExternalList.values:type_name -> phi.websocket.control.v1.ExternalValue
-	64, // 85: phi.websocket.control.v1.ExternalObject.entries:type_name -> phi.websocket.control.v1.ExternalEntry
-	60, // 86: phi.websocket.control.v1.ExternalEntry.value:type_name -> phi.websocket.control.v1.ExternalValue
-	87, // [87:87] is the sub-list for method output_type
-	87, // [87:87] is the sub-list for method input_type
-	87, // [87:87] is the sub-list for extension type_name
-	87, // [87:87] is the sub-list for extension extendee
-	0,  // [0:87] is the sub-list for field type_name
+	2,   // 0: phi.websocket.control.v1.ControlClientFrame.hello:type_name -> phi.websocket.control.v1.ControlHello
+	4,   // 1: phi.websocket.control.v1.ControlClientFrame.call:type_name -> phi.websocket.control.v1.ControlCall
+	3,   // 2: phi.websocket.control.v1.ControlServerFrame.welcome:type_name -> phi.websocket.control.v1.ControlWelcome
+	5,   // 3: phi.websocket.control.v1.ControlServerFrame.response:type_name -> phi.websocket.control.v1.ControlResponse
+	7,   // 4: phi.websocket.control.v1.ControlServerFrame.event:type_name -> phi.websocket.control.v1.ControlEvent
+	12,  // 5: phi.websocket.control.v1.ControlCall.spawn:type_name -> phi.websocket.control.v1.SpawnCall
+	13,  // 6: phi.websocket.control.v1.ControlCall.list_sessions:type_name -> phi.websocket.control.v1.ListSessionsCall
+	14,  // 7: phi.websocket.control.v1.ControlCall.get_state:type_name -> phi.websocket.control.v1.GetStateCall
+	15,  // 8: phi.websocket.control.v1.ControlCall.hydrate:type_name -> phi.websocket.control.v1.HydrateCall
+	16,  // 9: phi.websocket.control.v1.ControlCall.get_messages:type_name -> phi.websocket.control.v1.GetMessagesCall
+	17,  // 10: phi.websocket.control.v1.ControlCall.prompt:type_name -> phi.websocket.control.v1.PromptCall
+	18,  // 11: phi.websocket.control.v1.ControlCall.get_available_models:type_name -> phi.websocket.control.v1.GetAvailableModelsCall
+	19,  // 12: phi.websocket.control.v1.ControlCall.set_model:type_name -> phi.websocket.control.v1.SetModelCall
+	20,  // 13: phi.websocket.control.v1.ControlCall.get_available_thinking_levels:type_name -> phi.websocket.control.v1.GetAvailableThinkingLevelsCall
+	21,  // 14: phi.websocket.control.v1.ControlCall.set_thinking:type_name -> phi.websocket.control.v1.SetThinkingCall
+	22,  // 15: phi.websocket.control.v1.ControlCall.new_session:type_name -> phi.websocket.control.v1.NewSessionCall
+	23,  // 16: phi.websocket.control.v1.ControlCall.abort:type_name -> phi.websocket.control.v1.AbortCall
+	24,  // 17: phi.websocket.control.v1.ControlCall.compact:type_name -> phi.websocket.control.v1.CompactCall
+	25,  // 18: phi.websocket.control.v1.ControlCall.set_session_name:type_name -> phi.websocket.control.v1.SetSessionNameCall
+	26,  // 19: phi.websocket.control.v1.ControlCall.subagent_transcript:type_name -> phi.websocket.control.v1.SubagentTranscriptCall
+	27,  // 20: phi.websocket.control.v1.ControlCall.view_ready:type_name -> phi.websocket.control.v1.ViewReadyCall
+	28,  // 21: phi.websocket.control.v1.ControlCall.set_capabilities:type_name -> phi.websocket.control.v1.SetCapabilitiesCall
+	29,  // 22: phi.websocket.control.v1.ControlCall.wait_view_ready:type_name -> phi.websocket.control.v1.WaitViewReadyCall
+	30,  // 23: phi.websocket.control.v1.ControlCall.dlg:type_name -> phi.websocket.control.v1.DlgCall
+	31,  // 24: phi.websocket.control.v1.ControlCall.dlg_closed:type_name -> phi.websocket.control.v1.DlgClosedCall
+	32,  // 25: phi.websocket.control.v1.ControlCall.activate_tab:type_name -> phi.websocket.control.v1.ActivateTabCall
+	36,  // 26: phi.websocket.control.v1.ControlCall.queue_submit:type_name -> phi.websocket.control.v1.QueueSubmitCall
+	37,  // 27: phi.websocket.control.v1.ControlCall.queue_restore:type_name -> phi.websocket.control.v1.QueueRestoreCall
+	38,  // 28: phi.websocket.control.v1.ControlCall.queue_copy:type_name -> phi.websocket.control.v1.QueueCopyCall
+	39,  // 29: phi.websocket.control.v1.ControlCall.queue_discard:type_name -> phi.websocket.control.v1.QueueDiscardCall
+	45,  // 30: phi.websocket.control.v1.ControlCall.extension_ui_response:type_name -> phi.websocket.control.v1.ExtensionUIResponseCall
+	47,  // 31: phi.websocket.control.v1.ControlCall.extension_ui_cancel:type_name -> phi.websocket.control.v1.ExtensionUICancelCall
+	6,   // 32: phi.websocket.control.v1.ControlResponse.error:type_name -> phi.websocket.control.v1.ControlError
+	49,  // 33: phi.websocket.control.v1.ControlResponse.spawn:type_name -> phi.websocket.control.v1.SpawnResult
+	50,  // 34: phi.websocket.control.v1.ControlResponse.list_sessions:type_name -> phi.websocket.control.v1.ListSessionsResult
+	51,  // 35: phi.websocket.control.v1.ControlResponse.get_state:type_name -> phi.websocket.control.v1.StateResult
+	52,  // 36: phi.websocket.control.v1.ControlResponse.hydrate:type_name -> phi.websocket.control.v1.TranscriptResult
+	52,  // 37: phi.websocket.control.v1.ControlResponse.get_messages:type_name -> phi.websocket.control.v1.TranscriptResult
+	53,  // 38: phi.websocket.control.v1.ControlResponse.prompt:type_name -> phi.websocket.control.v1.PromptResult
+	55,  // 39: phi.websocket.control.v1.ControlResponse.get_available_models:type_name -> phi.websocket.control.v1.ModelsResult
+	51,  // 40: phi.websocket.control.v1.ControlResponse.set_model:type_name -> phi.websocket.control.v1.StateResult
+	56,  // 41: phi.websocket.control.v1.ControlResponse.get_available_thinking_levels:type_name -> phi.websocket.control.v1.ThinkingLevelsResult
+	51,  // 42: phi.websocket.control.v1.ControlResponse.set_thinking:type_name -> phi.websocket.control.v1.StateResult
+	57,  // 43: phi.websocket.control.v1.ControlResponse.new_session:type_name -> phi.websocket.control.v1.NewSessionResult
+	58,  // 44: phi.websocket.control.v1.ControlResponse.abort:type_name -> phi.websocket.control.v1.AbortResult
+	59,  // 45: phi.websocket.control.v1.ControlResponse.compact:type_name -> phi.websocket.control.v1.CompactResult
+	51,  // 46: phi.websocket.control.v1.ControlResponse.set_session_name:type_name -> phi.websocket.control.v1.StateResult
+	61,  // 47: phi.websocket.control.v1.ControlResponse.subagent_transcript:type_name -> phi.websocket.control.v1.SubagentTranscriptResult
+	62,  // 48: phi.websocket.control.v1.ControlResponse.view_ready:type_name -> phi.websocket.control.v1.StubResult
+	62,  // 49: phi.websocket.control.v1.ControlResponse.set_capabilities:type_name -> phi.websocket.control.v1.StubResult
+	62,  // 50: phi.websocket.control.v1.ControlResponse.wait_view_ready:type_name -> phi.websocket.control.v1.StubResult
+	62,  // 51: phi.websocket.control.v1.ControlResponse.dlg:type_name -> phi.websocket.control.v1.StubResult
+	62,  // 52: phi.websocket.control.v1.ControlResponse.dlg_closed:type_name -> phi.websocket.control.v1.StubResult
+	62,  // 53: phi.websocket.control.v1.ControlResponse.activate_tab:type_name -> phi.websocket.control.v1.StubResult
+	40,  // 54: phi.websocket.control.v1.ControlResponse.queue_submit:type_name -> phi.websocket.control.v1.QueueItemResult
+	41,  // 55: phi.websocket.control.v1.ControlResponse.queue_restore:type_name -> phi.websocket.control.v1.QueueRestoreResult
+	42,  // 56: phi.websocket.control.v1.ControlResponse.queue_copy:type_name -> phi.websocket.control.v1.QueueCopyResult
+	43,  // 57: phi.websocket.control.v1.ControlResponse.queue_discard:type_name -> phi.websocket.control.v1.QueueDiscardResult
+	46,  // 58: phi.websocket.control.v1.ControlResponse.extension_ui_response:type_name -> phi.websocket.control.v1.ExtensionUIResponseResult
+	48,  // 59: phi.websocket.control.v1.ControlResponse.extension_ui_cancel:type_name -> phi.websocket.control.v1.ExtensionUICancelResult
+	63,  // 60: phi.websocket.control.v1.ControlEvent.state_changed:type_name -> phi.websocket.control.v1.StateChangedEvent
+	64,  // 61: phi.websocket.control.v1.ControlEvent.message_start:type_name -> phi.websocket.control.v1.MessageStartEvent
+	65,  // 62: phi.websocket.control.v1.ControlEvent.message_update:type_name -> phi.websocket.control.v1.MessageUpdateEvent
+	66,  // 63: phi.websocket.control.v1.ControlEvent.message_end:type_name -> phi.websocket.control.v1.MessageEndEvent
+	67,  // 64: phi.websocket.control.v1.ControlEvent.transcript_reset:type_name -> phi.websocket.control.v1.TranscriptResetEvent
+	68,  // 65: phi.websocket.control.v1.ControlEvent.rpc_exited:type_name -> phi.websocket.control.v1.RpcExitedEvent
+	69,  // 66: phi.websocket.control.v1.ControlEvent.subagent_fleet:type_name -> phi.websocket.control.v1.SubagentFleetEvent
+	70,  // 67: phi.websocket.control.v1.ControlEvent.auto_retry_start:type_name -> phi.websocket.control.v1.AutoRetryStartEvent
+	71,  // 68: phi.websocket.control.v1.ControlEvent.auto_retry_end:type_name -> phi.websocket.control.v1.AutoRetryEndEvent
+	72,  // 69: phi.websocket.control.v1.ControlEvent.summarization_retry_scheduled:type_name -> phi.websocket.control.v1.SummarizationRetryScheduledEvent
+	73,  // 70: phi.websocket.control.v1.ControlEvent.summarization_retry_finished:type_name -> phi.websocket.control.v1.SummarizationRetryFinishedEvent
+	74,  // 71: phi.websocket.control.v1.ControlEvent.compaction_end:type_name -> phi.websocket.control.v1.CompactionEndEvent
+	75,  // 72: phi.websocket.control.v1.ControlEvent.extension_error:type_name -> phi.websocket.control.v1.ExtensionErrorEvent
+	76,  // 73: phi.websocket.control.v1.ControlEvent.queue_changed:type_name -> phi.websocket.control.v1.QueueChangedEvent
+	77,  // 74: phi.websocket.control.v1.ControlEvent.extension_ui_request:type_name -> phi.websocket.control.v1.ExtensionUIRequestEvent
+	78,  // 75: phi.websocket.control.v1.ControlEvent.extension_ui_closed:type_name -> phi.websocket.control.v1.ExtensionUIClosedEvent
+	79,  // 76: phi.websocket.control.v1.ControlEvent.tool_execution_update:type_name -> phi.websocket.control.v1.ToolExecutionUpdateEvent
+	80,  // 77: phi.websocket.control.v1.Message.content:type_name -> phi.websocket.control.v1.ExternalValue
+	80,  // 78: phi.websocket.control.v1.Message.details:type_name -> phi.websocket.control.v1.ExternalValue
+	9,   // 79: phi.websocket.control.v1.TranscriptSnapshot.messages:type_name -> phi.websocket.control.v1.Message
+	8,   // 80: phi.websocket.control.v1.TranscriptSnapshot.state:type_name -> phi.websocket.control.v1.ControlState
+	33,  // 81: phi.websocket.control.v1.QueueItem.attachments:type_name -> phi.websocket.control.v1.QueueAttachment
+	34,  // 82: phi.websocket.control.v1.QueueSnapshot.items:type_name -> phi.websocket.control.v1.QueueItem
+	34,  // 83: phi.websocket.control.v1.QueueItemResult.item:type_name -> phi.websocket.control.v1.QueueItem
+	34,  // 84: phi.websocket.control.v1.QueueRestoreResult.item:type_name -> phi.websocket.control.v1.QueueItem
+	33,  // 85: phi.websocket.control.v1.QueueCopyResult.attachments:type_name -> phi.websocket.control.v1.QueueAttachment
+	34,  // 86: phi.websocket.control.v1.QueueDiscardResult.item:type_name -> phi.websocket.control.v1.QueueItem
+	11,  // 87: phi.websocket.control.v1.SpawnResult.session:type_name -> phi.websocket.control.v1.TranscriptSnapshot
+	8,   // 88: phi.websocket.control.v1.SpawnResult.state:type_name -> phi.websocket.control.v1.ControlState
+	10,  // 89: phi.websocket.control.v1.ListSessionsResult.sessions:type_name -> phi.websocket.control.v1.SessionSummary
+	8,   // 90: phi.websocket.control.v1.StateResult.state:type_name -> phi.websocket.control.v1.ControlState
+	35,  // 91: phi.websocket.control.v1.StateResult.queue:type_name -> phi.websocket.control.v1.QueueSnapshot
+	44,  // 92: phi.websocket.control.v1.StateResult.dialogs:type_name -> phi.websocket.control.v1.ExtensionUIDialog
+	11,  // 93: phi.websocket.control.v1.TranscriptResult.session:type_name -> phi.websocket.control.v1.TranscriptSnapshot
+	35,  // 94: phi.websocket.control.v1.TranscriptResult.queue:type_name -> phi.websocket.control.v1.QueueSnapshot
+	44,  // 95: phi.websocket.control.v1.TranscriptResult.dialogs:type_name -> phi.websocket.control.v1.ExtensionUIDialog
+	54,  // 96: phi.websocket.control.v1.ModelsResult.models:type_name -> phi.websocket.control.v1.ModelInfo
+	8,   // 97: phi.websocket.control.v1.NewSessionResult.state:type_name -> phi.websocket.control.v1.ControlState
+	8,   // 98: phi.websocket.control.v1.CompactResult.state:type_name -> phi.websocket.control.v1.ControlState
+	9,   // 99: phi.websocket.control.v1.SubagentRunStep.messages:type_name -> phi.websocket.control.v1.Message
+	60,  // 100: phi.websocket.control.v1.SubagentTranscriptResult.steps:type_name -> phi.websocket.control.v1.SubagentRunStep
+	8,   // 101: phi.websocket.control.v1.StateChangedEvent.state:type_name -> phi.websocket.control.v1.ControlState
+	6,   // 102: phi.websocket.control.v1.StateChangedEvent.error:type_name -> phi.websocket.control.v1.ControlError
+	80,  // 103: phi.websocket.control.v1.MessageStartEvent.message:type_name -> phi.websocket.control.v1.ExternalValue
+	9,   // 104: phi.websocket.control.v1.MessageEndEvent.message:type_name -> phi.websocket.control.v1.Message
+	80,  // 105: phi.websocket.control.v1.SubagentFleetEvent.fleet:type_name -> phi.websocket.control.v1.ExternalValue
+	80,  // 106: phi.websocket.control.v1.CompactionEndEvent.result:type_name -> phi.websocket.control.v1.ExternalValue
+	35,  // 107: phi.websocket.control.v1.QueueChangedEvent.queue:type_name -> phi.websocket.control.v1.QueueSnapshot
+	80,  // 108: phi.websocket.control.v1.ExtensionUIRequestEvent.request:type_name -> phi.websocket.control.v1.ExternalValue
+	80,  // 109: phi.websocket.control.v1.ToolExecutionUpdateEvent.payload:type_name -> phi.websocket.control.v1.ExternalValue
+	81,  // 110: phi.websocket.control.v1.ExternalValue.null_value:type_name -> phi.websocket.control.v1.ExternalNull
+	82,  // 111: phi.websocket.control.v1.ExternalValue.list_value:type_name -> phi.websocket.control.v1.ExternalList
+	83,  // 112: phi.websocket.control.v1.ExternalValue.object_value:type_name -> phi.websocket.control.v1.ExternalObject
+	80,  // 113: phi.websocket.control.v1.ExternalList.values:type_name -> phi.websocket.control.v1.ExternalValue
+	84,  // 114: phi.websocket.control.v1.ExternalObject.entries:type_name -> phi.websocket.control.v1.ExternalEntry
+	80,  // 115: phi.websocket.control.v1.ExternalEntry.value:type_name -> phi.websocket.control.v1.ExternalValue
+	116, // [116:116] is the sub-list for method output_type
+	116, // [116:116] is the sub-list for method input_type
+	116, // [116:116] is the sub-list for extension type_name
+	116, // [116:116] is the sub-list for extension extendee
+	0,   // [0:116] is the sub-list for field type_name
 }
 
 func init() { file_control_proto_init() }
@@ -5180,6 +6932,12 @@ func file_control_proto_init() {
 		(*ControlCall_Dlg)(nil),
 		(*ControlCall_DlgClosed)(nil),
 		(*ControlCall_ActivateTab)(nil),
+		(*ControlCall_QueueSubmit)(nil),
+		(*ControlCall_QueueRestore)(nil),
+		(*ControlCall_QueueCopy)(nil),
+		(*ControlCall_QueueDiscard)(nil),
+		(*ControlCall_ExtensionUiResponse)(nil),
+		(*ControlCall_ExtensionUiCancel)(nil),
 	}
 	file_control_proto_msgTypes[5].OneofWrappers = []any{
 		(*ControlResponse_Error)(nil),
@@ -5204,6 +6962,12 @@ func file_control_proto_init() {
 		(*ControlResponse_Dlg)(nil),
 		(*ControlResponse_DlgClosed)(nil),
 		(*ControlResponse_ActivateTab)(nil),
+		(*ControlResponse_QueueSubmit)(nil),
+		(*ControlResponse_QueueRestore)(nil),
+		(*ControlResponse_QueueCopy)(nil),
+		(*ControlResponse_QueueDiscard)(nil),
+		(*ControlResponse_ExtensionUiResponse)(nil),
+		(*ControlResponse_ExtensionUiCancel)(nil),
 	}
 	file_control_proto_msgTypes[7].OneofWrappers = []any{
 		(*ControlEvent_StateChanged)(nil),
@@ -5219,6 +6983,10 @@ func file_control_proto_init() {
 		(*ControlEvent_SummarizationRetryFinished)(nil),
 		(*ControlEvent_CompactionEnd)(nil),
 		(*ControlEvent_ExtensionError)(nil),
+		(*ControlEvent_QueueChanged)(nil),
+		(*ControlEvent_ExtensionUiRequest)(nil),
+		(*ControlEvent_ExtensionUiClosed)(nil),
+		(*ControlEvent_ToolExecutionUpdate)(nil),
 	}
 	file_control_proto_msgTypes[8].OneofWrappers = []any{}
 	file_control_proto_msgTypes[9].OneofWrappers = []any{}
@@ -5230,24 +6998,33 @@ func file_control_proto_init() {
 	file_control_proto_msgTypes[30].OneofWrappers = []any{}
 	file_control_proto_msgTypes[31].OneofWrappers = []any{}
 	file_control_proto_msgTypes[32].OneofWrappers = []any{}
-	file_control_proto_msgTypes[38].OneofWrappers = []any{}
+	file_control_proto_msgTypes[34].OneofWrappers = []any{}
 	file_control_proto_msgTypes[41].OneofWrappers = []any{}
+	file_control_proto_msgTypes[42].OneofWrappers = []any{}
 	file_control_proto_msgTypes[43].OneofWrappers = []any{}
-	file_control_proto_msgTypes[47].OneofWrappers = []any{
+	file_control_proto_msgTypes[44].OneofWrappers = []any{}
+	file_control_proto_msgTypes[45].OneofWrappers = []any{}
+	file_control_proto_msgTypes[54].OneofWrappers = []any{}
+	file_control_proto_msgTypes[57].OneofWrappers = []any{}
+	file_control_proto_msgTypes[59].OneofWrappers = []any{}
+	file_control_proto_msgTypes[63].OneofWrappers = []any{
 		(*StateChangedEvent_State)(nil),
 		(*StateChangedEvent_Error)(nil),
 	}
-	file_control_proto_msgTypes[48].OneofWrappers = []any{}
-	file_control_proto_msgTypes[49].OneofWrappers = []any{}
-	file_control_proto_msgTypes[52].OneofWrappers = []any{}
-	file_control_proto_msgTypes[53].OneofWrappers = []any{}
-	file_control_proto_msgTypes[54].OneofWrappers = []any{}
-	file_control_proto_msgTypes[55].OneofWrappers = []any{}
-	file_control_proto_msgTypes[56].OneofWrappers = []any{}
-	file_control_proto_msgTypes[57].OneofWrappers = []any{}
-	file_control_proto_msgTypes[58].OneofWrappers = []any{}
-	file_control_proto_msgTypes[59].OneofWrappers = []any{}
-	file_control_proto_msgTypes[60].OneofWrappers = []any{
+	file_control_proto_msgTypes[64].OneofWrappers = []any{}
+	file_control_proto_msgTypes[65].OneofWrappers = []any{}
+	file_control_proto_msgTypes[68].OneofWrappers = []any{}
+	file_control_proto_msgTypes[69].OneofWrappers = []any{}
+	file_control_proto_msgTypes[70].OneofWrappers = []any{}
+	file_control_proto_msgTypes[71].OneofWrappers = []any{}
+	file_control_proto_msgTypes[72].OneofWrappers = []any{}
+	file_control_proto_msgTypes[73].OneofWrappers = []any{}
+	file_control_proto_msgTypes[74].OneofWrappers = []any{}
+	file_control_proto_msgTypes[75].OneofWrappers = []any{}
+	file_control_proto_msgTypes[77].OneofWrappers = []any{}
+	file_control_proto_msgTypes[78].OneofWrappers = []any{}
+	file_control_proto_msgTypes[79].OneofWrappers = []any{}
+	file_control_proto_msgTypes[80].OneofWrappers = []any{
 		(*ExternalValue_NullValue)(nil),
 		(*ExternalValue_BoolValue)(nil),
 		(*ExternalValue_NumberValue)(nil),
@@ -5262,7 +7039,7 @@ func file_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_proto_rawDesc), len(file_control_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   65,
+			NumMessages:   85,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -300,6 +300,10 @@ describe('control results', () => {
                 messages: LEGACY_MESSAGES,
                 lastSeq: 2,
                 state: LEGACY_STATE,
+                // hydrate and getMessages also carry the delivery ledger and
+                // the retained dialogs; this fixture sends neither.
+                queue: { sessionEpoch: '', items: [] },
+                dialogs: [],
             });
         }
 
