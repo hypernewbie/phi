@@ -56,7 +56,7 @@ func TestAccessRollbackGuard(t *testing.T) {
 			t.Fatalf("pre-migration rollback guard: %v", err)
 		}
 		var contender accessStateLock
-		if contender.tryAcquire(accessV2LockPath()) {
+		if contender.tryAcquire(Default.accessV2LockPath()) {
 			contender.release()
 			t.Fatal("rollback guard did not retain the stable lock")
 		}
@@ -66,7 +66,7 @@ func TestAccessRollbackGuard(t *testing.T) {
 	t.Run("refuses a running owner", func(t *testing.T) {
 		withTempConfig(t)
 		var owner accessStateLock
-		if !owner.tryAcquire(accessV2LockPath()) {
+		if !owner.tryAcquire(Default.accessV2LockPath()) {
 			t.Fatal("test owner failed to acquire auth lock")
 		}
 		defer owner.release()
@@ -80,8 +80,8 @@ func TestAccessRollbackGuard(t *testing.T) {
 		name string
 		path func() string
 	}{
-		{name: "auth database", path: accessDBPath},
-		{name: "legacy session state", path: accessV2StatePath},
+		{name: "auth database", path: Default.accessDBPath},
+		{name: "legacy session state", path: Default.accessV2StatePath},
 	} {
 		t.Run("refuses "+statePath.name, func(t *testing.T) {
 			withTempConfig(t)
@@ -145,7 +145,7 @@ func writeLegacyAccessStateForTest(t *testing.T, state *accessV2StateFile) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(accessV2StatePath(), raw, 0o600); err != nil {
+	if err := os.WriteFile(Default.accessV2StatePath(), raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -174,7 +174,7 @@ func TestAccessMigrationFreshInstallAndVerifierImport(t *testing.T) {
 		if cfg.AccessPasswordHash != "" || cfg.AccessAuthMigration == nil || cfg.AccessAuthMigration.State != "complete" {
 			t.Fatalf("fresh Config migration state = %#v", cfg.AccessAuthMigration)
 		}
-		if _, err := os.Lstat(accessV2StatePath()); !os.IsNotExist(err) {
+		if _, err := os.Lstat(Default.accessV2StatePath()); !os.IsNotExist(err) {
 			t.Fatalf("fresh migration retained legacy state path: %v", err)
 		}
 	})
@@ -213,7 +213,7 @@ func seedCompletedJSONAccessHome(t *testing.T, configID, databaseID [16]byte) (s
 	encoded := testAccessHash()
 	active.RecordBinding = accessRecordBinding(encoded)
 	state := accessDBState{PasswordRecord: encoded, MigrationID: databaseID, V2Available: true, Active: active}
-	store, err := openAccessDB(accessDBPath(), true)
+	store, err := openAccessDB(Default.accessDBPath(), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +317,7 @@ func TestAccessMigrationImportsLegacySessionsAndConsumedHandles(t *testing.T) {
 	if !auth.v2Available || testAccessDBPasswordRecord(t) != encoded {
 		t.Fatal("legacy verifier/session migration did not become authoritative")
 	}
-	if _, err := os.Lstat(accessV2StatePath()); !os.IsNotExist(err) {
+	if _, err := os.Lstat(Default.accessV2StatePath()); !os.IsNotExist(err) {
 		t.Fatalf("successful migration retained legacy state: %v", err)
 	}
 }
@@ -440,11 +440,11 @@ func TestAccessMigrationSemanticallyCorruptLegacyStateKeepsV1(t *testing.T) {
 	if cfg.AccessPasswordHash != "" || cfg.AccessAuthMigration == nil || cfg.AccessAuthMigration.State != "complete" {
 		t.Fatalf("semantic corruption did not complete safely: %#v", cfg)
 	}
-	if _, err := os.Lstat(accessV2StatePath()); !os.IsNotExist(err) {
+	if _, err := os.Lstat(Default.accessV2StatePath()); !os.IsNotExist(err) {
 		t.Fatalf("corrupt legacy recovery input was not retired after safe migration: %v", err)
 	}
 
-	status := testAccessServe(HandleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+	status := testAccessServe(Default.HandleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
 	if status.Code != http.StatusOK {
 		t.Fatalf("v1 status after semantic corruption = %d: %s", status.Code, status.Body.String())
 	}
@@ -463,7 +463,7 @@ func TestAccessMigrationSemanticallyCorruptLegacyStateKeepsV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	login := testAccessServe(HandleAccessAuthLogin, httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(string(loginBody))))
+	login := testAccessServe(Default.HandleAccessAuthLogin, httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(string(loginBody))))
 	if login.Code != http.StatusOK || len(login.Result().Cookies()) != 1 {
 		t.Fatalf("v1 login after semantic corruption = %d cookies=%d: %s", login.Code, len(login.Result().Cookies()), login.Body.String())
 	}
@@ -512,7 +512,7 @@ func TestAccessMigrationRejectsLegacyRecordIDRefreshKeyMismatch(t *testing.T) {
 			if active.RecordBinding != accessRecordBinding(encoded) || active.RecordID != "" || active.RefreshKey != nil || len(active.Families) != 0 {
 				t.Fatalf("mismatched legacy state was not reduced to a safe base: %+v", active)
 			}
-			if status := testAccessServe(HandleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil)); status.Code != http.StatusOK {
+			if status := testAccessServe(Default.HandleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil)); status.Code != http.StatusOK {
 				t.Fatalf("v1 status after corrupt legacy state = %d: %s", status.Code, status.Body.String())
 			}
 			cookie := testAccessCookieFor(t, auth)
@@ -529,7 +529,7 @@ func TestAccessMigrationCorruptLegacyStateKeepsV1ButDisablesV2(t *testing.T) {
 	withTempConfig(t)
 	encoded := testAccessHash()
 	seedTestLegacyConfig(t, encoded)
-	if err := os.WriteFile(accessV2StatePath(), []byte(`{"version":1,"active":{"epoch":0}}`), 0o600); err != nil {
+	if err := os.WriteFile(Default.accessV2StatePath(), []byte(`{"version":1,"active":{"epoch":0}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	auth := useTestAccessAuth(t)
@@ -542,7 +542,7 @@ func TestAccessMigrationCorruptLegacyStateKeepsV1ButDisablesV2(t *testing.T) {
 	if state := testAccessStateFile(t).Active; state.RecordBinding != accessRecordBinding(encoded) || len(state.Families) != 0 {
 		t.Fatalf("corrupt legacy state did not reset v2 sessions: %+v", state)
 	}
-	if _, err := os.Lstat(accessV2StatePath()); !os.IsNotExist(err) {
+	if _, err := os.Lstat(Default.accessV2StatePath()); !os.IsNotExist(err) {
 		t.Fatalf("corrupt legacy state was not removed after migration: %v", err)
 	}
 	cookie := testAccessCookieFor(t, auth)
@@ -609,11 +609,11 @@ func TestAccessMigrationConfigWriteFailuresRecoverIdempotently(t *testing.T) {
 			t.Fatalf("failed initial marker write exposed auth: faulted=%v record=%v", manager.faulted, manager.record)
 		}
 		manager.close()
-		cfg, err := readAccessMigrationConfig()
+		cfg, err := Default.readAccessMigrationConfig()
 		if err != nil || cfg.AccessPasswordHash != encoded || cfg.AccessAuthMigration != nil {
 			t.Fatalf("initial marker failure changed Config: %#v, err=%v", cfg, err)
 		}
-		if _, err := os.Lstat(accessDBPath()); !os.IsNotExist(err) {
+		if _, err := os.Lstat(Default.accessDBPath()); !os.IsNotExist(err) {
 			t.Fatalf("initial marker failure created auth database: %v", err)
 		}
 		setConfigWriter(nil)
@@ -623,7 +623,7 @@ func TestAccessMigrationConfigWriteFailuresRecoverIdempotently(t *testing.T) {
 			t.Fatalf("retry after initial marker write failure: %v", err)
 		}
 		retry.close()
-		cfg, err = readAccessMigrationConfig()
+		cfg, err = Default.readAccessMigrationConfig()
 		if err != nil || cfg.AccessAuthMigration == nil || cfg.AccessAuthMigration.State != "complete" || cfg.AccessPasswordHash != "" {
 			t.Fatalf("retry did not complete the migration: %#v, err=%v", cfg, err)
 		}
@@ -672,7 +672,7 @@ func TestAccessMigrationConfigWriteFailuresRecoverIdempotently(t *testing.T) {
 			first.close()
 			setConfigWriter(previousWriter)
 
-			cfg, err := readAccessMigrationConfig()
+			cfg, err := Default.readAccessMigrationConfig()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -683,7 +683,7 @@ func TestAccessMigrationConfigWriteFailuresRecoverIdempotently(t *testing.T) {
 			} else if cfg.AccessPasswordHash != encoded || cfg.AccessAuthMigration == nil || cfg.AccessAuthMigration.State != "pending" {
 				t.Fatalf("failed finalization did not preserve pending recovery state: %#v", cfg)
 			}
-			if _, err := os.Lstat(accessV2StatePath()); err != nil {
+			if _, err := os.Lstat(Default.accessV2StatePath()); err != nil {
 				t.Fatalf("failed finalization removed legacy state before recovery: %v", err)
 			}
 
@@ -693,7 +693,7 @@ func TestAccessMigrationConfigWriteFailuresRecoverIdempotently(t *testing.T) {
 				t.Fatalf("recover after finalization failure: %v", err)
 			}
 			defer recovered.close()
-			cfg, err = readAccessMigrationConfig()
+			cfg, err = Default.readAccessMigrationConfig()
 			if err != nil || cfg.AccessPasswordHash != "" || cfg.AccessAuthMigration == nil || cfg.AccessAuthMigration.State != "complete" {
 				t.Fatalf("recovered migration Config = %#v, err=%v", cfg, err)
 			}
@@ -701,7 +701,7 @@ func TestAccessMigrationConfigWriteFailuresRecoverIdempotently(t *testing.T) {
 			if err != nil || state.PasswordRecord != encoded || !recovered.v2Available {
 				t.Fatalf("recovered migration state = verifier:%q v2:%v err:%v", state.PasswordRecord, recovered.v2Available, err)
 			}
-			if _, err := os.Lstat(accessV2StatePath()); !os.IsNotExist(err) {
+			if _, err := os.Lstat(Default.accessV2StatePath()); !os.IsNotExist(err) {
 				t.Fatalf("recovered migration retained legacy state: %v", err)
 			}
 		})
@@ -721,13 +721,13 @@ func TestAccessMigrationCompletedMarkerRejectsUntrustedDatabaseState(t *testing.
 			}
 			initial.close()
 
-			cfg, err := readAccessMigrationConfig()
+			cfg, err := Default.readAccessMigrationConfig()
 			if err != nil || cfg.AccessAuthMigration == nil || cfg.AccessAuthMigration.State != "complete" {
 				t.Fatalf("prepared Config = %#v err=%v", cfg, err)
 			}
 			switch name {
 			case "migration ID mismatch":
-				store, err := openAccessDB(accessDBPath(), false)
+				store, err := openAccessDB(Default.accessDBPath(), false)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -743,7 +743,7 @@ func TestAccessMigrationCompletedMarkerRejectsUntrustedDatabaseState(t *testing.
 				}
 				store.close()
 			case "unsupported schema":
-				store, err := openAccessDB(accessDBPath(), false)
+				store, err := openAccessDB(Default.accessDBPath(), false)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -793,11 +793,11 @@ func TestAccessMigrationPendingRetriesAbsentOrPristineDatabase(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := writeAccessMigrationConfig(nil, encoded, marker, encoded); err != nil {
+			if err := Default.writeAccessMigrationConfig(nil, encoded, marker, encoded); err != nil {
 				t.Fatal(err)
 			}
 			if tc.pristineDB {
-				store, err := openAccessDB(accessDBPath(), true)
+				store, err := openAccessDB(Default.accessDBPath(), true)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -810,7 +810,7 @@ func TestAccessMigrationPendingRetriesAbsentOrPristineDatabase(t *testing.T) {
 				t.Fatalf("pending migration retry: %v", err)
 			}
 			defer manager.close()
-			cfg, err := readAccessMigrationConfig()
+			cfg, err := Default.readAccessMigrationConfig()
 			if err != nil || cfg.AccessPasswordHash != "" || cfg.AccessAuthMigration == nil || cfg.AccessAuthMigration.State != "complete" || cfg.AccessAuthMigration.ID != marker.ID {
 				t.Fatalf("migration retry Config = %#v, err=%v", cfg, err)
 			}
@@ -841,7 +841,7 @@ func TestAccessMigrationPendingRejectsMismatchedOrUnsupportedDatabase(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := writeAccessMigrationConfig(nil, encoded, marker, encoded); err != nil {
+			if err := Default.writeAccessMigrationConfig(nil, encoded, marker, encoded); err != nil {
 				t.Fatal(err)
 			}
 			markerID := migrationIDForTest(t, marker)
@@ -865,7 +865,7 @@ func TestAccessMigrationPendingRejectsMismatchedOrUnsupportedDatabase(t *testing
 					t.Fatal(err)
 				}
 				active.RecordBinding = accessRecordBinding(dbVerifier)
-				store, err := openAccessDB(accessDBPath(), true)
+				store, err := openAccessDB(Default.accessDBPath(), true)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -876,7 +876,7 @@ func TestAccessMigrationPendingRejectsMismatchedOrUnsupportedDatabase(t *testing
 				}
 				store.close()
 			case "non-pristine database":
-				store, err := openAccessDB(accessDBPath(), true)
+				store, err := openAccessDB(Default.accessDBPath(), true)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -886,7 +886,7 @@ func TestAccessMigrationPendingRejectsMismatchedOrUnsupportedDatabase(t *testing
 				}
 				store.close()
 			case "unsupported database":
-				store, err := openAccessDB(accessDBPath(), true)
+				store, err := openAccessDB(Default.accessDBPath(), true)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -907,7 +907,7 @@ func TestAccessMigrationPendingRejectsMismatchedOrUnsupportedDatabase(t *testing
 				t.Fatalf("failed migration left fallback auth state: faulted=%v record=%v", manager.faulted, manager.record)
 			}
 			manager.close()
-			cfg, err := readAccessMigrationConfig()
+			cfg, err := Default.readAccessMigrationConfig()
 			if err != nil || cfg.AccessPasswordHash != encoded || cfg.AccessAuthMigration == nil || cfg.AccessAuthMigration.State != "pending" || cfg.AccessAuthMigration.ID != marker.ID {
 				t.Fatalf("failed migration changed recovery Config: %#v, err=%v", cfg, err)
 			}
@@ -931,7 +931,7 @@ func TestAccessMigrationRejectsMalformedTOMLMarkerMetadata(t *testing.T) {
 			if err := os.WriteFile(configFilePath(), []byte(tc.marker), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := readAccessMigrationConfig(); err == nil {
+			if _, err := Default.readAccessMigrationConfig(); err == nil {
 				t.Fatal("malformed TOML marker was accepted")
 			}
 		})
@@ -958,7 +958,7 @@ func TestAccessMigrationJSONFallbackRejectsMalformedMetadata(t *testing.T) {
 			if err := os.WriteFile(legacy, []byte(tc.raw), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := readAccessMigrationConfig(); err == nil {
+			if _, err := Default.readAccessMigrationConfig(); err == nil {
 				t.Fatal("malformed legacy JSON metadata was accepted")
 			}
 			if got := mustRead(t, legacy); string(got) != tc.raw {
@@ -980,7 +980,7 @@ func TestAccessMigrationRejectsUnmarkedDatabaseAndMalformedMarker(t *testing.T) 
 			t.Fatal(err)
 		}
 		manager.close()
-		cfg, err := readAccessMigrationConfig()
+		cfg, err := Default.readAccessMigrationConfig()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1020,7 +1020,7 @@ func TestAccessMigrationRejectsUnmarkedDatabaseAndMalformedMarker(t *testing.T) 
 
 func TestAccessDBInitializationFailureRollsBackSchemaAndVersion(t *testing.T) {
 	withTempConfig(t)
-	store, err := openAccessDB(accessDBPath(), true)
+	store, err := openAccessDB(Default.accessDBPath(), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1080,7 +1080,7 @@ func TestAccessMigrationPendingMarkerRecoversInitializedDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeAccessMigrationConfig(nil, encoded, marker, encoded); err != nil {
+	if err := Default.writeAccessMigrationConfig(nil, encoded, marker, encoded); err != nil {
 		t.Fatal(err)
 	}
 	migrationID, err := config.MigrationMarkerID(marker)
@@ -1092,7 +1092,7 @@ func TestAccessMigrationPendingMarkerRecoversInitializedDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	active.RecordBinding = accessRecordBinding(encoded)
-	store, err := openAccessDB(accessDBPath(), true)
+	store, err := openAccessDB(Default.accessDBPath(), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1120,7 +1120,7 @@ func TestAccessMigrationRejectsCompletedMarkerWithoutDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeAccessMigrationConfig(nil, testAccessHash(), marker, ""); err != nil {
+	if err := Default.writeAccessMigrationConfig(nil, testAccessHash(), marker, ""); err != nil {
 		t.Fatal(err)
 	}
 	manager := NewManager(testConfigStore, testSocketHub)
@@ -1136,7 +1136,7 @@ func TestAccessMigrationRejectsCorruptDatabaseWithoutConfigFallback(t *testing.T
 	auth := useTestAccessAuth(t)
 	testAccessEnableV2(t, testAccessPassword)
 	auth.close()
-	if err := os.WriteFile(accessDBPath(), []byte("not sqlite"), 0o600); err != nil {
+	if err := os.WriteFile(Default.accessDBPath(), []byte("not sqlite"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	manager := NewManager(testConfigStore, testSocketHub)
@@ -1158,7 +1158,7 @@ func TestAccessFaultedOwnerCannotIssueOrAcceptV1Credentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookie := testAccessCookieFor(t, auth)
-	status := testAccessServe(HandleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+	status := testAccessServe(Default.HandleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
 	if status.Code != http.StatusOK {
 		t.Fatalf("initial v1 status = %d: %s", status.Code, status.Body.String())
 	}
@@ -1187,7 +1187,7 @@ func TestAccessFaultedOwnerCannotIssueOrAcceptV1Credentials(t *testing.T) {
 		if err := auth.db.db.Close(); err != nil {
 			return err
 		}
-		if err := os.WriteFile(accessDBPath(), []byte("not sqlite"), 0o600); err != nil {
+		if err := os.WriteFile(Default.accessDBPath(), []byte("not sqlite"), 0o600); err != nil {
 			return err
 		}
 		return errors.New("injected uncertain commit after database corruption")
@@ -1195,7 +1195,7 @@ func TestAccessFaultedOwnerCannotIssueOrAcceptV1Credentials(t *testing.T) {
 	auth.mu.Unlock()
 	changeRequest := httptest.NewRequest(http.MethodPost, "/api/auth/password", strings.NewReader(`{"password_hash":"`+testAccessHash()+`"}`))
 	changeRequest.AddCookie(cookie)
-	change := testAccessServe(HandleAccessPassword, changeRequest)
+	change := testAccessServe(Default.HandleAccessPassword, changeRequest)
 	auth.mu.Lock()
 	auth.db.commit = previousCommit
 	faulted, retainedRecord := auth.faulted, auth.record != nil
@@ -1207,11 +1207,11 @@ func TestAccessFaultedOwnerCannotIssueOrAcceptV1Credentials(t *testing.T) {
 		t.Fatalf("failed reload did not retain a faulted owner: faulted=%v record=%v", faulted, retainedRecord)
 	}
 
-	status = testAccessServe(HandleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+	status = testAccessServe(Default.HandleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
 	if status.Code != http.StatusServiceUnavailable || status.Body.String() != "Unable to start login: unable to persist access password\n" {
 		t.Fatalf("faulted v1 status = %d %q", status.Code, status.Body.String())
 	}
-	login := testAccessServe(HandleAccessAuthLogin, httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(string(loginBody))))
+	login := testAccessServe(Default.HandleAccessAuthLogin, httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(string(loginBody))))
 	if login.Code != http.StatusInternalServerError || login.Body.String() != "Unable to login\n" || len(login.Result().Cookies()) != 0 {
 		t.Fatalf("faulted v1 login = %d cookies=%d body=%q", login.Code, len(login.Result().Cookies()), login.Body.String())
 	}
@@ -1267,7 +1267,7 @@ func TestAccessDBRejectsInconsistentActiveState(t *testing.T) {
 			}
 			auth.close()
 
-			store, err := openAccessDB(accessDBPath(), false)
+			store, err := openAccessDB(Default.accessDBPath(), false)
 			if err != nil {
 				t.Fatalf("open synthetic auth database: %v", err)
 			}
@@ -1316,7 +1316,7 @@ func TestAccessDBRejectsInconsistentActiveState(t *testing.T) {
 
 func TestAccessDBDurability(t *testing.T) {
 	withTempConfig(t)
-	path := accessDBPath()
+	path := Default.accessDBPath()
 	store, err := openAccessDB(path, true)
 	if err != nil {
 		t.Fatalf("open auth DB: %v", err)
@@ -1390,9 +1390,9 @@ func TestAccessDBM1RealServerAcceptance(t *testing.T) {
 
 	newServer := func() *httptest.Server {
 		mux := http.NewServeMux()
-		mux.HandleFunc("/api/auth/v2/login", HandleAccessV2Login)
-		mux.HandleFunc("/api/auth/v2/password", HandleAccessV2Password)
-		mux.Handle("/api/coders", Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mux.HandleFunc("/api/auth/v2/login", Default.HandleAccessV2Login)
+		mux.HandleFunc("/api/auth/v2/password", Default.HandleAccessV2Password)
+		mux.Handle("/api/coders", Default.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 		})))
 		return httptest.NewServer(mux)

@@ -7,28 +7,23 @@ import (
 	"github.com/hypernewbie/phi/pkg/update"
 )
 
-var (
-	updateChecker *update.Checker
-	updateApplier *update.Applier
-)
-
 // handleUpdateStatus returns the current cached update check result.
 // GET /api/update/status
-func HandleUpdateStatus(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if updateChecker == nil {
+	if app.updateChecker == nil {
 		http.Error(w, "Update checker not initialized", http.StatusServiceUnavailable)
 		return
 	}
 
-	status := updateChecker.Status()
+	status := app.updateChecker.Status()
 	// Force a fresh check on first hit if we've never checked before.
 	if status.LastChecked == "" {
-		if result := updateChecker.RunCheck(false); result.Err == nil && result.Latest != "" {
-			status = updateChecker.Status()
+		if result := app.updateChecker.RunCheck(false); result.Err == nil && result.Latest != "" {
+			status = app.updateChecker.Status()
 		}
 	}
 
@@ -38,25 +33,25 @@ func HandleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 
 // handleUpdateCheck triggers a fresh check (subject to min interval).
 // POST /api/update/check
-// InstallUpdater publishes the release-build checker and applier to the
+// installUpdater publishes the release-build checker and applier to the
 // update routes. Dev builds leave both nil and the routes report unavailable.
-func InstallUpdater(checker *update.Checker, applier *update.Applier) {
-	updateChecker = checker
-	updateApplier = applier
+func (app *Server) installUpdater(checker *update.Checker, applier *update.Applier) {
+	app.updateChecker = checker
+	app.updateApplier = applier
 }
 
-func HandleUpdateCheck(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if updateChecker == nil {
+	if app.updateChecker == nil {
 		http.Error(w, "Update checker not initialized", http.StatusServiceUnavailable)
 		return
 	}
 
-	result := updateChecker.RunCheck(false)
-	status := updateChecker.Status()
+	result := app.updateChecker.RunCheck(false)
+	status := app.updateChecker.Status()
 	if result.Err != nil {
 		// Don't surface the raw error to the client; it's noise. Keep
 		// the cached state and include a hint in Error so the UI can
@@ -71,16 +66,16 @@ func HandleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 // handleUpdateApply kicks off a T2 staged swap. POST /api/update/apply
 // with body {"version":"v0.8.2"}. Returns immediately with the initial
 // progress snapshot; client polls /api/update/progress to track.
-func HandleUpdateApply(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if updateApplier == nil {
+	if app.updateApplier == nil {
 		http.Error(w, "Update applier not initialized", http.StatusServiceUnavailable)
 		return
 	}
-	if !updateApplier.Eligible() {
+	if !app.updateApplier.Eligible() {
 		http.Error(w, "Self-update is not available for this install method", http.StatusForbidden)
 		return
 	}
@@ -99,24 +94,24 @@ func HandleUpdateApply(w http.ResponseWriter, r *http.Request) {
 
 	// Run in a goroutine so the HTTP response returns immediately.
 	// The client polls /api/update/progress for status.
-	go updateApplier.Apply(req.Version)
+	go app.updateApplier.Apply(req.Version)
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(updateApplier.Progress())
+	_ = json.NewEncoder(w).Encode(app.updateApplier.Progress())
 }
 
 // handleUpdateProgress returns the current apply pipeline status.
 // GET /api/update/progress
-func HandleUpdateProgress(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleUpdateProgress(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if updateApplier == nil {
+	if app.updateApplier == nil {
 		http.Error(w, "Update applier not initialized", http.StatusServiceUnavailable)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(updateApplier.Progress())
+	_ = json.NewEncoder(w).Encode(app.updateApplier.Progress())
 }

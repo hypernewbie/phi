@@ -140,12 +140,12 @@ func TestAccessRestartAuthLifecycle(t *testing.T) {
 			t.Error("Unix replacement started before auth DB and ownership were closed")
 		}
 		status := httptest.NewRecorder()
-		HandleAccessAuthStatus(status, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+		Default.HandleAccessAuthStatus(status, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
 		if status.Code != http.StatusServiceUnavailable || auth.db != nil || auth.owner.held() || auth.ownedNow() {
 			t.Errorf("status request reopened auth during restart: status=%d db=%v owner=%v owned=%v", status.Code, auth.db != nil, auth.owner.held(), auth.ownedNow())
 		}
 		contender := &accessStateLock{}
-		if !contender.tryAcquire(accessV2LockPath()) {
+		if !contender.tryAcquire(Default.accessV2LockPath()) {
 			t.Error("auth owner lock remained held during Unix replacement")
 			return execFailure
 		}
@@ -159,7 +159,7 @@ func TestAccessRestartAuthLifecycle(t *testing.T) {
 		t.Fatalf("failed replacement did not restore active auth ownership: owned=%v lock=%v db=%v faulted=%v restarting=%v", auth.ownedNow(), auth.owner.held(), auth.db != nil, auth.faulted, auth.restartInProgress)
 	}
 	contender := &accessStateLock{}
-	if contender.tryAcquire(accessV2LockPath()) {
+	if contender.tryAcquire(Default.accessV2LockPath()) {
 		contender.release()
 		t.Fatal("recovered auth owner did not retain the ownership lock")
 	}
@@ -201,7 +201,7 @@ func TestAccessRestartAuthLifecycle(t *testing.T) {
 		if failedAuth.db != nil || failedAuth.owner.held() {
 			t.Error("Unix replacement started before auth DB and ownership were closed")
 		}
-		if err := os.WriteFile(accessDBPath(), []byte("corrupt"), 0o600); err != nil {
+		if err := os.WriteFile(Default.accessDBPath(), []byte("corrupt"), 0o600); err != nil {
 			return err
 		}
 		return execFailure

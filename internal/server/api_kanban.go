@@ -5,10 +5,10 @@ import (
 	"net/http"
 )
 
-func HandleKanbanVault(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleKanbanVault(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		cfg := loadConfig()
+		cfg := app.loadConfig()
 		pw, err := DecryptVault(cfg.KanbanPasswordEnc)
 		if err != nil {
 			http.Error(w, "Failed to decrypt password: "+err.Error(), http.StatusInternalServerError)
@@ -31,7 +31,7 @@ func HandleKanbanVault(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		cfg := loadConfig()
+		cfg := app.loadConfig()
 		if req.Password != "" {
 			enc, err := EncryptVault(req.Password)
 			if err != nil {
@@ -46,15 +46,15 @@ func HandleKanbanVault(w http.ResponseWriter, r *http.Request) {
 		if req.URL != "" {
 			cfg.KanbanURL = req.URL
 		}
-		saveConfig(cfg)
+		app.saveConfig(cfg)
 		w.WriteHeader(http.StatusOK)
 
 	case http.MethodDelete:
-		cfg := loadConfig()
+		cfg := app.loadConfig()
 		cfg.KanbanPasswordEnc = ""
 		cfg.KanbanUsername = ""
 		cfg.KanbanURL = ""
-		saveConfig(cfg)
+		app.saveConfig(cfg)
 		w.WriteHeader(http.StatusOK)
 
 	default:

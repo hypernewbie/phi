@@ -12,7 +12,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/hypernewbie/phi/internal/access"
 	"github.com/hypernewbie/phi/internal/config"
 )
 
@@ -21,7 +20,7 @@ func mobileRequest(t *testing.T, fence bool, body string, want int) MobileAppear
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/config/mobile-appearance", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json; charset=utf-8")
-	ServeMobileAppearance(w, r, fence, configStore().Update)
+	testServer.serveMobileAppearance(w, r, fence, testServer.configStore().Update)
 	if w.Code != want {
 		t.Fatalf("status=%d want=%d body=%s", w.Code, want, w.Body.String())
 	}
@@ -40,18 +39,18 @@ func mobileRequest(t *testing.T, fence bool, body string, want int) MobileAppear
 
 func TestMobileAppearancePersistenceAndReset(t *testing.T) {
 	withTempConfig(t)
-	legacy := loadConfig()
+	legacy := testServer.loadConfig()
 	legacy.UIFontFamily, legacy.TerminalFontFamily = "Desktop UI", "Desktop terminal"
 	legacy.UIFontSize, legacy.TerminalFontSize = 16, 18
-	saveConfig(legacy)
+	testServer.saveConfig(legacy)
 	state := mobileRequest(t, false, `{"revision":0,"fields":{"ui_font_size":21}}`, 200)
 	if state.Revision != 1 || state.UIFontSize == nil || *state.UIFontSize != 21 || state.UIFontFamily != nil {
 		t.Fatalf("unexpected state: %+v", state)
 	}
 	state = mobileRequest(t, false, `{"revision":1,"fields":{"ui_font_family":"","terminal_font_family":"Mobile terminal","terminal_font_size":20}}`, 200)
 	legacy.UseHiddenTerminal = true
-	saveConfig(legacy)
-	cfg := loadConfig()
+	testServer.saveConfig(legacy)
+	cfg := testServer.loadConfig()
 	if cfg.MobileAppearanceRevision != 2 || *cfg.MobileUIFontSize != 21 || *cfg.MobileUIFontFamily != "" || *cfg.MobileTerminalFontFamily != "Mobile terminal" || *cfg.MobileTerminalFontSize != 20 || !cfg.UseHiddenTerminal {
 		t.Fatalf("stale save lost owned data: %+v", MobileAppearanceFromConfig(cfg))
 	}
@@ -76,8 +75,8 @@ func TestMobileAppearanceConcurrentDesktopAndAtomicBatch(t *testing.T) {
 		body    string
 		handler http.HandlerFunc
 	}{
-		{`{"revision":0,"fields":{"ui_font_size":21,"terminal_font_size":22,"ui_font_family":"Mobile UI","terminal_font_family":"Mobile terminal"}}`, HandleMobileAppearance},
-		{`{"ui_font_size":19,"terminal_font_size":20,"ui_font_family":"Desktop UI","terminal_font_family":"Desktop terminal"}`, HandleAppearanceUpdate},
+		{`{"revision":0,"fields":{"ui_font_size":21,"terminal_font_size":22,"ui_font_family":"Mobile UI","terminal_font_family":"Mobile terminal"}}`, testServer.handleMobileAppearance},
+		{`{"ui_font_size":19,"terminal_font_size":20,"ui_font_family":"Desktop UI","terminal_font_family":"Desktop terminal"}`, testServer.handleAppearanceUpdate},
 	} {
 		wg.Add(1)
 		go func() {
@@ -92,7 +91,7 @@ func TestMobileAppearanceConcurrentDesktopAndAtomicBatch(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	if cfg.UIFontSize != 19 || cfg.TerminalFontSize != 20 || cfg.UIFontFamily != "Desktop UI" || cfg.TerminalFontFamily != "Desktop terminal" || cfg.MobileAppearanceRevision != 1 || *cfg.MobileUIFontSize != 21 || *cfg.MobileTerminalFontSize != 22 || *cfg.MobileUIFontFamily != "Mobile UI" || *cfg.MobileTerminalFontFamily != "Mobile terminal" {
 		t.Fatalf("concurrent profiles lost values: %+v", cfg)
 	}
@@ -156,7 +155,7 @@ func TestMobileAppearanceRejectsWithoutMutation(t *testing.T) {
 			if ct != "missing" {
 				r.Header.Set("Content-Type", ct)
 			}
-			ServeMobileAppearance(w, r, tc.fence, configStore().Update)
+			testServer.serveMobileAppearance(w, r, tc.fence, testServer.configStore().Update)
 			if w.Code != tc.status {
 				t.Fatalf("status=%d want=%d body=%s", w.Code, tc.status, w.Body.String())
 			}
@@ -179,7 +178,7 @@ func TestMobileAppearanceFenceAndConcurrency(t *testing.T) {
 			w := httptest.NewRecorder()
 			r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(fmt.Sprintf(`{"revision":0,"fields":{"ui_font_size":%d}}`, size)))
 			r.Header.Set("Content-Type", "application/json")
-			HandleMobileAppearance(w, r)
+			testServer.handleMobileAppearance(w, r)
 			codes <- w.Code
 		}(size)
 	}
@@ -215,8 +214,8 @@ func TestMobileAppearanceReadWriteErrorsAndRevisionLimit(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"revision":1,"fields":{"ui_font_size":24}}`))
 	r.Header.Set("Content-Type", "application/json")
-	ServeMobileAppearance(w, r, false, func(mutate func(*config.Config) error) (config.Config, error) {
-		cfg, err := configStore().ReadAuthoritative()
+	testServer.serveMobileAppearance(w, r, false, func(mutate func(*config.Config) error) (config.Config, error) {
+		cfg, err := testServer.configStore().ReadAuthoritative()
 		if err != nil {
 			return config.Config{}, err
 		}
@@ -227,7 +226,7 @@ func TestMobileAppearanceReadWriteErrorsAndRevisionLimit(t *testing.T) {
 	if w.Code != 500 || !bytes.Equal(before, after) {
 		t.Fatalf("failed write status=%d mutated=%t", w.Code, !bytes.Equal(before, after))
 	}
-	if _, err := configStore().Update(func(cfg *config.Config) error {
+	if _, err := testServer.configStore().Update(func(cfg *config.Config) error {
 		cfg.MobileAppearanceRevision = MaxMobileAppearanceRevision
 		return nil
 	}); err != nil {
@@ -239,7 +238,7 @@ func TestMobileAppearanceReadWriteErrorsAndRevisionLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	w = httptest.NewRecorder()
-	HandleMobileAppearance(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	testServer.handleMobileAppearance(w, httptest.NewRequest(http.MethodGet, "/", nil))
 	if w.Code != 500 {
 		t.Fatalf("malformed config GET=%d", w.Code)
 	}
@@ -254,13 +253,13 @@ func TestMobileAppearanceMethodsAndAuthorization(t *testing.T) {
 	auth := useTestAccessAuth(t)
 	for _, fence := range []bool{false, true} {
 		w := httptest.NewRecorder()
-		ServeMobileAppearance(w, httptest.NewRequest(http.MethodDelete, "/", nil), fence, configStore().Update)
+		testServer.serveMobileAppearance(w, httptest.NewRequest(http.MethodDelete, "/", nil), fence, testServer.configStore().Update)
 		if w.Code != 405 {
 			t.Fatalf("DELETE=%d", w.Code)
 		}
 	}
 	w := httptest.NewRecorder()
-	HandleMobileAppearance(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	testServer.handleMobileAppearance(w, httptest.NewRequest(http.MethodGet, "/", nil))
 	if w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" || !strings.Contains(w.Body.String(), `"ui_font_size":null`) {
 		t.Fatalf("GET=%d %s", w.Code, w.Body.String())
 	}
@@ -268,9 +267,9 @@ func TestMobileAppearanceMethodsAndAuthorization(t *testing.T) {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/config/mobile-appearance", HandleMobileAppearance)
-	mux.HandleFunc("/api/config/mobile-appearance/fence", HandleMobileAppearanceFence)
-	protected := access.Middleware(mux)
+	mux.HandleFunc("/api/config/mobile-appearance", testServer.handleMobileAppearance)
+	mux.HandleFunc("/api/config/mobile-appearance/fence", testServer.handleMobileAppearanceFence)
+	protected := testServer.accessManager.Middleware(mux)
 	for _, path := range []string{"/api/config/mobile-appearance", "/api/config/mobile-appearance/fence"} {
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
 			w := httptest.NewRecorder()

@@ -72,11 +72,11 @@ func TestRecordingResponseCompressionIsExactAndTinySpansStayRaw(t *testing.T) {
 func TestRecordingEndpointDefaultHTTPTransportInflatesWithoutChangingFrontiers(t *testing.T) {
 	setupHotHub(t)
 	data := bytes.Repeat([]byte("\x1b[31mLINE 你🙂\x1b[0m\r\n"), 1024)
-	if err := Hub.Ingest("compressed", data); err != nil {
+	if err := testServer.hub.Ingest("compressed", data); err != nil {
 		t.Fatal(err)
 	}
-	Hub.RecordResize("compressed", 100, 30)
-	srv := httptest.NewServer(http.HandlerFunc(HandleFallback))
+	testServer.hub.RecordResize("compressed", 100, 30)
+	srv := httptest.NewServer(http.HandlerFunc(testServer.handleFallback))
 	defer srv.Close()
 	// Same Go automatic gzip support used by phic; no custom decompressor.
 	resp, err := srv.Client().Get(srv.URL + fmt.Sprintf("/api/terminals/compressed/recording?from=0&through=%d", len(data)))

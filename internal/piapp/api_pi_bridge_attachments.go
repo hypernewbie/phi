@@ -71,7 +71,7 @@ func (a *API) HandlePiBridgeAttachmentContext(w http.ResponseWriter, r *http.Req
 		attachments.WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 		return
 	}
-	if _, err := attachments.LivePiPane(pane); err != nil {
+	if _, err := attachments.LivePiPane(a.paneManager(), pane); err != nil {
 		attachments.WriteJSONError(w, http.StatusNotFound, "unavailable")
 		return
 	}
@@ -227,7 +227,7 @@ func (a *API) HandlePiBridgeAttachmentSend(w http.ResponseWriter, r *http.Reques
 		record, _ := a.attachmentStore().Send(body.ID, body.Pane)
 		writeAttachmentSend(w, record)
 	}
-	if _, err := attachments.LivePiPane(body.Pane); err != nil {
+	if _, err := attachments.LivePiPane(a.paneManager(), body.Pane); err != nil {
 		refuse("unavailable")
 		return
 	}
@@ -334,7 +334,7 @@ func (a *API) currentAttachmentContext(pane string) attachmentTargetContext {
 	if a.paneManager() == nil || a.bridgeOrNil() == nil || a.attachmentStore() == nil {
 		return attachmentTargetContext{}
 	}
-	if _, err := attachments.LivePiPane(pane); err != nil {
+	if _, err := attachments.LivePiPane(a.paneManager(), pane); err != nil {
 		return attachmentTargetContext{}
 	}
 	processID, view, ok := a.bridgeOrNil().AttachmentPaneView(pane)

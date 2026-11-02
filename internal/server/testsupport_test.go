@@ -22,6 +22,12 @@ import (
 
 // testStore is the config store the handler tests read and write.
 var testStore *config.Store
+var testServer = New(Options{})
+
+type Config = config.Config
+type QuickCommand = config.QuickCommand
+type ModelPresetsMap = config.ModelPresetsMap
+type PeerConfig = config.PeerConfig
 
 // withTempConfig points the package at a fresh config file.
 func withTempConfig(t *testing.T) string {
@@ -30,13 +36,10 @@ func withTempConfig(t *testing.T) string {
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	previous := testStore
+	previous, previousServer := testStore, testServer
 	testStore = config.NewStore(config.Paths{Primary: path}, nil)
-	ConfigStore = func() *config.Store { return testStore }
-	t.Cleanup(func() {
-		testStore = previous
-		ConfigStore = func() *config.Store { return testStore }
-	})
+	testServer = New(Options{Config: testStore, Version: "dev", Commit: "none", Date: "unknown", BuildSource: "source"})
+	t.Cleanup(func() { testStore, testServer = previous, previousServer })
 	return path
 }
 
@@ -60,9 +63,9 @@ func testMainShell() (string, []string) {
 func withTempBackends(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	orig := testCustomBackendsDir
-	testCustomBackendsDir = dir
-	t.Cleanup(func() { testCustomBackendsDir = orig })
+	orig := testServer.testCustomBackendsDir
+	testServer.testCustomBackendsDir = dir
+	t.Cleanup(func() { testServer.testCustomBackendsDir = orig })
 	return dir
 }
 
@@ -70,13 +73,10 @@ func withTempBackends(t *testing.T) string {
 // test can recreate the store between assertions.
 func withTempConfigAt(t *testing.T, path string) {
 	t.Helper()
-	previous := testStore
+	previous, previousServer := testStore, testServer
 	testStore = config.NewStore(config.Paths{Primary: path}, nil)
-	ConfigStore = func() *config.Store { return testStore }
-	t.Cleanup(func() {
-		testStore = previous
-		ConfigStore = func() *config.Store { return testStore }
-	})
+	testServer = New(Options{Config: testStore, Version: "dev", Commit: "none", Date: "unknown", BuildSource: "source"})
+	t.Cleanup(func() { testStore, testServer = previous, previousServer })
 }
 
 // testPaneShutdownGrace is the grace test panes get before Shutdown escalates.
@@ -85,12 +85,12 @@ const testPaneShutdownGrace = 100 * time.Millisecond
 // useTestAccessAuth installs a fresh access manager wired to the test store.
 func useTestAccessAuth(t *testing.T) *access.Manager {
 	t.Helper()
-	previous := access.Default
-	manager := access.NewManager(configStore, func() *ws.Hub { return Hub })
-	access.Default = manager
+	previous := testServer.accessManager
+	manager := access.NewManager(testServer.configStore, func() *ws.Hub { return testServer.hub })
+	testServer.accessManager = manager
 	t.Cleanup(func() {
 		manager.Close()
-		access.Default = previous
+		testServer.accessManager = previous
 	})
 	if testStore != nil {
 		if err := manager.Configure(""); err != nil {
@@ -134,7 +134,7 @@ func readPrimaryConfig() (config.Config, bool, error) {
 func loginTestCookie(t *testing.T) *http.Cookie {
 	t.Helper()
 	statusW := httptest.NewRecorder()
-	access.HandleAccessAuthStatus(statusW, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+	testServer.accessManager.HandleAccessAuthStatus(statusW, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
 	var status map[string]any
 	if err := json.Unmarshal(statusW.Body.Bytes(), &status); err != nil {
 		t.Fatal(err)
@@ -148,7 +148,7 @@ func loginTestCookie(t *testing.T) *http.Cookie {
 	loginReq := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(loginBody))
 	loginReq.RemoteAddr = "192.0.2.21:12345"
 	loginW := httptest.NewRecorder()
-	access.HandleAccessAuthLogin(loginW, loginReq)
+	testServer.accessManager.HandleAccessAuthLogin(loginW, loginReq)
 	if loginW.Code != http.StatusOK {
 		t.Fatalf("login: got %d body=%s", loginW.Code, loginW.Body.String())
 	}

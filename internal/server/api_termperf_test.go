@@ -24,20 +24,20 @@ import (
 
 func setupHotHub(t *testing.T) {
 	t.Helper()
-	orig := Hub
-	Hub = ws.NewHub(4096)
-	t.Cleanup(func() { Hub = orig })
+	orig := testServer.hub
+	testServer.hub = ws.NewHub(4096)
+	t.Cleanup(func() { testServer.hub = orig })
 }
 
 func TestRecordingEndpointServesFramedBytes(t *testing.T) {
 	setupHotHub(t)
-	Hub.Ingest("pane-1", []byte("hello "))
-	Hub.Ingest("pane-1", []byte("world"))
-	Hub.RecordResize("pane-1", 100, 30)
+	testServer.hub.Ingest("pane-1", []byte("hello "))
+	testServer.hub.Ingest("pane-1", []byte("world"))
+	testServer.hub.RecordResize("pane-1", 100, 30)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/terminals/pane-1/recording?from=0&through=11", nil)
 	w := httptest.NewRecorder()
-	HandleFallback(w, req)
+	testServer.handleFallback(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
@@ -64,11 +64,11 @@ func TestRecordingEndpointServesFramedBytes(t *testing.T) {
 
 func TestRecordingEndpointPartialRangeAndErrors(t *testing.T) {
 	setupHotHub(t)
-	Hub.Ingest("pane-2", []byte("0123456789"))
+	testServer.hub.Ingest("pane-2", []byte("0123456789"))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/terminals/pane-2/recording?from=3&through=7", nil)
 	w := httptest.NewRecorder()
-	HandleFallback(w, req)
+	testServer.handleFallback(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
@@ -83,7 +83,7 @@ func TestRecordingEndpointPartialRangeAndErrors(t *testing.T) {
 	// Unknown pane -> 404 via Recording's LookupPane miss.
 	req404 := httptest.NewRequest(http.MethodGet, "/api/terminals/nope/recording?from=0&through=5", nil)
 	w404 := httptest.NewRecorder()
-	HandleFallback(w404, req404)
+	testServer.handleFallback(w404, req404)
 	if w404.Code != http.StatusBadRequest && w404.Code != http.StatusNotFound {
 		t.Fatalf("unknown pane should 4xx, got %d", w404.Code)
 	}
@@ -91,7 +91,7 @@ func TestRecordingEndpointPartialRangeAndErrors(t *testing.T) {
 	// from beyond head -> 400.
 	reqBad := httptest.NewRequest(http.MethodGet, "/api/terminals/pane-2/recording?from=99&through=100", nil)
 	wBad := httptest.NewRecorder()
-	HandleFallback(wBad, reqBad)
+	testServer.handleFallback(wBad, reqBad)
 	if wBad.Code != http.StatusBadRequest {
 		t.Fatalf("from beyond head should 400, got %d", wBad.Code)
 	}
@@ -99,16 +99,16 @@ func TestRecordingEndpointPartialRangeAndErrors(t *testing.T) {
 
 func TestRecordingEndpointRejectsWrongEpoch(t *testing.T) {
 	setupHotHub(t)
-	Hub.Ingest("pane-3", []byte("hello"))
+	testServer.hub.Ingest("pane-3", []byte("hello"))
 
-	ph, ok := Hub.LookupPane("pane-3")
+	ph, ok := testServer.hub.LookupPane("pane-3")
 	if !ok {
 		t.Fatal("pane-3 missing")
 	}
 	// Right epoch: 200.
 	reqOK := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/terminals/pane-3/recording?from=0&through=5&epoch=%d", ph.EpochOf()), nil)
 	wOK := httptest.NewRecorder()
-	HandleFallback(wOK, reqOK)
+	testServer.handleFallback(wOK, reqOK)
 	if wOK.Code != http.StatusOK {
 		t.Fatalf("matching epoch should 200, got %d", wOK.Code)
 	}
@@ -116,7 +116,7 @@ func TestRecordingEndpointRejectsWrongEpoch(t *testing.T) {
 	// Wrong epoch: 409.
 	reqBad := httptest.NewRequest(http.MethodGet, "/api/terminals/pane-3/recording?from=0&through=5&epoch=999", nil)
 	wBad := httptest.NewRecorder()
-	HandleFallback(wBad, reqBad)
+	testServer.handleFallback(wBad, reqBad)
 	if wBad.Code != http.StatusConflict {
 		t.Fatalf("wrong epoch should 409, got %d", wBad.Code)
 	}
@@ -124,10 +124,10 @@ func TestRecordingEndpointRejectsWrongEpoch(t *testing.T) {
 
 func TestCheckpointEndpointStoreAndConflict(t *testing.T) {
 	setupHotHub(t)
-	Hub.Ingest("pane-3", []byte("abcdef")) // head=6
+	testServer.hub.Ingest("pane-3", []byte("abcdef")) // head=6
 
 	epochOf := func() uint64 {
-		ph, ok := Hub.LookupPane("pane-3")
+		ph, ok := testServer.hub.LookupPane("pane-3")
 		if !ok {
 			t.Fatal("pane missing")
 		}
@@ -139,7 +139,7 @@ func TestCheckpointEndpointStoreAndConflict(t *testing.T) {
 	wrong := httptest.NewRequest(http.MethodPost, "/api/terminals/pane-3/checkpoint",
 		bytes.NewBufferString(`{"epoch":1,"through":3,"cols":80,"rows":24,"ansi":"\u001b[2J"}`))
 	wWrong := httptest.NewRecorder()
-	HandleFallback(wWrong, wrong)
+	testServer.handleFallback(wWrong, wrong)
 	if wWrong.Code != http.StatusConflict {
 		t.Fatalf("bad epoch should 409, got %d", wWrong.Code)
 	}
@@ -148,7 +148,7 @@ func TestCheckpointEndpointStoreAndConflict(t *testing.T) {
 	good := httptest.NewRequest(http.MethodPost, "/api/terminals/pane-3/checkpoint",
 		bytes.NewBufferString(`{"epoch":`+egood+`,"through":3,"cols":80,"rows":24,"ansi":"screen-snapshot"}`))
 	wGood := httptest.NewRecorder()
-	HandleFallback(wGood, good)
+	testServer.handleFallback(wGood, good)
 	if wGood.Code != http.StatusNoContent {
 		t.Fatalf("valid checkpoint should 204, got %d", wGood.Code)
 	}
@@ -158,7 +158,7 @@ func TestCheckpointEndpointStoreAndConflict(t *testing.T) {
 	bigReq := httptest.NewRequest(http.MethodPost, "/api/terminals/pane-3/checkpoint",
 		bytes.NewBufferString(`{"epoch":`+egood+`,"through":3,"cols":80,"rows":24,"ansi":"`+string(big)+`"}`))
 	wBig := httptest.NewRecorder()
-	HandleFallback(wBig, bigReq)
+	testServer.handleFallback(wBig, bigReq)
 	if wBig.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized checkpoint should 413, got %d", wBig.Code)
 	}
@@ -168,12 +168,12 @@ func itoa(v uint64) string { return strconv.FormatUint(v, 10) }
 
 func TestRecordingHaveNegotiation(t *testing.T) {
 	setupHotHub(t)
-	Hub.Ingest("pane-have", []byte("0123456789abcdefghij")) // head=20
+	testServer.hub.Ingest("pane-have", []byte("0123456789abcdefghij")) // head=20
 
 	get := func(query string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, "/api/terminals/pane-have/recording"+query, nil)
 		w := httptest.NewRecorder()
-		HandleFallback(w, req)
+		testServer.handleFallback(w, req)
 		return w
 	}
 	spanOf := func(w *httptest.ResponseRecorder) (uint64, uint64, string) {
@@ -223,22 +223,22 @@ func TestRecordingHaveNegotiation(t *testing.T) {
 
 func TestRecordingEndpointCursorFiltersAnd409(t *testing.T) {
 	setupHotHub(t)
-	if err := Hub.SetRecordingDirectory(t.TempDir()); err != nil {
+	if err := testServer.hub.SetRecordingDirectory(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	const pane = "cursor-pane"
 	payload := bytes.Repeat([]byte("0123456789abcdef"), 4096) // 64 KiB
-	if err := Hub.Ingest(pane, payload); err != nil {
+	if err := testServer.hub.Ingest(pane, payload); err != nil {
 		t.Fatal(err)
 	}
-	Hub.RecordResize(pane, 80, 24)
-	Hub.RecordResize(pane, 100, 30)
-	Hub.RecordResize(pane, 120, 40)
+	testServer.hub.RecordResize(pane, 80, 24)
+	testServer.hub.RecordResize(pane, 100, 30)
+	testServer.hub.RecordResize(pane, 120, 40)
 	at := uint64(len(payload))
-	if err := Hub.Ingest(pane, payload); err != nil {
+	if err := testServer.hub.Ingest(pane, payload); err != nil {
 		t.Fatal(err)
 	}
-	ph, ok := Hub.LookupPane(pane)
+	ph, ok := testServer.hub.LookupPane(pane)
 	if !ok {
 		t.Fatal("pane missing")
 	}
@@ -248,7 +248,7 @@ func TestRecordingEndpointCursorFiltersAnd409(t *testing.T) {
 	get := func(query string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, "/api/terminals/"+pane+"/recording?"+query, nil)
 		w := httptest.NewRecorder()
-		HandleFallback(w, req)
+		testServer.handleFallback(w, req)
 		return w
 	}
 	headerOf := func(w *httptest.ResponseRecorder) (ws.RecordingHeaderJSON, []byte) {
@@ -298,7 +298,7 @@ func TestRecordingEndpointCursorFiltersAnd409(t *testing.T) {
 	}
 
 	// Evict the boundary, then prove the stale cursor expires with 409.
-	if err := Hub.Ingest(pane, bytes.Repeat([]byte("x"), 5<<20)); err != nil {
+	if err := testServer.hub.Ingest(pane, bytes.Repeat([]byte("x"), 5<<20)); err != nil {
 		t.Fatal(err)
 	}
 	floorProbe := get("from=0&through=999999999")
@@ -321,7 +321,7 @@ func TestTerminalStateMissingPaneReturns404(t *testing.T) {
 	setupHotHub(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/terminals/no-such-pane/state?epoch=1&through=0&kind=ansi-v1", nil)
 	w := httptest.NewRecorder()
-	HandleFallback(w, req)
+	testServer.handleFallback(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("missing pane state should 404, got %d: %s", w.Code, w.Body.String())
 	}
@@ -329,20 +329,20 @@ func TestTerminalStateMissingPaneReturns404(t *testing.T) {
 
 func TestTerminalStateLatestANSICarriesContinuation(t *testing.T) {
 	setupHotHub(t)
-	if err := Hub.SetRecordingDirectory(t.TempDir()); err != nil {
+	if err := testServer.hub.SetRecordingDirectory(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	// An unfinished UTF-8 sequence: the live suffix completes it.
-	if err := Hub.Ingest("cont-pane", []byte("A\xe2\x82")); err != nil {
+	if err := testServer.hub.Ingest("cont-pane", []byte("A\xe2\x82")); err != nil {
 		t.Fatal(err)
 	}
-	ph, ok := Hub.LookupPane("cont-pane")
+	ph, ok := testServer.hub.LookupPane("cont-pane")
 	if !ok {
 		t.Fatal("pane missing")
 	}
 	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/terminals/cont-pane/state?epoch=%d&through=latest&kind=ansi-v1", ph.EpochOf()), nil)
 	w := httptest.NewRecorder()
-	HandleFallback(w, req)
+	testServer.handleFallback(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("latest ansi should 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -374,19 +374,19 @@ func TestTerminalStateLatestANSICarriesContinuation(t *testing.T) {
 
 func TestTerminalStateLatestGhosttyServesLiveSnapshot(t *testing.T) {
 	setupHotHub(t)
-	if err := Hub.SetRecordingDirectory(t.TempDir()); err != nil {
+	if err := testServer.hub.SetRecordingDirectory(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	if err := Hub.Ingest("ghostty-pane", []byte("live screen\r\n")); err != nil {
+	if err := testServer.hub.Ingest("ghostty-pane", []byte("live screen\r\n")); err != nil {
 		t.Fatal(err)
 	}
-	ph, ok := Hub.LookupPane("ghostty-pane")
+	ph, ok := testServer.hub.LookupPane("ghostty-pane")
 	if !ok {
 		t.Fatal("pane missing")
 	}
 	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/terminals/ghostty-pane/state?epoch=%d&through=latest&kind=ghostty-ready-v1", ph.EpochOf()), nil)
 	w := httptest.NewRecorder()
-	HandleFallback(w, req)
+	testServer.handleFallback(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("latest ghostty should 200, got %d: %s", w.Code, w.Body.String())
 	}

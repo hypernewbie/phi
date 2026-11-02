@@ -14,10 +14,10 @@ import (
 
 func TestStateEndpointValidatesEpochAndRequestedFrontier(t *testing.T) {
 	setupHotHub(t)
-	if err := Hub.Ingest("state", []byte("requested book\r\nLATEST")); err != nil {
+	if err := testServer.hub.Ingest("state", []byte("requested book\r\nLATEST")); err != nil {
 		t.Fatal(err)
 	}
-	pos, _, _, _, err := Hub.State("state")
+	pos, _, _, _, err := testServer.hub.State("state")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestStateEndpointValidatesEpochAndRequestedFrontier(t *testing.T) {
 	} {
 		req := httptest.NewRequest(http.MethodGet, "/api/terminals/state/state?"+tc.query, nil)
 		w := httptest.NewRecorder()
-		HandleTerminalState(w, req)
+		testServer.handleTerminalState(w, req)
 		if w.Code != tc.code {
 			t.Fatalf("query %q: got %d want %d: %s", tc.query, w.Code, tc.code, w.Body.String())
 		}

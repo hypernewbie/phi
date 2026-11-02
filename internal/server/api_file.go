@@ -26,14 +26,14 @@ import (
 // renders SVG documents neutered when loaded from <img>; direct
 // navigation is mitigated by nosniff + the existing markdown-asset
 // CSP precedent (extended to any image here).
-func HandleFileAsset(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleFileAsset(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	cwd := r.URL.Query().Get("cwd")
 	if cwd == "" {
-		cwd = ActiveCWD
+		cwd = app.activeCWD
 	}
 	rel := filepath.Clean(strings.TrimSpace(r.URL.Query().Get("path")))
 	// Reject rooted/absolute/traversal paths before touching the FS.

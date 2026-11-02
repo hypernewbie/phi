@@ -9,26 +9,26 @@ import (
 )
 
 // startFleetPoller reads peers from config and starts the poller.
-// StartFleetPoller begins polling the configured peers.
-func StartFleetPoller() {
-	cfg := loadConfig()
+// startFleetPoller begins polling the configured peers.
+func (app *Server) startFleetPoller() {
+	cfg := app.loadConfig()
 	peers := make([]fleet.PeerCfg, 0, len(cfg.Peers))
 	for _, p := range cfg.Peers {
 		if p.URL != "" {
 			peers = append(peers, fleet.PeerCfg{Name: p.Name, URL: p.URL})
 		}
 	}
-	Fleet.Start(peers)
+	app.fleet.Start(peers)
 }
 
 // handleGetPeersStatus returns cached fleet status for all configured peers.
-func HandleGetPeersStatus(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleGetPeersStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	statuses := Fleet.Status()
+	statuses := app.fleet.Status()
 	if statuses == nil {
 		statuses = []fleet.PeerStatus{}
 	}
@@ -38,10 +38,10 @@ func HandleGetPeersStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleConfigPeers handles GET/POST for the peers config array.
-func HandleConfigPeers(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleConfigPeers(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		cfg := loadConfig()
+		cfg := app.loadConfig()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(cfg.Peers)
 
@@ -51,12 +51,12 @@ func HandleConfigPeers(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		cfg := loadConfig()
+		cfg := app.loadConfig()
 		cfg.Peers = peers
-		saveConfig(cfg)
+		app.saveConfig(cfg)
 
 		// Restart fleet poller with updated peers
-		StartFleetPoller()
+		app.startFleetPoller()
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(peers)

@@ -11,7 +11,7 @@ import (
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
-func HandleTerminalState(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleTerminalState(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/terminals/"), "/state")
 	epoch, err := strconv.ParseUint(r.URL.Query().Get("epoch"), 10, 64)
 	if err != nil {
@@ -32,9 +32,9 @@ func HandleTerminalState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unsupported terminal state kind", http.StatusBadRequest)
 		return
 	}
-	state := Hub.HistoricalStateContext
+	state := app.hub.HistoricalStateContext
 	if kind == "ansi-v1" {
-		state = Hub.HistoricalANSIStateContext
+		state = app.hub.HistoricalANSIStateContext
 	}
 	var pos ws.PanePosition
 	var data []byte
@@ -42,9 +42,9 @@ func HandleTerminalState(w http.ResponseWriter, r *http.Request) {
 	if latest {
 		switch kind {
 		case "ansi-v1":
-			pos, data, cols, rows, err = Hub.LiveANSIState(id, epoch)
+			pos, data, cols, rows, err = app.hub.LiveANSIState(id, epoch)
 		case "ghostty-ready-v1":
-			pos, data, cols, rows, err = Hub.LiveGhosttyState(id, epoch)
+			pos, data, cols, rows, err = app.hub.LiveGhosttyState(id, epoch)
 		default:
 			http.Error(w, "latest requires ansi-v1 or ghostty-ready-v1", http.StatusBadRequest)
 			return

@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"net"
@@ -7,25 +7,23 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/hypernewbie/phi/internal/server"
 )
 
 // TestGracefulShutdown_DrainsInFlightRequest — gracefulShutdown no longer
 // calls os.Exit, so it's directly testable: /readyz must flip to 503 while
 // the drain is in progress, a slow in-flight request must still complete
-// with 200, and srv.Serve must return http.ErrServerClosed. server.PTY and
-// server.Hub are nil'd out for the duration so this stays a pure HTTP-drain test
+// with 200, and srv.Serve must return http.ErrServerClosed. PTY and
+// Hub are nil'd out for the duration so this stays a pure HTTP-drain test
 // — PTY shutdown has its own coverage in pkg/pty/manager_test.go.
 func TestGracefulShutdown_DrainsInFlightRequest(t *testing.T) {
-	server.ShuttingDown.Store(false)
-	t.Cleanup(func() { server.ShuttingDown.Store(false) })
+	testServer.shuttingDown.Store(false)
+	t.Cleanup(func() { testServer.shuttingDown.Store(false) })
 
-	origPtyManager, origWsHub := server.PTY, server.Hub
-	server.PTY, server.Hub = nil, nil
-	t.Cleanup(func() { server.PTY, server.Hub = origPtyManager, origWsHub })
+	origPtyManager, origWsHub := testServer.pty, testServer.hub
+	testServer.pty, testServer.hub = nil, nil
+	t.Cleanup(func() { testServer.pty, testServer.hub = origPtyManager, origWsHub })
 
-	restoreSyncPath := server.SetSyncPathForTest(filepath.Join(t.TempDir(), "syncboard-test.json"))
+	restoreSyncPath := testServer.setSyncPathForTest(filepath.Join(t.TempDir(), "syncboard-test.json"))
 	t.Cleanup(restoreSyncPath)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -59,7 +57,7 @@ func TestGracefulShutdown_DrainsInFlightRequest(t *testing.T) {
 
 	shutdownDone := make(chan struct{})
 	go func() {
-		gracefulShutdown([]*http.Server{srv}, 0, 0, 5*time.Second)
+		testServer.gracefulShutdown([]*http.Server{srv}, 0, 0, 5*time.Second)
 		close(shutdownDone)
 	}()
 
@@ -68,7 +66,7 @@ func TestGracefulShutdown_DrainsInFlightRequest(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	w := httptest.NewRecorder()
-	server.HandleReadyz(w, req)
+	testServer.handleReadyz(w, req)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("/readyz during drain: got %d want 503", w.Code)
 	}

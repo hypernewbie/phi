@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/hypernewbie/phi/pkg/system"
@@ -21,39 +20,30 @@ type SyncMessage struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-var (
-	syncMu    sync.RWMutex
-	syncStore = make(map[string]*SyncMessage)
-
-	testSyncPath string
-	saveTimer    *time.Timer
-	saveMu       sync.Mutex
-)
-
-// SetSyncPathForTest overrides the syncboard file for the caller's test and
+// setSyncPathForTest overrides the syncboard file for the caller's test and
 // returns a restore function.
-func SetSyncPathForTest(path string) func() {
-	previous := testSyncPath
-	testSyncPath = path
-	return func() { testSyncPath = previous }
+func (app *Server) setSyncPathForTest(path string) func() {
+	previous := app.testSyncPath
+	app.testSyncPath = path
+	return func() { app.testSyncPath = previous }
 }
 
 // SyncFilePath reports the syncboard file path for the current data dir.
-func SyncFilePath() string { return syncFilePath() }
+func (app *Server) SyncFilePath() string { return app.syncFilePath() }
 
-func syncFilePath() string {
-	if testSyncPath != "" {
-		return testSyncPath
+func (app *Server) syncFilePath() string {
+	if app.testSyncPath != "" {
+		return app.testSyncPath
 	}
-	return filepath.Join(system.PhiDataDir(), "syncboard.json")
+	return filepath.Join(app.stateDir(), "syncboard.json")
 }
 
-func TriggerSaveSyncStore() {
-	saveMu.Lock()
-	defer saveMu.Unlock()
+func (app *Server) triggerSaveSyncStore() {
+	app.saveMu.Lock()
+	defer app.saveMu.Unlock()
 
-	if saveTimer != nil {
-		saveTimer.Stop()
+	if app.saveTimer != nil {
+		app.saveTimer.Stop()
 	}
 
 	// Resolve the path now, on the caller's goroutine, instead of inside
@@ -61,33 +51,33 @@ func TriggerSaveSyncStore() {
 	// syncFilePath() between cases (api_health_test.go, main_test.go); a
 	// timer that re-read it 500ms later could fire while a later test was
 	// writing that var, which is exactly the data race this avoids.
-	path := syncFilePath()
-	saveTimer = time.AfterFunc(500*time.Millisecond, func() {
-		_ = flushSyncStoreTo(path)
+	path := app.syncFilePath()
+	app.saveTimer = time.AfterFunc(500*time.Millisecond, func() {
+		_ = app.flushSyncStoreTo(path)
 	})
 }
 
-func FlushSyncStore() error {
-	saveMu.Lock()
-	if saveTimer != nil {
-		saveTimer.Stop()
-		saveTimer = nil
+func (app *Server) flushSyncStore() error {
+	app.saveMu.Lock()
+	if app.saveTimer != nil {
+		app.saveTimer.Stop()
+		app.saveTimer = nil
 	}
-	saveMu.Unlock()
+	app.saveMu.Unlock()
 
-	return flushSyncStoreTo(syncFilePath())
+	return app.flushSyncStoreTo(app.syncFilePath())
 }
 
 // flushSyncStoreTo writes the current in-memory sync store to path.
-// FlushSyncStore and the debounced timer scheduled by TriggerSaveSyncStore
+// flushSyncStore and the debounced timer scheduled by triggerSaveSyncStore
 // both funnel through here, each having resolved path at its own call time.
-func flushSyncStoreTo(path string) error {
-	syncMu.RLock()
-	list := make([]SyncMessage, 0, len(syncStore))
-	for _, msg := range syncStore {
+func (app *Server) flushSyncStoreTo(path string) error {
+	app.syncMu.RLock()
+	list := make([]SyncMessage, 0, len(app.syncStore))
+	for _, msg := range app.syncStore {
 		list = append(list, *msg)
 	}
-	syncMu.RUnlock()
+	app.syncMu.RUnlock()
 
 	b, err := json.MarshalIndent(list, "", "  ")
 	if err != nil {
@@ -97,8 +87,8 @@ func flushSyncStoreTo(path string) error {
 	return system.WriteFileAtomic(path, b, 0644)
 }
 
-func LoadSyncStore() error {
-	path := syncFilePath()
+func (app *Server) loadSyncStore() error {
+	path := app.syncFilePath()
 	b, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -112,16 +102,16 @@ func LoadSyncStore() error {
 		return err
 	}
 
-	syncMu.Lock()
-	defer syncMu.Unlock()
+	app.syncMu.Lock()
+	defer app.syncMu.Unlock()
 	for _, msg := range list {
 		m := msg
-		syncStore[msg.Key] = &m
+		app.syncStore[msg.Key] = &m
 	}
 	return nil
 }
 
-func HandleSyncMessages(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleSyncMessages(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/sync/messages")
 	key := strings.TrimPrefix(path, "/")
 	key = strings.TrimSpace(key)
@@ -130,12 +120,12 @@ func HandleSyncMessages(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		if key == "" {
 			// List all messages
-			syncMu.RLock()
-			list := make([]SyncMessage, 0, len(syncStore))
-			for _, msg := range syncStore {
+			app.syncMu.RLock()
+			list := make([]SyncMessage, 0, len(app.syncStore))
+			for _, msg := range app.syncStore {
 				list = append(list, *msg)
 			}
-			syncMu.RUnlock()
+			app.syncMu.RUnlock()
 
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(list)
@@ -143,9 +133,9 @@ func HandleSyncMessages(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Get single message
-		syncMu.RLock()
-		msg, exists := syncStore[key]
-		syncMu.RUnlock()
+		app.syncMu.RLock()
+		msg, exists := app.syncStore[key]
+		app.syncMu.RUnlock()
 
 		if !exists {
 			http.Error(w, "Message not found", http.StatusNotFound)
@@ -186,25 +176,25 @@ func HandleSyncMessages(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		syncMu.Lock()
+		app.syncMu.Lock()
 		now := time.Now()
-		if existing, exists := syncStore[req.Key]; exists {
+		if existing, exists := app.syncStore[req.Key]; exists {
 			existing.Value = valStr
 			existing.UpdatedAt = now
 		} else {
-			syncStore[req.Key] = &SyncMessage{
+			app.syncStore[req.Key] = &SyncMessage{
 				Key:       req.Key,
 				Value:     valStr,
 				CreatedAt: now,
 				UpdatedAt: now,
 			}
 		}
-		msg := *syncStore[req.Key]
-		syncMu.Unlock()
-		TriggerSaveSyncStore()
+		msg := *app.syncStore[req.Key]
+		app.syncMu.Unlock()
+		app.triggerSaveSyncStore()
 
-		if Hub != nil {
-			Hub.BroadcastNotification(&wspb.Notification{
+		if app.hub != nil {
+			app.hub.BroadcastNotification(&wspb.Notification{
 				Kind: &wspb.Notification_SyncChanged{SyncChanged: &wspb.SyncChanged{
 					Action: proto.String("upsert"),
 					Key:    proto.String(msg.Key),
@@ -227,16 +217,16 @@ func HandleSyncMessages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		syncMu.Lock()
-		_, exists := syncStore[key]
+		app.syncMu.Lock()
+		_, exists := app.syncStore[key]
 		if exists {
-			delete(syncStore, key)
+			delete(app.syncStore, key)
 		}
-		syncMu.Unlock()
+		app.syncMu.Unlock()
 		if exists {
-			TriggerSaveSyncStore()
-			if Hub != nil {
-				Hub.BroadcastNotification(&wspb.Notification{
+			app.triggerSaveSyncStore()
+			if app.hub != nil {
+				app.hub.BroadcastNotification(&wspb.Notification{
 					Kind: &wspb.Notification_SyncChanged{SyncChanged: &wspb.SyncChanged{
 						Action: proto.String("delete"),
 						Key:    proto.String(key),
@@ -257,7 +247,7 @@ func HandleSyncMessages(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func HandleSyncCoordinator(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleSyncCoordinator(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -269,8 +259,8 @@ func HandleSyncCoordinator(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	cfg := loadConfig()
+	cfg := app.loadConfig()
 	cfg.SyncCoordinator = strings.TrimSpace(req.SyncCoordinator)
-	saveConfig(cfg)
+	app.saveConfig(cfg)
 	w.WriteHeader(http.StatusOK)
 }

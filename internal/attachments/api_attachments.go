@@ -115,7 +115,7 @@ func attachmentSweep(dir string) {
 //   - 400 missing file, disallowed MIME, or multipart parse failure
 //   - 413 body exceeded attachmentMaxBytes
 //   - 500 filesystem failure
-func HandleClipboard(w http.ResponseWriter, r *http.Request) {
+func (a *API) HandleClipboard(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return

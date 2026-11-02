@@ -1,13 +1,13 @@
 //go:build windows
 
-package server
+package main
 
 import (
 	"syscall"
 	"unsafe"
 )
 
-func EnableVirtualTerminalProcessing() {
+func enableVirtualTerminalProcessing() {
 	kernel32 := syscall.NewLazyDLL("kernel32.dll")
 	setConsoleMode := kernel32.NewProc("SetConsoleMode")
 	getConsoleMode := kernel32.NewProc("GetConsoleMode")

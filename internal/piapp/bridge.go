@@ -104,6 +104,7 @@ type Bridge struct {
 	reason       string
 	runtime      func() ([]byte, error)
 	version      string
+	attachments  *attachments.AttachmentStore
 	// Syncboard handles local sync writes; nil keeps remote-only behavior.
 	Syncboard http.Handler
 	// LoadConfig reads the live config for sync routing; nil refuses sync.
@@ -152,7 +153,7 @@ type bridgePane struct {
 // nil result means integration is disabled; launches then run unmanaged.
 // runtime returns the bundled extension bytes and version stamps the stable
 // copy written for manual installs.
-func StartBridge(hub *ws.Hub, runtime func() ([]byte, error), version string) *Bridge {
+func StartBridge(hub *ws.Hub, runtime func() ([]byte, error), version string, store *attachments.AttachmentStore) *Bridge {
 	endpoint, err := pibridge.NewEndpoint()
 	if err != nil {
 		log.Printf("[pi-bridge] endpoint unavailable, integration disabled: %v", err)
@@ -165,13 +166,14 @@ func StartBridge(hub *ws.Hub, runtime func() ([]byte, error), version string) *B
 		return nil
 	}
 	b := &Bridge{
-		runtime:  runtime,
-		version:  version,
-		server:   pibridge.NewServer(),
-		endpoint: endpoint,
-		listener: listener,
-		hub:      hub,
-		panes:    map[string]*bridgePane{},
+		runtime:     runtime,
+		version:     version,
+		attachments: store,
+		server:      pibridge.NewServer(),
+		endpoint:    endpoint,
+		listener:    listener,
+		hub:         hub,
+		panes:       map[string]*bridgePane{},
 	}
 	if err := b.materialize(); err != nil {
 		b.reason = "runtime unavailable"
@@ -377,8 +379,8 @@ func (b *Bridge) Provision(paneID string, inject bool) (env map[string]string, a
 		piBridgeEnvProcess: processID,
 		piBridgeEnvToken:   token,
 	}
-	if attachments.Default != nil {
-		if root, err := attachments.Default.ProcessRoot(processID); err == nil {
+	if b.attachments != nil {
+		if root, err := b.attachments.ProcessRoot(processID); err == nil {
 			env[piBridgeEnvAttachmentRoot] = root
 		}
 	}

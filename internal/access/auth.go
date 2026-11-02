@@ -412,32 +412,22 @@ func validAccessDigest(digest string) bool {
 	return err == nil
 }
 
-// stateStore resolves the store that locates auth state files. Tests set it
-// to their temp store in withTempConfig; production leaves it nil and state
-// lives beside the process config.toml.
-var stateStore func() *config.Store
-
-// accessDir is the directory that holds access state, next to config.toml.
-func accessDir() string {
-	if stateStore != nil {
-		return filepath.Dir(stateStore().PrimaryPath())
-	}
-	if store, err := Default.store(); err == nil {
-		return filepath.Dir(store.PrimaryPath())
-	}
-	return filepath.Dir(config.NewStore(config.Paths{}, nil).PrimaryPath())
+// accessDir locates this manager's state beside its config, not a singleton.
+// Configure validates the provider before any state path is used.
+func (m *Manager) accessDir() string {
+	return filepath.Dir(m.configStore().PrimaryPath())
 }
 
 // accessV2StatePath locates the legacy JSON session snapshot used only during
 // the one-time SQLite migration.
-func accessV2StatePath() string {
-	return filepath.Join(accessDir(), accessV2StateFileName)
+func (m *Manager) accessV2StatePath() string {
+	return filepath.Join(m.accessDir(), accessV2StateFileName)
 }
 
 // accessV2LockPath is a stable inode: locking the state file itself would be
 // useless because every write replaces it atomically.
-func accessV2LockPath() string {
-	return filepath.Join(accessDir(), accessV2LockFileName)
+func (m *Manager) accessV2LockPath() string {
+	return filepath.Join(m.accessDir(), accessV2LockFileName)
 }
 
 // accessStateLock owns the on-disk auth state for this process.
@@ -1052,8 +1042,14 @@ type Manager struct {
 	// configStore and socketHub are process-wide collaborators the manager
 	// needs but does not own. main installs them once; nil is tolerated by
 	// the paths that can run without them (tests, first-run activation).
-	configStore func() *config.Store
-	socketHub   func() *ws.Hub
+	configStore        func() *config.Store
+	socketHub          func() *ws.Hub
+	accessOriginsCache struct {
+		mu      sync.Mutex
+		raw     string
+		origins []string
+		err     error
+	}
 }
 
 // NewManager returns an unconfigured manager. configStore resolves the config
@@ -1092,7 +1088,6 @@ func (m *Manager) hub() *ws.Hub {
 
 // Default is the process access manager. main replaces it during startup and
 // tests replace it per test.
-var Default = NewManager(nil, nil)
 
 // revokeAccessSockets fences client-facing sockets to generation. The auth
 // layer owns the generation; the hub owns connection closure.
@@ -1122,6 +1117,9 @@ func retireAccessV2Sockets(hub *ws.Hub) {
 // configure acquires ownership before it reads authoritative credentials or
 // migration state. The Config snapshot argument is display-only for a non-owner.
 func (m *Manager) Configure(encoded string) error {
+	if _, err := m.store(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.activateLocked(encoded)
@@ -1132,7 +1130,7 @@ func (m *Manager) activateLocked(displayEncoded string) error {
 		_ = m.db.close()
 		m.db = nil
 	}
-	m.owned = m.owner.tryAcquire(accessV2LockPath())
+	m.owned = m.owner.tryAcquire(m.accessV2LockPath())
 	m.generation++
 	m.challenges = make(map[string]time.Time)
 	m.sessions = make(map[string]time.Time)
@@ -1146,7 +1144,7 @@ func (m *Manager) activateLocked(displayEncoded string) error {
 	if !m.owned {
 		// A non-owner may show a read-only status snapshot, but never uses it to
 		// authorize. A failed snapshot is conservatively displayed as enabled.
-		encoded, err := readOnlyAccessDBVerifier(accessDBPath())
+		encoded, err := readOnlyAccessDBVerifier(m.accessDBPath())
 		if err != nil || encoded == "" {
 			if displayEncoded != "" {
 				encoded = displayEncoded
@@ -1322,7 +1320,7 @@ func (m *Manager) ensureOwned() bool {
 	if m.owned {
 		return !m.faulted
 	}
-	if !m.owner.tryAcquire(accessV2LockPath()) {
+	if !m.owner.tryAcquire(m.accessV2LockPath()) {
 		return false
 	}
 	if err := m.activateLocked(""); err != nil {
@@ -2510,19 +2508,19 @@ func accessClientIP(remoteAddr string) string {
 	return remoteAddr
 }
 
-func Middleware(next http.Handler) http.Handler {
+func (m *Manager) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if accessAuthPublicPath(r.URL.Path) || isSyncBoardPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !Default.ownedNow() {
+		if !m.ownedNow() {
 			// A second instance serves the UI but authorizes nothing: it cannot
 			// tell whether the owner enabled or revoked since it read Config.
 			http.Error(w, "access authentication required", http.StatusUnauthorized)
 			return
 		}
-		decision := Default.authorizeRequest(r)
+		decision := m.authorizeRequest(r)
 		if !decision.Authorized {
 			http.Error(w, "access authentication required", http.StatusUnauthorized)
 			return
@@ -2574,20 +2572,20 @@ func accessAuthPublicPath(path string) bool {
 	return !strings.HasPrefix(path, "/api/") && !strings.HasPrefix(path, "/ws/")
 }
 
-func HandleAccessAuthStatus(w http.ResponseWriter, r *http.Request) {
+func (m *Manager) HandleAccessAuthStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	Default.ensureOwned()
-	enabled, salt, challenge, iterations, err := Default.statusAndChallenge()
+	m.ensureOwned()
+	enabled, salt, challenge, iterations, err := m.statusAndChallenge()
 	if err != nil {
 		http.Error(w, "Unable to start login: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	payload := map[string]interface{}{
 		"enabled":       enabled,
-		"authenticated": enabled && Default.authenticated(r),
+		"authenticated": enabled && m.authenticated(r),
 		"protocols":     []string{accessPasswordHashVersion, accessJWTProtocol},
 	}
 	if enabled {
@@ -2601,7 +2599,7 @@ func HandleAccessAuthStatus(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
-func HandleAccessAuthLogin(w http.ResponseWriter, r *http.Request) {
+func (m *Manager) HandleAccessAuthLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -2614,11 +2612,11 @@ func HandleAccessAuthLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid login request", http.StatusBadRequest)
 		return
 	}
-	if !Default.ensureOwned() {
+	if !m.ensureOwned() {
 		http.Error(w, "Unable to login", http.StatusInternalServerError)
 		return
 	}
-	token, err := Default.login(req.Challenge, req.Proof, r.RemoteAddr)
+	token, err := m.login(req.Challenge, req.Proof, r.RemoteAddr)
 	if err != nil {
 		if errors.Is(err, errAccessRateLimited) {
 			http.Error(w, err.Error(), http.StatusTooManyRequests)
@@ -2638,7 +2636,7 @@ func HandleAccessAuthLogin(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
-func HandleAccessPassword(w http.ResponseWriter, r *http.Request) {
+func (m *Manager) HandleAccessPassword(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -2654,11 +2652,11 @@ func HandleAccessPassword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid password configuration", http.StatusBadRequest)
 		return
 	}
-	if !Default.ensureOwned() {
+	if !m.ensureOwned() {
 		http.Error(w, "Unable to save access password", http.StatusInternalServerError)
 		return
 	}
-	outcome, err := Default.setEncodedPassword(req.PasswordHash, accessCredentialFromRequest(r))
+	outcome, err := m.setEncodedPassword(req.PasswordHash, accessCredentialFromRequest(r))
 	if err != nil {
 		switch {
 		case errors.Is(err, errAccessUnauthorized):
@@ -2683,12 +2681,12 @@ func HandleAccessPassword(w http.ResponseWriter, r *http.Request) {
 // handleAccessV2Status reports enforcement, whether the request carries a valid
 // explicit bearer, and whether this process owns the auth state. A cookie never
 // authenticates this endpoint.
-func HandleAccessV2Status(w http.ResponseWriter, r *http.Request) {
+func (m *Manager) HandleAccessV2Status(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		accessMethodNotAllowed(w, http.MethodGet)
 		return
 	}
-	enabled, authenticated, owned := Default.v2Status(r)
+	enabled, authenticated, owned := m.v2Status(r)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]bool{
@@ -2715,12 +2713,12 @@ func (m *Manager) v2Status(r *http.Request) (enabled, authenticated, owned bool)
 	return enabled, m.jwtValidLocked(credential.Token, now, accessJWTClockAllowance), owned
 }
 
-func HandleAccessV2Login(w http.ResponseWriter, r *http.Request) {
+func (m *Manager) HandleAccessV2Login(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		accessMethodNotAllowed(w, http.MethodPost)
 		return
 	}
-	secure, ok := accessV2Allowed(w, r)
+	secure, ok := m.accessV2Allowed(w, r)
 	if !ok {
 		return
 	}
@@ -2733,11 +2731,11 @@ func HandleAccessV2Login(w http.ResponseWriter, r *http.Request) {
 		accessError(w, "Invalid login request", http.StatusBadRequest)
 		return
 	}
-	if !Default.ensureOwned() {
+	if !m.ensureOwned() {
 		accessError(w, "Unable to login", http.StatusInternalServerError)
 		return
 	}
-	bundle, err := Default.loginPassword(password, r.RemoteAddr)
+	bundle, err := m.loginPassword(password, r.RemoteAddr)
 	if err != nil {
 		switch {
 		case errors.Is(err, errAccessRateLimited):
@@ -2753,12 +2751,12 @@ func HandleAccessV2Login(w http.ResponseWriter, r *http.Request) {
 	writeAccessV2Bundle(w, bundle)
 }
 
-func HandleAccessV2Password(w http.ResponseWriter, r *http.Request) {
+func (m *Manager) HandleAccessV2Password(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		accessMethodNotAllowed(w, http.MethodPost)
 		return
 	}
-	secure, ok := accessV2Allowed(w, r)
+	secure, ok := m.accessV2Allowed(w, r)
 	if !ok {
 		return
 	}
@@ -2771,7 +2769,7 @@ func HandleAccessV2Password(w http.ResponseWriter, r *http.Request) {
 		accessError(w, "Invalid password configuration", http.StatusBadRequest)
 		return
 	}
-	if !Default.ensureOwned() {
+	if !m.ensureOwned() {
 		accessError(w, "Unable to save access password", http.StatusInternalServerError)
 		return
 	}
@@ -2785,12 +2783,12 @@ func HandleAccessV2Password(w http.ResponseWriter, r *http.Request) {
 	var outcome accessPasswordOutcome
 	var err error
 	if password == "" {
-		outcome, err = Default.clearPassword(credential)
+		outcome, err = m.clearPassword(credential)
 	} else if len(password) < accessPasswordMinBytes || len(password) > accessPasswordMaxBytes {
 		accessError(w, "Invalid password configuration", http.StatusBadRequest)
 		return
 	} else {
-		outcome, err = Default.setRawPassword(password, credential)
+		outcome, err = m.setRawPassword(password, credential)
 	}
 	if err != nil {
 		switch {
@@ -2819,12 +2817,12 @@ func HandleAccessV2Password(w http.ResponseWriter, r *http.Request) {
 	writeEnabledAccessV2Bundle(w, bundle)
 }
 
-func HandleAccessV2Refresh(w http.ResponseWriter, r *http.Request) {
+func (m *Manager) HandleAccessV2Refresh(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		accessMethodNotAllowed(w, http.MethodPost)
 		return
 	}
-	secure, ok := accessV2Allowed(w, r)
+	secure, ok := m.accessV2Allowed(w, r)
 	if !ok {
 		return
 	}
@@ -2845,7 +2843,7 @@ func HandleAccessV2Refresh(w http.ResponseWriter, r *http.Request) {
 		accessError(w, errAccessUnauthorized.Error(), http.StatusUnauthorized)
 		return
 	}
-	if !Default.ensureOwned() {
+	if !m.ensureOwned() {
 		accessError(w, "Unable to refresh access session", http.StatusInternalServerError)
 		return
 	}
@@ -2854,7 +2852,7 @@ func HandleAccessV2Refresh(w http.ResponseWriter, r *http.Request) {
 		accessError(w, errAccessUnauthorized.Error(), http.StatusUnauthorized)
 		return
 	}
-	bundle, err := Default.refresh(handle, accessClientIP(r.RemoteAddr), Default.now())
+	bundle, err := m.refresh(handle, accessClientIP(r.RemoteAddr), m.now())
 	if err != nil {
 		switch {
 		case errors.Is(err, errAccessRefreshLimit):
@@ -2871,12 +2869,12 @@ func HandleAccessV2Refresh(w http.ResponseWriter, r *http.Request) {
 	writeAccessV2Bundle(w, bundle)
 }
 
-func HandleAccessV2Logout(w http.ResponseWriter, r *http.Request) {
+func (m *Manager) HandleAccessV2Logout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		accessMethodNotAllowed(w, http.MethodPost)
 		return
 	}
-	secure, ok := accessV2Allowed(w, r)
+	secure, ok := m.accessV2Allowed(w, r)
 	if !ok {
 		return
 	}
@@ -2895,11 +2893,11 @@ func HandleAccessV2Logout(w http.ResponseWriter, r *http.Request) {
 		accessError(w, errAccessUnauthorized.Error(), http.StatusUnauthorized)
 		return
 	}
-	if !Default.ensureOwned() {
+	if !m.ensureOwned() {
 		accessError(w, "Unable to logout", http.StatusInternalServerError)
 		return
 	}
-	if err := Default.logoutBearer(credential.Token, all, Default.now()); err != nil {
+	if err := m.logoutBearer(credential.Token, all, m.now()); err != nil {
 		if errors.Is(err, errAccessUnauthorized) {
 			accessError(w, errAccessUnauthorized.Error(), http.StatusUnauthorized)
 			return
@@ -3107,8 +3105,8 @@ const accessRefreshRetryAfterSeconds = 60
 // routes. It reports whether the cookies must carry Secure, which follows the
 // origin that was actually validated rather than r.Host: a proxy may forward
 // Host: 127.0.0.1:7070 for a browser at https://phi.example.
-func accessV2Allowed(w http.ResponseWriter, r *http.Request) (secure bool, ok bool) {
-	origins, originsErr := accessConfiguredOrigins()
+func (m *Manager) accessV2Allowed(w http.ResponseWriter, r *http.Request) (secure bool, ok bool) {
+	origins, originsErr := m.accessConfiguredOrigins()
 	if len(r.Header.Values(accessV2Header)) != 1 || !strings.EqualFold(r.Header.Get(accessV2Header), accessV2HeaderValue) {
 		accessError(w, "forbidden", http.StatusForbidden)
 		return false, false
@@ -3256,27 +3254,21 @@ func accessCanonicalHost(scheme, host string) (string, error) {
 // accessConfiguredOrigins canonicalizes auth_origins once per distinct value.
 // A malformed entry is an error, never a silent skip: the request is refused and
 // startup validation reports it.
-var accessOriginsCache struct {
-	mu      sync.Mutex
-	raw     string
-	origins []string
-	err     error
-}
 
-func accessConfiguredOrigins() ([]string, error) {
-	store, err := Default.store()
+func (m *Manager) accessConfiguredOrigins() ([]string, error) {
+	store, err := m.store()
 	if err != nil {
 		return nil, err
 	}
 	configured := store.Load().AuthOrigins
 	raw := strings.Join(configured, "\n")
-	accessOriginsCache.mu.Lock()
-	defer accessOriginsCache.mu.Unlock()
-	if accessOriginsCache.raw == raw && (accessOriginsCache.origins != nil || accessOriginsCache.err != nil) {
-		return accessOriginsCache.origins, accessOriginsCache.err
+	m.accessOriginsCache.mu.Lock()
+	defer m.accessOriginsCache.mu.Unlock()
+	if m.accessOriginsCache.raw == raw && (m.accessOriginsCache.origins != nil || m.accessOriginsCache.err != nil) {
+		return m.accessOriginsCache.origins, m.accessOriginsCache.err
 	}
 	origins, err := canonicalizeAccessOrigins(configured)
-	accessOriginsCache.raw, accessOriginsCache.origins, accessOriginsCache.err = raw, origins, err
+	m.accessOriginsCache.raw, m.accessOriginsCache.origins, m.accessOriginsCache.err = raw, origins, err
 	return origins, err
 }
 
@@ -3305,7 +3297,7 @@ func canonicalizeAccessOrigins(configured []string) ([]string, error) {
 // validateOrigins reports a malformed auth_origins list so startup can refuse to
 // run with a configuration that would silently 403 every browser.
 func (m *Manager) ValidateOrigins() error {
-	_, err := accessConfiguredOrigins()
+	_, err := m.accessConfiguredOrigins()
 	return err
 }
 

@@ -38,21 +38,21 @@ func restoreHarness(t *testing.T) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	oldManager, oldCoders, oldHub, oldCwd, oldTitleService := PTY, Coders, Hub, ActiveCWD, Titles
-	PTY = pty.NewManager()
-	Coders = coders.NewManager()
-	Hub = ws.NewHub(64 * 1024)
-	ActiveCWD = home
-	Titles = nil
+	oldManager, oldCoders, oldHub, oldCwd, oldTitleService := testServer.pty, testServer.coders, testServer.hub, testServer.activeCWD, testServer.titles
+	testServer.pty = pty.NewManager()
+	testServer.coders = coders.NewManager()
+	testServer.hub = ws.NewHub(64 * 1024)
+	testServer.activeCWD = home
+	testServer.titles = nil
 	t.Cleanup(func() {
-		if Titles != nil {
-			Titles.Close()
+		if testServer.titles != nil {
+			testServer.titles.Close()
 		}
-		for _, inst := range PTY.ListActive() {
-			_ = PTY.Kill(inst.ID)
+		for _, inst := range testServer.pty.ListActive() {
+			_ = testServer.pty.Kill(inst.ID)
 		}
-		_ = PTY.FlushSaveState()
-		PTY, Coders, Hub, ActiveCWD, Titles = oldManager, oldCoders, oldHub, oldCwd, oldTitleService
+		_ = testServer.pty.FlushSaveState()
+		testServer.pty, testServer.coders, testServer.hub, testServer.activeCWD, testServer.titles = oldManager, oldCoders, oldHub, oldCwd, oldTitleService
 	})
 	return home
 }
@@ -60,16 +60,16 @@ func restoreHarness(t *testing.T) string {
 func TestRestoreBackendSlotsKeepIdentityMetadataAndExactResumeArgs(t *testing.T) {
 	home := restoreHarness(t)
 	for _, id := range []string{"claude", "pi", "agy", "codex", "bash", "pwsh"} {
-		c := Coders.MustGet(id)
+		c := testServer.coders.MustGet(id)
 		c.Command = os.Args[0]
 		c.Args = nil
 		c.SessionSource = "none"
 		path := filepath.Join(home, id+".args")
 		c.Env = map[string]string{"PHI_TEST_RESTORE_CHILD": "1", "PHI_TEST_RESTORE_ARGS": path}
-		Coders.Add(c)
+		testServer.coders.Add(c)
 		tab := pty.SavedTab{PTYInstanceSnapshot: pty.PTYInstanceSnapshot{ID: "pane-" + id, Coder: id, SessionID: "exact-native-id", Cwd: home, Title: "Keep title", Workspace: "workspace", Pinned: true, Marked: true}}
-		restoreSavedTab(tab)
-		inst, ok := PTY.Get(tab.ID)
+		testServer.restoreSavedTab(tab)
+		inst, ok := testServer.pty.Get(tab.ID)
 		if !ok || inst.IsPtyDead() {
 			t.Fatalf("%s restored as a ghost", id)
 		}
@@ -97,20 +97,20 @@ func TestRestoreBackendSlotsKeepIdentityMetadataAndExactResumeArgs(t *testing.T)
 
 func TestSpawnedPiPaneRegistersThroughSharedLaunchPath(t *testing.T) {
 	home := restoreHarness(t)
-	coder := Coders.MustGet("pi")
+	coder := testServer.coders.MustGet("pi")
 	coder.Command = os.Args[0]
 	coder.Args = nil
 	coder.SessionSource = "none"
 	coder.Env = map[string]string{"PHI_TEST_RESTORE_CHILD": "1"}
-	Coders.Add(coder)
-	service := NewPiTerminalTitleService(PTY, Hub)
-	Titles = service
+	testServer.coders.Add(coder)
+	service := NewPiTerminalTitleService(testServer.pty, testServer.hub)
+	testServer.titles = service
 
 	tab := pty.SavedTab{PTYInstanceSnapshot: pty.PTYInstanceSnapshot{
 		ID: "registered-pi-pane", Coder: "pi", Cwd: home, SessionID: "native-id", Title: "Saved title",
 	}}
-	restoreSavedTab(tab)
-	instance, ok := PTY.Get(tab.ID)
+	testServer.restoreSavedTab(tab)
+	instance, ok := testServer.pty.Get(tab.ID)
 	if !ok || instance.IsPtyDead() {
 		t.Fatal("Pi pane did not launch through the shared terminal path")
 	}
@@ -124,15 +124,15 @@ func TestSpawnedPiPaneRegistersThroughSharedLaunchPath(t *testing.T) {
 
 func TestRestoreInvalidNativeResumeFallsBackWithoutAbortingOtherTabs(t *testing.T) {
 	home := restoreHarness(t)
-	c := Coders.MustGet("codex")
+	c := testServer.coders.MustGet("codex")
 	c.Command = os.Args[0]
 	c.Args = nil
 	c.SessionSource = "none"
 	path := filepath.Join(home, "fallback.args")
 	c.Env = map[string]string{"PHI_TEST_RESTORE_CHILD": "1", "PHI_TEST_RESTORE_ARGS": path, "PHI_TEST_RESTORE_REJECT_RESUME": "1"}
-	Coders.Add(c)
-	restoreSavedTab(pty.SavedTab{PTYInstanceSnapshot: pty.PTYInstanceSnapshot{ID: "bad-resume", Coder: "codex", SessionID: "stale", Cwd: home, Title: "Keep tab"}})
-	inst, ok := PTY.Get("bad-resume")
+	testServer.coders.Add(c)
+	testServer.restoreSavedTab(pty.SavedTab{PTYInstanceSnapshot: pty.PTYInstanceSnapshot{ID: "bad-resume", Coder: "codex", SessionID: "stale", Cwd: home, Title: "Keep tab"}})
+	inst, ok := testServer.pty.Get("bad-resume")
 	if !ok || inst.IsPtyDead() || inst.Snapshot().SessionID != "" {
 		t.Fatal("failed resume did not become a fresh live tab")
 	}
@@ -146,8 +146,8 @@ func TestRestoreCorruptFileNeverAbortsStartup(t *testing.T) {
 	home := restoreHarness(t)
 	_ = os.MkdirAll(filepath.Join(home, ".phi"), 0700)
 	_ = os.WriteFile(filepath.Join(home, ".phi", "tabs.json"), []byte("invalid"), 0600)
-	RestoreSavedTabs()
-	if len(PTY.ListActive()) != 0 {
+	testServer.restoreSavedTabs()
+	if len(testServer.pty.ListActive()) != 0 {
 		t.Fatal("corrupt state published ghost tabs")
 	}
 }

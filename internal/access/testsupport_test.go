@@ -20,6 +20,7 @@ var (
 	testLegacyConfigPath string
 	testStore            *config.Store
 	testWriter           config.Writer
+	Default              = NewManager(testConfigStore, testSocketHub)
 )
 
 func testConfigStore() *config.Store { return testStore }
@@ -32,11 +33,10 @@ func withTempConfig(t *testing.T) string {
 		t.Fatalf("create temp config: %v", err)
 	}
 	f.Close()
-	origPath, origStore, origState := testConfigPath, testStore, stateStore
+	origPath, origStore := testConfigPath, testStore
 	testConfigPath = f.Name()
 	testStore = config.NewStore(config.Paths{Primary: testConfigPath, Legacy: testLegacyConfigPath}, nil)
-	stateStore = testConfigStore
-	t.Cleanup(func() { testConfigPath, testStore, stateStore = origPath, origStore, origState })
+	t.Cleanup(func() { testConfigPath, testStore = origPath, origStore })
 	return f.Name()
 }
 
@@ -45,11 +45,10 @@ func withTempConfig(t *testing.T) string {
 func withTempLegacyConfig(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.json")
-	origPath, origStore, origState := testLegacyConfigPath, testStore, stateStore
+	origPath, origStore := testLegacyConfigPath, testStore
 	testLegacyConfigPath = path
 	testStore = config.NewStore(config.Paths{Primary: testConfigPath, Legacy: testLegacyConfigPath}, nil)
-	stateStore = testConfigStore
-	t.Cleanup(func() { testLegacyConfigPath, testStore, stateStore = origPath, origStore, origState })
+	t.Cleanup(func() { testLegacyConfigPath, testStore = origPath, origStore })
 	return path
 }
 

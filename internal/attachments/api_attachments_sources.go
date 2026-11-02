@@ -36,7 +36,7 @@ type attachmentServerItemRequest struct {
 	ExpectedFingerprint string `json:"expected_fingerprint"`
 }
 
-func HandleV2Browse(w http.ResponseWriter, r *http.Request) {
+func (a *API) HandleV2Browse(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
@@ -48,7 +48,7 @@ func HandleV2Browse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pane := r.URL.Query().Get("pane")
-	inst, err := LivePiPane(pane)
+	inst, err := LivePiPane(a.paneManager(), pane)
 	if err != nil {
 		WriteJSONError(w, http.StatusNotFound, "unavailable")
 		return
@@ -110,7 +110,7 @@ func HandleV2Browse(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(result)
 }
 
-func HandleV2ServerItem(w http.ResponseWriter, r *http.Request) {
+func (a *API) HandleV2ServerItem(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
@@ -127,7 +127,7 @@ func HandleV2ServerItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer clearDeadline()
-	if Default == nil {
+	if a.Store == nil {
 		WriteJSONError(w, http.StatusServiceUnavailable, "storage")
 		return
 	}
@@ -148,11 +148,11 @@ func HandleV2ServerItem(w http.ResponseWriter, r *http.Request) {
 		WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 		return
 	}
-	if _, err := LivePiPane(body.Pane); err != nil {
+	if _, err := LivePiPane(a.paneManager(), body.Pane); err != nil {
 		WriteJSONError(w, http.StatusNotFound, "unavailable")
 		return
 	}
-	item, err := Default.SnapshotFile(r.Context(), body.ID, body.Pane, body.Path, body.ExpectedFingerprint)
+	item, err := a.Store.SnapshotFile(r.Context(), body.ID, body.Pane, body.Path, body.ExpectedFingerprint)
 	if err != nil {
 		WriteStoreError(w, err)
 		return

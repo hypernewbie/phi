@@ -20,7 +20,7 @@ import (
 //  4. Windows: spawn detached child, exit. Child retry-binds via restart.BindWithRetry.
 //
 // Returns immediately with JSON ack. Clients see 0x05 and arm reload pollers.
-func HandleRestart(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -29,12 +29,12 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{"status":"restarting"}`))
 
-	if err := FlushStateForRestart(); err != nil {
+	if err := app.flushStateForRestart(); err != nil {
 		log.Printf("[restart] flush failed: %v", err)
 	}
 
-	if Hub != nil {
-		Hub.BroadcastShutdown("restart")
+	if app.hub != nil {
+		app.hub.BroadcastShutdown("restart")
 	}
 
 	time.Sleep(150 * time.Millisecond)
@@ -43,22 +43,26 @@ func HandleRestart(w http.ResponseWriter, r *http.Request) {
 
 	switch runtime.GOOS {
 	case "windows":
-		access.RestartOnWindows(access.Default, func() (int, error) {
+		if app.options.Exit == nil {
+			log.Printf("[restart] process exit callback is unavailable")
+			return
+		}
+		access.RestartOnWindows(app.accessManager, func() (int, error) {
 			return restart.SpawnDetached(args, os.Environ())
-		}, os.Exit)
+		}, app.options.Exit)
 	default:
 		log.Printf("[restart] exec-replacing self: %v", args)
-		access.RestartOnUnix(access.Default, func() error {
+		access.RestartOnUnix(app.accessManager, func() error {
 			return restart.ExecSelf(args, os.Environ())
 		})
 	}
 }
 
-func FlushStateForRestart() error {
-	if PTY != nil {
-		if err := PTY.FlushSaveState(); err != nil {
+func (app *Server) flushStateForRestart() error {
+	if app.pty != nil {
+		if err := app.pty.FlushSaveState(); err != nil {
 			return err
 		}
 	}
-	return FlushSyncStore()
+	return app.flushSyncStore()
 }

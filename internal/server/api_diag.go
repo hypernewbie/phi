@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"runtime"
-	"sync"
 	"time"
 
 	"github.com/hypernewbie/phi/pkg/update"
@@ -44,23 +43,21 @@ type DiagResponse struct {
 	NumGC      uint32 `json:"num_gc"`
 }
 
-var serverStartedAt = time.Now()
-
 // handleDiag returns a snapshot of server state for the diag panel.
 // GET /api/diag. Intentionally unauthenticated — this is a local
 // tool, not a public API. Pair with risk R6 (v0.9 auth) for hardening.
-func HandleDiag(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleDiag(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	resp := DiagResponse{
-		Version:       Version,
-		InstallMethod: installMethodCached(),
-		UptimeSeconds: time.Since(serverStartedAt).Seconds(),
+		Version:       app.version,
+		InstallMethod: app.installMethodCached(),
+		UptimeSeconds: time.Since(app.serverStartedAt).Seconds(),
 		Goroutines:    runtime.NumGoroutine(),
-		StartedAt:     serverStartedAt,
+		StartedAt:     app.serverStartedAt,
 		Panes:         []PaneDiag{}, // always serialize as [], never null
 		GoVersion:     runtime.Version(),
 		GOMAXPROCS:    runtime.GOMAXPROCS(0),
@@ -72,8 +69,8 @@ func HandleDiag(w http.ResponseWriter, r *http.Request) {
 	resp.MemAllocMB = float64(m.Alloc) / (1024 * 1024)
 	resp.NumGC = m.NumGC
 
-	if PTY != nil {
-		insts := PTY.ListActive()
+	if app.pty != nil {
+		insts := app.pty.ListActive()
 		resp.PTYs = len(insts)
 		for _, inst := range insts {
 			busy, lastActivity := inst.BusyState()
@@ -84,8 +81,8 @@ func HandleDiag(w http.ResponseWriter, r *http.Request) {
 				Busy:         busy,
 				LastActivity: lastActivity,
 			}
-			if Hub != nil {
-				pd.ClientCount, pd.RingBytes, pd.RingCapacity = Hub.PaneStats(inst.ID)
+			if app.hub != nil {
+				pd.ClientCount, pd.RingBytes, pd.RingCapacity = app.hub.PaneStats(inst.ID)
 			}
 			resp.Panes = append(resp.Panes, pd)
 		}
@@ -97,14 +94,10 @@ func HandleDiag(w http.ResponseWriter, r *http.Request) {
 
 // installMethodCached is the install method as of the last successful
 // detection. Avoids re-running the path/sum check on every /api/diag hit.
-var (
-	cachedInstallMethod string
-	installMethodOnce   sync.Once
-)
 
-func installMethodCached() string {
-	installMethodOnce.Do(func() {
-		cachedInstallMethod = update.DetectInstallMethod(BuildSource)
+func (app *Server) installMethodCached() string {
+	app.installMethodOnce.Do(func() {
+		app.cachedInstallMethod = update.DetectInstallMethod(app.buildSource)
 	})
-	return cachedInstallMethod
+	return app.cachedInstallMethod
 }

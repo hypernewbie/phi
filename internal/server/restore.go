@@ -27,7 +27,7 @@ func (e terminalLaunchError) Error() string { return e.err.Error() }
 
 // One launch path for normal requests and restored tabs. Backend policy lives
 // in the registry/adapters; restoration only supplies saved tab intent.
-func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg config.Config, opts pty.SpawnOptions, probe bool) (*pty.PTYInstance, error) {
+func (app *Server) spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg config.Config, opts pty.SpawnOptions, probe bool) (*pty.PTYInstance, error) {
 	bad := func(err error) (*pty.PTYInstance, error) { return nil, terminalLaunchError{http.StatusBadRequest, err} }
 	if err := coders.VerifyOpenCode(ctx, c); err != nil {
 		return bad(err)
@@ -46,7 +46,7 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg co
 	// managed coders; SpawnWithOptions adopts an explicit opts.ID.
 	var bridgeEnv map[string]string
 	var bridgeExtArgs []string
-	bridge := bridgeOrNil()
+	bridge := app.bridgeOrNil()
 	managedPane := bridge != nil && piapp.ForCoder(c.ID) && c.PiMode != "psi"
 	if managedPane {
 		if opts.ID == "" {
@@ -62,7 +62,7 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg co
 		}
 	}
 	plan, err := coders.ResolveLaunch(c, coders.SpawnRequest{Coder: req.Coder, Cwd: req.Cwd, SessionID: req.SessionID, ExtraArgs: req.ExtraArgs, ExtensionArgs: bridgeExtArgs}, coders.LaunchOptions{
-		Config: coders.ConfigView{PiOffline: cfg.PiOffline, ClaudeDangerouslySkipPermissions: cfg.ClaudeDangerouslySkipPermissions}, DefaultCwd: ActiveCWD,
+		Config: coders.ConfigView{PiOffline: cfg.PiOffline, ClaudeDangerouslySkipPermissions: cfg.ClaudeDangerouslySkipPermissions}, DefaultCwd: app.activeCWD,
 	})
 	if err != nil {
 		revokeBridge()
@@ -72,7 +72,7 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg co
 	opts.Cols, opts.Rows = req.Cols, req.Rows
 	opts.ExtraArgs = req.ExtraArgs
 	var inst *pty.PTYInstance
-	nativeObserver := session.ResumeReferenceObserver(c, func(nativeID string) { PTY.BindSession(inst, nativeID) })
+	nativeObserver := session.ResumeReferenceObserver(c, func(nativeID string) { app.pty.BindSession(inst, nativeID) })
 	firstOutput := make(chan struct{})
 	outputSeen := false
 	opts.ObserveOutput = func(data []byte) {
@@ -84,7 +84,7 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg co
 			nativeObserver(data)
 		}
 	}
-	inst, err = PTY.SpawnWithOptions(ctx, plan.Cwd, plan.Command, plan.Args, c.ID, id, opts, plan.Env, bridgeEnv)
+	inst, err = app.pty.SpawnWithOptions(ctx, plan.Cwd, plan.Command, plan.Args, c.ID, id, opts, plan.Env, bridgeEnv)
 	if err != nil {
 		revokeBridge()
 		return nil, terminalLaunchError{http.StatusInternalServerError, err}
@@ -92,13 +92,13 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg co
 	if managedPane {
 		bridge.Complete(inst)
 	}
-	if Titles != nil {
-		Titles.Register(inst)
+	if app.titles != nil {
+		app.titles.Register(inst)
 	}
 	if req.Cols != 0 && req.Rows != 0 {
-		Hub.RecordResize(inst.ID, req.Cols, req.Rows)
+		app.hub.RecordResize(inst.ID, req.Cols, req.Rows)
 	}
-	ws.StartPTYReadLoop(inst, Hub)
+	ws.StartPTYReadLoop(inst, app.hub)
 	if probe {
 		// Catch immediate CLI resume/config failures before publishing a dead
 		// process as a restored tab. A failure does not block other tabs.
@@ -107,12 +107,12 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg co
 		select {
 		case <-firstOutput:
 		case <-inst.Pty.Closed:
-			_ = PTY.Kill(inst.ID)
+			_ = app.pty.Kill(inst.ID)
 			revokeBridge() // synchronous: the restore retry reuses this tab ID
 			return nil, fmt.Errorf("backend exited before restoration (code %d)", inst.Pty.ExitCode())
 		case <-ctx.Done():
 			if inst.IsPtyDead() {
-				_ = PTY.Kill(inst.ID)
+				_ = app.pty.Kill(inst.ID)
 				revokeBridge()
 				return nil, ctx.Err()
 			}
@@ -122,13 +122,13 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg co
 		select {
 		case <-inst.Pty.Closed:
 			timer.Stop()
-			_ = PTY.Kill(inst.ID)
+			_ = app.pty.Kill(inst.ID)
 			revokeBridge()
 			return nil, fmt.Errorf("backend exited during restoration (code %d)", inst.Pty.ExitCode())
 		case <-timer.C:
 		case <-ctx.Done():
 			timer.Stop()
-			_ = PTY.Kill(inst.ID)
+			_ = app.pty.Kill(inst.ID)
 			revokeBridge()
 			return nil, ctx.Err()
 		}
@@ -139,14 +139,14 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg co
 
 var savedPaneID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
 
-func RestoreSavedTabs() {
+func (app *Server) restoreSavedTabs() {
 	tabs, err := pty.ReadSavedTabs()
 	if err != nil {
 		log.Printf("[tabs] cannot read saved tabs; continuing startup: %v", err)
 		return
 	}
-	PTY.BeginRestore()
-	defer PTY.EndRestore()
+	app.pty.BeginRestore()
+	defer app.pty.EndRestore()
 	pty.SortSavedTabs(tabs)
 	seen := map[string]bool{}
 	jobs := make(chan pty.SavedTab)
@@ -158,7 +158,7 @@ func RestoreSavedTabs() {
 		go func() {
 			defer workers.Done()
 			for tab := range jobs {
-				restoreSavedTab(tab)
+				app.restoreSavedTab(tab)
 			}
 		}()
 	}
@@ -171,16 +171,16 @@ func RestoreSavedTabs() {
 	}
 	close(jobs)
 	workers.Wait()
-	if err := PTY.FlushSaveState(); err != nil {
+	if err := app.pty.FlushSaveState(); err != nil {
 		log.Printf("[tabs] restore snapshot: %v", err)
 	}
 }
 
-func restoreSavedTab(tab pty.SavedTab) {
-	cfg := loadConfig()
-	c, known := Coders.Get(tab.Coder)
+func (app *Server) restoreSavedTab(tab pty.SavedTab) {
+	cfg := app.loadConfig()
+	c, known := app.coders.Get(tab.Coder)
 	if !known {
-		c = Coders.MustGet("bash")
+		c = app.coders.MustGet("bash")
 	}
 	if known && c.ID == "opencode" {
 		// The registry chooses the default for NEW panes, not the generation
@@ -212,7 +212,7 @@ func restoreSavedTab(tab pty.SavedTab) {
 		req.ExtraArgs = nil
 	}
 	if info, err := os.Stat(req.Cwd); err != nil || !info.IsDir() {
-		req.Cwd = ActiveCWD
+		req.Cwd = app.activeCWD
 	}
 	if req.SessionID != "" && c.SessionSource != "none" && c.SessionSource != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -250,7 +250,7 @@ func restoreSavedTab(tab pty.SavedTab) {
 	attempt := func(profile coders.Coder, probe bool) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 		defer cancel()
-		_, err := spawnTerminal(ctx, profile, req, cfg, opts, probe)
+		_, err := app.spawnTerminal(ctx, profile, req, cfg, opts, probe)
 		return err
 	}
 	if err := attempt(c, true); err == nil {

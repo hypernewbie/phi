@@ -48,14 +48,14 @@ const fsListMaxEntries = 1000
 // except when listing inside an ignored dir itself, which shows everything;
 // outside one, dotfiles are hidden (the /api/fs/autocomplete precedent).
 // `.git` is always hidden. Symlink entries are listed as leaves, never dirs.
-func HandleFSList(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleFSList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	cwd := r.URL.Query().Get("cwd")
 	if cwd == "" {
-		cwd = ActiveCWD
+		cwd = app.activeCWD
 	}
 	rel := filepath.Clean(strings.TrimSpace(r.URL.Query().Get("path")))
 	if rel == "." {
@@ -173,7 +173,7 @@ func HandleFSList(w http.ResponseWriter, r *http.Request) {
 // handleFSBrowse lists immediate visible directories at an absolute path.
 // Unlike the workspace Files tree, this endpoint preserves symlink aliases
 // and does not apply workspace confinement or Git-ignore filtering.
-func HandleFSBrowse(w http.ResponseWriter, r *http.Request) {
+func handleFSBrowse(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return

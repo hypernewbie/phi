@@ -341,9 +341,9 @@ func TestPiTitleWorkerStepIsFairAndDoesNotBlockPTYOrHTTP(t *testing.T) {
 	first := spawnPiTitlePaneForTest(t, manager, "fair-first", cwd, "first-native", "First saved")
 	second := spawnPiTitlePaneForTest(t, manager, "fair-second", cwd, "second-native", "Second saved")
 	client := addTitleObserver(hub, first.ID)
-	oldManager := PTY
-	PTY = manager
-	t.Cleanup(func() { PTY = oldManager })
+	oldManager := testServer.pty
+	testServer.pty = manager
+	t.Cleanup(func() { testServer.pty = oldManager })
 	service := NewPiTerminalTitleService(manager, hub)
 	service.watcherFactory = func(func() []string, func(string)) (*fswatch.Watcher, error) {
 		return nil, errors.New("test does not need filesystem events")
@@ -414,7 +414,7 @@ outputReceived:
 	responseDone := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		w := httptest.NewRecorder()
-		HandleSpawnTerminal(w, httptest.NewRequest(http.MethodGet, "/api/terminals", nil))
+		testServer.handleSpawnTerminal(w, httptest.NewRequest(http.MethodGet, "/api/terminals", nil))
 		responseDone <- w
 	}()
 	select {

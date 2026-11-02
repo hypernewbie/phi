@@ -16,7 +16,7 @@ import (
 // is the *scope* of that exemption: it must not become a general hole.
 
 func authedHandler() http.Handler {
-	return Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return Default.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("reached"))
 	}))

@@ -4,51 +4,43 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/hypernewbie/phi/pkg/coders"
 )
 
-var (
-	ocServiceCacheMu      sync.Mutex
-	ocServiceCacheRunning bool
-	ocServiceCacheTime    time.Time
-	ocServiceCacheValid   bool
-)
-
-func getCachedOpenCodeStatus(ctx context.Context, c coders.Coder) (bool, error) {
-	ocServiceCacheMu.Lock()
-	if ocServiceCacheValid && time.Since(ocServiceCacheTime) < 2*time.Second {
-		running := ocServiceCacheRunning
-		ocServiceCacheMu.Unlock()
+func (app *Server) getCachedOpenCodeStatus(ctx context.Context, c coders.Coder) (bool, error) {
+	app.ocServiceCacheMu.Lock()
+	if app.ocServiceCacheValid && time.Since(app.ocServiceCacheTime) < 2*time.Second {
+		running := app.ocServiceCacheRunning
+		app.ocServiceCacheMu.Unlock()
 		return running, nil
 	}
-	ocServiceCacheMu.Unlock()
+	app.ocServiceCacheMu.Unlock()
 
 	running, err := coders.OpenCodeService(ctx, c, "status")
 	if err == nil {
-		ocServiceCacheMu.Lock()
-		ocServiceCacheRunning = running
-		ocServiceCacheTime = time.Now()
-		ocServiceCacheValid = true
-		ocServiceCacheMu.Unlock()
+		app.ocServiceCacheMu.Lock()
+		app.ocServiceCacheRunning = running
+		app.ocServiceCacheTime = time.Now()
+		app.ocServiceCacheValid = true
+		app.ocServiceCacheMu.Unlock()
 	}
 	return running, err
 }
 
-func invalidateOpenCodeServiceCache() {
-	ocServiceCacheMu.Lock()
-	ocServiceCacheValid = false
-	ocServiceCacheMu.Unlock()
+func (app *Server) invalidateOpenCodeServiceCache() {
+	app.ocServiceCacheMu.Lock()
+	app.ocServiceCacheValid = false
+	app.ocServiceCacheMu.Unlock()
 }
 
-func countActiveOpenCodeTabs() int {
-	if PTY == nil {
+func (app *Server) countActiveOpenCodeTabs() int {
+	if app.pty == nil {
 		return 0
 	}
 	count := 0
-	for _, inst := range PTY.ListActive() {
+	for _, inst := range app.pty.ListActive() {
 		if inst.Coder == "opencode" && !inst.IsPtyDead() {
 			count++
 		}
@@ -56,13 +48,13 @@ func countActiveOpenCodeTabs() int {
 	return count
 }
 
-func HandleOpenCodeService(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleOpenCodeService(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	ensureCoderManager()
-	c, ok := Coders.Get("opencode")
+	app.ensureCoderManager()
+	c, ok := app.coders.Get("opencode")
 	if !ok || c.SessionSource != "opencode_v2" || c.OpenCodeMode == "legacy" {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -73,8 +65,8 @@ func HandleOpenCodeService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	running, err := getCachedOpenCodeStatus(r.Context(), c)
-	tabs := countActiveOpenCodeTabs()
+	running, err := app.getCachedOpenCodeStatus(r.Context(), c)
+	tabs := app.countActiveOpenCodeTabs()
 
 	w.Header().Set("Content-Type", "application/json")
 	resp := map[string]interface{}{
@@ -82,11 +74,11 @@ func HandleOpenCodeService(w http.ResponseWriter, r *http.Request) {
 		"running":   running,
 		"tabs":      tabs,
 	}
-	cfg := loadConfig()
+	cfg := app.loadConfig()
 	if cfg.OpenCodeIdleStopMinutes > 0 {
 		resp["idle_stop_minutes"] = cfg.OpenCodeIdleStopMinutes
-		if PTY != nil {
-			lastAct := PTY.LastOpenCodeActivity()
+		if app.pty != nil {
+			lastAct := app.pty.LastOpenCodeActivity()
 			rem := time.Duration(cfg.OpenCodeIdleStopMinutes)*time.Minute - time.Since(lastAct)
 			if rem < 0 {
 				rem = 0
@@ -100,13 +92,13 @@ func HandleOpenCodeService(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-func HandleOpenCodeServiceStop(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleOpenCodeServiceStop(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	ensureCoderManager()
-	c, ok := Coders.Get("opencode")
+	app.ensureCoderManager()
+	c, ok := app.coders.Get("opencode")
 	if !ok || c.SessionSource != "opencode_v2" || c.OpenCodeMode == "legacy" {
 		http.Error(w, "OpenCode 2 is not enabled", http.StatusBadRequest)
 		return
@@ -117,7 +109,7 @@ func HandleOpenCodeServiceStop(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
-	tabs := countActiveOpenCodeTabs()
+	tabs := app.countActiveOpenCodeTabs()
 	if tabs > 0 && !req.Force {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)
@@ -130,7 +122,7 @@ func HandleOpenCodeServiceStop(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, err := coders.OpenCodeService(r.Context(), c, "stop")
-	invalidateOpenCodeServiceCache()
+	app.invalidateOpenCodeServiceCache()
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)

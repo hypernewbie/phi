@@ -45,7 +45,7 @@ func paneInputPayload(text string) string {
 	return payload + "\r"
 }
 
-func HandleFallback(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleFallback(w http.ResponseWriter, r *http.Request) {
 	// Log requests briefly.
 	log.Printf("[http] %s %s", r.Method, r.URL.Path)
 
@@ -61,7 +61,7 @@ func HandleFallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		err := PTY.SetPinned(id, req.Pinned)
+		err := app.pty.SetPinned(id, req.Pinned)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -82,7 +82,7 @@ func HandleFallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		err := PTY.SetMarked(id, req.Marked)
+		err := app.pty.SetMarked(id, req.Marked)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -103,7 +103,7 @@ func HandleFallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		inst, ok := PTY.Get(id)
+		inst, ok := app.pty.Get(id)
 		if !ok || inst == nil {
 			http.Error(w, "terminal instance not found", http.StatusNotFound)
 			return
@@ -138,7 +138,7 @@ func HandleFallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		err := PTY.SetTitle(id, req.Title)
+		err := app.pty.SetTitle(id, req.Title)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -167,7 +167,7 @@ func HandleFallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		inst, ok := PTY.Get(id)
+		inst, ok := app.pty.Get(id)
 		if !ok || inst.Pty == nil {
 			http.Error(w, "Pane not found", http.StatusNotFound)
 			return
@@ -183,7 +183,7 @@ func HandleFallback(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/terminals/") {
 		id := strings.TrimPrefix(r.URL.Path, "/api/terminals/")
-		err := PTY.Kill(id)
+		err := app.pty.Kill(id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -193,7 +193,7 @@ func HandleFallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/terminals/") && strings.HasSuffix(r.URL.Path, "/state") {
-		HandleTerminalState(w, r)
+		app.handleTerminalState(w, r)
 		return
 	}
 
@@ -221,7 +221,7 @@ func HandleFallback(w http.ResponseWriter, r *http.Request) {
 		if after != "" {
 			var endCursor string
 			var cerr error
-			rec, endCursor, cerr = Hub.RecordingAfterCursor(id, from, through, after)
+			rec, endCursor, cerr = app.hub.RecordingAfterCursor(id, from, through, after)
 			if cerr != nil {
 				if errors.Is(cerr, ws.ErrEventCursorExpired) {
 					http.Error(w, cerr.Error(), http.StatusConflict)
@@ -233,7 +233,7 @@ func HandleFallback(w http.ResponseWriter, r *http.Request) {
 			rec.EventCursor = endCursor
 		} else {
 			var ok bool
-			rec, ok = Hub.Recording(id, from, through)
+			rec, ok = app.hub.Recording(id, from, through)
 			if !ok {
 				http.Error(w, "from is beyond the pane head", http.StatusBadRequest)
 				return
@@ -260,7 +260,7 @@ func HandleFallback(w http.ResponseWriter, r *http.Request) {
 				if after != "" {
 					var endCursor string
 					var cerr error
-					rec, endCursor, cerr = Hub.RecordingAfterCursor(id, mfrom, mthrough, after)
+					rec, endCursor, cerr = app.hub.RecordingAfterCursor(id, mfrom, mthrough, after)
 					if cerr != nil {
 						if errors.Is(cerr, ws.ErrEventCursorExpired) {
 							http.Error(w, cerr.Error(), http.StatusConflict)
@@ -272,7 +272,7 @@ func HandleFallback(w http.ResponseWriter, r *http.Request) {
 					rec.EventCursor = endCursor
 				} else {
 					var ok bool
-					rec, ok = Hub.Recording(id, mfrom, mthrough)
+					rec, ok = app.hub.Recording(id, mfrom, mthrough)
 					if !ok {
 						http.Error(w, "from is beyond the pane head", http.StatusBadRequest)
 						return
@@ -318,7 +318,7 @@ func HandleFallback(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "checkpoint too large", http.StatusRequestEntityTooLarge)
 			return
 		}
-		if !Hub.StoreCheckpoint(id, ws.CheckpointUpload{
+		if !app.hub.StoreCheckpoint(id, ws.CheckpointUpload{
 			Epoch: req.Epoch, Through: req.Through, Cols: req.Cols, Rows: req.Rows, Ansi: ansi,
 		}) {
 			http.Error(w, "stale checkpoint (epoch/through mismatch)", http.StatusConflict)
@@ -330,36 +330,36 @@ func HandleFallback(w http.ResponseWriter, r *http.Request) {
 
 	if strings.HasPrefix(r.URL.Path, "/ws/pane/") {
 		id := strings.TrimPrefix(r.URL.Path, "/ws/pane/")
-		inst, ok := PTY.Get(id)
+		inst, ok := app.pty.Get(id)
 		if !ok {
 			http.Error(w, "Pane not found", http.StatusNotFound)
 			return
 		}
-		ws.HandleWS(w, r, inst, PTY, Hub)
+		ws.HandleWS(w, r, inst, app.pty, app.hub)
 		return
 	}
 
 	// Fallback to static assets (embedded by default, disk with --web).
-	Static.ServeHTTP(w, r)
+	app.static.ServeHTTP(w, r)
 }
 
-func HandleGetCoders(w http.ResponseWriter, r *http.Request) {
-	ensureCoderManager()
-	list := Coders.List()
+func (app *Server) handleGetCoders(w http.ResponseWriter, r *http.Request) {
+	app.ensureCoderManager()
+	list := app.coders.List()
 	descriptors := coders.DescriptorsFor(list)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(descriptors)
 }
 
-func HandleGetSessions(w http.ResponseWriter, r *http.Request) {
-	ensureCoderManager()
+func (app *Server) handleGetSessions(w http.ResponseWriter, r *http.Request) {
+	app.ensureCoderManager()
 	coderID := r.URL.Query().Get("coder")
 	cwd := r.URL.Query().Get("cwd")
 	if cwd == "" {
-		cwd = ActiveCWD
+		cwd = app.activeCWD
 	}
 
-	c, ok := Coders.Get(coderID)
+	c, ok := app.coders.Get(coderID)
 	if !ok {
 		http.Error(w, "Invalid coder", http.StatusBadRequest)
 		return
@@ -412,9 +412,9 @@ func HandleGetSessions(w http.ResponseWriter, r *http.Request) {
 // without going through main() still have a usable registry. Production
 // always sets Coders in main.go; this fallback only fires in
 // tests that drive a single handler.
-func ensureCoderManager() {
-	if Coders == nil {
-		Coders = coders.NewManager()
+func (app *Server) ensureCoderManager() {
+	if app.coders == nil {
+		app.coders = coders.NewManager()
 	}
 }
 
@@ -431,33 +431,33 @@ type SpawnRequest struct {
 	Rows         uint16   `json:"rows,omitempty"`
 }
 
-func terminalOpenCodeMode(inst *pty.PTYInstance) string {
+func (app *Server) terminalOpenCodeMode(inst *pty.PTYInstance) string {
 	if inst.OpenCodeMode != "" {
 		return inst.OpenCodeMode
 	}
-	if Coders != nil {
-		if c, ok := Coders.Get(inst.Coder); ok {
+	if app.coders != nil {
+		if c, ok := app.coders.Get(inst.Coder); ok {
 			return c.OpenCodeMode
 		}
 	}
 	return ""
 }
 
-func terminalPiMode(inst *pty.PTYInstance) string {
+func (app *Server) terminalPiMode(inst *pty.PTYInstance) string {
 	if inst.PiMode != "" {
 		return inst.PiMode
 	}
-	if Coders != nil {
-		if c, ok := Coders.Get(inst.Coder); ok {
+	if app.coders != nil {
+		if c, ok := app.coders.Get(inst.Coder); ok {
 			return c.PiMode
 		}
 	}
 	return ""
 }
 
-func HandleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
-		instances := PTY.ListActive()
+		instances := app.pty.ListActive()
 		type terminalView struct {
 			pty.PTYInstanceSnapshot
 			ActiveWS      bool
@@ -467,11 +467,11 @@ func HandleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		views := make([]terminalView, 0, len(instances))
 		for _, inst := range instances {
 			snapshot := inst.Snapshot()
-			snapshot.OpenCodeMode = terminalOpenCodeMode(inst)
-			snapshot.PiMode = terminalPiMode(inst)
+			snapshot.OpenCodeMode = app.terminalOpenCodeMode(inst)
+			snapshot.PiMode = app.terminalPiMode(inst)
 			view := terminalView{PTYInstanceSnapshot: snapshot, ActiveWS: snapshot.ActiveWS, ActiveWSCount: snapshot.ActiveWSCount}
 			if piapp.ForCoder(snapshot.Coder) && snapshot.PiMode != "psi" {
-				state := bridgeOrNil().PaneSnapshot(snapshot.ID)
+				state := app.bridgeOrNil().PaneSnapshot(snapshot.ID)
 				view.PiBridge = &state
 			}
 			views = append(views, view)
@@ -485,7 +485,7 @@ func HandleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	ensureCoderManager()
+	app.ensureCoderManager()
 
 	var req SpawnRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -497,7 +497,7 @@ func HandleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cols and rows must both be supplied", http.StatusBadRequest)
 		return
 	}
-	c, ok := Coders.Get(req.Coder)
+	c, ok := app.coders.Get(req.Coder)
 	if req.OpenCodeMini {
 		var err error
 		c, err = coders.OpenCodeMini(c)
@@ -518,14 +518,14 @@ func HandleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 	// Reattach only to the requested presentation of this session. Mini
 	// and full TUI clients may coexist; never replace a running process.
 	if req.SessionID != "" {
-		for _, inst := range PTY.ListActive() {
+		for _, inst := range app.pty.ListActive() {
 			snapshot := inst.Snapshot()
 			if snapshot.Coder == req.Coder && snapshot.SessionID == req.SessionID {
-				mode := terminalOpenCodeMode(inst)
+				mode := app.terminalOpenCodeMode(inst)
 				if req.Coder == "opencode" && ok && c.OpenCodeMode != "" && mode != c.OpenCodeMode {
 					continue
 				}
-				piMode := terminalPiMode(inst)
+				piMode := app.terminalPiMode(inst)
 				if req.Coder == "pi" && ok && c.PiMode != "" && piMode != c.PiMode {
 					continue
 				}
@@ -538,7 +538,7 @@ func HandleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 					payload["pi_mode"] = piMode
 				}
 				if piapp.ForCoder(snapshot.Coder) && piMode != "psi" {
-					payload["pi_bridge"] = bridgeOrNil().PaneSnapshot(snapshot.ID)
+					payload["pi_bridge"] = app.bridgeOrNil().PaneSnapshot(snapshot.ID)
 				}
 				_ = json.NewEncoder(w).Encode(payload)
 				return
@@ -551,7 +551,7 @@ func HandleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	inst, err := spawnTerminal(r.Context(), c, req, loadConfig(), pty.SpawnOptions{}, false)
+	inst, err := app.spawnTerminal(r.Context(), c, req, app.loadConfig(), pty.SpawnOptions{}, false)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if launchErr, ok := err.(terminalLaunchError); ok {
@@ -563,8 +563,8 @@ func HandleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 
 	// A new pane may be the first live one in this cwd/worktree, so it
 	// can widen the markdown watch set.
-	if MDWatcher != nil {
-		MDWatcher.Recompute()
+	if app.mdWatcher != nil {
+		app.mdWatcher.Recompute()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -576,7 +576,7 @@ func HandleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		payload["pi_mode"] = c.PiMode
 	}
 	if piapp.ForCoder(inst.Coder) && inst.PiMode != "psi" {
-		payload["pi_bridge"] = bridgeOrNil().PaneSnapshot(inst.ID)
+		payload["pi_bridge"] = app.bridgeOrNil().PaneSnapshot(inst.ID)
 	}
 	_ = json.NewEncoder(w).Encode(payload)
 }
@@ -586,7 +586,7 @@ type MetaRequest struct {
 	Name string `json:"name"`
 }
 
-func HandleSessionMeta(w http.ResponseWriter, r *http.Request) {
+func handleSessionMeta(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -606,7 +606,7 @@ func HandleSessionMeta(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func HandleFSAutocomplete(w http.ResponseWriter, r *http.Request) {
+func handleFSAutocomplete(w http.ResponseWriter, r *http.Request) {
 	typed := r.URL.Query().Get("path")
 	expanded := expandHome(typed)
 
@@ -655,10 +655,10 @@ func HandleFSAutocomplete(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(suggestions)
 }
 
-func HandleGetWorktrees(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleGetWorktrees(w http.ResponseWriter, r *http.Request) {
 	cwd := r.URL.Query().Get("cwd")
 	if cwd == "" {
-		cwd = ActiveCWD
+		cwd = app.activeCWD
 	}
 
 	wts, err := session.ListGitWorktrees(r.Context(), cwd)
@@ -667,7 +667,7 @@ func HandleGetWorktrees(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := loadConfig()
+	cfg := app.loadConfig()
 	activeWT := cfg.ActiveWorktrees[cwd]
 
 	// Find if we have an active worktree. If not, default to current cwd or first one.
@@ -704,10 +704,10 @@ func HandleGetWorktrees(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(wts)
 }
 
-func HandleGetWorktreeDirtyStates(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleGetWorktreeDirtyStates(w http.ResponseWriter, r *http.Request) {
 	cwd := r.URL.Query().Get("cwd")
 	if cwd == "" {
-		cwd = ActiveCWD
+		cwd = app.activeCWD
 	}
 
 	wts, err := session.ListGitWorktrees(r.Context(), cwd)
@@ -732,7 +732,7 @@ type WorktreeStateRequest struct {
 	Expanded       map[string]bool `json:"expanded"`
 }
 
-func HandleWorktreeStateUpdate(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleWorktreeStateUpdate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -744,7 +744,7 @@ func HandleWorktreeStateUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := loadConfig()
+	cfg := app.loadConfig()
 	if cfg.ExpandedWorktrees == nil {
 		cfg.ExpandedWorktrees = make(map[string]bool)
 	}
@@ -760,7 +760,7 @@ func HandleWorktreeStateUpdate(w http.ResponseWriter, r *http.Request) {
 		cfg.ExpandedWorktrees[path] = exp
 	}
 
-	saveConfig(cfg)
+	app.saveConfig(cfg)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -770,11 +770,11 @@ func HandleWorktreeStateUpdate(w http.ResponseWriter, r *http.Request) {
 // mode off; cheap enough to handle synchronously without caching.
 // On sampling failure, returns 0.0 with HTTP 200 (the UI treats 0 as
 // 'no data, leave indicator idle').
-func HandleSystemCPU(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleSystemCPU(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 500*time.Millisecond)
 	defer cancel()
 
-	stats, err := CPU.Sample(ctx)
+	stats, err := app.cpu.Sample(ctx)
 	if err != nil {
 		// Don't 500 — the CPU indicator is decorative. Return a zero
 		// sample so the UI clears any active state.
@@ -790,7 +790,7 @@ func HandleSystemCPU(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(stats)
 }
 
-func HandleGetClipboard(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleGetClipboard(w http.ResponseWriter, r *http.Request) {
 	// Resolve the clipboard source. When the frontend passes a ?pane=<id>
 	// query parameter, we read from that specific PTY's session-isolated
 	// shim file rather than the package-global shim path (which gets
@@ -799,8 +799,8 @@ func HandleGetClipboard(w http.ResponseWriter, r *http.Request) {
 	// behavior (system clipboard, or package-global shim if set).
 	var shimPath string
 	if pane := r.URL.Query().Get("pane"); pane != "" {
-		if PTY != nil {
-			if inst, ok := PTY.Get(pane); ok && inst != nil && inst.Pty != nil {
+		if app.pty != nil {
+			if inst, ok := app.pty.Get(pane); ok && inst != nil && inst.Pty != nil {
 				shimPath = inst.Pty.ClipboardFile()
 			}
 		}
@@ -832,13 +832,13 @@ func clipboardSource(shimPath string) string {
 	return "system"
 }
 
-func HandleGetSessionTranscript(w http.ResponseWriter, r *http.Request) {
-	ensureCoderManager()
+func (app *Server) handleGetSessionTranscript(w http.ResponseWriter, r *http.Request) {
+	app.ensureCoderManager()
 	coder := r.URL.Query().Get("coder")
 	id := r.URL.Query().Get("id")
 	cwd := r.URL.Query().Get("cwd")
 
-	c, ok := Coders.Get(coder)
+	c, ok := app.coders.Get(coder)
 	if !ok {
 		http.Error(w, "Invalid coder", http.StatusBadRequest)
 		return
@@ -866,7 +866,7 @@ func HandleGetSessionTranscript(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(messages)
 }
 
-func HandleProxy(w http.ResponseWriter, r *http.Request) {
+func handleProxy(w http.ResponseWriter, r *http.Request) {
 	target := r.URL.Query().Get("url")
 	if target == "" {
 		http.Error(w, "Missing url parameter", http.StatusBadRequest)
@@ -908,16 +908,16 @@ func HandleProxy(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
-func HandleGetVersion(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleGetVersion(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"api":            "1",
-		"version":        Version,
-		"commit":         Commit,
-		"date":           Date,
-		"build_source":   BuildSource,
-		"install_method": update.DetectInstallMethod(BuildSource),
-		"started_at":     fmt.Sprintf("%d", StartedAt),
+		"version":        app.version,
+		"commit":         app.commit,
+		"date":           app.date,
+		"build_source":   app.buildSource,
+		"install_method": update.DetectInstallMethod(app.buildSource),
+		"started_at":     fmt.Sprintf("%d", app.startedAt),
 	})
 }
 

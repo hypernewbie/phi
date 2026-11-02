@@ -1,12 +1,10 @@
-package main
+package server
 
 import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/hypernewbie/phi/internal/access"
 )
 
 func TestTranscriptSearchRouteUsesAccessAuthGate(t *testing.T) {
@@ -18,8 +16,8 @@ func TestTranscriptSearchRouteUsesAccessAuthGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/pi-bridge/transcript-search", piAPI.HandlePiBridgeTranscriptSearch)
-	protected := access.Middleware(mux)
+	mux.HandleFunc("/api/pi-bridge/transcript-search", testServer.pi.HandlePiBridgeTranscriptSearch)
+	protected := testServer.accessManager.Middleware(mux)
 	req := httptest.NewRequest(http.MethodPost, "/api/pi-bridge/transcript-search", strings.NewReader(
 		`{"pane":"unknown","query":"needle","generation":"1","initial":true}`,
 	))

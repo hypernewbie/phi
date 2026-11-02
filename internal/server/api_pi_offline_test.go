@@ -42,7 +42,7 @@ func contains(hay []string, needle string) bool {
 func TestPiOfflineFlag(t *testing.T) {
 	t.Run("off by default", func(t *testing.T) {
 		withTempConfig(t)
-		cfg := loadConfig()
+		cfg := testServer.loadConfig()
 		if cfg.PiOffline {
 			t.Fatal("PiOffline should default to false so existing configs are unaffected")
 		}
@@ -98,10 +98,10 @@ func TestPiOfflineFlag(t *testing.T) {
 
 	t.Run("persists across a save/load round trip", func(t *testing.T) {
 		withTempConfig(t)
-		cfg := loadConfig()
+		cfg := testServer.loadConfig()
 		cfg.PiOffline = true
-		saveConfig(cfg)
-		if !loadConfig().PiOffline {
+		testServer.saveConfig(cfg)
+		if !testServer.loadConfig().PiOffline {
 			t.Fatal("PiOffline did not survive save/load")
 		}
 	})

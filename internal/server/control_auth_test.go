@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"net/http"
@@ -8,7 +8,6 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/hypernewbie/phi/internal/access"
 	"github.com/hypernewbie/phi/pkg/rpc"
 	"github.com/hypernewbie/phi/pkg/ws"
 )
@@ -22,7 +21,7 @@ func TestControlAuthRejectsNoCookie(t *testing.T) {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws/control", ws.HandleControl(nil, rpc.NewManager(), nil))
-	srv := httptest.NewServer(access.Middleware(mux))
+	srv := httptest.NewServer(testServer.accessManager.Middleware(mux))
 	defer srv.Close()
 	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/control"
 	c, resp, err := websocket.DefaultDialer.Dial(url, nil)

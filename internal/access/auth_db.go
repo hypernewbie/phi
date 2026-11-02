@@ -44,8 +44,8 @@ type accessDB struct {
 	commit      func(*sql.Tx) error
 }
 
-func accessDBPath() string {
-	return filepath.Join(accessDir(), accessDBFileName)
+func (m *Manager) accessDBPath() string {
+	return filepath.Join(m.accessDir(), accessDBFileName)
 }
 
 func accessDBFileURI(path string) string {
@@ -731,19 +731,15 @@ type Config = config.Config
 // flow. The type belongs to internal/config.
 type accessAuthMigrationMarker = config.MigrationMarker
 
-// migrationStore resolves the store that holds the migration marker. Tests
-// point it at their temp store; production uses the process manager's store.
-func migrationStore() (*config.Store, error) {
-	if stateStore != nil {
-		return stateStore(), nil
-	}
-	return Default.store()
+// migrationStore resolves this manager's config persistence.
+func (m *Manager) migrationStore() (*config.Store, error) {
+	return m.store()
 }
 
 // readAccessMigrationConfig reads the stored verifier and marker for the
 // rollback guard. A read error keeps rollback refused.
-func readAccessMigrationConfig() (Config, error) {
-	store, err := migrationStore()
+func (m *Manager) readAccessMigrationConfig() (Config, error) {
+	store, err := m.migrationStore()
 	if err != nil {
 		return Config{}, err
 	}
@@ -752,8 +748,8 @@ func readAccessMigrationConfig() (Config, error) {
 
 // writeAccessMigrationConfig is the access-side seam over the store's locked
 // compare-and-swap.
-func writeAccessMigrationConfig(expected *accessAuthMigrationMarker, expectedVerifier string, next *accessAuthMigrationMarker, nextVerifier string) error {
-	store, err := migrationStore()
+func (m *Manager) writeAccessMigrationConfig(expected *accessAuthMigrationMarker, expectedVerifier string, next *accessAuthMigrationMarker, nextVerifier string) error {
+	store, err := m.migrationStore()
 	if err != nil {
 		return err
 	}
@@ -764,8 +760,12 @@ func writeAccessMigrationConfig(expected *accessAuthMigrationMarker, expectedVer
 // the Config/SQLite import has started or left any state. The caller holds the
 // returned release for the duration of the rollback.
 func AcquireRollbackGuard(store *config.Store) (func(), error) {
+	if store == nil {
+		return nil, errors.New("access config store is not installed")
+	}
+	manager := NewManager(func() *config.Store { return store }, nil)
 	lock := &accessStateLock{}
-	if !lock.tryAcquire(accessV2LockPath()) {
+	if !lock.tryAcquire(manager.accessV2LockPath()) {
 		return nil, errors.New("access state is owned by a running Phi instance")
 	}
 	release := lock.release
@@ -782,7 +782,7 @@ func AcquireRollbackGuard(store *config.Store) (func(), error) {
 		release()
 		return nil, errors.New("rollback refused after access auth migration started")
 	}
-	for _, path := range []string{accessDBPath(), accessV2StatePath()} {
+	for _, path := range []string{manager.accessDBPath(), manager.accessV2StatePath()} {
 		if _, err := os.Lstat(path); err == nil {
 			release()
 			return nil, errors.New("rollback refused because access auth state exists")
@@ -794,9 +794,9 @@ func AcquireRollbackGuard(store *config.Store) (func(), error) {
 	return release, nil
 }
 
-func importAccessLegacyState(encoded string) (accessV2ActiveState, bool, error) {
+func (m *Manager) importAccessLegacyState(encoded string) (accessV2ActiveState, bool, error) {
 	base := accessV2ActiveState{RecordBinding: accessRecordBinding(encoded), Epoch: 1, Families: []accessV2Family{}}
-	state, err := loadAccessV2StateFile(accessV2StatePath())
+	state, err := loadAccessV2StateFile(m.accessV2StatePath())
 	if err != nil {
 		return base, false, nil
 	}
@@ -829,11 +829,11 @@ func importAccessLegacyState(encoded string) (accessV2ActiveState, bool, error) 
 }
 
 func (m *Manager) openMigratedAccessDB() (accessDBState, *accessDB, error) {
-	cfg, err := readAccessMigrationConfig()
+	cfg, err := m.readAccessMigrationConfig()
 	if err != nil {
 		return accessDBState{}, nil, err
 	}
-	path := accessDBPath()
+	path := m.accessDBPath()
 	_, statErr := os.Lstat(path)
 	dbExists := statErr == nil
 	if statErr != nil && !os.IsNotExist(statErr) {
@@ -850,7 +850,7 @@ func (m *Manager) openMigratedAccessDB() (accessDBState, *accessDB, error) {
 		if err != nil {
 			return accessDBState{}, nil, err
 		}
-		if err := writeAccessMigrationConfig(nil, cfg.AccessPasswordHash, marker, cfg.AccessPasswordHash); err != nil {
+		if err := m.writeAccessMigrationConfig(nil, cfg.AccessPasswordHash, marker, cfg.AccessPasswordHash); err != nil {
 			return accessDBState{}, nil, err
 		}
 		cfg.AccessAuthMigration = marker
@@ -876,7 +876,7 @@ func (m *Manager) openMigratedAccessDB() (accessDBState, *accessDB, error) {
 		}
 		var state accessDBState
 		if pristine {
-			active, available, err := importAccessLegacyState(cfg.AccessPasswordHash)
+			active, available, err := m.importAccessLegacyState(cfg.AccessPasswordHash)
 			if err != nil {
 				store.close()
 				return accessDBState{}, nil, err
@@ -908,11 +908,11 @@ func (m *Manager) openMigratedAccessDB() (accessDBState, *accessDB, error) {
 		}
 		complete := *cfg.AccessAuthMigration
 		complete.State = "complete"
-		if err := writeAccessMigrationConfig(cfg.AccessAuthMigration, cfg.AccessPasswordHash, &complete, ""); err != nil {
+		if err := m.writeAccessMigrationConfig(cfg.AccessAuthMigration, cfg.AccessPasswordHash, &complete, ""); err != nil {
 			store.close()
 			return accessDBState{}, nil, err
 		}
-		verifiedConfig, err := readAccessMigrationConfig()
+		verifiedConfig, err := m.readAccessMigrationConfig()
 		if err != nil || verifiedConfig.AccessPasswordHash != "" || !config.SameMigrationMarker(verifiedConfig.AccessAuthMigration, &complete) {
 			store.close()
 			if err == nil {
@@ -920,7 +920,7 @@ func (m *Manager) openMigratedAccessDB() (accessDBState, *accessDB, error) {
 			}
 			return accessDBState{}, nil, err
 		}
-		removeLegacyAccessState()
+		m.removeLegacyAccessState()
 		return state, store, nil
 	case "complete":
 		if cfg.AccessPasswordHash != "" {
@@ -940,11 +940,11 @@ func (m *Manager) openMigratedAccessDB() (accessDBState, *accessDB, error) {
 			return accessDBState{}, nil, err
 		}
 		marker := *cfg.AccessAuthMigration
-		if err := writeAccessMigrationConfig(&marker, "", &marker, ""); err != nil {
+		if err := m.writeAccessMigrationConfig(&marker, "", &marker, ""); err != nil {
 			store.close()
 			return accessDBState{}, nil, err
 		}
-		verifiedConfig, err := readAccessMigrationConfig()
+		verifiedConfig, err := m.readAccessMigrationConfig()
 		if err != nil || verifiedConfig.AccessPasswordHash != "" || !config.SameMigrationMarker(verifiedConfig.AccessAuthMigration, &marker) {
 			store.close()
 			if err == nil {
@@ -952,15 +952,15 @@ func (m *Manager) openMigratedAccessDB() (accessDBState, *accessDB, error) {
 			}
 			return accessDBState{}, nil, err
 		}
-		removeLegacyAccessState()
+		m.removeLegacyAccessState()
 		return state, store, nil
 	default:
 		return accessDBState{}, nil, errors.New("invalid auth migration marker state")
 	}
 }
 
-func removeLegacyAccessState() {
-	if err := os.Remove(accessV2StatePath()); err != nil && !os.IsNotExist(err) {
+func (m *Manager) removeLegacyAccessState() {
+	if err := os.Remove(m.accessV2StatePath()); err != nil && !os.IsNotExist(err) {
 		log.Printf("[auth] could not remove legacy auth state after verified migration")
 	}
 }

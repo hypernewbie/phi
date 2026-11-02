@@ -35,15 +35,15 @@ func (w *attachmentDeadlineRecorder) SetReadDeadline(time.Time) error {
 
 func withAttachmentTestGlobals(t *testing.T) {
 	t.Helper()
-	oldStore, oldManager := Default, ptyManager
+	oldStore, oldManager := testAPI.Store, ptyManager
 	store, err := OpenAttachmentStoreAt(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	Default = store
+	testAPI.Store = store
 	ptyManager = pty.NewManager()
 	t.Cleanup(func() {
-		Default, ptyManager = oldStore, oldManager
+		testAPI.Store, ptyManager = oldStore, oldManager
 		_ = store.Close()
 	})
 }
@@ -107,7 +107,7 @@ func TestHandleAttachmentsV2PutAndStatus(t *testing.T) {
 	id := uuid.NewString()
 	png := testPNG(t, 2, 2)
 	body, contentType := attachmentMultipartBody(t, pane, "screen.png", "image/png", png)
-	server := httptest.NewServer(http.HandlerFunc(HandleV2Item))
+	server := httptest.NewServer(http.HandlerFunc(testAPI.HandleV2Item))
 	defer server.Close()
 	req, _ := http.NewRequest(http.MethodPut, server.URL+"/api/attachments/v2/items/"+id, body)
 	req.Header.Set("Content-Type", contentType)
@@ -149,7 +149,7 @@ func TestHandleAttachmentsV2PutAndStatus(t *testing.T) {
 func TestHandleAttachmentsV2RejectsForgedImageAndForeignPane(t *testing.T) {
 	withAttachmentTestGlobals(t)
 	pane := withLiveAttachmentPi(t)
-	server := httptest.NewServer(http.HandlerFunc(HandleV2Item))
+	server := httptest.NewServer(http.HandlerFunc(testAPI.HandleV2Item))
 	defer server.Close()
 	for _, tc := range []struct {
 		name string
@@ -186,7 +186,7 @@ func TestHandleAttachmentsV2RequiresDeadlineSupport(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPut, "/api/attachments/v2/items/"+id, nil)
 	req.Host = "example.test"
 	req.Header.Set("Origin", "http://example.test")
-	HandleV2Item(w, req)
+	testAPI.HandleV2Item(w, req)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d want=%d", w.Code, http.StatusServiceUnavailable)
 	}
@@ -233,7 +233,7 @@ func TestAttachmentSameOriginTLSProxyPolicy(t *testing.T) {
 func TestAttachmentV2DeadlinesClearForReusedConnection(t *testing.T) {
 	withAttachmentTestGlobals(t)
 	pane := withLiveAttachmentPi(t)
-	server := httptest.NewServer(http.HandlerFunc(HandleV2Item))
+	server := httptest.NewServer(http.HandlerFunc(testAPI.HandleV2Item))
 	defer server.Close()
 	client := server.Client()
 	id := uuid.NewString()
@@ -268,10 +268,10 @@ func TestAttachmentV2DeadlinesClearForReusedConnection(t *testing.T) {
 func TestAttachmentV2StalledUploadTimesOutAndDoesNotHoldStatus(t *testing.T) {
 	withAttachmentTestGlobals(t)
 	pane := withLiveAttachmentPi(t)
-	oldTimeout := attachmentPutReadTimeout
-	attachmentPutReadTimeout = 100 * time.Millisecond
-	t.Cleanup(func() { attachmentPutReadTimeout = oldTimeout })
-	server := httptest.NewServer(http.HandlerFunc(HandleV2Item))
+	oldTimeout := testAPI.attachmentPutReadTimeout
+	testAPI.attachmentPutReadTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { testAPI.attachmentPutReadTimeout = oldTimeout })
+	server := httptest.NewServer(http.HandlerFunc(testAPI.HandleV2Item))
 	defer server.Close()
 	pr, pw := io.Pipe()
 	mw := multipart.NewWriter(pw)
@@ -312,7 +312,7 @@ func TestAttachmentV2StalledUploadTimesOutAndDoesNotHoldStatus(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("stalled upload did not time out")
 	}
-	if got := Default.ItemStatus(id, pane); got.State != "missing" {
+	if got := testAPI.Store.ItemStatus(id, pane); got.State != "missing" {
 		t.Fatalf("stalled upload status=%+v", got)
 	}
 }

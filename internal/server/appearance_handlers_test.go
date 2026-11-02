@@ -22,13 +22,13 @@ func TestHandleAppearanceUpdate_PersistsFields(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/config/appearance", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	HandleAppearanceUpdate(w, req)
+	testServer.handleAppearanceUpdate(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
 	}
 
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	if cfg.UIFontFamily != "Inter" {
 		t.Errorf("UIFontFamily: got %q want %q", cfg.UIFontFamily, "Inter")
 	}
@@ -67,23 +67,23 @@ func TestHandleAppearanceUpdate_PersistsFields(t *testing.T) {
 func TestHandleAppearanceUpdate_PartialUpdate(t *testing.T) {
 	withTempConfig(t)
 	// Seed: all three set.
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	cfg.UIFontFamily = "SeedFamily"
 	cfg.UIFontSize = 18
 	cfg.TerminalFontFamily = "SeedTerm"
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 
 	// POST only one field.
 	req := httptest.NewRequest(http.MethodPost, "/api/config/appearance",
 		strings.NewReader(`{"ui_font_size":13}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	HandleAppearanceUpdate(w, req)
+	testServer.handleAppearanceUpdate(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: %d", w.Code)
 	}
 
-	cfg2 := loadConfig()
+	cfg2 := testServer.loadConfig()
 	if cfg2.UIFontFamily != "SeedFamily" {
 		t.Errorf("UIFontFamily should be untouched: got %q", cfg2.UIFontFamily)
 	}
@@ -119,11 +119,11 @@ func TestHandleAppearanceUpdate_ClampsFontSize(t *testing.T) {
 				strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
-			HandleAppearanceUpdate(w, req)
+			testServer.handleAppearanceUpdate(w, req)
 			if w.Code != http.StatusOK {
 				t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
 			}
-			cfg := loadConfig()
+			cfg := testServer.loadConfig()
 			if cfg.UIFontSize != tc.want {
 				t.Errorf("size %d: got %d want %d", tc.in, cfg.UIFontSize, tc.want)
 			}
@@ -155,11 +155,11 @@ func TestHandleAppearanceUpdate_ClampsTerminalFontSize(t *testing.T) {
 				strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
-			HandleAppearanceUpdate(w, req)
+			testServer.handleAppearanceUpdate(w, req)
 			if w.Code != http.StatusOK {
 				t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
 			}
-			cfg := loadConfig()
+			cfg := testServer.loadConfig()
 			if cfg.TerminalFontSize != tc.want {
 				t.Errorf("size %d: got %d want %d", tc.in, cfg.TerminalFontSize, tc.want)
 			}
@@ -191,11 +191,11 @@ func TestHandleAppearanceUpdate_HostnameOverride(t *testing.T) {
 				strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
-			HandleAppearanceUpdate(w, req)
+			testServer.handleAppearanceUpdate(w, req)
 			if w.Code != http.StatusOK {
 				t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
 			}
-			if cfg := loadConfig(); cfg.HostnameOverride != tc.want {
+			if cfg := testServer.loadConfig(); cfg.HostnameOverride != tc.want {
 				t.Errorf("in %q: got %q want %q", tc.in, cfg.HostnameOverride, tc.want)
 			}
 		})
@@ -204,9 +204,9 @@ func TestHandleAppearanceUpdate_HostnameOverride(t *testing.T) {
 
 func TestHandleAppearanceUpdate_HostnameOverrideRejects(t *testing.T) {
 	withTempConfig(t)
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	cfg.HostnameOverride = "example.com:8080"
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 	// Only things that break the label's role as a DISPLAY string are
 	// rejected: too long, control characters. Hostname-shaped garbage
 	// is fine — the label never dials anything.
@@ -217,12 +217,12 @@ func TestHandleAppearanceUpdate_HostnameOverrideRejects(t *testing.T) {
 			strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
-		HandleAppearanceUpdate(w, req)
+		testServer.handleAppearanceUpdate(w, req)
 		if w.Code != http.StatusOK {
 			t.Fatalf("in %q: status %d", bad, w.Code)
 		}
 		// Rejected input leaves the stored value unchanged.
-		if got := loadConfig().HostnameOverride; got != "example.com:8080" {
+		if got := testServer.loadConfig().HostnameOverride; got != "example.com:8080" {
 			t.Errorf("in %q: stored value changed to %q", bad, got)
 		}
 	}
@@ -249,11 +249,11 @@ func TestHandleAppearanceUpdate_ClampsMobileScrollback(t *testing.T) {
 				strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
-			HandleAppearanceUpdate(w, req)
+			testServer.handleAppearanceUpdate(w, req)
 			if w.Code != http.StatusOK {
 				t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
 			}
-			cfg := loadConfig()
+			cfg := testServer.loadConfig()
 			if cfg.MobileScrollbackRows != tc.want {
 				t.Errorf("rows %d: got %d want %d", tc.in, cfg.MobileScrollbackRows, tc.want)
 			}
@@ -267,7 +267,7 @@ func TestHandleAppearanceUpdate_RequiresPost(t *testing.T) {
 	for _, method := range []string{http.MethodGet, http.MethodDelete, http.MethodPut} {
 		req := httptest.NewRequest(method, "/api/config/appearance", nil)
 		w := httptest.NewRecorder()
-		HandleAppearanceUpdate(w, req)
+		testServer.handleAppearanceUpdate(w, req)
 		if w.Code != http.StatusMethodNotAllowed {
 			t.Errorf("%s: got %d want 405", method, w.Code)
 		}
@@ -282,7 +282,7 @@ func TestHandleAppearanceUpdate_RejectsGarbageBody(t *testing.T) {
 		strings.NewReader(`{not json`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	HandleAppearanceUpdate(w, req)
+	testServer.handleAppearanceUpdate(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("garbage body: got %d want 400", w.Code)
 	}
@@ -293,16 +293,16 @@ func TestHandleAppearanceUpdate_RejectsGarbageBody(t *testing.T) {
 // them on open.
 func TestHandleConfig_IncludesAppearanceFields(t *testing.T) {
 	withTempConfig(t)
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	cfg.UIFontFamily = "Inter"
 	cfg.UIFontSize = 15
 	cfg.TerminalFontFamily = "JetBrains Mono"
 	cfg.TerminalFontSize = 20
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	w := httptest.NewRecorder()
-	HandleConfig(w, req)
+	testServer.handleConfig(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: %d", w.Code)
 	}
@@ -378,7 +378,7 @@ func TestReportedHostname(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := reportedHostname(config.Config{HostnameOverride: tc.override}); got != tc.want {
+			if got := ReportedHostname(config.Config{HostnameOverride: tc.override}); got != tc.want {
 				t.Errorf("override %q: got %q want %q", tc.override, got, tc.want)
 			}
 		})
@@ -387,12 +387,12 @@ func TestReportedHostname(t *testing.T) {
 
 func TestHandleConfig_ReportsOverrideHostname(t *testing.T) {
 	withTempConfig(t)
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	cfg.HostnameOverride = "dusty_potato"
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	w := httptest.NewRecorder()
-	HandleConfig(w, req)
+	testServer.handleConfig(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: %d", w.Code)
 	}

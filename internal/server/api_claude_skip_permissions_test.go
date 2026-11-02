@@ -7,13 +7,13 @@ import (
 )
 
 // Mirrors api_pi_offline_test.go shape: ResolveLaunch is the real entry
-// point HandleSpawnTerminal calls, so these tests exercise the actual
+// point handleSpawnTerminal calls, so these tests exercise the actual
 // flag-placement code rather than a test-local copy. Same scope discipline
 // as pi -- the flag is claude's own, and other coders would reject it.
 func TestClaudeDangerouslySkipPermissionsFlag(t *testing.T) {
 	t.Run("off by default", func(t *testing.T) {
 		withTempConfig(t)
-		cfg := loadConfig()
+		cfg := testServer.loadConfig()
 		if cfg.ClaudeDangerouslySkipPermissions {
 			t.Fatal("ClaudeDangerouslySkipPermissions should default to false so existing configs are unaffected")
 		}
@@ -70,10 +70,10 @@ func TestClaudeDangerouslySkipPermissionsFlag(t *testing.T) {
 
 	t.Run("persists across a save/load round trip", func(t *testing.T) {
 		withTempConfig(t)
-		cfg := loadConfig()
+		cfg := testServer.loadConfig()
 		cfg.ClaudeDangerouslySkipPermissions = true
-		saveConfig(cfg)
-		if !loadConfig().ClaudeDangerouslySkipPermissions {
+		testServer.saveConfig(cfg)
+		if !testServer.loadConfig().ClaudeDangerouslySkipPermissions {
 			t.Fatal("ClaudeDangerouslySkipPermissions did not survive save/load")
 		}
 	})

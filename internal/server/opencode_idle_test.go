@@ -265,14 +265,14 @@ func TestOpenCodeIdleStopAPI(t *testing.T) {
 	withTempConfigAt(t, filepath.Join(dir, "config.toml"))
 
 	// Save initial config
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	cfg.OpenCodeIdleStopMinutes = 0
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 
 	// 1. Method Not Allowed
 	req := httptest.NewRequest(http.MethodGet, "/api/config/opencode-idle-stop", nil)
 	w := httptest.NewRecorder()
-	HandleOpenCodeIdleStop(w, req)
+	testServer.handleOpenCodeIdleStop(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", w.Code)
 	}
@@ -280,7 +280,7 @@ func TestOpenCodeIdleStopAPI(t *testing.T) {
 	// 2. Bad JSON
 	req = httptest.NewRequest(http.MethodPost, "/api/config/opencode-idle-stop", bytes.NewBufferString("invalid json"))
 	w = httptest.NewRecorder()
-	HandleOpenCodeIdleStop(w, req)
+	testServer.handleOpenCodeIdleStop(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for bad json, got %d", w.Code)
 	}
@@ -302,7 +302,7 @@ func TestOpenCodeIdleStopAPI(t *testing.T) {
 		body, _ := json.Marshal(map[string]int{"minutes": ct.input})
 		req = httptest.NewRequest(http.MethodPost, "/api/config/opencode-idle-stop", bytes.NewReader(body))
 		w = httptest.NewRecorder()
-		HandleOpenCodeIdleStop(w, req)
+		testServer.handleOpenCodeIdleStop(w, req)
 		if w.Code != http.StatusOK {
 			t.Fatalf("input %d: expected 200, got %d", ct.input, w.Code)
 		}
@@ -315,7 +315,7 @@ func TestOpenCodeIdleStopAPI(t *testing.T) {
 			t.Errorf("input %d: got %d, want %d", ct.input, resp["opencode_idle_stop_minutes"], ct.want)
 		}
 
-		saved := loadConfig()
+		saved := testServer.loadConfig()
 		if saved.OpenCodeIdleStopMinutes != ct.want {
 			t.Errorf("saved config input %d: got %d, want %d", ct.input, saved.OpenCodeIdleStopMinutes, ct.want)
 		}
@@ -324,7 +324,7 @@ func TestOpenCodeIdleStopAPI(t *testing.T) {
 	// 4. Verify /api/config includes opencode_idle_stop_minutes
 	req = httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	w = httptest.NewRecorder()
-	HandleConfig(w, req)
+	testServer.handleConfig(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /api/config: expected 200, got %d", w.Code)
 	}

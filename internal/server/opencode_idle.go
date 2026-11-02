@@ -41,48 +41,48 @@ type openCodeIdleWatcher struct {
 	isShuttingDown   func() bool
 }
 
-func newOpenCodeIdleWatcher() *openCodeIdleWatcher {
+func (app *Server) newOpenCodeIdleWatcher() *openCodeIdleWatcher {
 	return &openCodeIdleWatcher{
 		stopCh:  make(chan struct{}),
 		nowFunc: time.Now,
 		statusFunc: func(ctx context.Context) (bool, bool, error) {
-			ensureCoderManager()
-			c, ok := Coders.Get("opencode")
+			app.ensureCoderManager()
+			c, ok := app.coders.Get("opencode")
 			if !ok || c.SessionSource != "opencode_v2" || c.OpenCodeMode == "legacy" {
 				return false, false, nil
 			}
-			running, err := getCachedOpenCodeStatus(ctx, c)
+			running, err := app.getCachedOpenCodeStatus(ctx, c)
 			return true, running, err
 		},
 		stopFunc: func(ctx context.Context) error {
-			ensureCoderManager()
-			c, ok := Coders.Get("opencode")
+			app.ensureCoderManager()
+			c, ok := app.coders.Get("opencode")
 			if !ok || c.SessionSource != "opencode_v2" || c.OpenCodeMode == "legacy" {
 				return nil
 			}
 			ctxTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
 			defer cancel()
 			_, err := coders.OpenCodeService(ctxTimeout, c, "stop")
-			invalidateOpenCodeServiceCache()
+			app.invalidateOpenCodeServiceCache()
 			return err
 		},
 		lastActivityFunc: func() time.Time {
-			if PTY == nil {
+			if app.pty == nil {
 				return time.Time{}
 			}
-			return PTY.LastOpenCodeActivity()
+			return app.pty.LastOpenCodeActivity()
 		},
 		activeTabsCount: func() int {
-			if PTY == nil {
+			if app.pty == nil {
 				return 0
 			}
-			return PTY.ActiveOpenCodeTabsCount()
+			return app.pty.ActiveOpenCodeTabsCount()
 		},
 		idleMinutesFunc: func() int {
-			return loadConfig().OpenCodeIdleStopMinutes
+			return app.loadConfig().OpenCodeIdleStopMinutes
 		},
 		isShuttingDown: func() bool {
-			return ShuttingDown.Load() || (PTY != nil && PTY.IsDraining())
+			return app.shuttingDown.Load() || (app.pty != nil && app.pty.IsDraining())
 		},
 	}
 }
@@ -215,24 +215,21 @@ func (w *openCodeIdleWatcher) stop() {
 	close(w.stopCh)
 }
 
-var defaultOpenCodeIdleWatcher *openCodeIdleWatcher
-var openCodeIdleWatcherMu sync.Mutex
-
-func StartOpenCodeIdleWatcher() {
-	openCodeIdleWatcherMu.Lock()
-	defer openCodeIdleWatcherMu.Unlock()
-	if defaultOpenCodeIdleWatcher != nil {
+func (app *Server) startOpenCodeIdleWatcher() {
+	app.openCodeIdleWatcherMu.Lock()
+	defer app.openCodeIdleWatcherMu.Unlock()
+	if app.defaultOpenCodeIdleWatcher != nil {
 		return
 	}
-	defaultOpenCodeIdleWatcher = newOpenCodeIdleWatcher()
-	defaultOpenCodeIdleWatcher.start(60 * time.Second)
+	app.defaultOpenCodeIdleWatcher = app.newOpenCodeIdleWatcher()
+	app.defaultOpenCodeIdleWatcher.start(60 * time.Second)
 }
 
-func StopOpenCodeIdleWatcher() {
-	openCodeIdleWatcherMu.Lock()
-	defer openCodeIdleWatcherMu.Unlock()
-	if defaultOpenCodeIdleWatcher != nil {
-		defaultOpenCodeIdleWatcher.stop()
-		defaultOpenCodeIdleWatcher = nil
+func (app *Server) stopOpenCodeIdleWatcher() {
+	app.openCodeIdleWatcherMu.Lock()
+	defer app.openCodeIdleWatcherMu.Unlock()
+	if app.defaultOpenCodeIdleWatcher != nil {
+		app.defaultOpenCodeIdleWatcher.stop()
+		app.defaultOpenCodeIdleWatcher = nil
 	}
 }

@@ -15,17 +15,17 @@ import (
 func TestPiBridgeNoInjectSetting(t *testing.T) {
 	t.Run("off by default", func(t *testing.T) {
 		withTempConfig(t)
-		if loadConfig().PiBridgeNoInject {
+		if testServer.loadConfig().PiBridgeNoInject {
 			t.Fatal("PiBridgeNoInject should default to false so existing configs inject as before")
 		}
 	})
 
 	t.Run("persists across a save/load round trip", func(t *testing.T) {
 		withTempConfig(t)
-		cfg := loadConfig()
+		cfg := testServer.loadConfig()
 		cfg.PiBridgeNoInject = true
-		saveConfig(cfg)
-		if !loadConfig().PiBridgeNoInject {
+		testServer.saveConfig(cfg)
+		if !testServer.loadConfig().PiBridgeNoInject {
 			t.Fatal("PiBridgeNoInject did not survive save/load")
 		}
 	})
@@ -34,11 +34,11 @@ func TestPiBridgeNoInjectSetting(t *testing.T) {
 		withTempConfig(t)
 		req := httptest.NewRequest(http.MethodPost, "/api/config/pi-bridge-no-inject", strings.NewReader(`{"enabled":true}`))
 		w := httptest.NewRecorder()
-		HandlePiBridgeNoInject(w, req)
+		testServer.handlePiBridgeNoInject(w, req)
 		if w.Code != http.StatusOK {
 			t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
 		}
-		if !loadConfig().PiBridgeNoInject {
+		if !testServer.loadConfig().PiBridgeNoInject {
 			t.Fatal("endpoint did not persist the flag")
 		}
 		var body map[string]bool
@@ -52,16 +52,16 @@ func TestPiBridgeNoInjectSetting(t *testing.T) {
 
 	t.Run("endpoint turns the field off again", func(t *testing.T) {
 		withTempConfig(t)
-		cfg := loadConfig()
+		cfg := testServer.loadConfig()
 		cfg.PiBridgeNoInject = true
-		saveConfig(cfg)
+		testServer.saveConfig(cfg)
 		req := httptest.NewRequest(http.MethodPost, "/api/config/pi-bridge-no-inject", strings.NewReader(`{"enabled":false}`))
 		w := httptest.NewRecorder()
-		HandlePiBridgeNoInject(w, req)
+		testServer.handlePiBridgeNoInject(w, req)
 		if w.Code != http.StatusOK {
 			t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
 		}
-		if loadConfig().PiBridgeNoInject {
+		if testServer.loadConfig().PiBridgeNoInject {
 			t.Fatal("endpoint did not clear the flag")
 		}
 	})
@@ -70,7 +70,7 @@ func TestPiBridgeNoInjectSetting(t *testing.T) {
 		withTempConfig(t)
 		req := httptest.NewRequest(http.MethodGet, "/api/config/pi-bridge-no-inject", nil)
 		w := httptest.NewRecorder()
-		HandlePiBridgeNoInject(w, req)
+		testServer.handlePiBridgeNoInject(w, req)
 		if w.Code != http.StatusMethodNotAllowed {
 			t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
 		}

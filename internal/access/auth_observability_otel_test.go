@@ -79,14 +79,14 @@ func TestAccessObservabilitySpansCarryNoCredentials(t *testing.T) {
 	var tokens []string
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/auth/status", HandleAccessAuthStatus)
-	mux.HandleFunc("/api/auth/login", HandleAccessAuthLogin)
-	mux.HandleFunc("/api/auth/password", HandleAccessPassword)
-	mux.HandleFunc("/api/auth/v2/status", HandleAccessV2Status)
-	mux.HandleFunc("/api/auth/v2/login", HandleAccessV2Login)
-	mux.HandleFunc("/api/auth/v2/password", HandleAccessV2Password)
-	mux.HandleFunc("/api/auth/v2/refresh", HandleAccessV2Refresh)
-	mux.HandleFunc("/api/auth/v2/logout", HandleAccessV2Logout)
+	mux.HandleFunc("/api/auth/status", Default.HandleAccessAuthStatus)
+	mux.HandleFunc("/api/auth/login", Default.HandleAccessAuthLogin)
+	mux.HandleFunc("/api/auth/password", Default.HandleAccessPassword)
+	mux.HandleFunc("/api/auth/v2/status", Default.HandleAccessV2Status)
+	mux.HandleFunc("/api/auth/v2/login", Default.HandleAccessV2Login)
+	mux.HandleFunc("/api/auth/v2/password", Default.HandleAccessV2Password)
+	mux.HandleFunc("/api/auth/v2/refresh", Default.HandleAccessV2Refresh)
+	mux.HandleFunc("/api/auth/v2/logout", Default.HandleAccessV2Logout)
 	mux.HandleFunc("/api/config", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -100,7 +100,7 @@ func TestAccessObservabilitySpansCarryNoCredentials(t *testing.T) {
 		})
 	}
 	// Same order as main.go.
-	server := httptest.NewServer(obs.WrapHTTP(Middleware(mux)))
+	server := httptest.NewServer(obs.WrapHTTP(Default.Middleware(mux)))
 	defer server.Close()
 
 	post := func(path, bearer, body string) *http.Response {

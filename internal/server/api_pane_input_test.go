@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hypernewbie/phi/internal/access"
 	"github.com/hypernewbie/phi/pkg/pty"
 )
 
@@ -23,10 +22,10 @@ func withPaneManager(t *testing.T) *pty.Manager {
 	t.Helper()
 	withTempConfig(t)
 	m := pty.NewManager()
-	orig := PTY
-	PTY = m
+	orig := testServer.pty
+	testServer.pty = m
 	t.Cleanup(func() {
-		PTY = orig
+		testServer.pty = orig
 		m.Shutdown(testPaneShutdownGrace)
 	})
 	return m
@@ -58,7 +57,7 @@ func TestPaneInput_PaneNotFound(t *testing.T) {
 		strings.NewReader(`{"text":"hi"}`),
 	)
 	w := httptest.NewRecorder()
-	HandleFallback(w, req)
+	testServer.handleFallback(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status: want 404, got %d — %s", w.Code, w.Body.String())
 	}
@@ -72,7 +71,7 @@ func TestPaneInput_BadBody(t *testing.T) {
 		strings.NewReader(`{bad json`),
 	)
 	w := httptest.NewRecorder()
-	HandleFallback(w, req)
+	testServer.handleFallback(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status: want 400, got %d — %s", w.Code, w.Body.String())
 	}
@@ -88,7 +87,7 @@ func TestPaneInput_RequiresAccessAuth(t *testing.T) {
 		t.Fatalf("configure: %v", err)
 	}
 
-	guarded := access.Middleware(http.HandlerFunc(HandleFallback))
+	guarded := testServer.accessManager.Middleware(http.HandlerFunc(testServer.handleFallback))
 
 	// No cookie: the gate rejects before the handler runs.
 	req := httptest.NewRequest(
@@ -106,7 +105,7 @@ func TestPaneInput_RequiresAccessAuth(t *testing.T) {
 	// request passes the gate and reaches the handler (404: pane doesn't
 	// exist, which proves it got past auth).
 	statusW := httptest.NewRecorder()
-	access.HandleAccessAuthStatus(statusW, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+	testServer.accessManager.HandleAccessAuthStatus(statusW, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
 	var status map[string]any
 	if err := json.Unmarshal(statusW.Body.Bytes(), &status); err != nil {
 		t.Fatal(err)
@@ -117,7 +116,7 @@ func TestPaneInput_RequiresAccessAuth(t *testing.T) {
 	loginReq := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(loginBody))
 	loginReq.RemoteAddr = "192.0.2.20:12345"
 	loginW := httptest.NewRecorder()
-	access.HandleAccessAuthLogin(loginW, loginReq)
+	testServer.accessManager.HandleAccessAuthLogin(loginW, loginReq)
 	if loginW.Code != http.StatusOK {
 		t.Fatalf("login: got %d body=%s", loginW.Code, loginW.Body.String())
 	}
@@ -154,7 +153,7 @@ func TestPaneInput_WritesToPty(t *testing.T) {
 		strings.NewReader(`{"text":"hello-remote"}`),
 	)
 	w := httptest.NewRecorder()
-	HandleFallback(w, req)
+	testServer.handleFallback(w, req)
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("status: want 204, got %d — %s", w.Code, w.Body.String())
 	}

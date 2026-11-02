@@ -1,4 +1,4 @@
-package server
+package main
 
 import (
 	"bytes"
@@ -43,7 +43,7 @@ func TestResolveLevel_EnvFallback(t *testing.T) {
 }
 
 // TestInitLogging_BridgesStdlibLog verifies log.Printf lines flow through
-// the slog handler once InitLogging has installed the bridge, and that the
+// the slog handler once initLogging has installed the bridge, and that the
 // configured level is honored (a Debug-level bridge line is suppressed by
 // an Info-level handler).
 func TestInitLogging_BridgesStdlibLog(t *testing.T) {
@@ -73,7 +73,7 @@ func TestInitLogging_BridgesStdlibLog(t *testing.T) {
 	}
 }
 
-// TestInitLogging_DebugGate confirms InitLogging wires the requested level
+// TestInitLogging_DebugGate confirms initLogging wires the requested level
 // into the handler: an Info-level init suppresses Debug records.
 func TestInitLogging_DebugGate(t *testing.T) {
 	origDefault := slog.Default()
@@ -85,7 +85,7 @@ func TestInitLogging_DebugGate(t *testing.T) {
 		log.SetFlags(origFlags)
 	})
 
-	// InitLogging always targets os.Stderr, so exercise the same
+	// initLogging always targets os.Stderr, so exercise the same
 	// construction it does and check the resulting handler's gating
 	// directly rather than trying to swap os.Stderr.
 	ctx := context.Background()

@@ -15,26 +15,26 @@ import (
 func setupMockOpenCode(t *testing.T, serviceStatus string) {
 	t.Helper()
 	withTempConfig(t)
-	oldCoders, oldPTY := Coders, PTY
+	oldCoders, oldPTY := testServer.coders, testServer.pty
 	t.Cleanup(func() {
-		Coders = oldCoders
-		PTY = oldPTY
-		invalidateOpenCodeServiceCache()
+		testServer.coders = oldCoders
+		testServer.pty = oldPTY
+		testServer.invalidateOpenCodeServiceCache()
 	})
-	Coders = coders.NewManager()
-	PTY = pty.NewManager()
-	c, _ := Coders.Get("opencode")
+	testServer.coders = coders.NewManager()
+	testServer.pty = pty.NewManager()
+	c, _ := testServer.coders.Get("opencode")
 	c.Command = os.Args[0]
 	c.Env = map[string]string{"PHI_TEST_ROOT_OC_SERVICE": serviceStatus}
-	Coders.Add(c)
-	invalidateOpenCodeServiceCache()
+	testServer.coders.Add(c)
+	testServer.invalidateOpenCodeServiceCache()
 }
 
 func TestOpenCodeServiceStatusRunning(t *testing.T) {
 	setupMockOpenCode(t, "http://127.0.0.1:49374")
 
 	w := httptest.NewRecorder()
-	HandleOpenCodeService(w, httptest.NewRequest(http.MethodGet, "/api/opencode/service", nil))
+	testServer.handleOpenCodeService(w, httptest.NewRequest(http.MethodGet, "/api/opencode/service", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -57,7 +57,7 @@ func TestOpenCodeServiceStatusStopped(t *testing.T) {
 	setupMockOpenCode(t, "stopped")
 
 	w := httptest.NewRecorder()
-	HandleOpenCodeService(w, httptest.NewRequest(http.MethodGet, "/api/opencode/service", nil))
+	testServer.handleOpenCodeService(w, httptest.NewRequest(http.MethodGet, "/api/opencode/service", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -77,7 +77,7 @@ func TestOpenCodeServiceStopConflictWhenTabsActive(t *testing.T) {
 	setupMockOpenCode(t, "http://127.0.0.1:49374")
 
 	// Inject a simulated active OpenCode instance into PTY
-	PTY.AddInstanceForTesting(&pty.PTYInstance{
+	testServer.pty.AddInstanceForTesting(&pty.PTYInstance{
 		ID:        "test-pane-1",
 		Coder:     "opencode",
 		SessionID: "sess-1",
@@ -85,7 +85,7 @@ func TestOpenCodeServiceStopConflictWhenTabsActive(t *testing.T) {
 	})
 
 	w := httptest.NewRecorder()
-	HandleOpenCodeServiceStop(w, httptest.NewRequest(http.MethodPost, "/api/opencode/service/stop", strings.NewReader(`{}`)))
+	testServer.handleOpenCodeServiceStop(w, httptest.NewRequest(http.MethodPost, "/api/opencode/service/stop", strings.NewReader(`{}`)))
 	if w.Code != http.StatusConflict {
 		t.Fatalf("expected 409 Conflict, got %d: %s", w.Code, w.Body.String())
 	}
@@ -102,7 +102,7 @@ func TestOpenCodeServiceStopConflictWhenTabsActive(t *testing.T) {
 
 	// Now with force: true, it should succeed
 	wForce := httptest.NewRecorder()
-	HandleOpenCodeServiceStop(wForce, httptest.NewRequest(http.MethodPost, "/api/opencode/service/stop", strings.NewReader(`{"force":true}`)))
+	testServer.handleOpenCodeServiceStop(wForce, httptest.NewRequest(http.MethodPost, "/api/opencode/service/stop", strings.NewReader(`{"force":true}`)))
 	if wForce.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK on force, got %d: %s", wForce.Code, wForce.Body.String())
 	}
@@ -119,7 +119,7 @@ func TestOpenCodeServiceStopWhenNoTabs(t *testing.T) {
 	setupMockOpenCode(t, "http://127.0.0.1:49374")
 
 	w := httptest.NewRecorder()
-	HandleOpenCodeServiceStop(w, httptest.NewRequest(http.MethodPost, "/api/opencode/service/stop", strings.NewReader(`{}`)))
+	testServer.handleOpenCodeServiceStop(w, httptest.NewRequest(http.MethodPost, "/api/opencode/service/stop", strings.NewReader(`{}`)))
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
 	}
@@ -134,16 +134,16 @@ func TestOpenCodeServiceStopWhenNoTabs(t *testing.T) {
 
 func TestOpenCodeServiceUnsupportedOnLegacy(t *testing.T) {
 	withTempConfig(t)
-	oldCoders := Coders
+	oldCoders := testServer.coders
 	t.Cleanup(func() {
-		Coders = oldCoders
-		invalidateOpenCodeServiceCache()
+		testServer.coders = oldCoders
+		testServer.invalidateOpenCodeServiceCache()
 	})
-	Coders = coders.NewManagerWithOptions(coders.BuiltinOptions{OpenCodeLegacy: true})
-	invalidateOpenCodeServiceCache()
+	testServer.coders = coders.NewManagerWithOptions(coders.BuiltinOptions{OpenCodeLegacy: true})
+	testServer.invalidateOpenCodeServiceCache()
 
 	w := httptest.NewRecorder()
-	HandleOpenCodeService(w, httptest.NewRequest(http.MethodGet, "/api/opencode/service", nil))
+	testServer.handleOpenCodeService(w, httptest.NewRequest(http.MethodGet, "/api/opencode/service", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -160,13 +160,13 @@ func TestOpenCodeServiceMethodNotAllowed(t *testing.T) {
 	setupMockOpenCode(t, "stopped")
 
 	wGet := httptest.NewRecorder()
-	HandleOpenCodeServiceStop(wGet, httptest.NewRequest(http.MethodGet, "/api/opencode/service/stop", nil))
+	testServer.handleOpenCodeServiceStop(wGet, httptest.NewRequest(http.MethodGet, "/api/opencode/service/stop", nil))
 	if wGet.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", wGet.Code)
 	}
 
 	wPost := httptest.NewRecorder()
-	HandleOpenCodeService(wPost, httptest.NewRequest(http.MethodPost, "/api/opencode/service", nil))
+	testServer.handleOpenCodeService(wPost, httptest.NewRequest(http.MethodPost, "/api/opencode/service", nil))
 	if wPost.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", wPost.Code)
 	}

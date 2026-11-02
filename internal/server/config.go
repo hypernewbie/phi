@@ -11,8 +11,8 @@ import (
 )
 
 // loadConfig reads the live config through the installed store.
-func loadConfig() config.Config {
-	store := configStore()
+func (app *Server) loadConfig() config.Config {
+	store := app.configStore()
 	if store == nil {
 		return config.Config{}
 	}
@@ -20,8 +20,8 @@ func loadConfig() config.Config {
 }
 
 // loadConfigWithError reads the live config and reports read failures.
-func loadConfigWithError() (config.Config, error) {
-	store := configStore()
+func (app *Server) loadConfigWithError() (config.Config, error) {
+	store := app.configStore()
 	if store == nil {
 		return config.Config{}, errNoConfigStore
 	}
@@ -30,18 +30,27 @@ func loadConfigWithError() (config.Config, error) {
 
 // saveConfig writes the config back through the installed store, preserving
 // fields other owners changed in the meantime.
-func saveConfig(cfg config.Config) {
-	if store := configStore(); store != nil {
+func (app *Server) saveConfig(cfg config.Config) {
+	if store := app.configStore(); store != nil {
 		store.SaveLegacy(cfg)
 	}
 }
 
 // configFilePath reports the primary config path.
-func configFilePath() string {
-	if store := configStore(); store != nil {
+func (app *Server) configFilePath() string {
+	if store := app.configStore(); store != nil {
 		return store.PrimaryPath()
 	}
 	return filepath.Join(system.PhiDataDir(), "config.toml")
+}
+
+// stateDir keeps handler fixtures beside their own config. Production uses
+// the same resolved Phi data directory as before.
+func (app *Server) stateDir() string {
+	if store := app.configStore(); store != nil {
+		return filepath.Dir(store.PrimaryPath())
+	}
+	return system.PhiDataDir()
 }
 
 // expandHome resolves a leading ~ against the user's home directory.
@@ -58,7 +67,7 @@ func expandHome(path string) string {
 
 // reportedHostname is the display host: the override when set, else the
 // kernel hostname.
-func reportedHostname(cfg config.Config) string {
+func ReportedHostname(cfg config.Config) string {
 	if override := strings.TrimSpace(cfg.HostnameOverride); override != "" {
 		return override
 	}
@@ -74,17 +83,16 @@ func reportedHostname(cfg config.Config) string {
 // value under `go test` panics so a test that forgets withTempBackends
 // cannot silently scan the user's real ~/.phi/backends directory
 // (R3). Production code always goes through customBackendsDir.
-var testCustomBackendsDir string
 
-// SetCustomBackendsDirForTest overrides the backend scan directory for the
+// setCustomBackendsDirForTest overrides the backend scan directory for the
 // caller's test and returns a restore function.
-func SetCustomBackendsDirForTest(dir string) func() {
-	previous := testCustomBackendsDir
-	testCustomBackendsDir = dir
-	return func() { testCustomBackendsDir = previous }
+func (app *Server) setCustomBackendsDirForTest(dir string) func() {
+	previous := app.testCustomBackendsDir
+	app.testCustomBackendsDir = dir
+	return func() { app.testCustomBackendsDir = previous }
 }
 
-// CustomBackendsDir returns the directory phi scans for custom backend
+// customBackendsDir returns the directory phi scans for custom backend
 // JSON files at startup. Each `*.json` file is parsed as a sparse
 // CoderPatch and merged onto the matching built-in (or inserted as a
 // new coder if the ID is novel). Production path is `~/.phi/backends/`.
@@ -93,9 +101,9 @@ func SetCustomBackendsDirForTest(dir string) func() {
 // that reads the live backends dir without isolating itself would
 // either pick up the developer's local profiles or silently shadow
 // them.
-func CustomBackendsDir() string {
-	if testCustomBackendsDir != "" {
-		return testCustomBackendsDir
+func (app *Server) customBackendsDir() string {
+	if app.testCustomBackendsDir != "" {
+		return app.testCustomBackendsDir
 	}
 	if testing.Testing() {
 		panic("customBackendsDir() called under `go test` without testCustomBackendsDir set. " +

@@ -131,8 +131,6 @@ type AttachmentStore struct {
 	closed          bool
 }
 
-var Default *AttachmentStore
-
 // OpenAttachmentStore opens the one-writer v2 store. A failure disables only
 // attachment routes; callers must let Phi and unrelated bridge features run.
 func OpenAttachmentStore() (*AttachmentStore, error) {

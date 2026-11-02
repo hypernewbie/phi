@@ -31,7 +31,7 @@ type RunCommandResponse struct {
 	Results []CommandResult `json:"results"`
 }
 
-func HandleRunCommand(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleRunCommand(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -53,7 +53,7 @@ func HandleRunCommand(w http.ResponseWriter, r *http.Request) {
 		if req.Cwd != "" {
 			worktrees = []string{req.Cwd}
 		} else {
-			worktrees = []string{ActiveCWD}
+			worktrees = []string{app.activeCWD}
 		}
 	}
 

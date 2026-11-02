@@ -16,11 +16,11 @@ import (
 // or any embedded secret. R2: the descriptor is the only thing the
 // browser sees, and env-bound API keys must not reach it.
 func TestHandleGetCodersExcludesSecrets(t *testing.T) {
-	// Seed a custom backend with an env-bound secret. HandleGetCoders
+	// Seed a custom backend with an env-bound secret. handleGetCoders
 	// reads from Coders, so we add directly.
 	withTempBackends(t) // not strictly needed but keeps the test honest
-	ensureCoderManager()
-	Coders.Add(coders.Coder{
+	testServer.ensureCoderManager()
+	testServer.coders.Add(coders.Coder{
 		ID:             "secret-agent",
 		Name:           "Secret Agent",
 		ShortLabel:     "SA",
@@ -36,7 +36,7 @@ func TestHandleGetCodersExcludesSecrets(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
 	w := httptest.NewRecorder()
-	HandleGetCoders(w, req)
+	testServer.handleGetCoders(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -72,10 +72,10 @@ func TestHandleGetCodersExcludesSecrets(t *testing.T) {
 // (R9 — app.codersPresetRegistry[coderId]). A refactor that turned
 // this into an array would silently break the existing client.
 func TestHandleGetCodersIsObjectShape(t *testing.T) {
-	ensureCoderManager()
+	testServer.ensureCoderManager()
 	req := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
 	w := httptest.NewRecorder()
-	HandleGetCoders(w, req)
+	testServer.handleGetCoders(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -100,9 +100,9 @@ func TestCustomBackendsNotInConfigSave(t *testing.T) {
 	withTempBackends(t)
 	withTempConfig(t)
 
-	ensureCoderManager()
-	Coders.LoadFromDir(testCustomBackendsDir, nil)
-	Coders.Add(coders.Coder{
+	testServer.ensureCoderManager()
+	testServer.coders.LoadFromDir(testServer.testCustomBackendsDir, nil)
+	testServer.coders.Add(coders.Coder{
 		ID:             "leaky-agent",
 		Name:           "Leaky",
 		Command:        "leak",
@@ -110,8 +110,8 @@ func TestCustomBackendsNotInConfigSave(t *testing.T) {
 		InputMode:      "staged",
 	})
 
-	cfg := loadConfig()
-	saveConfig(cfg)
+	cfg := testServer.loadConfig()
+	testServer.saveConfig(cfg)
 
 	// Reload the config file directly to see what was actually written.
 	data, err := osReadFile(testConfigPathValue())

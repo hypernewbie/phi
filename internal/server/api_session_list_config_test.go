@@ -36,7 +36,7 @@ func TestSessionListPageSizeConfig(t *testing.T) {
 			}
 
 			rec := httptest.NewRecorder()
-			HandleConfig(rec, httptest.NewRequest("GET", "/api/config", nil))
+			testServer.handleConfig(rec, httptest.NewRequest("GET", "/api/config", nil))
 			if rec.Code != 200 {
 				t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 			}
@@ -68,21 +68,21 @@ func TestSessionListPageSizeConfig(t *testing.T) {
 		if err := os.WriteFile(path, []byte(`session_list_page_size = 7`), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if raw := loadConfig().SessionListPageSize; raw != 7 {
+		if raw := testServer.loadConfig().SessionListPageSize; raw != 7 {
 			t.Fatalf("raw config value %d, want 7", raw)
 		}
 
-		cfg := loadConfig()
+		cfg := testServer.loadConfig()
 		cfg.Workspaces = []string{"/work"}
-		saveConfig(cfg)
+		testServer.saveConfig(cfg)
 
-		reloaded := loadConfig()
+		reloaded := testServer.loadConfig()
 		if reloaded.SessionListPageSize != 7 {
 			t.Fatalf("round trip value %d, want 7", reloaded.SessionListPageSize)
 		}
 
 		rec := httptest.NewRecorder()
-		HandleConfig(rec, httptest.NewRequest("GET", "/api/config", nil))
+		testServer.handleConfig(rec, httptest.NewRequest("GET", "/api/config", nil))
 		var payload map[string]any
 		if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 			t.Fatalf("decode payload: %v", err)

@@ -18,9 +18,7 @@ const (
 	PaneMaxBytes                = 256
 )
 
-var attachmentPutReadTimeout = 10 * time.Minute
-
-func HandleV2Item(w http.ResponseWriter, r *http.Request) {
+func (a *API) HandleV2Item(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	prefix := "/api/attachments/v2/items/"
 	id := strings.TrimPrefix(r.URL.Path, prefix)
@@ -30,41 +28,41 @@ func HandleV2Item(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		handleAttachmentItemStatus(w, r, id)
+		a.handleAttachmentItemStatus(w, r, id)
 	case http.MethodPut:
-		handleAttachmentItemPut(w, r, id)
+		a.handleAttachmentItemPut(w, r, id)
 	default:
 		w.Header().Set("Allow", "GET, PUT")
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
-func handleAttachmentItemStatus(w http.ResponseWriter, r *http.Request, id string) {
+func (a *API) handleAttachmentItemStatus(w http.ResponseWriter, r *http.Request, id string) {
 	pane := r.URL.Query().Get("pane")
 	if pane == "" || len(pane) > PaneMaxBytes {
 		WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 		return
 	}
-	if Default == nil {
+	if a.Store == nil {
 		WriteJSONError(w, http.StatusServiceUnavailable, "storage")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(Default.ItemStatus(id, pane))
+	_ = json.NewEncoder(w).Encode(a.Store.ItemStatus(id, pane))
 }
 
-func handleAttachmentItemPut(w http.ResponseWriter, r *http.Request, id string) {
+func (a *API) handleAttachmentItemPut(w http.ResponseWriter, r *http.Request, id string) {
 	if !SameOrigin(r) {
 		WriteJSONError(w, http.StatusForbidden, "unavailable")
 		return
 	}
-	clearDeadline, ok := SetReadDeadline(w, r, attachmentPutReadTimeout)
+	clearDeadline, ok := SetReadDeadline(w, r, a.attachmentPutReadTimeout)
 	if !ok {
 		WriteJSONError(w, http.StatusServiceUnavailable, "unavailable")
 		return
 	}
 	defer clearDeadline()
-	if Default == nil {
+	if a.Store == nil {
 		WriteJSONError(w, http.StatusServiceUnavailable, "storage")
 		return
 	}
@@ -123,7 +121,7 @@ func handleAttachmentItemPut(w http.ResponseWriter, r *http.Request, id string) 
 				WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 				return
 			}
-			if _, err := LivePiPane(pane); err != nil {
+			if _, err := LivePiPane(a.paneManager(), pane); err != nil {
 				_ = part.Close()
 				WriteJSONError(w, http.StatusNotFound, "unavailable")
 				return
@@ -139,7 +137,7 @@ func handleAttachmentItemPut(w http.ResponseWriter, r *http.Request, id string) 
 				_ = extra.Close()
 				return ErrInvalid
 			}
-			item, putErr := Default.Put(r.Context(), id, pane, name, part.Header.Get("Content-Type"), part, finish)
+			item, putErr := a.Store.Put(r.Context(), id, pane, name, part.Header.Get("Content-Type"), part, finish)
 			if putErr != nil {
 				WriteStoreError(w, putErr)
 				return
@@ -156,11 +154,11 @@ func handleAttachmentItemPut(w http.ResponseWriter, r *http.Request, id string) 
 }
 
 // LivePiPane returns the live PTY instance for a pane ID.
-func LivePiPane(paneID string) (*pty.PTYInstance, error) {
-	if paneManager() == nil || paneID == "" || len(paneID) > PaneMaxBytes {
+func LivePiPane(manager *pty.Manager, paneID string) (*pty.PTYInstance, error) {
+	if manager == nil || paneID == "" || len(paneID) > PaneMaxBytes {
 		return nil, ErrNotFound
 	}
-	inst, ok := paneManager().Get(paneID)
+	inst, ok := manager.Get(paneID)
 	if !ok || inst == nil || inst.Coder != "pi" || inst.IsPtyDead() {
 		return nil, ErrNotFound
 	}

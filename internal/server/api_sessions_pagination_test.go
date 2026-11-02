@@ -63,13 +63,13 @@ func TestHandleGetSessionsPagination(t *testing.T) {
 		writePiSessionFixture(t, projectDir, id, cwd, base.Add(-time.Duration(i)*time.Minute))
 	}
 
-	before := Coders
-	Coders = coders.NewManager()
-	beforeCWD := ActiveCWD
-	ActiveCWD = cwd
+	before := testServer.coders
+	testServer.coders = coders.NewManager()
+	beforeCWD := testServer.activeCWD
+	testServer.activeCWD = cwd
 	t.Cleanup(func() {
-		Coders = before
-		ActiveCWD = beforeCWD
+		testServer.coders = before
+		testServer.activeCWD = beforeCWD
 	})
 
 	query := func(extra map[string]string) string {
@@ -94,7 +94,7 @@ func TestHandleGetSessionsPagination(t *testing.T) {
 		t.Helper()
 		req := httptest.NewRequest("GET", "/api/sessions?"+query(extra), nil)
 		rec := httptest.NewRecorder()
-		HandleGetSessions(rec, req)
+		testServer.handleGetSessions(rec, req)
 		return rec
 	}
 
@@ -191,14 +191,14 @@ func TestHandleGetSessionsPaginationEdges(t *testing.T) {
 		writePiSessionFixture(t, projectDir, id, cwd, base.Add(-time.Duration(i)*time.Minute))
 	}
 
-	beforeCoders := Coders
-	Coders = coders.NewManager()
-	Coders.Add(coders.Coder{ID: "missing-source-coder", SessionSource: "missing-test-source"})
-	beforeCWD := ActiveCWD
-	ActiveCWD = cwd
+	beforeCoders := testServer.coders
+	testServer.coders = coders.NewManager()
+	testServer.coders.Add(coders.Coder{ID: "missing-source-coder", SessionSource: "missing-test-source"})
+	beforeCWD := testServer.activeCWD
+	testServer.activeCWD = cwd
 	t.Cleanup(func() {
-		Coders = beforeCoders
-		ActiveCWD = beforeCWD
+		testServer.coders = beforeCoders
+		testServer.activeCWD = beforeCWD
 	})
 
 	encodedCwd := url.QueryEscape(cwd)
@@ -206,7 +206,7 @@ func TestHandleGetSessionsPaginationEdges(t *testing.T) {
 		t.Helper()
 		req := httptest.NewRequest("GET", "/api/sessions?"+rawQuery, nil)
 		rec := httptest.NewRecorder()
-		HandleGetSessions(rec, req)
+		testServer.handleGetSessions(rec, req)
 		return rec
 	}
 	decode := func(t *testing.T, rec *httptest.ResponseRecorder) []session.Session {

@@ -1,7 +1,7 @@
 //go:build !windows
 
-package server
+package main
 
-func EnableVirtualTerminalProcessing() {
+func enableVirtualTerminalProcessing() {
 	// VT is enabled by default on Unix platforms
 }

@@ -1,6 +1,6 @@
 //go:build profiling
 
-package main
+package server
 
 import (
 	"bytes"
@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hypernewbie/phi/internal/access"
 	"github.com/hypernewbie/phi/pkg/obs"
 )
 
@@ -19,7 +18,7 @@ import (
 func timingTestCookie(t *testing.T) *http.Cookie {
 	t.Helper()
 	statusW := httptest.NewRecorder()
-	access.HandleAccessAuthStatus(statusW, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+	testServer.accessManager.HandleAccessAuthStatus(statusW, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
 	if statusW.Code != http.StatusOK {
 		t.Fatalf("status: got %d", statusW.Code)
 	}
@@ -33,7 +32,7 @@ func timingTestCookie(t *testing.T) *http.Cookie {
 	loginReq := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(body))
 	loginReq.RemoteAddr = "192.0.2.15:12345"
 	loginW := httptest.NewRecorder()
-	access.HandleAccessAuthLogin(loginW, loginReq)
+	testServer.accessManager.HandleAccessAuthLogin(loginW, loginReq)
 	if loginW.Code != http.StatusOK {
 		t.Fatalf("login: got %d body=%s", loginW.Code, loginW.Body.String())
 	}
@@ -53,7 +52,7 @@ func TestTimingSkipsRejectedAuthRequests(t *testing.T) {
 	reached := false
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/thing", func(w http.ResponseWriter, r *http.Request) { reached = true })
-	handler := access.Middleware(obs.WrapTimingHTTP(mux))
+	handler := testServer.accessManager.Middleware(obs.WrapTimingHTTP(mux))
 
 	capture, ok := obs.BeginTimingCapture()
 	if !ok {
@@ -86,7 +85,7 @@ func TestTimingRecordsAuthenticatedRequests(t *testing.T) {
 		reached = true
 		w.WriteHeader(http.StatusNoContent)
 	})
-	handler := access.Middleware(obs.WrapTimingHTTP(mux))
+	handler := testServer.accessManager.Middleware(obs.WrapTimingHTTP(mux))
 
 	capture, ok := obs.BeginTimingCapture()
 	if !ok {

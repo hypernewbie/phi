@@ -36,23 +36,23 @@ func init() {
 
 func TestOpenCodeConfigDefaultsAndLegacyRoundTrip(t *testing.T) {
 	withTempConfig(t)
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	if cfg.OpenCodeLegacy {
 		t.Fatal("default must be v2")
 	}
 	cfg.OpenCodeLegacy = true
 	cfg.OpenCodeCommand = "/private/v2 binary"
 	cfg.OpenCodeLegacyCommand = "/private/v1 binary"
-	saveConfig(cfg)
-	read := loadConfig()
+	testServer.saveConfig(cfg)
+	read := testServer.loadConfig()
 	if !read.OpenCodeLegacy || read.OpenCodeCommand != cfg.OpenCodeCommand || read.OpenCodeLegacyCommand != cfg.OpenCodeLegacyCommand {
 		t.Fatalf("config lost options: %+v", read)
 	}
-	before := Coders
-	t.Cleanup(func() { Coders = before })
-	Coders = coders.NewManagerWithOptions(coders.BuiltinOptions{OpenCodeLegacy: read.OpenCodeLegacy, OpenCodeCommand: read.OpenCodeCommand, OpenCodeLegacyCommand: read.OpenCodeLegacyCommand})
+	before := testServer.coders
+	t.Cleanup(func() { testServer.coders = before })
+	testServer.coders = coders.NewManagerWithOptions(coders.BuiltinOptions{OpenCodeLegacy: read.OpenCodeLegacy, OpenCodeCommand: read.OpenCodeCommand, OpenCodeLegacyCommand: read.OpenCodeLegacyCommand})
 	w := httptest.NewRecorder()
-	HandleGetCoders(w, httptest.NewRequest(http.MethodGet, "/api/coders", nil))
+	testServer.handleGetCoders(w, httptest.NewRequest(http.MethodGet, "/api/coders", nil))
 	var desc map[string]coders.CoderDescriptor
 	if err := json.Unmarshal(w.Body.Bytes(), &desc); err != nil {
 		t.Fatal(err)
@@ -64,7 +64,7 @@ func TestOpenCodeConfigDefaultsAndLegacyRoundTrip(t *testing.T) {
 		t.Fatal("private executable path leaked in descriptors")
 	}
 	w = httptest.NewRecorder()
-	HandleConfig(w, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+	testServer.handleConfig(w, httptest.NewRequest(http.MethodGet, "/api/config", nil))
 	if strings.Contains(w.Body.String(), "/private/") {
 		t.Fatal("private executable path leaked in config API")
 	}
@@ -82,11 +82,11 @@ func TestOpenCodeMixedPresentationsReattachAndListActualMode(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".phi", "tabs.json"), []byte(data), 0600); err != nil {
 		t.Fatal(err)
 	}
-	oldCoders, oldPTY := Coders, PTY
-	t.Cleanup(func() { Coders = oldCoders; PTY = oldPTY })
-	Coders = coders.NewManager()
-	PTY = pty.NewManager()
-	if err := PTY.LoadState(); err != nil {
+	oldCoders, oldPTY := testServer.coders, testServer.pty
+	t.Cleanup(func() { testServer.coders = oldCoders; testServer.pty = oldPTY })
+	testServer.coders = coders.NewManager()
+	testServer.pty = pty.NewManager()
+	if err := testServer.pty.LoadState(); err != nil {
 		t.Fatal(err)
 	}
 	for _, test := range []struct{ body, id, mode string }{
@@ -94,7 +94,7 @@ func TestOpenCodeMixedPresentationsReattachAndListActualMode(t *testing.T) {
 		{`{"coder":"opencode","session_id":"same","opencode_mini":true}`, "small", "mini"},
 	} {
 		w := httptest.NewRecorder()
-		HandleSpawnTerminal(w, httptest.NewRequest(http.MethodPost, "/api/terminals", strings.NewReader(test.body)))
+		testServer.handleSpawnTerminal(w, httptest.NewRequest(http.MethodPost, "/api/terminals", strings.NewReader(test.body)))
 		var reply map[string]string
 		json.Unmarshal(w.Body.Bytes(), &reply)
 		if w.Code != http.StatusOK || reply["pane_id"] != test.id || reply["opencode_mode"] != test.mode {
@@ -102,7 +102,7 @@ func TestOpenCodeMixedPresentationsReattachAndListActualMode(t *testing.T) {
 		}
 	}
 	w := httptest.NewRecorder()
-	HandleSpawnTerminal(w, httptest.NewRequest(http.MethodGet, "/api/terminals", nil))
+	testServer.handleSpawnTerminal(w, httptest.NewRequest(http.MethodGet, "/api/terminals", nil))
 	var running []map[string]interface{}
 	json.Unmarshal(w.Body.Bytes(), &running)
 	modes := map[string]interface{}{}
@@ -112,26 +112,26 @@ func TestOpenCodeMixedPresentationsReattachAndListActualMode(t *testing.T) {
 	if modes["full"] != "tui" || modes["small"] != "mini" {
 		t.Fatalf("actual modes lost: %v", modes)
 	}
-	if Coders.MustGet("opencode").OpenCodeMode != "tui" {
+	if testServer.coders.MustGet("opencode").OpenCodeMode != "tui" {
 		t.Fatal("Mini changed default")
 	}
 }
 
 func TestOpenCodeV2RejectsInstalledV1BeforePTYSpawn(t *testing.T) {
 	withTempConfig(t)
-	before := Coders
-	t.Cleanup(func() { Coders = before })
-	Coders = coders.NewManager()
-	c, _ := Coders.Get("opencode")
+	before := testServer.coders
+	t.Cleanup(func() { testServer.coders = before })
+	testServer.coders = coders.NewManager()
+	c, _ := testServer.coders.Get("opencode")
 	c.Command = os.Args[0]
 	c.Env = map[string]string{"PHI_TEST_ROOT_OC_VERSION": "1.18.34"}
-	Coders.Add(c)
+	testServer.coders.Add(c)
 	for _, body := range []string{
 		`{"coder":"opencode"}`,
 		`{"coder":"opencode","opencode_mini":true}`,
 	} {
 		w := httptest.NewRecorder()
-		HandleSpawnTerminal(w, httptest.NewRequest(http.MethodPost, "/api/terminals", strings.NewReader(body)))
+		testServer.handleSpawnTerminal(w, httptest.NewRequest(http.MethodPost, "/api/terminals", strings.NewReader(body)))
 		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "requires a v2 binary") {
 			t.Fatalf("request %s: wrong result: %d %s", body, w.Code, w.Body.String())
 		}

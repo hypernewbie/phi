@@ -1,4 +1,4 @@
-package server
+package main
 
 import (
 	"log"
@@ -36,7 +36,7 @@ func resolveLevel(flagVal string) slog.Level {
 // if PHI_LOG_FORMAT=json), installs it via slog.SetDefault, and bridges the
 // stdlib "log" package through it so the ~47 existing log.Printf("[tag] ...")
 // call sites keep working unchanged — no mechanical rewrite required.
-func InitLogging(level string) *slog.Logger {
+func initLogging(level string) *slog.Logger {
 	opts := &slog.HandlerOptions{Level: resolveLevel(level)}
 
 	var handler slog.Handler

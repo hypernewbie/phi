@@ -1,10 +1,11 @@
-// Package server serves Phi's HTTP API and static assets. The process wiring
-// lives in main; this package owns the handler implementations and the shared
-// state they read.
+// Package server owns Phi's HTTP application and its process-scoped runtime.
+// New and Handler are inert; Run starts services and closes owned resources.
 package server
 
 import (
+	"io/fs"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -13,67 +14,146 @@ import (
 	"github.com/hypernewbie/phi/internal/config"
 	"github.com/hypernewbie/phi/internal/gitapi"
 	"github.com/hypernewbie/phi/internal/piapp"
+	"github.com/hypernewbie/phi/pkg/bindaddr"
 	"github.com/hypernewbie/phi/pkg/coders"
 	"github.com/hypernewbie/phi/pkg/fleet"
 	"github.com/hypernewbie/phi/pkg/fswatch"
+	"github.com/hypernewbie/phi/pkg/obs"
+	"github.com/hypernewbie/phi/pkg/prompt_history"
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/rpc"
 	"github.com/hypernewbie/phi/pkg/system"
+	"github.com/hypernewbie/phi/pkg/update"
 	"github.com/hypernewbie/phi/pkg/ws"
 )
 
-// Shared process state. main installs each value before serving; handlers
-// treat a nil manager as "that feature is unavailable".
-var (
-	PTY         *pty.Manager
-	Coders      *coders.Manager
-	Hub         *ws.Hub
-	Pi          *piapp.API
-	Git         *gitapi.API
-	ConfigStore func() *config.Store
-	Static      http.Handler
-	ActiveCWD   string
-	MDWatcher   *fswatch.Watcher
-	CPU         = system.NewSampler()
-	Fleet       = fleet.NewPoller()
-	Port        = 7070
-	AttachRoot  func() *attachments.AttachmentStore
-	Access      func() *access.Manager
-	// BridgeOf returns the Pi bridge owner; nil when integration is off.
-	BridgeOf func() *piapp.Bridge
-	// RPC backs the control WebSocket.
-	RPC *rpc.Manager
-	// Titles is the Pi title service; nil when title sync is off.
-	Titles *PiTerminalTitleService
-)
-
-// Build identity, stamped by the linker in main.
-var (
-	Version     = "dev"
-	Commit      = "none"
-	Date        = "unknown"
-	BuildSource = "source"
-)
-
-// StartedAt is the unix-second timestamp of server startup. /api/version
-// returns it so the front-end can detect a restart.
-var StartedAt = time.Now().Unix()
-
-// ShuttingDown flips true once the drain starts, so /readyz reports 503.
-var ShuttingDown atomic.Bool
-
-// bridgeOrNil resolves the installed bridge, if any.
-func bridgeOrNil() *piapp.Bridge {
-	if BridgeOf == nil {
-		return nil
-	}
-	return BridgeOf()
+// Options contains binary inputs, not process-global configuration. Paths and
+// resource loaders are supplied by the entrypoint; the caller owns logging and
+// observability initialization. OnListen runs after successful binds, before serving.
+type Options struct {
+	IP                                 string
+	Port                               int
+	Web                                string
+	DiagnosticsDir                     string
+	CWD                                string
+	Config                             *config.Store
+	Version, Commit, Date, BuildSource string
+	Assets                             func() (fs.FS, map[string][]byte, error)
+	PiRuntime                          func() ([]byte, error)
+	PiVersion                          string
+	OnListen                           func(config.Config, []bindaddr.Addr, int)
+	// Exit is used only by the Windows restart handoff, after child spawn.
+	Exit func(int)
 }
 
-// configStore resolves the installed config store.
-func configStore() *config.Store {
-	if ConfigStore == nil {
-		return nil
+// Server is one application. Handler fixtures can be independent, but Run is
+// process-scoped and single-use: PTY/system services retain process lifetimes.
+// Do not copy a Server or mutate its dependencies while serving requests.
+type Server struct {
+	options                            Options
+	runStarted                         atomic.Bool
+	handlerOnce                        sync.Once
+	handler                            http.Handler
+	mux                                *http.ServeMux
+	accessManager                      *access.Manager
+	attachmentStore                    *attachments.AttachmentStore
+	attachmentAPI                      *attachments.API
+	bridge                             *piapp.Bridge
+	pty                                *pty.Manager
+	coders                             *coders.Manager
+	hub                                *ws.Hub
+	pi                                 *piapp.API
+	git                                *gitapi.API
+	static                             http.Handler
+	activeCWD                          string
+	mdWatcher                          *fswatch.Watcher
+	cpu                                *system.Sampler
+	fleet                              *fleet.Poller
+	port                               int
+	rpc                                *rpc.Manager
+	titles                             *PiTerminalTitleService
+	version, commit, date, buildSource string
+	startedAt                          int64
+	shuttingDown                       atomic.Bool
+	diagnosticsProcessStartedAt        time.Time
+	serverStartedAt                    time.Time
+	cachedInstallMethod                string
+	installMethodOnce                  sync.Once
+	defaultOpenCodeIdleWatcher         *openCodeIdleWatcher
+	openCodeIdleWatcherMu              sync.Mutex
+	updateChecker                      *update.Checker
+	updateApplier                      *update.Applier
+	ocServiceCacheMu                   sync.Mutex
+	ocServiceCacheRunning              bool
+	ocServiceCacheTime                 time.Time
+	ocServiceCacheValid                bool
+	syncMu                             sync.RWMutex
+	syncStore                          map[string]*SyncMessage
+	testSyncPath                       string
+	saveTimer                          *time.Timer
+	saveMu                             sync.Mutex
+	promptHistoryStoreMu               sync.Mutex
+	promptHistoryStore                 *prompt_history.Store
+	promptHistoryLoadErr               error
+	testCustomBackendsDir              string
+}
+
+// New constructs an application without opening files, starting goroutines, or
+// registering routes on the process mux. Config paths remain caller-controlled.
+func New(options Options) *Server {
+	now := time.Now()
+	app := &Server{options: options,
+		activeCWD: options.CWD, port: options.Port,
+		version: options.Version, commit: options.Commit, date: options.Date, buildSource: options.BuildSource,
+		startedAt: now.Unix(), serverStartedAt: now, diagnosticsProcessStartedAt: now,
+		cpu: system.NewSampler(), fleet: fleet.NewPoller(), rpc: rpc.NewManager(),
+		syncStore: make(map[string]*SyncMessage),
 	}
-	return ConfigStore()
+	app.accessManager = access.NewManager(app.configStore, func() *ws.Hub { return app.hub })
+	app.pi = piapp.NewAPI(func() *piapp.Bridge { return app.bridge }, func() *attachments.AttachmentStore { return app.attachmentStore }, func() *pty.Manager { return app.pty })
+	app.git = gitapi.New(func() string { return app.activeCWD }, func() *pty.Manager { return app.pty }, func() []string { return app.workspaceRoots(app.loadConfig()) })
+	app.git.StartReadLoop = func(inst *pty.PTYInstance) { ws.StartPTYReadLoop(inst, app.hub) }
+	app.attachmentAPI = attachments.NewAPI(func() *pty.Manager { return app.pty })
+	return app
+}
+
+// Handler returns the complete HTTP/WS boundary. Middleware order is part of
+// the compatibility contract: observation, admission, then admitted timing.
+func (app *Server) Handler() http.Handler {
+	app.handlerOnce.Do(func() {
+		app.mux = http.NewServeMux()
+		app.registerRoutes(app.mux)
+		app.handler = obs.WrapHTTP(app.accessManager.Middleware(obs.WrapTimingHTTP(app.mux)))
+	})
+	return app.handler
+}
+
+func (app *Server) bridgeOrNil() *piapp.Bridge { return app.bridge }
+func (app *Server) configStore() *config.Store { return app.options.Config }
+
+// closeResources also handles partial startup. Process-lifetime idle workers
+// have no join API; Run is single-use and those workers end with the process.
+func (app *Server) closeResources() {
+	app.stopOpenCodeIdleWatcher()
+	if app.mdWatcher != nil {
+		app.mdWatcher.Close()
+	}
+	if app.titles != nil {
+		app.titles.Close()
+	}
+	if app.pty != nil {
+		app.pty.BeginDrain()
+		app.pty.Shutdown(100 * time.Millisecond)
+	}
+	app.accessManager.BeginRestart()
+	app.bridge.Stop()
+	if app.hub != nil {
+		_ = app.hub.Close()
+	}
+	if app.fleet != nil {
+		app.fleet.Start(nil)
+	}
+	if app.attachmentStore != nil {
+		_ = app.attachmentStore.Close()
+	}
 }

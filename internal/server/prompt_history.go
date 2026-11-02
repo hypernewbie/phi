@@ -6,10 +6,8 @@ import (
 	"net/http"
 	"path/filepath"
 	"strconv"
-	"sync"
 
 	"github.com/hypernewbie/phi/pkg/prompt_history"
-	"github.com/hypernewbie/phi/pkg/system"
 )
 
 // ---------- prompt_history handlers ----------
@@ -20,43 +18,38 @@ import (
 // sentinel empty store with no path — writes fail with "no path
 // configured", reads return []. That surfaces the persistence failure
 // (500 on append, [] on recent) without panicking.
-var (
-	promptHistoryStoreMu sync.Mutex
-	promptHistoryStore   *prompt_history.Store
-	promptHistoryLoadErr error
-)
 
 // PromptHistoryPath reports the history file for the current data dir.
-func PromptHistoryPath() string {
-	return filepath.Join(system.PhiDataDir(), "prompt_history.json")
+func (app *Server) PromptHistoryPath() string {
+	return filepath.Join(app.stateDir(), "prompt_history.json")
 }
 
-func promptHistoryLazyStore() (*prompt_history.Store, error) {
-	promptHistoryStoreMu.Lock()
-	defer promptHistoryStoreMu.Unlock()
-	if promptHistoryStore != nil || promptHistoryLoadErr != nil {
+func (app *Server) promptHistoryLazyStore() (*prompt_history.Store, error) {
+	app.promptHistoryStoreMu.Lock()
+	defer app.promptHistoryStoreMu.Unlock()
+	if app.promptHistoryStore != nil || app.promptHistoryLoadErr != nil {
 		// Already initialized (success or recorded failure). Reuse.
-		if promptHistoryStore == nil {
+		if app.promptHistoryStore == nil {
 			// Empty sentinel store, plus the recorded error so the
 			// handlers can surface it.
-			return &prompt_history.Store{}, promptHistoryLoadErr
+			return &prompt_history.Store{}, app.promptHistoryLoadErr
 		}
-		return promptHistoryStore, nil
+		return app.promptHistoryStore, nil
 	}
-	s, err := prompt_history.Load(PromptHistoryPath())
+	s, err := prompt_history.Load(app.PromptHistoryPath())
 	if err != nil {
-		log.Printf("[prompt_history] failed to load %s: %v", PromptHistoryPath(), err)
-		promptHistoryLoadErr = err
+		log.Printf("[prompt_history] failed to load %s: %v", app.PromptHistoryPath(), err)
+		app.promptHistoryLoadErr = err
 		// Cache a path-less empty store. Appends to this will fail at
 		// persist time, signalling the corrupt state to the caller.
 		return &prompt_history.Store{}, err
 	}
-	promptHistoryStore = s
+	app.promptHistoryStore = s
 	return s, nil
 }
 
-// HandlePromptHistoryAppend records a submitted prompt.
-func HandlePromptHistoryAppend(w http.ResponseWriter, r *http.Request) {
+// handlePromptHistoryAppend records a submitted prompt.
+func (app *Server) handlePromptHistoryAppend(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -69,7 +62,7 @@ func HandlePromptHistoryAppend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	s, err := promptHistoryLazyStore()
+	s, err := app.promptHistoryLazyStore()
 	if err != nil {
 		http.Error(w, "history load: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -82,8 +75,8 @@ func HandlePromptHistoryAppend(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "count": s.Len()})
 }
 
-// HandlePromptHistoryRecent lists recent prompts for a working directory.
-func HandlePromptHistoryRecent(w http.ResponseWriter, r *http.Request) {
+// handlePromptHistoryRecent lists recent prompts for a working directory.
+func (app *Server) handlePromptHistoryRecent(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -95,7 +88,7 @@ func HandlePromptHistoryRecent(w http.ResponseWriter, r *http.Request) {
 			n = parsed
 		}
 	}
-	s, _ := promptHistoryLazyStore() // error ignored here; Recent on empty store returns []
+	s, _ := app.promptHistoryLazyStore() // error ignored here; Recent on empty store returns []
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(s.Recent(cwd, n))
 }

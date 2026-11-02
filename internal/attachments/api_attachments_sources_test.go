@@ -37,7 +37,7 @@ func TestAttachmentBrowseUsesPaneCWDAndListsOnlyRegularEntries(t *testing.T) {
 	}
 	request := httptest.NewRequest(http.MethodGet, "/api/attachments/v2/browse?pane="+url.QueryEscape(pane), nil)
 	response := httptest.NewRecorder()
-	HandleV2Browse(response, request)
+	testAPI.HandleV2Browse(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -86,7 +86,7 @@ func TestAttachmentServerItemSnapshotsListedBytesAndRejectsChangedSource(t *test
 	request.Header.Set("Origin", "http://phi.test")
 	request.Header.Set("Content-Type", "application/json")
 	response := &attachmentDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
-	HandleV2ServerItem(response, request)
+	testAPI.HandleV2ServerItem(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -113,7 +113,7 @@ func TestAttachmentServerItemSnapshotsListedBytesAndRejectsChangedSource(t *test
 	staleRequest.Header.Set("Origin", "http://phi.test")
 	staleRequest.Header.Set("Content-Type", "application/json")
 	staleResponse := &attachmentDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
-	HandleV2ServerItem(staleResponse, staleRequest)
+	testAPI.HandleV2ServerItem(staleResponse, staleRequest)
 	if staleResponse.Code != http.StatusConflict || !bytes.Contains(staleResponse.Body.Bytes(), []byte(`"changed-source"`)) {
 		t.Fatalf("stale snapshot status=%d body=%s", staleResponse.Code, staleResponse.Body.String())
 	}
@@ -138,7 +138,7 @@ func TestAttachmentV2BrowseRequiresLivePiPaneAndSameOrigin(t *testing.T) {
 				r.Header.Set("Origin", tc.origin)
 			}
 			w := httptest.NewRecorder()
-			HandleV2Browse(w, r)
+			testAPI.HandleV2Browse(w, r)
 			if w.Code != tc.want {
 				t.Fatalf("status=%d want=%d body=%s", w.Code, tc.want, w.Body.String())
 			}

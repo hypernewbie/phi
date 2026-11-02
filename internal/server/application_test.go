@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bytes"
@@ -20,56 +20,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/session"
 	"github.com/hypernewbie/phi/pkg/update"
 )
 
-// withTempConfig points the config system at a fresh temp file for the duration
-// of the test, then restores the original override.
-func withTempConfig(t *testing.T) string {
-	t.Helper()
-	f, err := os.CreateTemp(t.TempDir(), "phi-test-config-*.toml")
-	if err != nil {
-		t.Fatalf("create temp config: %v", err)
-	}
-	f.Close()
-	orig := testConfigPath
-	testConfigPath = f.Name()
-	server.ConfigStore = configStore
-	t.Cleanup(func() {
-		testConfigPath = orig
-		server.ConfigStore = configStore
-	})
-	return f.Name()
-}
-
-func withTempLegacyConfig(t *testing.T) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "config.json")
-	orig := testLegacyConfigPath
-	testLegacyConfigPath = path
-	t.Cleanup(func() { testLegacyConfigPath = orig })
-	return path
-}
-
-// withTempBackends points customBackendsDir() at a fresh temp dir
-// for the duration of the test, then restores the original override.
-// Mirrors withTempConfig so tests can drop *.json files into the dir
-// without touching the developer's real ~/.phi/backends (R3).
-func withTempBackends(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	t.Cleanup(server.SetCustomBackendsDirForTest(dir))
-	return dir
-}
-
 // ─── Config defaults ──────────────────────────────────────────────────────────
 
 func TestLoadConfig_DefaultsOnEmptyFile(t *testing.T) {
 	withTempConfig(t)
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 
 	if cfg.ThemeColor != "purple" {
 		t.Errorf("ThemeColor default: want purple, got %q", cfg.ThemeColor)
@@ -90,7 +50,7 @@ func TestLoadConfig_DefaultsOnEmptyFile(t *testing.T) {
 
 func TestLoadConfig_DefaultQuickCommands(t *testing.T) {
 	withTempConfig(t)
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 
 	names := map[string]bool{}
 	for _, qc := range cfg.QuickCommands {
@@ -105,7 +65,7 @@ func TestLoadConfig_DefaultQuickCommands(t *testing.T) {
 
 func TestLoadConfig_DefaultTerminalCommands(t *testing.T) {
 	withTempConfig(t)
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 
 	names := map[string]bool{}
 	for _, tc := range cfg.TerminalCommands {
@@ -120,7 +80,7 @@ func TestLoadConfig_DefaultTerminalCommands(t *testing.T) {
 
 func TestLoadConfig_DefaultMarkdownDirs(t *testing.T) {
 	withTempConfig(t)
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 
 	found := false
 	for _, d := range cfg.MarkdownDirs {
@@ -136,14 +96,14 @@ func TestLoadConfig_DefaultMarkdownDirs(t *testing.T) {
 
 func TestSaveAndLoadConfig_RoundTrip(t *testing.T) {
 	withTempConfig(t)
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	cfg.ThemeColor = "amber"
 	cfg.ModelPresets = ModelPresetsMap{"pi": {"test/model-a", "test/model-b"}}
 	cfg.QuickCommands = []QuickCommand{{Name: "foo", Command: "bar"}}
 	cfg.MarkdownDirs = []string{"./notes"}
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 
-	got := loadConfig()
+	got := testServer.loadConfig()
 	if got.ThemeColor != "amber" {
 		t.Errorf("ThemeColor: want amber, got %q", got.ThemeColor)
 	}
@@ -197,7 +157,7 @@ func TestHandleModelPresets_AddEditAndDelete(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/config/models", body)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	server.HandleModelPresets(w, req)
+	testServer.handleModelPresets(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("POST status: want 200, got %d - %s", w.Code, w.Body.String())
 	}
@@ -206,12 +166,12 @@ func TestHandleModelPresets_AddEditAndDelete(t *testing.T) {
 	req = httptest.NewRequest(http.MethodPost, "/api/config/models", body)
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
-	server.HandleModelPresets(w, req)
+	testServer.handleModelPresets(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("edit POST status: want 200, got %d - %s", w.Code, w.Body.String())
 	}
 
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	if containsString(cfg.ModelPresets["pi"], "model-one") {
 		t.Error("old model preset still present after edit")
 	}
@@ -223,12 +183,12 @@ func TestHandleModelPresets_AddEditAndDelete(t *testing.T) {
 	req = httptest.NewRequest(http.MethodDelete, "/api/config/models", body)
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
-	server.HandleModelPresets(w, req)
+	testServer.handleModelPresets(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("DELETE status: want 200, got %d - %s", w.Code, w.Body.String())
 	}
 
-	cfg = loadConfig()
+	cfg = testServer.loadConfig()
 	if containsString(cfg.ModelPresets["pi"], "model-two") {
 		t.Error("model preset still present after DELETE")
 	}
@@ -249,7 +209,7 @@ func TestHandleConfig_Fields(t *testing.T) {
 	withTempConfig(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	w := httptest.NewRecorder()
-	server.HandleConfig(w, req)
+	testServer.handleConfig(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: want 200, got %d", w.Code)
@@ -277,7 +237,7 @@ func TestHandleConfig_Fields(t *testing.T) {
 
 func TestUseExistingTerminalTab_DefaultIsFalse(t *testing.T) {
 	withTempConfig(t)
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	if cfg.UseExistingTerminalTab {
 		t.Errorf("UseExistingTerminalTab default: want false, got true")
 	}
@@ -293,7 +253,7 @@ func TestUseExistingTerminalTab_MissingTOMLFieldStaysFalse(t *testing.T) {
 		t.Fatalf("write legacy config: %v", err)
 	}
 
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	if cfg.UseExistingTerminalTab {
 		t.Errorf("legacy config: UseExistingTerminalTab should default to false, got true")
 	}
@@ -305,7 +265,7 @@ func TestHandleUseExistingTerminalTab_Toggle(t *testing.T) {
 	// Initial GET: field is false
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	w := httptest.NewRecorder()
-	server.HandleConfig(w, req)
+	testServer.handleConfig(w, req)
 	var body map[string]interface{}
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatalf("decode initial: %v", err)
@@ -319,13 +279,13 @@ func TestHandleUseExistingTerminalTab_Toggle(t *testing.T) {
 	req1 := httptest.NewRequest(http.MethodPost, "/api/config/use-existing-terminal-tab", body1)
 	req1.Header.Set("Content-Type", "application/json")
 	w1 := httptest.NewRecorder()
-	server.HandleUseExistingTerminalTab(w1, req1)
+	testServer.handleUseExistingTerminalTab(w1, req1)
 	if w1.Code != http.StatusOK {
 		t.Fatalf("POST status: want 200, got %d — %s", w1.Code, w1.Body.String())
 	}
 
 	// Verify persisted to disk
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	if !cfg.UseExistingTerminalTab {
 		t.Errorf("after POST enabled=true, config still false")
 	}
@@ -335,11 +295,11 @@ func TestHandleUseExistingTerminalTab_Toggle(t *testing.T) {
 	req2 := httptest.NewRequest(http.MethodPost, "/api/config/use-existing-terminal-tab", body2)
 	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
-	server.HandleUseExistingTerminalTab(w2, req2)
+	testServer.handleUseExistingTerminalTab(w2, req2)
 	if w2.Code != http.StatusOK {
 		t.Fatalf("POST disable status: want 200, got %d", w2.Code)
 	}
-	cfg = loadConfig()
+	cfg = testServer.loadConfig()
 	if cfg.UseExistingTerminalTab {
 		t.Errorf("after POST enabled=false, config still true")
 	}
@@ -349,7 +309,7 @@ func TestHandleUseExistingTerminalTab_RejectsWrongMethod(t *testing.T) {
 	withTempConfig(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/config/use-existing-terminal-tab", nil)
 	w := httptest.NewRecorder()
-	server.HandleUseExistingTerminalTab(w, req)
+	testServer.handleUseExistingTerminalTab(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("GET status: want 405, got %d", w.Code)
 	}
@@ -361,7 +321,7 @@ func TestHandleFastMode_Toggle(t *testing.T) {
 	// Initial GET: field is false
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	w := httptest.NewRecorder()
-	server.HandleConfig(w, req)
+	testServer.handleConfig(w, req)
 	var body map[string]interface{}
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatalf("decode initial: %v", err)
@@ -375,13 +335,13 @@ func TestHandleFastMode_Toggle(t *testing.T) {
 	req1 := httptest.NewRequest(http.MethodPost, "/api/config/fast-mode", body1)
 	req1.Header.Set("Content-Type", "application/json")
 	w1 := httptest.NewRecorder()
-	server.HandleFastMode(w1, req1)
+	testServer.handleFastMode(w1, req1)
 	if w1.Code != http.StatusOK {
 		t.Fatalf("POST status: want 200, got %d — %s", w1.Code, w1.Body.String())
 	}
 
 	// Verify persisted to disk
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	if !cfg.FastMode {
 		t.Errorf("after POST enabled=true, config still false")
 	}
@@ -391,11 +351,11 @@ func TestHandleFastMode_Toggle(t *testing.T) {
 	req2 := httptest.NewRequest(http.MethodPost, "/api/config/fast-mode", body2)
 	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
-	server.HandleFastMode(w2, req2)
+	testServer.handleFastMode(w2, req2)
 	if w2.Code != http.StatusOK {
 		t.Fatalf("POST disable status: want 200, got %d", w2.Code)
 	}
-	cfg = loadConfig()
+	cfg = testServer.loadConfig()
 	if cfg.FastMode {
 		t.Errorf("after POST enabled=false, config still true")
 	}
@@ -405,7 +365,7 @@ func TestHandleFastMode_RejectsWrongMethod(t *testing.T) {
 	withTempConfig(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/config/fast-mode", nil)
 	w := httptest.NewRecorder()
-	server.HandleFastMode(w, req)
+	testServer.handleFastMode(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("GET status: want 405, got %d", w.Code)
 	}
@@ -417,7 +377,7 @@ func TestHandleClaudeDangerouslySkipPermissions_Toggle(t *testing.T) {
 	// Initial GET via /api/config: field is false
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	w := httptest.NewRecorder()
-	server.HandleConfig(w, req)
+	testServer.handleConfig(w, req)
 	var body map[string]interface{}
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatalf("decode initial: %v", err)
@@ -431,13 +391,13 @@ func TestHandleClaudeDangerouslySkipPermissions_Toggle(t *testing.T) {
 	req1 := httptest.NewRequest(http.MethodPost, "/api/config/claude-dangerously-skip-permissions", body1)
 	req1.Header.Set("Content-Type", "application/json")
 	w1 := httptest.NewRecorder()
-	server.HandleClaudeDangerouslySkipPermissions(w1, req1)
+	testServer.handleClaudeDangerouslySkipPermissions(w1, req1)
 	if w1.Code != http.StatusOK {
 		t.Fatalf("POST status: want 200, got %d — %s", w1.Code, w1.Body.String())
 	}
 
 	// Verify persisted to disk
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	if !cfg.ClaudeDangerouslySkipPermissions {
 		t.Errorf("after POST enabled=true, config still false")
 	}
@@ -447,11 +407,11 @@ func TestHandleClaudeDangerouslySkipPermissions_Toggle(t *testing.T) {
 	req2 := httptest.NewRequest(http.MethodPost, "/api/config/claude-dangerously-skip-permissions", body2)
 	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
-	server.HandleClaudeDangerouslySkipPermissions(w2, req2)
+	testServer.handleClaudeDangerouslySkipPermissions(w2, req2)
 	if w2.Code != http.StatusOK {
 		t.Fatalf("POST disable status: want 200, got %d", w2.Code)
 	}
-	cfg = loadConfig()
+	cfg = testServer.loadConfig()
 	if cfg.ClaudeDangerouslySkipPermissions {
 		t.Errorf("after POST enabled=false, config still true")
 	}
@@ -461,7 +421,7 @@ func TestHandleClaudeDangerouslySkipPermissions_RejectsWrongMethod(t *testing.T)
 	withTempConfig(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/config/claude-dangerously-skip-permissions", nil)
 	w := httptest.NewRecorder()
-	server.HandleClaudeDangerouslySkipPermissions(w, req)
+	testServer.handleClaudeDangerouslySkipPermissions(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("GET status: want 405, got %d", w.Code)
 	}
@@ -469,7 +429,7 @@ func TestHandleClaudeDangerouslySkipPermissions_RejectsWrongMethod(t *testing.T)
 
 func TestAutoReconnect_DefaultIsVisible(t *testing.T) {
 	withTempConfig(t)
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	if cfg.AutoReconnect != "visible" {
 		t.Errorf("AutoReconnect default: want %q, got %q", "visible", cfg.AutoReconnect)
 	}
@@ -483,7 +443,7 @@ func TestAutoReconnect_PreservesExplicitOff(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(legacy), 0644); err != nil {
 		t.Fatalf("write legacy config: %v", err)
 	}
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	if cfg.AutoReconnect != "off" {
 		t.Errorf("legacy off: want %q preserved, got %q", "off", cfg.AutoReconnect)
 	}
@@ -497,11 +457,11 @@ func TestHandleAutoReconnect_Toggle(t *testing.T) {
 	req1 := httptest.NewRequest(http.MethodPost, "/api/config/auto-reconnect", body1)
 	req1.Header.Set("Content-Type", "application/json")
 	w1 := httptest.NewRecorder()
-	server.HandleAutoReconnect(w1, req1)
+	testServer.handleAutoReconnect(w1, req1)
 	if w1.Code != http.StatusOK {
 		t.Fatalf("POST disable status: want 200, got %d — %s", w1.Code, w1.Body.String())
 	}
-	if cfg := loadConfig(); cfg.AutoReconnect != "off" {
+	if cfg := testServer.loadConfig(); cfg.AutoReconnect != "off" {
 		t.Errorf("after POST enabled=false: want %q, got %q", "off", cfg.AutoReconnect)
 	}
 
@@ -510,11 +470,11 @@ func TestHandleAutoReconnect_Toggle(t *testing.T) {
 	req2 := httptest.NewRequest(http.MethodPost, "/api/config/auto-reconnect", body2)
 	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
-	server.HandleAutoReconnect(w2, req2)
+	testServer.handleAutoReconnect(w2, req2)
 	if w2.Code != http.StatusOK {
 		t.Fatalf("POST enable status: want 200, got %d", w2.Code)
 	}
-	if cfg := loadConfig(); cfg.AutoReconnect != "visible" {
+	if cfg := testServer.loadConfig(); cfg.AutoReconnect != "visible" {
 		t.Errorf("after POST enabled=true: want %q, got %q", "visible", cfg.AutoReconnect)
 	}
 }
@@ -523,7 +483,7 @@ func TestHandleAutoReconnect_RejectsWrongMethod(t *testing.T) {
 	withTempConfig(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/config/auto-reconnect", nil)
 	w := httptest.NewRecorder()
-	server.HandleAutoReconnect(w, req)
+	testServer.handleAutoReconnect(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("GET status: want 405, got %d", w.Code)
 	}
@@ -533,12 +493,12 @@ func TestHandleAutoReconnect_RejectsWrongMethod(t *testing.T) {
 
 func TestHandleGetClipboard_NoPTYManager(t *testing.T) {
 	// Without a ?pane= query parameter, the handler should not panic even
-	// when server.PTY is nil (which is the case in unit tests that don't
+	// when PTY is nil (which is the case in unit tests that don't
 	// initialize it). The response should have empty=true and source=system.
 	withTempConfig(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/clipboard", nil)
 	w := httptest.NewRecorder()
-	server.HandleGetClipboard(w, req)
+	testServer.handleGetClipboard(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: want 200, got %d — %s", w.Code, w.Body.String())
@@ -565,7 +525,7 @@ func TestHandleGetClipboard_PaneWithoutManager(t *testing.T) {
 	withTempConfig(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/clipboard?pane=ghost-pane-id", nil)
 	w := httptest.NewRecorder()
-	server.HandleGetClipboard(w, req)
+	testServer.handleGetClipboard(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: want 200, got %d", w.Code)
@@ -575,7 +535,7 @@ func TestHandleGetClipboard_PaneWithoutManager(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	if src, _ := body["source"].(string); src != "system" {
-		t.Errorf("source: want %q (no server.PTY so falls back to system), got %q", "system", src)
+		t.Errorf("source: want %q (no PTY so falls back to system), got %q", "system", src)
 	}
 }
 
@@ -583,11 +543,11 @@ func TestHandleGetClipboard_PaneWithoutManager(t *testing.T) {
 
 func TestHandleSystemCPU_ReturnsValidShape(t *testing.T) {
 	// Warm up the sampler first so we get a real (non-zero-initial) value.
-	_, _ = server.CPU.Sample(context.Background())
+	_, _ = testServer.cpu.Sample(context.Background())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/system/cpu", nil)
 	w := httptest.NewRecorder()
-	server.HandleSystemCPU(w, req)
+	testServer.handleSystemCPU(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: want 200, got %d — %s", w.Code, w.Body.String())
@@ -620,12 +580,12 @@ func TestHandleQuickCommands_AddAndDelete(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/config/quick-commands", body)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	server.HandleQuickCommands(w, req)
+	testServer.handleQuickCommands(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("POST status: want 200, got %d — %s", w.Code, w.Body.String())
 	}
 
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	found := false
 	for _, qc := range cfg.QuickCommands {
 		if qc.Name == "mytest" && qc.Command == "ls -la" {
@@ -642,12 +602,12 @@ func TestHandleQuickCommands_AddAndDelete(t *testing.T) {
 	req = httptest.NewRequest(http.MethodDelete, "/api/config/quick-commands", body)
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
-	server.HandleQuickCommands(w, req)
+	testServer.handleQuickCommands(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("DELETE status: want 200, got %d", w.Code)
 	}
 
-	cfg = loadConfig()
+	cfg = testServer.loadConfig()
 	for _, qc := range cfg.QuickCommands {
 		if qc.Name == "mytest" {
 			t.Error("quick command still present after DELETE")
@@ -662,13 +622,13 @@ func TestHandleQuickCommands_UpdateExisting(t *testing.T) {
 		body := strings.NewReader(`{"name":"` + name + `","command":"` + command + `"}`)
 		req := httptest.NewRequest(http.MethodPost, "/api/config/quick-commands", body)
 		req.Header.Set("Content-Type", "application/json")
-		server.HandleQuickCommands(httptest.NewRecorder(), req)
+		testServer.handleQuickCommands(httptest.NewRecorder(), req)
 	}
 
 	post("upd", "original")
 	post("upd", "updated") // same name → should update
 
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	count := 0
 	for _, qc := range cfg.QuickCommands {
 		if qc.Name == "upd" {
@@ -686,12 +646,12 @@ func TestHandleQuickCommands_UpdateExisting(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/config/quick-commands", body)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	server.HandleQuickCommands(w, req)
+	testServer.handleQuickCommands(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("rename POST status: want 200, got %d - %s", w.Code, w.Body.String())
 	}
 
-	cfg = loadConfig()
+	cfg = testServer.loadConfig()
 	for _, qc := range cfg.QuickCommands {
 		if qc.Name == "upd" {
 			t.Error("old quick command name still present after rename")
@@ -710,12 +670,12 @@ func TestHandleTerminalCommands_AddAndDelete(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/config/terminal-commands", body)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	server.HandleTerminalCommands(w, req)
+	testServer.handleTerminalCommands(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("POST status: want 200, got %d — %s", w.Code, w.Body.String())
 	}
 
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	found := false
 	for _, tc := range cfg.TerminalCommands {
 		if tc.Name == "mytermtest" && tc.Command == "vim file.txt" {
@@ -732,12 +692,12 @@ func TestHandleTerminalCommands_AddAndDelete(t *testing.T) {
 	req = httptest.NewRequest(http.MethodDelete, "/api/config/terminal-commands", body)
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
-	server.HandleTerminalCommands(w, req)
+	testServer.handleTerminalCommands(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("DELETE status: want 200, got %d", w.Code)
 	}
 
-	cfg = loadConfig()
+	cfg = testServer.loadConfig()
 	for _, tc := range cfg.TerminalCommands {
 		if tc.Name == "mytermtest" {
 			t.Error("terminal command still present after DELETE")
@@ -752,13 +712,13 @@ func TestHandleTerminalCommands_UpdateExisting(t *testing.T) {
 		body := strings.NewReader(`{"name":"` + name + `","command":"` + command + `"}`)
 		req := httptest.NewRequest(http.MethodPost, "/api/config/terminal-commands", body)
 		req.Header.Set("Content-Type", "application/json")
-		server.HandleTerminalCommands(httptest.NewRecorder(), req)
+		testServer.handleTerminalCommands(httptest.NewRecorder(), req)
 	}
 
 	post("updterm", "original")
 	post("updterm", "updated") // same name → should update
 
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	count := 0
 	for _, tc := range cfg.TerminalCommands {
 		if tc.Name == "updterm" {
@@ -776,12 +736,12 @@ func TestHandleTerminalCommands_UpdateExisting(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/config/terminal-commands", body)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	server.HandleTerminalCommands(w, req)
+	testServer.handleTerminalCommands(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("rename POST status: want 200, got %d - %s", w.Code, w.Body.String())
 	}
 
-	cfg = loadConfig()
+	cfg = testServer.loadConfig()
 	for _, tc := range cfg.TerminalCommands {
 		if tc.Name == "updterm" {
 			t.Error("old terminal command name still present after rename")
@@ -798,20 +758,20 @@ func TestHandleMarkdownDirs_AddAndDelete(t *testing.T) {
 	withTempConfig(t)
 
 	// Remove defaults so our test dir is the only one
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	cfg.MarkdownDirs = []string{}
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 
 	body := strings.NewReader(`{"dir":"./testdocs"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/config/markdown-dirs", body)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	server.HandleMarkdownDirs(w, req)
+	testServer.handleMarkdownDirs(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("POST status: %d", w.Code)
 	}
 
-	cfg = loadConfig()
+	cfg = testServer.loadConfig()
 	if len(cfg.MarkdownDirs) != 1 || cfg.MarkdownDirs[0] != "./testdocs" {
 		t.Errorf("MarkdownDirs not updated: %v", cfg.MarkdownDirs)
 	}
@@ -819,9 +779,9 @@ func TestHandleMarkdownDirs_AddAndDelete(t *testing.T) {
 	body = strings.NewReader(`{"dir":"./testdocs"}`)
 	req = httptest.NewRequest(http.MethodDelete, "/api/config/markdown-dirs", body)
 	req.Header.Set("Content-Type", "application/json")
-	server.HandleMarkdownDirs(httptest.NewRecorder(), req)
+	testServer.handleMarkdownDirs(httptest.NewRecorder(), req)
 
-	cfg = loadConfig()
+	cfg = testServer.loadConfig()
 	for _, d := range cfg.MarkdownDirs {
 		if d == "./testdocs" {
 			t.Error("dir still present after DELETE")
@@ -835,18 +795,18 @@ func TestHandleMarkdownFiles_EmptyDir(t *testing.T) {
 	withTempConfig(t)
 	dir := t.TempDir()
 
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	cfg.MarkdownDirs = []string{dir}
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/markdown/files?cwd="+dir, nil)
 	w := httptest.NewRecorder()
-	server.HandleMarkdownFiles(w, req)
+	testServer.handleMarkdownFiles(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: %d", w.Code)
 	}
-	var files []server.MDFileEntry
+	var files []MDFileEntry
 	if err := json.NewDecoder(w.Body).Decode(&files); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -864,15 +824,15 @@ func TestHandleMarkdownFiles_FindsMDFiles(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "notes.md"), []byte("## Notes"), 0644)
 	os.WriteFile(filepath.Join(dir, "skip.txt"), []byte("not md"), 0644)
 
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	cfg.MarkdownDirs = []string{dir}
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/markdown/files?cwd="+dir, nil)
 	w := httptest.NewRecorder()
-	server.HandleMarkdownFiles(w, req)
+	testServer.handleMarkdownFiles(w, req)
 
-	var files []server.MDFileEntry
+	var files []MDFileEntry
 	json.NewDecoder(w.Body).Decode(&files)
 
 	if len(files) != 2 {
@@ -889,13 +849,13 @@ func TestHandleMarkdownFiles_NonExistentDirSkipped(t *testing.T) {
 	withTempConfig(t)
 	dir := t.TempDir()
 
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	cfg.MarkdownDirs = []string{"/does/not/exist/at/all", dir}
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/markdown/files?cwd="+dir, nil)
 	w := httptest.NewRecorder()
-	server.HandleMarkdownFiles(w, req)
+	testServer.handleMarkdownFiles(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("non-existent dir should not cause error, got status %d", w.Code)
@@ -911,19 +871,19 @@ func TestHandleMarkdownFile_Success(t *testing.T) {
 	mdPath := filepath.Join(dir, "test.md")
 	os.WriteFile(mdPath, []byte(content), 0644)
 
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	cfg.MarkdownDirs = []string{dir}
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 
 	// Anchor the workspace to dir so the confinement gate accepts it.
-	origCWD := server.ActiveCWD
-	server.ActiveCWD = dir
-	t.Cleanup(func() { server.ActiveCWD = origCWD })
+	origCWD := testServer.activeCWD
+	testServer.activeCWD = dir
+	t.Cleanup(func() { testServer.activeCWD = origCWD })
 
 	req := httptest.NewRequest(http.MethodGet,
 		"/api/markdown/file?path="+mdPath+"&cwd="+dir, nil)
 	w := httptest.NewRecorder()
-	server.HandleMarkdownFile(w, req)
+	testServer.handleMarkdownFile(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: %d — %s", w.Code, w.Body.String())
@@ -941,13 +901,13 @@ func TestHandleMarkdownFile_RejectsCraftedCwdEscape(t *testing.T) {
 	workspace := t.TempDir()
 	outside := t.TempDir()
 
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	cfg.MarkdownDirs = []string{"."} // base controlled by cwd
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 
-	origCWD := server.ActiveCWD
-	server.ActiveCWD = workspace
-	t.Cleanup(func() { server.ActiveCWD = origCWD })
+	origCWD := testServer.activeCWD
+	testServer.activeCWD = workspace
+	t.Cleanup(func() { testServer.activeCWD = origCWD })
 
 	outsideMD := filepath.Join(outside, "secret.md")
 	os.WriteFile(outsideMD, []byte("secret"), 0644)
@@ -955,7 +915,7 @@ func TestHandleMarkdownFile_RejectsCraftedCwdEscape(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet,
 		"/api/markdown/file?path="+outsideMD+"&cwd="+outside, nil)
 	w := httptest.NewRecorder()
-	server.HandleMarkdownFile(w, req)
+	testServer.handleMarkdownFile(w, req)
 
 	if w.Code != http.StatusForbidden {
 		t.Errorf("expected 403 for crafted-cwd escape, got %d (%s)", w.Code, w.Body.String())
@@ -969,13 +929,13 @@ func TestHandleMarkdownFile_RejectsSymlinkEscape(t *testing.T) {
 	dir := t.TempDir()
 	outside := t.TempDir()
 
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	cfg.MarkdownDirs = []string{dir}
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 
-	origCWD := server.ActiveCWD
-	server.ActiveCWD = dir
-	t.Cleanup(func() { server.ActiveCWD = origCWD })
+	origCWD := testServer.activeCWD
+	testServer.activeCWD = dir
+	t.Cleanup(func() { testServer.activeCWD = origCWD })
 
 	target := filepath.Join(outside, "target.md")
 	os.WriteFile(target, []byte("secret"), 0644)
@@ -987,7 +947,7 @@ func TestHandleMarkdownFile_RejectsSymlinkEscape(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet,
 		"/api/markdown/file?path="+link+"&cwd="+dir, nil)
 	w := httptest.NewRecorder()
-	server.HandleMarkdownFile(w, req)
+	testServer.handleMarkdownFile(w, req)
 
 	if w.Code != http.StatusForbidden {
 		t.Errorf("expected 403 for symlink escaping workspace, got %d (%s)", w.Code, w.Body.String())
@@ -997,9 +957,9 @@ func TestHandleMarkdownFile_RejectsSymlinkEscape(t *testing.T) {
 func TestHandleMarkdownFile_RejectsNonMD(t *testing.T) {
 	withTempConfig(t)
 	dir := t.TempDir()
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	cfg.MarkdownDirs = []string{dir}
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 
 	badPath := filepath.Join(dir, "secrets.txt")
 	os.WriteFile(badPath, []byte("secret"), 0644)
@@ -1007,7 +967,7 @@ func TestHandleMarkdownFile_RejectsNonMD(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet,
 		"/api/markdown/file?path="+badPath+"&cwd="+dir, nil)
 	w := httptest.NewRecorder()
-	server.HandleMarkdownFile(w, req)
+	testServer.handleMarkdownFile(w, req)
 
 	if w.Code != http.StatusForbidden {
 		t.Errorf("expected 403 for non-.md file, got %d", w.Code)
@@ -1017,9 +977,9 @@ func TestHandleMarkdownFile_RejectsNonMD(t *testing.T) {
 func TestHandleMarkdownFile_RejectsPathOutsideAllowedDirs(t *testing.T) {
 	withTempConfig(t)
 	dir := t.TempDir()
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	cfg.MarkdownDirs = []string{dir}
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 
 	// A file that is an .md file but NOT under any configured dir
 	outsidePath := filepath.Join(t.TempDir(), "escape.md")
@@ -1028,7 +988,7 @@ func TestHandleMarkdownFile_RejectsPathOutsideAllowedDirs(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet,
 		"/api/markdown/file?path="+outsidePath+"&cwd="+dir, nil)
 	w := httptest.NewRecorder()
-	server.HandleMarkdownFile(w, req)
+	testServer.handleMarkdownFile(w, req)
 
 	if w.Code != http.StatusForbidden {
 		t.Errorf("expected 403 for path outside allowed dirs, got %d", w.Code)
@@ -1043,15 +1003,15 @@ func TestHandleMarkdownPasteAndDelete(t *testing.T) {
 		t.Fatalf("mkdir docs: %v", err)
 	}
 
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	cfg.MarkdownDirs = []string{"docs"}
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 
 	pasteBody := `{"cwd":` + strconv.Quote(cwd) + `,"dir":"docs","name":"notes","content":"# hi\nthere\n"}`
 	pasteReq := httptest.NewRequest(http.MethodPost, "/api/markdown/paste", strings.NewReader(pasteBody))
 	pasteReq.Header.Set("Content-Type", "application/json")
 	pasteW := httptest.NewRecorder()
-	server.HandleMarkdownPaste(pasteW, pasteReq)
+	testServer.handleMarkdownPaste(pasteW, pasteReq)
 	if pasteW.Code != http.StatusOK {
 		t.Fatalf("paste status: %d body=%s", pasteW.Code, pasteW.Body.String())
 	}
@@ -1065,7 +1025,7 @@ func TestHandleMarkdownPasteAndDelete(t *testing.T) {
 	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/markdown/delete", strings.NewReader(deleteBody))
 	deleteReq.Header.Set("Content-Type", "application/json")
 	deleteW := httptest.NewRecorder()
-	server.HandleMarkdownDelete(deleteW, deleteReq)
+	testServer.handleMarkdownDelete(deleteW, deleteReq)
 	if deleteW.Code != http.StatusOK {
 		t.Fatalf("delete status: %d body=%s", deleteW.Code, deleteW.Body.String())
 	}
@@ -1098,9 +1058,9 @@ func TestHandleMarkdownCopyAllWorktrees(t *testing.T) {
 	otherWt := filepath.Join(t.TempDir(), "wt-other")
 	runGit(cwd, "worktree", "add", otherWt, "-b", "wt-other")
 
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	cfg.MarkdownDirs = []string{"docs"}
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 
 	sourceDir := filepath.Join(cwd, "docs")
 	if err := os.MkdirAll(sourceDir, 0755); err != nil {
@@ -1115,7 +1075,7 @@ func TestHandleMarkdownCopyAllWorktrees(t *testing.T) {
 	copyReq := httptest.NewRequest(http.MethodPost, "/api/markdown/copy-all-worktrees", strings.NewReader(copyBody))
 	copyReq.Header.Set("Content-Type", "application/json")
 	copyW := httptest.NewRecorder()
-	server.HandleMarkdownCopyAllWorktrees(copyW, copyReq)
+	testServer.handleMarkdownCopyAllWorktrees(copyW, copyReq)
 	if copyW.Code != http.StatusOK {
 		t.Fatalf("copy-all status: %d body=%s", copyW.Code, copyW.Body.String())
 	}
@@ -1131,7 +1091,7 @@ func TestHandleMarkdownCopyAllWorktrees(t *testing.T) {
 func TestHandleGetCoders(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
 	w := httptest.NewRecorder()
-	server.HandleGetCoders(w, req)
+	testServer.handleGetCoders(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
@@ -1153,7 +1113,7 @@ func TestHandleGetCoders(t *testing.T) {
 func TestHandleGetVersion(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/version", nil)
 	w := httptest.NewRecorder()
-	server.HandleGetVersion(w, req)
+	testServer.handleGetVersion(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
@@ -1174,30 +1134,23 @@ func TestHandleGetVersion(t *testing.T) {
 	}
 }
 
-func testMainShell() (string, []string) {
-	if runtime.GOOS == "windows" {
-		return "pwsh", []string{"-NoLogo", "-NoProfile", "-NonInteractive"}
-	}
-	return "bash", []string{"--norc", "--noprofile"}
-}
-
 func TestHandleFallback_Pinning(t *testing.T) {
 	// Re-initialise the global manager to ensure a clean state.
-	server.PTY = pty.NewManager()
+	testServer.pty = pty.NewManager()
 	shell, args := testMainShell()
 
-	inst, err := server.PTY.Spawn(context.Background(), "", shell, args, "shell", "test-session")
+	inst, err := testServer.pty.Spawn(context.Background(), "", shell, args, "shell", "test-session")
 	if err != nil {
 		t.Fatalf("Failed to spawn PTY for pinning test: %v", err)
 	}
 	defer func() {
-		_ = server.PTY.Kill(inst.ID)
+		_ = testServer.pty.Kill(inst.ID)
 	}()
 
 	// Verify posting to a non-existent terminal returns 404.
 	reqNotFound := httptest.NewRequest(http.MethodPost, "/api/terminals/non-existent-id/pin", strings.NewReader(`{"pinned":true}`))
 	wNotFound := httptest.NewRecorder()
-	server.HandleFallback(wNotFound, reqNotFound)
+	testServer.handleFallback(wNotFound, reqNotFound)
 	if wNotFound.Code != http.StatusNotFound {
 		t.Errorf("Expected 404 for non-existent terminal pinning, got %d", wNotFound.Code)
 	}
@@ -1205,7 +1158,7 @@ func TestHandleFallback_Pinning(t *testing.T) {
 	// Verify posting invalid JSON returns 400.
 	reqBadJSON := httptest.NewRequest(http.MethodPost, "/api/terminals/"+inst.ID+"/pin", strings.NewReader(`{"pinned":`))
 	wBadJSON := httptest.NewRecorder()
-	server.HandleFallback(wBadJSON, reqBadJSON)
+	testServer.handleFallback(wBadJSON, reqBadJSON)
 	if wBadJSON.Code != http.StatusBadRequest {
 		t.Errorf("Expected 400 for malformed JSON request, got %d", wBadJSON.Code)
 	}
@@ -1213,7 +1166,7 @@ func TestHandleFallback_Pinning(t *testing.T) {
 	// Verify successful pinning returns 200.
 	reqPin := httptest.NewRequest(http.MethodPost, "/api/terminals/"+inst.ID+"/pin", strings.NewReader(`{"pinned":true}`))
 	wPin := httptest.NewRecorder()
-	server.HandleFallback(wPin, reqPin)
+	testServer.handleFallback(wPin, reqPin)
 	if wPin.Code != http.StatusOK {
 		t.Fatalf("Expected 200 OK for valid pinning request, got %d", wPin.Code)
 	}
@@ -1225,7 +1178,7 @@ func TestHandleFallback_Pinning(t *testing.T) {
 	// Verify successful unpinning returns 200.
 	reqUnpin := httptest.NewRequest(http.MethodPost, "/api/terminals/"+inst.ID+"/pin", strings.NewReader(`{"pinned":false}`))
 	wUnpin := httptest.NewRecorder()
-	server.HandleFallback(wUnpin, reqUnpin)
+	testServer.handleFallback(wUnpin, reqUnpin)
 	if wUnpin.Code != http.StatusOK {
 		t.Fatalf("Expected 200 OK for valid unpinning request, got %d", wUnpin.Code)
 	}
@@ -1236,19 +1189,19 @@ func TestHandleFallback_Pinning(t *testing.T) {
 }
 
 func TestHandleFallback_Rename(t *testing.T) {
-	server.PTY = pty.NewManager()
+	testServer.pty = pty.NewManager()
 	shell, args := testMainShell()
 
-	inst, err := server.PTY.Spawn(context.Background(), "", shell, args, "shell", "test-session")
+	inst, err := testServer.pty.Spawn(context.Background(), "", shell, args, "shell", "test-session")
 	if err != nil {
 		t.Fatalf("Failed to spawn PTY for rename test: %v", err)
 	}
-	defer func() { _ = server.PTY.Kill(inst.ID) }()
+	defer func() { _ = testServer.pty.Kill(inst.ID) }()
 
 	// 404 for unknown pane.
 	reqNF := httptest.NewRequest(http.MethodPost, "/api/terminals/nope/title", strings.NewReader(`{"title":"x"}`))
 	wNF := httptest.NewRecorder()
-	server.HandleFallback(wNF, reqNF)
+	testServer.handleFallback(wNF, reqNF)
 	if wNF.Code != http.StatusNotFound {
 		t.Errorf("unknown pane: want 404, got %d", wNF.Code)
 	}
@@ -1256,7 +1209,7 @@ func TestHandleFallback_Rename(t *testing.T) {
 	// 400 for malformed JSON.
 	reqBad := httptest.NewRequest(http.MethodPost, "/api/terminals/"+inst.ID+"/title", strings.NewReader(`{"title":`))
 	wBad := httptest.NewRecorder()
-	server.HandleFallback(wBad, reqBad)
+	testServer.handleFallback(wBad, reqBad)
 	if wBad.Code != http.StatusBadRequest {
 		t.Errorf("malformed JSON: want 400, got %d", wBad.Code)
 	}
@@ -1264,7 +1217,7 @@ func TestHandleFallback_Rename(t *testing.T) {
 	// 200 + title mutated.
 	reqOK := httptest.NewRequest(http.MethodPost, "/api/terminals/"+inst.ID+"/title", strings.NewReader(`{"title":"deploy hotfix"}`))
 	wOK := httptest.NewRecorder()
-	server.HandleFallback(wOK, reqOK)
+	testServer.handleFallback(wOK, reqOK)
 	if wOK.Code != http.StatusOK {
 		t.Fatalf("rename: want 200, got %d", wOK.Code)
 	}
@@ -1282,14 +1235,14 @@ func TestHandleFallback_PiRenameDeliversOneNativeNameCommand(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	withTempConfig(t)
 	manager := pty.NewManager()
-	oldManager := server.PTY
-	server.PTY = manager
+	oldManager := testServer.pty
+	testServer.pty = manager
 	t.Cleanup(func() {
 		for _, inst := range manager.ListActive() {
 			_ = manager.Kill(inst.ID)
 		}
 		_ = manager.FlushSaveState()
-		server.PTY = oldManager
+		testServer.pty = oldManager
 	})
 
 	outputPath := filepath.Join(home, "native-command.txt")
@@ -1306,7 +1259,7 @@ func TestHandleFallback_PiRenameDeliversOneNativeNameCommand(t *testing.T) {
 	for _, body := range []string{`{"title":"  \t "}`, `{"title":"line\nbreak"}`} {
 		req := httptest.NewRequest(http.MethodPost, "/api/terminals/"+inst.ID+"/title", strings.NewReader(body))
 		w := httptest.NewRecorder()
-		server.HandleFallback(w, req)
+		testServer.handleFallback(w, req)
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("invalid Pi title %s returned HTTP %d", body, w.Code)
 		}
@@ -1317,7 +1270,7 @@ func TestHandleFallback_PiRenameDeliversOneNativeNameCommand(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/terminals/"+inst.ID+"/title", strings.NewReader(`{"title":"Native name"}`))
 	w := httptest.NewRecorder()
-	server.HandleFallback(w, req)
+	testServer.handleFallback(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("Pi rename returned HTTP %d: %s", w.Code, w.Body.String())
 	}
@@ -1354,14 +1307,14 @@ func TestHandleFallback_PiRenameDeliversOneNativeNameCommand(t *testing.T) {
 }
 
 func TestHandleFallback_PiRenameRejectsMissingWriter(t *testing.T) {
-	oldManager := server.PTY
-	server.PTY = pty.NewManager()
-	t.Cleanup(func() { server.PTY = oldManager })
+	oldManager := testServer.pty
+	testServer.pty = pty.NewManager()
+	t.Cleanup(func() { testServer.pty = oldManager })
 	dead := &pty.PTYInstance{ID: "dead-pi-pane", Coder: "pi", SessionID: "native-id", Title: "Saved title"}
-	server.PTY.AddInstanceForTesting(dead)
+	testServer.pty.AddInstanceForTesting(dead)
 	req := httptest.NewRequest(http.MethodPost, "/api/terminals/"+dead.ID+"/title", strings.NewReader(`{"title":"New title"}`))
 	w := httptest.NewRecorder()
-	server.HandleFallback(w, req)
+	testServer.handleFallback(w, req)
 	if w.Code < 400 {
 		t.Fatalf("missing live Pi writer returned HTTP %d", w.Code)
 	}
@@ -1371,10 +1324,10 @@ func TestHandleFallback_PiRenameRejectsMissingWriter(t *testing.T) {
 }
 
 func TestHandleFallback_Delete(t *testing.T) {
-	server.PTY = pty.NewManager()
+	testServer.pty = pty.NewManager()
 	shell, args := testMainShell()
 
-	inst, err := server.PTY.Spawn(context.Background(), "", shell, args, "shell", "test-session")
+	inst, err := testServer.pty.Spawn(context.Background(), "", shell, args, "shell", "test-session")
 	if err != nil {
 		t.Fatalf("Failed to spawn PTY for delete test: %v", err)
 	}
@@ -1382,7 +1335,7 @@ func TestHandleFallback_Delete(t *testing.T) {
 	// Verify deleting non-existent terminal returns 404.
 	reqNotFound := httptest.NewRequest(http.MethodDelete, "/api/terminals/non-existent-id", nil)
 	wNotFound := httptest.NewRecorder()
-	server.HandleFallback(wNotFound, reqNotFound)
+	testServer.handleFallback(wNotFound, reqNotFound)
 	if wNotFound.Code != http.StatusNotFound {
 		t.Errorf("Expected 404 for non-existent terminal deletion, got %d", wNotFound.Code)
 	}
@@ -1390,12 +1343,12 @@ func TestHandleFallback_Delete(t *testing.T) {
 	// Verify successful deletion returns 200 and cleans up the terminal.
 	reqDelete := httptest.NewRequest(http.MethodDelete, "/api/terminals/"+inst.ID, nil)
 	wDelete := httptest.NewRecorder()
-	server.HandleFallback(wDelete, reqDelete)
+	testServer.handleFallback(wDelete, reqDelete)
 	if wDelete.Code != http.StatusOK {
 		t.Fatalf("Expected 200 OK for valid deletion request, got %d", wDelete.Code)
 	}
 
-	_, found := server.PTY.Get(inst.ID)
+	_, found := testServer.pty.Get(inst.ID)
 	if found {
 		t.Error("Expected PTY instance to be removed from manager registry after delete request")
 	}
@@ -1424,7 +1377,7 @@ func TestHandleGetWorktreeDirtyStates(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/git/worktree-dirty?cwd="+tempDir, nil)
 	w := httptest.NewRecorder()
-	server.HandleGetWorktreeDirtyStates(w, req)
+	testServer.handleGetWorktreeDirtyStates(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("Expected status 200, got %d", w.Code)
@@ -1450,7 +1403,7 @@ func TestHandleGetWorktreeDirtyStates(t *testing.T) {
 func TestHandleGetSessionTranscript_Unsupported(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/session-transcript?coder=nonexistent&id=123", nil)
 	w := httptest.NewRecorder()
-	server.HandleGetSessionTranscript(w, req)
+	testServer.handleGetSessionTranscript(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("Expected status 400 for unsupported coder, got %d", w.Code)
@@ -1461,7 +1414,7 @@ func TestHandleGetSessionTranscript_EmptyPi(t *testing.T) {
 	tempCwd := filepath.Join(os.TempDir(), "nonexistent")
 	req := httptest.NewRequest(http.MethodGet, "/api/session-transcript?coder=pi&id=nonexistent&cwd="+tempCwd, nil)
 	w := httptest.NewRecorder()
-	server.HandleGetSessionTranscript(w, req)
+	testServer.handleGetSessionTranscript(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("Expected status 200 for empty transcript, got %d", w.Code)
@@ -1500,7 +1453,7 @@ func TestHandleProxy_Success(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	server.HandleProxy(w, req)
+	handleProxy(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("Expected status 200, got %d", w.Code)
@@ -1517,7 +1470,7 @@ func TestHandleProxy_Success(t *testing.T) {
 func TestHandleProxy_MissingUrl(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/proxy", nil)
 	w := httptest.NewRecorder()
-	server.HandleProxy(w, req)
+	handleProxy(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("Expected status 400 for missing url, got %d", w.Code)
@@ -1533,18 +1486,18 @@ func TestEncodeDecodeConfigData(t *testing.T) {
 	orig := DummyData{Name: "testing-dry", Val: 42}
 	prefix := "TESTPREFIX"
 
-	encoded, err := server.EncodeConfigData(prefix, orig)
+	encoded, err := EncodeConfigData(prefix, orig)
 	if err != nil {
-		t.Fatalf("server.EncodeConfigData failed: %v", err)
+		t.Fatalf("EncodeConfigData failed: %v", err)
 	}
 
 	if !strings.HasPrefix(encoded, prefix+":") {
 		t.Errorf("expected prefix %s in encoded string, got %s", prefix, encoded)
 	}
 
-	decodedBytes, err := server.DecodeConfigData(encoded, prefix)
+	decodedBytes, err := DecodeConfigData(encoded, prefix)
 	if err != nil {
-		t.Fatalf("server.DecodeConfigData failed: %v", err)
+		t.Fatalf("DecodeConfigData failed: %v", err)
 	}
 
 	var decoded DummyData
@@ -1557,13 +1510,13 @@ func TestEncodeDecodeConfigData(t *testing.T) {
 	}
 
 	// Test invalid prefix
-	_, err = server.DecodeConfigData(encoded, "WRONGPREFIX")
+	_, err = DecodeConfigData(encoded, "WRONGPREFIX")
 	if err == nil {
 		t.Error("expected error decoding with wrong prefix, got nil")
 	}
 
 	// Test malformed payload
-	_, err = server.DecodeConfigData("TESTPREFIX:hash", prefix)
+	_, err = DecodeConfigData("TESTPREFIX:hash", prefix)
 	if err == nil {
 		t.Error("expected error for malformed payload, got nil")
 	}
@@ -1572,7 +1525,7 @@ func TestEncodeDecodeConfigData(t *testing.T) {
 	parts := strings.Split(encoded, ":")
 	parts[2] = "YWJj" // base64 for "abc", will mismatch hash
 	corrupted := strings.Join(parts, ":")
-	_, err = server.DecodeConfigData(corrupted, prefix)
+	_, err = DecodeConfigData(corrupted, prefix)
 	if err == nil {
 		t.Error("expected error for corrupted payload (hash mismatch), got nil")
 	}
@@ -1582,16 +1535,16 @@ func TestConfigExportImportModelsHandlers(t *testing.T) {
 	withTempConfig(t)
 
 	// Set initial config
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	cfg.ModelPresets = ModelPresetsMap{"pi": []string{"original-model"}}
 	cfg.QuickCommands = []QuickCommand{{Name: "test", Command: "echo 1"}}
 	cfg.TerminalCommands = []QuickCommand{{Name: "term", Command: "bash"}}
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 
 	// Call export
 	reqExport := httptest.NewRequest(http.MethodGet, "/api/config/export-models", nil)
 	wExport := httptest.NewRecorder()
-	server.HandleConfigExportModels(wExport, reqExport)
+	testServer.handleConfigExportModels(wExport, reqExport)
 
 	if wExport.Code != http.StatusOK {
 		t.Fatalf("export handler failed, code %d", wExport.Code)
@@ -1609,24 +1562,24 @@ func TestConfigExportImportModelsHandlers(t *testing.T) {
 	}
 
 	// Update configuration so we can verify import overwrites it
-	cfg = loadConfig()
+	cfg = testServer.loadConfig()
 	cfg.ModelPresets = ModelPresetsMap{"pi": []string{"overwritten-model"}}
 	cfg.QuickCommands = []QuickCommand{{Name: "test2", Command: "echo 2"}}
 	cfg.TerminalCommands = []QuickCommand{{Name: "term-different", Command: "sh"}}
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 
 	// Call import with the exported config
 	importReqBody, _ := json.Marshal(map[string]string{"config": exportRes.Config})
 	reqImport := httptest.NewRequest(http.MethodPost, "/api/config/import-models", strings.NewReader(string(importReqBody)))
 	wImport := httptest.NewRecorder()
-	server.HandleConfigImportModels(wImport, reqImport)
+	testServer.handleConfigImportModels(wImport, reqImport)
 
 	if wImport.Code != http.StatusOK {
 		t.Fatalf("import handler failed, code %d, body: %s", wImport.Code, wImport.Body.String())
 	}
 
 	// Reload config and assert only models are restored. Commands remain unchanged.
-	loaded := loadConfig()
+	loaded := testServer.loadConfig()
 	if loaded.ModelPresets["pi"][0] != "original-model" {
 		t.Errorf("model presets not restored, got %+v", loaded.ModelPresets)
 	}
@@ -1654,18 +1607,18 @@ func TestConfigExportImportModelsHandlers(t *testing.T) {
 func TestConfigExportQuickCommandsOnly(t *testing.T) {
 	withTempConfig(t)
 
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	cfg.QuickCommands = []QuickCommand{
 		{Name: "q1", Command: "echo q1"},
 		{Name: "q2", Command: "echo q2"},
 	}
 	// Terminal cmds are also set; the quick export must NOT include them.
 	cfg.TerminalCommands = []QuickCommand{{Name: "t1", Command: "bash t1"}}
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 
 	reqExport := httptest.NewRequest(http.MethodGet, "/api/config/export-quick-commands", nil)
 	wExport := httptest.NewRecorder()
-	server.HandleConfigExportQuickCommands(wExport, reqExport)
+	testServer.handleConfigExportQuickCommands(wExport, reqExport)
 	if wExport.Code != http.StatusOK {
 		t.Fatalf("quick export handler failed, code %d, body: %s", wExport.Code, wExport.Body.String())
 	}
@@ -1681,7 +1634,7 @@ func TestConfigExportQuickCommandsOnly(t *testing.T) {
 	}
 
 	// Round-trip decode and confirm ONLY quick_commands was carried.
-	jsonData, err := server.DecodeConfigData(exportRes.Config, "PHIQUICKCMDS")
+	jsonData, err := DecodeConfigData(exportRes.Config, "PHIQUICKCMDS")
 	if err != nil {
 		t.Fatalf("decode PHIQUICKCMDS: %v", err)
 	}
@@ -1704,18 +1657,18 @@ func TestConfigExportQuickCommandsOnly(t *testing.T) {
 func TestConfigExportTerminalCommandsOnly(t *testing.T) {
 	withTempConfig(t)
 
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	// Quick cmds are also set; the terminal export must NOT include them.
 	cfg.QuickCommands = []QuickCommand{{Name: "q1", Command: "echo q1"}}
 	cfg.TerminalCommands = []QuickCommand{
 		{Name: "t1", Command: "bash t1"},
 		{Name: "t2", Command: "bash t2"},
 	}
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 
 	reqExport := httptest.NewRequest(http.MethodGet, "/api/config/export-terminal-commands", nil)
 	wExport := httptest.NewRecorder()
-	server.HandleConfigExportTerminalCommands(wExport, reqExport)
+	testServer.handleConfigExportTerminalCommands(wExport, reqExport)
 	if wExport.Code != http.StatusOK {
 		t.Fatalf("terminal export handler failed, code %d, body: %s", wExport.Code, wExport.Body.String())
 	}
@@ -1730,7 +1683,7 @@ func TestConfigExportTerminalCommandsOnly(t *testing.T) {
 		t.Fatalf("expected config to start with PHITERMCMDS:, got %q", exportRes.Config[:min(40, len(exportRes.Config))])
 	}
 
-	jsonData, err := server.DecodeConfigData(exportRes.Config, "PHITERMCMDS")
+	jsonData, err := DecodeConfigData(exportRes.Config, "PHITERMCMDS")
 	if err != nil {
 		t.Fatalf("decode PHITERMCMDS: %v", err)
 	}
@@ -1755,13 +1708,13 @@ func TestConfigExportTerminalCommandsOnly(t *testing.T) {
 func TestConfigImportCmdsScoping(t *testing.T) {
 	withTempConfig(t)
 
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	cfg.QuickCommands = []QuickCommand{{Name: "q-old", Command: "echo old"}}
 	cfg.TerminalCommands = []QuickCommand{{Name: "t-existing", Command: "bash existing"}}
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 
 	// Build a PHIQUICKCMDS payload and import it.
-	encoded, err := server.EncodeConfigData("PHIQUICKCMDS", struct {
+	encoded, err := EncodeConfigData("PHIQUICKCMDS", struct {
 		QuickCommands []QuickCommand `json:"quick_commands"`
 	}{
 		QuickCommands: []QuickCommand{{Name: "q-new", Command: "echo new"}},
@@ -1772,12 +1725,12 @@ func TestConfigImportCmdsScoping(t *testing.T) {
 	body, _ := json.Marshal(map[string]string{"config": encoded})
 	req := httptest.NewRequest(http.MethodPost, "/api/config/import-cmds", strings.NewReader(string(body)))
 	w := httptest.NewRecorder()
-	server.HandleConfigImportCmds(w, req)
+	testServer.handleConfigImportCmds(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("import handler failed, code %d, body: %s", w.Code, w.Body.String())
 	}
 
-	loaded := loadConfig()
+	loaded := testServer.loadConfig()
 	if len(loaded.QuickCommands) != 1 || loaded.QuickCommands[0].Name != "q-new" {
 		t.Errorf("quick commands not updated, got %+v", loaded.QuickCommands)
 	}
@@ -1788,11 +1741,11 @@ func TestConfigImportCmdsScoping(t *testing.T) {
 
 	// Now do the symmetric case: import a PHITERMCMDS payload and assert
 	// quick_commands is left alone.
-	cfg = loadConfig()
+	cfg = testServer.loadConfig()
 	cfg.QuickCommands = []QuickCommand{{Name: "q-existing", Command: "echo q-existing"}}
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 
-	encoded2, err := server.EncodeConfigData("PHITERMCMDS", struct {
+	encoded2, err := EncodeConfigData("PHITERMCMDS", struct {
 		TerminalCommands []QuickCommand `json:"terminal_commands"`
 	}{
 		TerminalCommands: []QuickCommand{{Name: "t-new", Command: "bash t-new"}},
@@ -1803,12 +1756,12 @@ func TestConfigImportCmdsScoping(t *testing.T) {
 	body2, _ := json.Marshal(map[string]string{"config": encoded2})
 	req2 := httptest.NewRequest(http.MethodPost, "/api/config/import-cmds", strings.NewReader(string(body2)))
 	w2 := httptest.NewRecorder()
-	server.HandleConfigImportCmds(w2, req2)
+	testServer.handleConfigImportCmds(w2, req2)
 	if w2.Code != http.StatusOK {
 		t.Fatalf("import handler failed, code %d, body: %s", w2.Code, w2.Body.String())
 	}
 
-	loaded = loadConfig()
+	loaded = testServer.loadConfig()
 	if len(loaded.TerminalCommands) != 1 || loaded.TerminalCommands[0].Name != "t-new" {
 		t.Errorf("terminal commands not updated, got %+v", loaded.TerminalCommands)
 	}
@@ -1822,13 +1775,13 @@ func TestConfigImportCmdsScoping(t *testing.T) {
 func TestConfigImportCmdsLegacyPHICMDS(t *testing.T) {
 	withTempConfig(t)
 
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	cfg.QuickCommands = []QuickCommand{{Name: "q-old", Command: "echo old"}}
 	cfg.TerminalCommands = []QuickCommand{{Name: "t-old", Command: "bash old"}}
-	saveConfig(cfg)
+	testServer.saveConfig(cfg)
 
 	// Build the legacy combined format and import.
-	encoded, err := server.EncodeConfigData("PHICMDS", struct {
+	encoded, err := EncodeConfigData("PHICMDS", struct {
 		QuickCommands    []QuickCommand `json:"quick_commands"`
 		TerminalCommands []QuickCommand `json:"terminal_commands"`
 	}{
@@ -1841,12 +1794,12 @@ func TestConfigImportCmdsLegacyPHICMDS(t *testing.T) {
 	body, _ := json.Marshal(map[string]string{"config": encoded})
 	req := httptest.NewRequest(http.MethodPost, "/api/config/import-cmds", strings.NewReader(string(body)))
 	w := httptest.NewRecorder()
-	server.HandleConfigImportCmds(w, req)
+	testServer.handleConfigImportCmds(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("legacy PHICMDS import failed, code %d, body: %s", w.Code, w.Body.String())
 	}
 
-	loaded := loadConfig()
+	loaded := testServer.loadConfig()
 	if len(loaded.QuickCommands) != 1 || loaded.QuickCommands[0].Name != "q-new" {
 		t.Errorf("legacy PHICMDS: quick commands not updated, got %+v", loaded.QuickCommands)
 	}
@@ -1951,10 +1904,10 @@ func TestPushoverAPI(t *testing.T) {
 	// GET Pushover config
 	reqGet := httptest.NewRequest(http.MethodGet, "/api/config/pushover", nil)
 	wGet := httptest.NewRecorder()
-	server.HandleGetPushoverConfig(wGet, reqGet)
+	testServer.handleGetPushoverConfig(wGet, reqGet)
 
 	if wGet.Code != http.StatusOK {
-		t.Fatalf("server.HandleGetPushoverConfig failed: %d", wGet.Code)
+		t.Fatalf("handleGetPushoverConfig failed: %d", wGet.Code)
 	}
 
 	// POST Pushover config
@@ -1965,13 +1918,13 @@ func TestPushoverAPI(t *testing.T) {
 	})
 	reqPost := httptest.NewRequest(http.MethodPost, "/api/config/pushover", strings.NewReader(string(postBody)))
 	wPost := httptest.NewRecorder()
-	server.HandlePostPushoverConfig(wPost, reqPost)
+	testServer.handlePostPushoverConfig(wPost, reqPost)
 
 	if wPost.Code != http.StatusOK {
-		t.Fatalf("server.HandlePostPushoverConfig failed: %d", wPost.Code)
+		t.Fatalf("handlePostPushoverConfig failed: %d", wPost.Code)
 	}
 
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	if !cfg.PushoverEnabled || cfg.PushoverUserKey != "test_user_key" || cfg.PushoverAppToken != "test_app_token" {
 		t.Errorf("Config mismatch after Pushover POST: %+v", cfg)
 	}
@@ -1983,10 +1936,10 @@ func TestWebhookAPI(t *testing.T) {
 	// GET Webhook config
 	reqGet := httptest.NewRequest(http.MethodGet, "/api/config/webhook", nil)
 	wGet := httptest.NewRecorder()
-	server.HandleGetWebhookConfig(wGet, reqGet)
+	testServer.handleGetWebhookConfig(wGet, reqGet)
 
 	if wGet.Code != http.StatusOK {
-		t.Fatalf("server.HandleGetWebhookConfig failed: %d", wGet.Code)
+		t.Fatalf("handleGetWebhookConfig failed: %d", wGet.Code)
 	}
 
 	// POST Webhook config
@@ -1996,13 +1949,13 @@ func TestWebhookAPI(t *testing.T) {
 	})
 	reqPost := httptest.NewRequest(http.MethodPost, "/api/config/webhook", bytes.NewReader(postBody))
 	wPost := httptest.NewRecorder()
-	server.HandlePostWebhookConfig(wPost, reqPost)
+	testServer.handlePostWebhookConfig(wPost, reqPost)
 
 	if wPost.Code != http.StatusOK {
-		t.Fatalf("server.HandlePostWebhookConfig failed: %d", wPost.Code)
+		t.Fatalf("handlePostWebhookConfig failed: %d", wPost.Code)
 	}
 
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	if !cfg.WebhookEnabled || cfg.WebhookURL != "https://api.day.app/test_key/" {
 		t.Errorf("Config mismatch after Webhook POST: %+v", cfg)
 	}
@@ -2014,10 +1967,10 @@ func TestSimplepushAPI(t *testing.T) {
 	// GET Simplepush config
 	reqGet := httptest.NewRequest(http.MethodGet, "/api/config/simplepush", nil)
 	wGet := httptest.NewRecorder()
-	server.HandleGetSimplepushConfig(wGet, reqGet)
+	testServer.handleGetSimplepushConfig(wGet, reqGet)
 
 	if wGet.Code != http.StatusOK {
-		t.Fatalf("server.HandleGetSimplepushConfig failed: %d", wGet.Code)
+		t.Fatalf("handleGetSimplepushConfig failed: %d", wGet.Code)
 	}
 
 	// POST Simplepush config
@@ -2027,13 +1980,13 @@ func TestSimplepushAPI(t *testing.T) {
 	})
 	reqPost := httptest.NewRequest(http.MethodPost, "/api/config/simplepush", bytes.NewReader(postBody))
 	wPost := httptest.NewRecorder()
-	server.HandlePostSimplepushConfig(wPost, reqPost)
+	testServer.handlePostSimplepushConfig(wPost, reqPost)
 
 	if wPost.Code != http.StatusOK {
-		t.Fatalf("server.HandlePostSimplepushConfig failed: %d", wPost.Code)
+		t.Fatalf("handlePostSimplepushConfig failed: %d", wPost.Code)
 	}
 
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	if !cfg.SimplepushEnabled || cfg.SimplepushKey != "ABC123" {
 		t.Errorf("Config mismatch after Simplepush POST: %+v", cfg)
 	}
@@ -2050,14 +2003,14 @@ func TestKanbanVaultAPI(t *testing.T) {
 	})
 	reqPost := httptest.NewRequest(http.MethodPost, "/api/config/kanban-vault", strings.NewReader(string(postBody)))
 	wPost := httptest.NewRecorder()
-	server.HandleKanbanVault(wPost, reqPost)
+	testServer.handleKanbanVault(wPost, reqPost)
 
 	if wPost.Code != http.StatusOK {
-		t.Fatalf("server.HandleKanbanVault POST failed: %d", wPost.Code)
+		t.Fatalf("handleKanbanVault POST failed: %d", wPost.Code)
 	}
 
 	// Verify encrypted string in config file
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	if cfg.KanbanPasswordEnc == "" || cfg.KanbanPasswordEnc == "my_test_password" {
 		t.Errorf("Expected encrypted password in config, got %q", cfg.KanbanPasswordEnc)
 	}
@@ -2071,10 +2024,10 @@ func TestKanbanVaultAPI(t *testing.T) {
 	// GET password
 	reqGet := httptest.NewRequest(http.MethodGet, "/api/config/kanban-vault", nil)
 	wGet := httptest.NewRecorder()
-	server.HandleKanbanVault(wGet, reqGet)
+	testServer.handleKanbanVault(wGet, reqGet)
 
 	if wGet.Code != http.StatusOK {
-		t.Fatalf("server.HandleKanbanVault GET failed: %d", wGet.Code)
+		t.Fatalf("handleKanbanVault GET failed: %d", wGet.Code)
 	}
 	var getRes map[string]string
 	json.NewDecoder(wGet.Body).Decode(&getRes)
@@ -2092,11 +2045,11 @@ func TestKanbanVaultAPI(t *testing.T) {
 	postBody2, _ := json.Marshal(map[string]string{"password": "new_pw"})
 	reqPost2 := httptest.NewRequest(http.MethodPost, "/api/config/kanban-vault", strings.NewReader(string(postBody2)))
 	wPost2 := httptest.NewRecorder()
-	server.HandleKanbanVault(wPost2, reqPost2)
+	testServer.handleKanbanVault(wPost2, reqPost2)
 	if wPost2.Code != http.StatusOK {
 		t.Fatalf("second POST failed: %d", wPost2.Code)
 	}
-	cfg2 := loadConfig()
+	cfg2 := testServer.loadConfig()
 	if cfg2.KanbanUsername != "alice" {
 		t.Errorf("Partial POST should preserve username, got %q", cfg2.KanbanUsername)
 	}
@@ -2104,13 +2057,13 @@ func TestKanbanVaultAPI(t *testing.T) {
 	// DELETE password
 	reqDel := httptest.NewRequest(http.MethodDelete, "/api/config/kanban-vault", nil)
 	wDel := httptest.NewRecorder()
-	server.HandleKanbanVault(wDel, reqDel)
+	testServer.handleKanbanVault(wDel, reqDel)
 
 	if wDel.Code != http.StatusOK {
-		t.Fatalf("server.HandleKanbanVault DELETE failed: %d", wDel.Code)
+		t.Fatalf("handleKanbanVault DELETE failed: %d", wDel.Code)
 	}
 
-	cfgAfterDel := loadConfig()
+	cfgAfterDel := testServer.loadConfig()
 	if cfgAfterDel.KanbanPasswordEnc != "" {
 		t.Errorf("Expected empty KanbanPasswordEnc after DELETE")
 	}
@@ -2124,7 +2077,7 @@ func TestKanbanVaultAPI(t *testing.T) {
 
 func TestSyncCoordinatorConfig(t *testing.T) {
 	withTempConfig(t)
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	if cfg.SyncCoordinator != "" {
 		t.Errorf("expected an unset coordinator to stay empty in config, got %q", cfg.SyncCoordinator)
 	}
@@ -2132,12 +2085,12 @@ func TestSyncCoordinatorConfig(t *testing.T) {
 	body, _ := json.Marshal(map[string]string{"sync_coordinator": "http://coordinator.test"})
 	req := httptest.NewRequest(http.MethodPost, "/api/config/sync-coordinator", strings.NewReader(string(body)))
 	w := httptest.NewRecorder()
-	server.HandleSyncCoordinator(w, req)
+	testServer.handleSyncCoordinator(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("POST /api/config/sync-coordinator failed: status %d", w.Code)
 	}
 
-	cfg = loadConfig()
+	cfg = testServer.loadConfig()
 	if cfg.SyncCoordinator != "http://coordinator.test" {
 		t.Errorf("expected updated coordinator 'http://coordinator.test', got %q", cfg.SyncCoordinator)
 	}
@@ -2145,7 +2098,7 @@ func TestSyncCoordinatorConfig(t *testing.T) {
 	// Verify GET /api/config returns the sync_coordinator value
 	reqGet := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	wGet := httptest.NewRecorder()
-	server.HandleConfig(wGet, reqGet)
+	testServer.handleConfig(wGet, reqGet)
 	if wGet.Code != http.StatusOK {
 		t.Fatalf("GET /api/config failed: status %d", wGet.Code)
 	}
@@ -2158,8 +2111,8 @@ func TestSyncCoordinatorConfig(t *testing.T) {
 
 func TestSyncCoordinatorDefaultFollowsServerPort(t *testing.T) {
 	withTempConfig(t)
-	originalPort := server.Port
-	t.Cleanup(func() { server.Port = originalPort })
+	originalPort := testServer.port
+	t.Cleanup(func() { testServer.port = originalPort })
 
 	for _, tc := range []struct {
 		name        string
@@ -2179,11 +2132,11 @@ func TestSyncCoordinatorDefaultFollowsServerPort(t *testing.T) {
 		{"scoped IPv6 bind", 17170, "", "fe80::2", "en0", "http://[fe80::2%25en0]:17170"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			server.Port = tc.port
-			cfg := loadConfig()
+			testServer.port = tc.port
+			cfg := testServer.loadConfig()
 			cfg.SyncCoordinator = tc.coordinator
-			saveConfig(cfg)
-			if got := loadConfig().SyncCoordinator; got != tc.coordinator {
+			testServer.saveConfig(cfg)
+			if got := testServer.loadConfig().SyncCoordinator; got != tc.coordinator {
 				t.Fatalf("saved coordinator = %q, want %q", got, tc.coordinator)
 			}
 
@@ -2194,7 +2147,7 @@ func TestSyncCoordinatorDefaultFollowsServerPort(t *testing.T) {
 				}))
 			}
 			w := httptest.NewRecorder()
-			server.HandleConfig(w, req)
+			testServer.handleConfig(w, req)
 			if w.Code != http.StatusOK {
 				t.Fatalf("GET /api/config: status %d", w.Code)
 			}
@@ -2213,7 +2166,7 @@ func TestSyncCoordinatorDefaultFollowsServerPort(t *testing.T) {
 
 func TestSyncCoordinatorDefaultUsesRequestListener(t *testing.T) {
 	withTempConfig(t)
-	server := httptest.NewServer(http.HandlerFunc(server.HandleConfig))
+	server := httptest.NewServer(http.HandlerFunc(testServer.handleConfig))
 	defer server.Close()
 
 	response, err := server.Client().Get(server.URL + "/api/config")
@@ -2236,7 +2189,7 @@ func TestPeersStatusContract(t *testing.T) {
 	// /api/peers/status must always return a JSON array (never null, never 500)
 	req := httptest.NewRequest(http.MethodGet, "/api/peers/status", nil)
 	w := httptest.NewRecorder()
-	server.HandleGetPeersStatus(w, req)
+	testServer.handleGetPeersStatus(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -2251,7 +2204,7 @@ func TestPeersStatusContract(t *testing.T) {
 func TestPeersStatusMethodNotAllowed(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/peers/status", nil)
 	w := httptest.NewRecorder()
-	server.HandleGetPeersStatus(w, req)
+	testServer.handleGetPeersStatus(w, req)
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405, got %d", w.Code)
@@ -2270,7 +2223,7 @@ func TestConfigPeersCRUD(t *testing.T) {
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/config/peers", strings.NewReader(string(payload)))
 	w := httptest.NewRecorder()
-	server.HandleConfigPeers(w, req)
+	testServer.handleConfigPeers(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("POST /api/config/peers failed: %d", w.Code)
@@ -2279,7 +2232,7 @@ func TestConfigPeersCRUD(t *testing.T) {
 	// GET peers
 	req = httptest.NewRequest(http.MethodGet, "/api/config/peers", nil)
 	w = httptest.NewRecorder()
-	server.HandleConfigPeers(w, req)
+	testServer.handleConfigPeers(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /api/config/peers failed: %d", w.Code)
@@ -2301,12 +2254,12 @@ func TestConfigPeersCRUD(t *testing.T) {
 // the documented fields. Pin the shape — this is a cross-version API.
 func TestUpdateStatusContract(t *testing.T) {
 	// Install a checker so the handler can run.
-	server.InstallUpdater(update.NewChecker("v0.7.15", "standalone"), nil)
-	t.Cleanup(func() { server.InstallUpdater(nil, nil) })
+	testServer.installUpdater(update.NewChecker("v0.7.15", "standalone"), nil)
+	t.Cleanup(func() { testServer.installUpdater(nil, nil) })
 
 	req := httptest.NewRequest(http.MethodGet, "/api/update/status", nil)
 	w := httptest.NewRecorder()
-	server.HandleUpdateStatus(w, req)
+	testServer.handleUpdateStatus(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -2330,12 +2283,12 @@ func TestUpdateStatusContract(t *testing.T) {
 }
 
 func TestUpdateStatusMethodNotAllowed(t *testing.T) {
-	server.InstallUpdater(update.NewChecker("v0.7.15", "standalone"), nil)
-	t.Cleanup(func() { server.InstallUpdater(nil, nil) })
+	testServer.installUpdater(update.NewChecker("v0.7.15", "standalone"), nil)
+	t.Cleanup(func() { testServer.installUpdater(nil, nil) })
 
 	req := httptest.NewRequest(http.MethodPost, "/api/update/status", nil)
 	w := httptest.NewRecorder()
-	server.HandleUpdateStatus(w, req)
+	testServer.handleUpdateStatus(w, req)
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405, got %d", w.Code)
@@ -2343,12 +2296,12 @@ func TestUpdateStatusMethodNotAllowed(t *testing.T) {
 }
 
 func TestUpdateStatusWithoutChecker(t *testing.T) {
-	server.InstallUpdater(nil, nil)
-	t.Cleanup(func() { server.InstallUpdater(nil, nil) })
+	testServer.installUpdater(nil, nil)
+	t.Cleanup(func() { testServer.installUpdater(nil, nil) })
 
 	req := httptest.NewRequest(http.MethodGet, "/api/update/status", nil)
 	w := httptest.NewRecorder()
-	server.HandleUpdateStatus(w, req)
+	testServer.handleUpdateStatus(w, req)
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("expected 503 when checker nil, got %d", w.Code)
@@ -2370,7 +2323,7 @@ func TestRunGatedUpdateCheck_RunsOnFreshChecker(t *testing.T) {
 	c.SetReleaseURLForTesting(srv.URL)
 
 	// Fresh checker: both gates true, must hit the server once.
-	runGatedUpdateCheck(c, "test")
+	testServer.runGatedUpdateCheck(c, "test")
 
 	if hits != 1 {
 		t.Fatalf("expected exactly 1 network hit on a fresh checker, got %d", hits)
@@ -2399,7 +2352,7 @@ func TestRunGatedUpdateCheck_SkipsWhenAlreadyFresh(t *testing.T) {
 	}
 
 	// cached status is fresh → must not hit the network.
-	runGatedUpdateCheck(c, "test")
+	testServer.runGatedUpdateCheck(c, "test")
 
 	if hits != 1 {
 		t.Fatalf("expected the second, too-soon call to skip the network (still 1 hit), got %d", hits)
@@ -2410,12 +2363,12 @@ func TestRunGatedUpdateCheck_SkipsWhenAlreadyFresh(t *testing.T) {
 // the documented fields. Even when no apply has been triggered, it
 // must respond cleanly with Phase="idle".
 func TestUpdateProgressContract(t *testing.T) {
-	server.InstallUpdater(nil, update.NewApplier("v0.7.15", "standalone"))
-	t.Cleanup(func() { server.InstallUpdater(nil, nil) })
+	testServer.installUpdater(nil, update.NewApplier("v0.7.15", "standalone"))
+	t.Cleanup(func() { testServer.installUpdater(nil, nil) })
 
 	req := httptest.NewRequest(http.MethodGet, "/api/update/progress", nil)
 	w := httptest.NewRecorder()
-	server.HandleUpdateProgress(w, req)
+	testServer.handleUpdateProgress(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -2430,12 +2383,12 @@ func TestUpdateProgressContract(t *testing.T) {
 }
 
 func TestUpdateApplyRequiresVersion(t *testing.T) {
-	server.InstallUpdater(nil, update.NewApplier("v0.7.15", "standalone"))
-	t.Cleanup(func() { server.InstallUpdater(nil, nil) })
+	testServer.installUpdater(nil, update.NewApplier("v0.7.15", "standalone"))
+	t.Cleanup(func() { testServer.installUpdater(nil, nil) })
 
 	req := httptest.NewRequest(http.MethodPost, "/api/update/apply", strings.NewReader(`{}`))
 	w := httptest.NewRecorder()
-	server.HandleUpdateApply(w, req)
+	testServer.handleUpdateApply(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for missing version, got %d", w.Code)
@@ -2443,12 +2396,12 @@ func TestUpdateApplyRequiresVersion(t *testing.T) {
 }
 
 func TestUpdateApplyRejectsIneligibleMethod(t *testing.T) {
-	server.InstallUpdater(nil, update.NewApplier("v0.7.15", "go-install"))
-	t.Cleanup(func() { server.InstallUpdater(nil, nil) })
+	testServer.installUpdater(nil, update.NewApplier("v0.7.15", "go-install"))
+	t.Cleanup(func() { testServer.installUpdater(nil, nil) })
 
 	req := httptest.NewRequest(http.MethodPost, "/api/update/apply", strings.NewReader(`{"version":"v0.8.0"}`))
 	w := httptest.NewRecorder()
-	server.HandleUpdateApply(w, req)
+	testServer.handleUpdateApply(w, req)
 
 	if w.Code != http.StatusForbidden {
 		t.Errorf("expected 403 for ineligible method, got %d", w.Code)
@@ -2456,14 +2409,14 @@ func TestUpdateApplyRejectsIneligibleMethod(t *testing.T) {
 }
 
 func TestUpdateApplyRejectsSameVersion(t *testing.T) {
-	server.InstallUpdater(nil, update.NewApplier("v0.7.15", "standalone"))
-	t.Cleanup(func() { server.InstallUpdater(nil, nil) })
+	testServer.installUpdater(nil, update.NewApplier("v0.7.15", "standalone"))
+	t.Cleanup(func() { testServer.installUpdater(nil, nil) })
 
 	req := httptest.NewRequest(http.MethodPost, "/api/update/apply", strings.NewReader(`{"version":"v0.7.15"}`))
 	w := httptest.NewRecorder()
-	server.HandleUpdateApply(w, req)
+	testServer.handleUpdateApply(w, req)
 
-	// server.HandleUpdateApply returns 200 immediately and the actual apply
+	// handleUpdateApply returns 200 immediately and the actual apply
 	// runs in a goroutine; the progress will reflect the eventual
 	// rejection. We just confirm the handler didn't blow up and the
 	// request body was accepted.
@@ -2478,7 +2431,7 @@ func TestUpdateApplyRejectsSameVersion(t *testing.T) {
 func TestRestartMethodNotAllowed(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/restart", nil)
 	w := httptest.NewRecorder()
-	server.HandleRestart(w, req)
+	testServer.handleRestart(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405 on GET, got %d", w.Code)
 	}
@@ -2489,7 +2442,7 @@ func TestRestartMethodNotAllowed(t *testing.T) {
 func TestDiagContract(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/diag", nil)
 	w := httptest.NewRecorder()
-	server.HandleDiag(w, req)
+	testServer.handleDiag(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -2516,7 +2469,7 @@ func TestDiagContract(t *testing.T) {
 func TestDiagMethodNotAllowed(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/diag", nil)
 	w := httptest.NewRecorder()
-	server.HandleDiag(w, req)
+	testServer.handleDiag(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405 on POST, got %d", w.Code)
 	}
@@ -2533,7 +2486,7 @@ func thinkingPresetsRequest(t *testing.T, method, body string) *httptest.Respons
 	req := httptest.NewRequest(method, "/api/config/thinking-presets", reader)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	server.HandleThinkingPresets(w, req)
+	testServer.handleThinkingPresets(w, req)
 	return w
 }
 
@@ -2576,7 +2529,7 @@ func TestThinkingPresets_PutPersistsAndClears(t *testing.T) {
 	if got := decodeThinkingPresets(t, w); !reflect.DeepEqual(got, []string{"low", "high", "max"}) {
 		t.Fatalf("PUT response: got %v", got)
 	}
-	if got := loadConfig().ThinkingPresets; !reflect.DeepEqual(got, []string{"low", "high", "max"}) {
+	if got := testServer.loadConfig().ThinkingPresets; !reflect.DeepEqual(got, []string{"low", "high", "max"}) {
 		t.Fatalf("saved order not preserved, got %v", got)
 	}
 
@@ -2584,7 +2537,7 @@ func TestThinkingPresets_PutPersistsAndClears(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("clear status: want 200, got %d - %s", w.Code, w.Body.String())
 	}
-	if got := loadConfig().ThinkingPresets; len(got) != 0 {
+	if got := testServer.loadConfig().ThinkingPresets; len(got) != 0 {
 		t.Fatalf("explicit empty list should clear, got %v", got)
 	}
 }
@@ -2597,7 +2550,7 @@ func TestThinkingPresets_PutPreservesCompressionDefault(t *testing.T) {
 	if w := thinkingPresetsRequest(t, http.MethodPut, `{"thinking_presets":["high"]}`); w.Code != http.StatusOK {
 		t.Fatalf("PUT status: want 200, got %d - %s", w.Code, w.Body.String())
 	}
-	if cfg := loadConfig(); !cfg.CompressionEnabled {
+	if cfg := testServer.loadConfig(); !cfg.CompressionEnabled {
 		t.Fatal("missing compression_enabled key must keep its true default")
 	}
 
@@ -2607,7 +2560,7 @@ func TestThinkingPresets_PutPreservesCompressionDefault(t *testing.T) {
 	if w := thinkingPresetsRequest(t, http.MethodPut, `{"thinking_presets":["low"]}`); w.Code != http.StatusOK {
 		t.Fatalf("PUT status: want 200, got %d - %s", w.Code, w.Body.String())
 	}
-	if cfg := loadConfig(); cfg.CompressionEnabled {
+	if cfg := testServer.loadConfig(); cfg.CompressionEnabled {
 		t.Fatal("explicit compression_enabled:false must remain false")
 	}
 }
@@ -2639,7 +2592,7 @@ func TestThinkingPresets_RejectsInvalidWithoutWriting(t *testing.T) {
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("%s: want 400, got %d - %s", name, w.Code, w.Body.String())
 		}
-		if got := loadConfig().ThinkingPresets; !reflect.DeepEqual(got, []string{"high"}) {
+		if got := testServer.loadConfig().ThinkingPresets; !reflect.DeepEqual(got, []string{"high"}) {
 			t.Fatalf("%s: rejected request changed disk: %v", name, got)
 		}
 	}
@@ -2654,15 +2607,15 @@ func TestThinkingPresets_RejectsInvalidWithoutWriting(t *testing.T) {
 func TestThinkingPresets_LegacySavePreservesLatestList(t *testing.T) {
 	withTempConfig(t)
 
-	stale := loadConfig()
+	stale := testServer.loadConfig()
 	if w := thinkingPresetsRequest(t, http.MethodPut, `{"thinking_presets":["xhigh"]}`); w.Code != http.StatusOK {
 		t.Fatalf("seed status: want 200, got %d", w.Code)
 	}
 
 	stale.ThemeColor = "blue"
-	saveConfig(stale)
+	testServer.saveConfig(stale)
 
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	if cfg.ThemeColor != "blue" {
 		t.Fatalf("unrelated save lost its own field, got theme %q", cfg.ThemeColor)
 	}
@@ -2701,7 +2654,7 @@ func TestThinkingPresets_AppearInConfigResponse(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	w := httptest.NewRecorder()
-	server.HandleConfig(w, req)
+	testServer.handleConfig(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /api/config: want 200, got %d", w.Code)
 	}
@@ -2730,4 +2683,3 @@ func mustRead(t *testing.T, path string) []byte {
 
 // testPaneShutdownGrace is the grace test panes get before Shutdown escalates.
 // Kept short so per-test pane cleanup does not dominate the suite.
-const testPaneShutdownGrace = 100 * time.Millisecond

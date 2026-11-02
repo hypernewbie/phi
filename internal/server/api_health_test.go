@@ -11,7 +11,7 @@ import (
 func TestLivez(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/livez", nil)
 	w := httptest.NewRecorder()
-	HandleLivez(w, req)
+	handleLivez(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /livez: got %d want 200", w.Code)
 	}
@@ -21,7 +21,7 @@ func TestLivez(t *testing.T) {
 
 	req = httptest.NewRequest(http.MethodPost, "/livez", nil)
 	w = httptest.NewRecorder()
-	HandleLivez(w, req)
+	handleLivez(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST /livez: got %d want 405", w.Code)
 	}
@@ -29,10 +29,10 @@ func TestLivez(t *testing.T) {
 
 // TestReadyzReady — ShuttingDown=false -> 200 "ready".
 func TestReadyzReady(t *testing.T) {
-	ShuttingDown.Store(false)
+	testServer.shuttingDown.Store(false)
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	w := httptest.NewRecorder()
-	HandleReadyz(w, req)
+	testServer.handleReadyz(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /readyz: got %d want 200", w.Code)
 	}
@@ -43,12 +43,12 @@ func TestReadyzReady(t *testing.T) {
 
 // TestReadyzDraining — ShuttingDown=true -> 503 "shutting down".
 func TestReadyzDraining(t *testing.T) {
-	ShuttingDown.Store(true)
-	t.Cleanup(func() { ShuttingDown.Store(false) })
+	testServer.shuttingDown.Store(true)
+	t.Cleanup(func() { testServer.shuttingDown.Store(false) })
 
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	w := httptest.NewRecorder()
-	HandleReadyz(w, req)
+	testServer.handleReadyz(w, req)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("GET /readyz while draining: got %d want 503", w.Code)
 	}
@@ -61,7 +61,7 @@ func TestReadyzDraining(t *testing.T) {
 func TestReadyzRequiresGet(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/readyz", nil)
 	w := httptest.NewRecorder()
-	HandleReadyz(w, req)
+	testServer.handleReadyz(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST /readyz: got %d want 405", w.Code)
 	}

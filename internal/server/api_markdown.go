@@ -19,7 +19,7 @@ import (
 	"github.com/hypernewbie/phi/pkg/system"
 )
 
-func HandleMarkdownDirs(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleMarkdownDirs(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -34,7 +34,7 @@ func HandleMarkdownDirs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Missing dir", http.StatusBadRequest)
 		return
 	}
-	cfg := loadConfig()
+	cfg := app.loadConfig()
 	if r.Method == http.MethodPost {
 		for _, d := range cfg.MarkdownDirs {
 			if d == dir {
@@ -52,9 +52,9 @@ func HandleMarkdownDirs(w http.ResponseWriter, r *http.Request) {
 		}
 		cfg.MarkdownDirs = newDirs
 	}
-	saveConfig(cfg)
-	if MDWatcher != nil {
-		MDWatcher.Recompute()
+	app.saveConfig(cfg)
+	if app.mdWatcher != nil {
+		app.mdWatcher.Recompute()
 	}
 	w.WriteHeader(http.StatusOK)
 }
@@ -104,10 +104,10 @@ func markdownAllowedDirs(cwd string, cfg config.Config) ([]string, error) {
 // boot cwd and every live pane cwd. Reuses markdownAllowedDirs so the
 // watcher and the /api/markdown/files listing can never disagree on
 // what a "markdown dir" is.
-func MarkdownWatchDirs() []string {
-	cfg := loadConfig()
-	cwds := map[string]bool{ActiveCWD: true}
-	for _, inst := range PTY.ListActive() {
+func (app *Server) markdownWatchDirs() []string {
+	cfg := app.loadConfig()
+	cwds := map[string]bool{app.activeCWD: true}
+	for _, inst := range app.pty.ListActive() {
 		if snap := inst.Snapshot(); snap.Cwd != "" {
 			cwds[snap.Cwd] = true
 		}
@@ -152,16 +152,16 @@ func normalizeMarkdownFilename(name string) string {
 	return name
 }
 
-func HandleMarkdownFiles(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleMarkdownFiles(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	cwd := r.URL.Query().Get("cwd")
 	if cwd == "" {
-		cwd = ActiveCWD
+		cwd = app.activeCWD
 	}
-	cfg := loadConfig()
+	cfg := app.loadConfig()
 	files := []MDFileEntry{}
 	for _, dir := range cfg.MarkdownDirs {
 		absDir := dir
@@ -187,7 +187,7 @@ func HandleMarkdownFiles(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(files)
 }
 
-func HandleMarkdownFile(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleMarkdownFile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -203,9 +203,9 @@ func HandleMarkdownFile(w http.ResponseWriter, r *http.Request) {
 	}
 	cwd := r.URL.Query().Get("cwd")
 	if cwd == "" {
-		cwd = ActiveCWD
+		cwd = app.activeCWD
 	}
-	cfg := loadConfig()
+	cfg := app.loadConfig()
 	allowedDirs, _ := markdownAllowedDirs(cwd, cfg)
 	absPath, err := filepath.Abs(path)
 	if err != nil {
@@ -216,7 +216,7 @@ func HandleMarkdownFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Path not in allowed markdown dirs", http.StatusForbidden)
 		return
 	}
-	realPath, ok := confineToWorkspace(w, absPath, cfg)
+	realPath, ok := app.confineToWorkspace(w, absPath, cfg)
 	if !ok {
 		return
 	}
@@ -232,7 +232,7 @@ func HandleMarkdownFile(w http.ResponseWriter, r *http.Request) {
 // handleMarkdownAsset serves local image files referenced by markdown
 // (e.g. ![x](./img.png)). Mirrors handleMarkdownFile's allowed-dirs gate,
 // with an image-extension allowlist in place of the .md gate.
-func HandleMarkdownAsset(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleMarkdownAsset(w http.ResponseWriter, r *http.Request) {
 	// HEAD keeps the same gate and headers as GET: http.ServeFile answers it
 	// without a body, which is what a browser preload or cache revalidation
 	// sends.
@@ -253,9 +253,9 @@ func HandleMarkdownAsset(w http.ResponseWriter, r *http.Request) {
 	}
 	cwd := r.URL.Query().Get("cwd")
 	if cwd == "" {
-		cwd = ActiveCWD
+		cwd = app.activeCWD
 	}
-	cfg := loadConfig()
+	cfg := app.loadConfig()
 	allowedDirs, _ := markdownAllowedDirs(cwd, cfg)
 	absPath, err := filepath.Abs(path)
 	if err != nil {
@@ -266,7 +266,7 @@ func HandleMarkdownAsset(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Path not in allowed markdown dirs", http.StatusForbidden)
 		return
 	}
-	realPath, ok := confineToWorkspace(w, absPath, cfg)
+	realPath, ok := app.confineToWorkspace(w, absPath, cfg)
 	if !ok {
 		return
 	}
@@ -290,7 +290,7 @@ func HandleMarkdownAsset(w http.ResponseWriter, r *http.Request) {
 //     file outside the tree; an in-tree symlink resolves and serves normally.
 //   - Regular files only: directories, FIFOs (open blocks forever), and
 //     device nodes are rejected.
-func confineToWorkspace(w http.ResponseWriter, absPath string, cfg config.Config) (string, bool) {
+func (app *Server) confineToWorkspace(w http.ResponseWriter, absPath string, cfg config.Config) (string, bool) {
 	realPath, err := filepath.EvalSymlinks(absPath)
 	if err != nil {
 		http.Error(w, "Not found", http.StatusNotFound)
@@ -300,19 +300,19 @@ func confineToWorkspace(w http.ResponseWriter, absPath string, cfg config.Config
 		http.Error(w, "Not found", http.StatusNotFound)
 		return "", false
 	}
-	if !markdownPathAllowed(realPath, WorkspaceRoots(cfg)) {
+	if !markdownPathAllowed(realPath, app.workspaceRoots(cfg)) {
 		http.Error(w, "Path not under workspace", http.StatusForbidden)
 		return "", false
 	}
 	return realPath, true
 }
 
-// WorkspaceRoots returns the resolved directories Phi legitimately
+// workspaceRoots returns the resolved directories Phi legitimately
 // operates in: the boot cwd, every configured workspace, and every live
 // pane's cwd (worktrees). Used to confine markdown reads to real project
 // trees rather than trusting the client-supplied cwd. Each root is
 // symlink-resolved so prefix checks match an EvalSymlinks'd target.
-func WorkspaceRoots(cfg config.Config) []string {
+func (app *Server) workspaceRoots(cfg config.Config) []string {
 	seen := map[string]bool{}
 	var roots []string
 	add := func(p string) {
@@ -331,12 +331,12 @@ func WorkspaceRoots(cfg config.Config) []string {
 			roots = append(roots, abs)
 		}
 	}
-	add(ActiveCWD)
+	add(app.activeCWD)
 	for _, ws := range cfg.Workspaces {
 		add(ws)
 	}
-	if PTY != nil {
-		for _, inst := range PTY.ListActive() {
+	if app.pty != nil {
+		for _, inst := range app.pty.ListActive() {
 			if snap := inst.Snapshot(); snap.Cwd != "" {
 				add(snap.Cwd)
 			}
@@ -345,7 +345,7 @@ func WorkspaceRoots(cfg config.Config) []string {
 	return roots
 }
 
-func HandleMarkdownPaste(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleMarkdownPaste(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -357,14 +357,14 @@ func HandleMarkdownPaste(w http.ResponseWriter, r *http.Request) {
 	}
 	cwd := req.Cwd
 	if cwd == "" {
-		cwd = ActiveCWD
+		cwd = app.activeCWD
 	}
 	name := normalizeMarkdownFilename(req.Name)
 	if name == "" || name == ".md" {
 		http.Error(w, "Invalid filename", http.StatusBadRequest)
 		return
 	}
-	cfg := loadConfig()
+	cfg := app.loadConfig()
 	allowedDirs, _ := markdownAllowedDirs(cwd, cfg)
 	targetDir, err := resolveMarkdownTargetDir(cwd, req.Dir)
 	if err != nil {
@@ -396,7 +396,7 @@ func HandleMarkdownPaste(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"path": targetPath, "name": name})
 }
 
-func HandleMarkdownDelete(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleMarkdownDelete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -408,9 +408,9 @@ func HandleMarkdownDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	cwd := req.Cwd
 	if cwd == "" {
-		cwd = ActiveCWD
+		cwd = app.activeCWD
 	}
-	cfg := loadConfig()
+	cfg := app.loadConfig()
 	allowedDirs, _ := markdownAllowedDirs(cwd, cfg)
 	absPath, err := filepath.Abs(req.Path)
 	if err != nil {
@@ -432,7 +432,7 @@ func HandleMarkdownDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func HandleMarkdownCopyAllWorktrees(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleMarkdownCopyAllWorktrees(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -444,13 +444,13 @@ func HandleMarkdownCopyAllWorktrees(w http.ResponseWriter, r *http.Request) {
 	}
 	cwd := req.Cwd
 	if cwd == "" {
-		cwd = ActiveCWD
+		cwd = app.activeCWD
 	}
 	if req.Dir == "" {
 		http.Error(w, "Missing markdown dir", http.StatusBadRequest)
 		return
 	}
-	cfg := loadConfig()
+	cfg := app.loadConfig()
 	allowedDirs, _ := markdownAllowedDirs(cwd, cfg)
 	sourcePath, err := filepath.Abs(req.Path)
 	if err != nil {
@@ -595,7 +595,7 @@ func decodeMarkdownBundle(raw string) ([]MDExportEntry, error) {
 // handleMarkdownExportBundle enumerates markdown files in the configured
 // markdownDirs (relative to cwd), reads their contents, and returns a
 // single tamper-detected base64+gzip blob the user can copy to clipboard.
-func HandleMarkdownExportBundle(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleMarkdownExportBundle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -605,9 +605,9 @@ func HandleMarkdownExportBundle(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req) // body optional
 	if req.Cwd == "" {
-		req.Cwd = ActiveCWD
+		req.Cwd = app.activeCWD
 	}
-	cfg := loadConfig()
+	cfg := app.loadConfig()
 
 	files := []MDExportEntry{}
 	for _, dir := range cfg.MarkdownDirs {
@@ -656,7 +656,7 @@ func HandleMarkdownExportBundle(w http.ResponseWriter, r *http.Request) {
 // files are skipped unless the request sets overwrite=true. Path
 // traversal via filename is rejected by normalizeMarkdownFilename +
 // markdownPathAllowed.
-func HandleMarkdownImportBundle(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleMarkdownImportBundle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -667,9 +667,9 @@ func HandleMarkdownImportBundle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Cwd == "" {
-		req.Cwd = ActiveCWD
+		req.Cwd = app.activeCWD
 	}
-	cfg := loadConfig()
+	cfg := app.loadConfig()
 	if len(cfg.MarkdownDirs) == 0 {
 		http.Error(w, "No markdown directories configured — set one in Settings first.", http.StatusBadRequest)
 		return

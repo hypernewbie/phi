@@ -6,6 +6,4 @@ import "github.com/hypernewbie/phi/pkg/pty"
 // test fixture replace it without touching process globals.
 var ptyManager *pty.Manager
 
-func init() {
-	panes = func() *pty.Manager { return ptyManager }
-}
+var testAPI = NewAPI(func() *pty.Manager { return ptyManager })

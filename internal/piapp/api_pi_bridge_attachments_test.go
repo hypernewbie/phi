@@ -22,10 +22,10 @@ func TestPiAttachmentStatusSurvivesPaneClosure(t *testing.T) {
 	withAttachmentTestGlobals(t)
 	id := uuid.NewString()
 	hash := strings.Repeat("a", 64)
-	if _, _, err := attachments.Default.BeginSend(id, "closed-pane", hash); err != nil {
+	if _, _, err := testAttachments.BeginSend(id, "closed-pane", hash); err != nil {
 		t.Fatal(err)
 	}
-	if err := attachments.Default.UpdateSend(id, true, "unknown", "uncertain"); err != nil {
+	if err := testAttachments.UpdateSend(id, true, "unknown", "uncertain"); err != nil {
 		t.Fatal(err)
 	}
 	request := httptest.NewRequest(http.MethodGet, "/api/pi-bridge/attachments?id="+id+"&pane=closed-pane", nil)

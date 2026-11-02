@@ -24,7 +24,7 @@ func startTestBridge(t *testing.T) *Bridge {
 // startTestBridgeWith starts a bridge on the given hub and stops it at cleanup.
 func startTestBridgeWith(t *testing.T, hub *ws.Hub) *Bridge {
 	t.Helper()
-	bridge := StartBridge(hub, testBundle, "0.0.0-test")
+	bridge := StartBridge(hub, testBundle, "0.0.0-test", testAttachments)
 	if bridge == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -82,6 +82,7 @@ var testBridge *Bridge
 
 // testPanes is the pane registry the test API and the attachment checks share.
 var testPanes *pty.Manager
+var testAttachments *attachments.AttachmentStore
 
 // withAttachmentTestGlobals installs an isolated attachment store and pane
 // registry and returns the API the attachment route tests drive.
@@ -91,13 +92,13 @@ func withAttachmentTestGlobals(t *testing.T) *API {
 	if err != nil {
 		t.Fatal(err)
 	}
-	previous := attachments.Default
-	attachments.Default = store
+	previous := testAttachments
+	testAttachments = store
 	testPanes = pty.NewManager()
-	attachments.SetPaneManager(func() *pty.Manager { return testPanes })
+
 	t.Cleanup(func() {
-		attachments.Default = previous
-		attachments.SetPaneManager(nil)
+		testAttachments = previous
+
 		testPanes = nil
 		_ = store.Close()
 	})
@@ -108,7 +109,7 @@ func withAttachmentTestGlobals(t *testing.T) *API {
 func testAPI() *API {
 	return NewAPI(
 		func() *Bridge { return testBridge },
-		func() *attachments.AttachmentStore { return attachments.Default },
+		func() *attachments.AttachmentStore { return testAttachments },
 		func() *pty.Manager { return testPanes },
 	)
 }

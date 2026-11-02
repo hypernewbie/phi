@@ -16,7 +16,7 @@ func TestHandleUseHiddenTerminal(t *testing.T) {
 	// Test GET is rejected (only POST allowed)
 	reqGet := httptest.NewRequest(http.MethodGet, "/api/config/use-hidden-terminal", nil)
 	wGet := httptest.NewRecorder()
-	HandleUseHiddenTerminal(wGet, reqGet)
+	testServer.handleUseHiddenTerminal(wGet, reqGet)
 	if wGet.Code != http.StatusMethodNotAllowed {
 		t.Errorf("GET status: want 405, got %d", wGet.Code)
 	}
@@ -24,7 +24,7 @@ func TestHandleUseHiddenTerminal(t *testing.T) {
 	// Test POST invalid JSON
 	reqBad := httptest.NewRequest(http.MethodPost, "/api/config/use-hidden-terminal", bytes.NewReader([]byte("bad json")))
 	wBad := httptest.NewRecorder()
-	HandleUseHiddenTerminal(wBad, reqBad)
+	testServer.handleUseHiddenTerminal(wBad, reqBad)
 	if wBad.Code != http.StatusBadRequest {
 		t.Errorf("bad JSON status: want 400, got %d", wBad.Code)
 	}
@@ -33,7 +33,7 @@ func TestHandleUseHiddenTerminal(t *testing.T) {
 	body, _ := json.Marshal(map[string]bool{"enabled": true})
 	reqEnable := httptest.NewRequest(http.MethodPost, "/api/config/use-hidden-terminal", bytes.NewReader(body))
 	wEnable := httptest.NewRecorder()
-	HandleUseHiddenTerminal(wEnable, reqEnable)
+	testServer.handleUseHiddenTerminal(wEnable, reqEnable)
 	if wEnable.Code != http.StatusOK {
 		t.Fatalf("enable status: want 200, got %d", wEnable.Code)
 	}
@@ -47,15 +47,15 @@ func TestHandleUseHiddenTerminal(t *testing.T) {
 	}
 
 	// Verify persistence in loaded config
-	cfg := loadConfig()
+	cfg := testServer.loadConfig()
 	if !cfg.UseHiddenTerminal {
 		t.Errorf("saved config UseHiddenTerminal: want true, got false")
 	}
 
-	// Verify HandleConfig returns use_hidden_terminal
+	// Verify handleConfig returns use_hidden_terminal
 	reqCfg := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	wCfg := httptest.NewRecorder()
-	HandleConfig(wCfg, reqCfg)
+	testServer.handleConfig(wCfg, reqCfg)
 	var cfgMap map[string]interface{}
 	if err := json.NewDecoder(wCfg.Body).Decode(&cfgMap); err != nil {
 		t.Fatalf("decode config response: %v", err)
@@ -75,7 +75,7 @@ func TestHandleRunCommand(t *testing.T) {
 	// Test GET method rejection
 	reqGet := httptest.NewRequest(http.MethodGet, "/api/cmd/run", nil)
 	wGet := httptest.NewRecorder()
-	HandleRunCommand(wGet, reqGet)
+	testServer.handleRunCommand(wGet, reqGet)
 	if wGet.Code != http.StatusMethodNotAllowed {
 		t.Errorf("GET status: want 405, got %d", wGet.Code)
 	}
@@ -83,7 +83,7 @@ func TestHandleRunCommand(t *testing.T) {
 	// Test empty command rejection
 	reqEmpty := httptest.NewRequest(http.MethodPost, "/api/cmd/run", bytes.NewReader([]byte(`{"command":""}`)))
 	wEmpty := httptest.NewRecorder()
-	HandleRunCommand(wEmpty, reqEmpty)
+	testServer.handleRunCommand(wEmpty, reqEmpty)
 	if wEmpty.Code != http.StatusBadRequest {
 		t.Errorf("empty command status: want 400, got %d", wEmpty.Code)
 	}
@@ -96,7 +96,7 @@ func TestHandleRunCommand(t *testing.T) {
 	bodySingle, _ := json.Marshal(reqSingle)
 	req1 := httptest.NewRequest(http.MethodPost, "/api/cmd/run", bytes.NewReader(bodySingle))
 	w1 := httptest.NewRecorder()
-	HandleRunCommand(w1, req1)
+	testServer.handleRunCommand(w1, req1)
 	if w1.Code != http.StatusOK {
 		t.Fatalf("single run status: want 200, got %d", w1.Code)
 	}
@@ -120,7 +120,7 @@ func TestHandleRunCommand(t *testing.T) {
 	bodyBatch, _ := json.Marshal(reqBatch)
 	req2 := httptest.NewRequest(http.MethodPost, "/api/cmd/batch-run", bytes.NewReader(bodyBatch))
 	w2 := httptest.NewRecorder()
-	HandleRunCommand(w2, req2)
+	testServer.handleRunCommand(w2, req2)
 	if w2.Code != http.StatusOK {
 		t.Fatalf("batch run status: want 200, got %d", w2.Code)
 	}
@@ -146,7 +146,7 @@ func TestHandleRunCommand(t *testing.T) {
 	bodyNonexistent, _ := json.Marshal(reqNonexistent)
 	req3 := httptest.NewRequest(http.MethodPost, "/api/cmd/run", bytes.NewReader(bodyNonexistent))
 	w3 := httptest.NewRecorder()
-	HandleRunCommand(w3, req3)
+	testServer.handleRunCommand(w3, req3)
 	if w3.Code != http.StatusOK {
 		t.Fatalf("nonexistent run status: want 200, got %d", w3.Code)
 	}

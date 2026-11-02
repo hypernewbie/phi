@@ -16,7 +16,7 @@ import (
 // floor moves above zero, and returns the head.
 func writePastTheFloor(t *testing.T, pane string) uint64 {
 	t.Helper()
-	if err := Hub.SetRecordingDirectory(t.TempDir()); err != nil {
+	if err := testServer.hub.SetRecordingDirectory(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	chunk := bytes.Repeat([]byte("x"), 64*1024)
@@ -24,7 +24,7 @@ func writePastTheFloor(t *testing.T, pane string) uint64 {
 	// request that starts at zero used to invert into an empty window.
 	pages := (ws.RetentionWindowBytes + 1<<20) / len(chunk)
 	for i := 0; i < pages; i++ {
-		if err := Hub.Ingest(pane, chunk); err != nil {
+		if err := testServer.hub.Ingest(pane, chunk); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -62,7 +62,7 @@ func TestRecordingEndpointServesTheRetainedWindowBelowTheFloor(t *testing.T) {
 	for cursor < head {
 		req := httptest.NewRequest(http.MethodGet, "/api/terminals/pane-rot/recording?from="+strconv.FormatUint(cursor, 10)+"&through=18446744073709551615", nil)
 		w := httptest.NewRecorder()
-		HandleFallback(w, req)
+		testServer.handleFallback(w, req)
 		if w.Code != http.StatusOK {
 			t.Fatalf("expected 200 for a request that starts below the floor, got %d: %s", w.Code, w.Body.String())
 		}
@@ -101,7 +101,7 @@ func TestRecordingEndpointAnswersAnEvictedWindowAsTheEmptySpanAtTheFloor(t *test
 
 	req := httptest.NewRequest(http.MethodGet, "/api/terminals/pane-rot/recording?from=0&through=18446744073709551615", nil)
 	w := httptest.NewRecorder()
-	HandleFallback(w, req)
+	testServer.handleFallback(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -109,7 +109,7 @@ func TestRecordingEndpointAnswersAnEvictedWindowAsTheEmptySpanAtTheFloor(t *test
 
 	req = httptest.NewRequest(http.MethodGet, "/api/terminals/pane-rot/recording?from=0&through=0", nil)
 	w = httptest.NewRecorder()
-	HandleFallback(w, req)
+	testServer.handleFallback(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 for an evicted window, got %d: %s", w.Code, w.Body.String())
 	}

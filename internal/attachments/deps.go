@@ -1,17 +1,26 @@
 package attachments
 
-import "github.com/hypernewbie/phi/pkg/pty"
+import (
+	"time"
 
-// panes reports the live PTY manager. main installs the provider because the
-// manager is created after the routes are registered.
-var panes func() *pty.Manager
+	"github.com/hypernewbie/phi/pkg/pty"
+)
 
-// SetPaneManager installs the PTY manager provider used for paste injection.
-func SetPaneManager(provider func() *pty.Manager) { panes = provider }
+// API binds attachment routes to one store and live pane registry.
+// Constructing it does not open a store or start services.
+type API struct {
+	Store                    *AttachmentStore
+	panes                    func() *pty.Manager
+	attachmentPutReadTimeout time.Duration
+}
 
-func paneManager() *pty.Manager {
-	if panes == nil {
+func NewAPI(panes func() *pty.Manager) *API {
+	return &API{panes: panes, attachmentPutReadTimeout: 10 * time.Minute}
+}
+
+func (a *API) paneManager() *pty.Manager {
+	if a.panes == nil {
 		return nil
 	}
-	return panes()
+	return a.panes()
 }

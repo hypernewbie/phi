@@ -30,12 +30,12 @@ func SendPushoverNotification(userKey, appToken, title, message string) error {
 	return nil
 }
 
-func HandleGetPushoverConfig(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleGetPushoverConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	cfg := loadConfig()
+	cfg := app.loadConfig()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"pushover_user_key":  cfg.PushoverUserKey,
@@ -44,7 +44,7 @@ func HandleGetPushoverConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func HandlePostPushoverConfig(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handlePostPushoverConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -58,20 +58,20 @@ func HandlePostPushoverConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	cfg := loadConfig()
+	cfg := app.loadConfig()
 	cfg.PushoverUserKey = req.PushoverUserKey
 	cfg.PushoverAppToken = req.PushoverAppToken
 	cfg.PushoverEnabled = req.PushoverEnabled
-	saveConfig(cfg)
+	app.saveConfig(cfg)
 	w.WriteHeader(http.StatusOK)
 }
 
-func HandleTestPushover(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleTestPushover(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	cfg := loadConfig()
+	cfg := app.loadConfig()
 	if cfg.PushoverUserKey == "" || cfg.PushoverAppToken == "" {
 		http.Error(w, "Pushover User Key and App Token are required", http.StatusBadRequest)
 		return
@@ -130,12 +130,12 @@ func SendWebhookNotification(webhookURL, title, message string) error {
 	return nil
 }
 
-func HandleGetWebhookConfig(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleGetWebhookConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	cfg := loadConfig()
+	cfg := app.loadConfig()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"webhook_url":     cfg.WebhookURL,
@@ -143,7 +143,7 @@ func HandleGetWebhookConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func HandlePostWebhookConfig(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handlePostWebhookConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -156,19 +156,19 @@ func HandlePostWebhookConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	cfg := loadConfig()
+	cfg := app.loadConfig()
 	cfg.WebhookURL = req.WebhookURL
 	cfg.WebhookEnabled = req.WebhookEnabled
-	saveConfig(cfg)
+	app.saveConfig(cfg)
 	w.WriteHeader(http.StatusOK)
 }
 
-func HandleTestWebhook(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleTestWebhook(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	cfg := loadConfig()
+	cfg := app.loadConfig()
 	if cfg.WebhookURL == "" {
 		http.Error(w, "Webhook URL is required", http.StatusBadRequest)
 		return
@@ -241,12 +241,12 @@ func SendSimplepushNotification(key, title, message, event string) error {
 	return nil
 }
 
-func HandleGetSimplepushConfig(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleGetSimplepushConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	cfg := loadConfig()
+	cfg := app.loadConfig()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"simplepush_key":     cfg.SimplepushKey,
@@ -254,7 +254,7 @@ func HandleGetSimplepushConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func HandlePostSimplepushConfig(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handlePostSimplepushConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -267,24 +267,24 @@ func HandlePostSimplepushConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	cfg := loadConfig()
+	cfg := app.loadConfig()
 	cfg.SimplepushKey = req.SimplepushKey
 	cfg.SimplepushEnabled = req.SimplepushEnabled
-	saveConfig(cfg)
+	app.saveConfig(cfg)
 	w.WriteHeader(http.StatusOK)
 }
 
-func HandleTestSimplepush(w http.ResponseWriter, r *http.Request) {
+func (app *Server) handleTestSimplepush(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	cfg := loadConfig()
+	cfg := app.loadConfig()
 	if cfg.SimplepushKey == "" {
 		http.Error(w, "Simplepush Key is required", http.StatusBadRequest)
 		return
 	}
-	host := reportedHostname(cfg)
+	host := ReportedHostname(cfg)
 	emoji := ThemeEmoji(cfg.ThemeColor)
 	title := fmt.Sprintf("[phi] Test Alert @ %s %s", host, emoji)
 	msg := fmt.Sprintf("🚀 Test notification from Phi!\n🎨 Active Theme: %s %s\n💻 Host: %s", cfg.ThemeColor, emoji, host)

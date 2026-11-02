@@ -126,7 +126,7 @@ func newAuthSocketServer(t *testing.T) (*ws.Hub, string) {
 		ws.HandleEventsWS(w, r, hub)
 	})
 	mux.HandleFunc("/ws/control", ws.HandleControl(hub, rpc.NewManager(), func() string { return home }))
-	server := httptest.NewServer(Middleware(mux))
+	server := httptest.NewServer(Default.Middleware(mux))
 	t.Cleanup(server.Close)
 
 	return hub, "ws" + strings.TrimPrefix(server.URL, "http")
@@ -176,11 +176,11 @@ func TestAccessRestartFailureClosesAndFencesAdmittedSockets(t *testing.T) {
 			t.Error("Unix replacement started before auth DB and ownership were closed")
 		}
 		status := httptest.NewRecorder()
-		HandleAccessAuthStatus(status, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+		Default.HandleAccessAuthStatus(status, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
 		if status.Code != http.StatusServiceUnavailable || auth.db != nil || auth.owner.held() || auth.ownedNow() {
 			t.Errorf("status request reopened auth during restart: status=%d db=%v owner=%v owned=%v", status.Code, auth.db != nil, auth.owner.held(), auth.ownedNow())
 		}
-		if err := os.WriteFile(accessDBPath(), []byte("corrupt"), 0o600); err != nil {
+		if err := os.WriteFile(Default.accessDBPath(), []byte("corrupt"), 0o600); err != nil {
 			return err
 		}
 		return execFailure
@@ -398,7 +398,7 @@ func TestAccessWSSameVerifierUncertainCommitFencesV1Socket(t *testing.T) {
 	}
 	request := httptest.NewRequest(http.MethodPost, "/api/auth/password", strings.NewReader(string(body)))
 	request.AddCookie(cookie)
-	response := testAccessServe(HandleAccessPassword, request)
+	response := testAccessServe(Default.HandleAccessPassword, request)
 	auth.mu.Lock()
 	auth.db.commit = previousCommit
 	newRecordID, newGeneration := auth.v2.recordID, auth.generation
@@ -572,7 +572,7 @@ func TestAccessWSLateRegistrationAfterRotationIsRejected(t *testing.T) {
 	token := testAccessEnableV2(t, testAccessPassword)
 	gate, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
-	server := httptest.NewServer(Middleware(gatedEventsHandler(hub, gate, release, &once)))
+	server := httptest.NewServer(Default.Middleware(gatedEventsHandler(hub, gate, release, &once)))
 	defer server.Close()
 
 	type result struct {
@@ -952,7 +952,7 @@ func TestAccessWSLateExpiryRegistrationIsRejected(t *testing.T) {
 	token := testAccessEnableV2(t, testAccessPassword)
 	gate, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
-	server := httptest.NewServer(Middleware(gatedEventsHandler(hub, gate, release, &once)))
+	server := httptest.NewServer(Default.Middleware(gatedEventsHandler(hub, gate, release, &once)))
 	defer server.Close()
 
 	type result struct {
@@ -1258,7 +1258,7 @@ func TestAccessWSEnableDisableAdmissionFence(t *testing.T) {
 		hub := testAccessUseHub(t)
 		gate, release := make(chan struct{}), make(chan struct{})
 		var once sync.Once
-		server := httptest.NewServer(Middleware(gatedEventsHandler(hub, gate, release, &once)))
+		server := httptest.NewServer(Default.Middleware(gatedEventsHandler(hub, gate, release, &once)))
 		defer server.Close()
 
 		type result struct {
@@ -1296,7 +1296,7 @@ func TestAccessWSEnableDisableAdmissionFence(t *testing.T) {
 		token := testAccessEnableV2(t, testAccessPassword)
 		gate, release := make(chan struct{}), make(chan struct{})
 		var once sync.Once
-		server := httptest.NewServer(Middleware(gatedEventsHandler(hub, gate, release, &once)))
+		server := httptest.NewServer(Default.Middleware(gatedEventsHandler(hub, gate, release, &once)))
 		defer server.Close()
 
 		type result struct {
@@ -1395,7 +1395,7 @@ func TestAccessSocketTokenHeaderIsNotAnHTTPCredential(t *testing.T) {
 	// The refresh route treats it as a carrier mix-up, not a fallback.
 	refresh := testAccessV2Request(http.MethodPost, "/api/auth/v2/refresh", `{}`)
 	refresh.Header.Set(accessSocketTokenHeader, token)
-	if w := testAccessServe(HandleAccessV2Refresh, refresh); w.Code != http.StatusUnauthorized {
+	if w := testAccessServe(Default.HandleAccessV2Refresh, refresh); w.Code != http.StatusUnauthorized {
 		t.Fatalf("refresh accepted the host carrier: %d", w.Code)
 	}
 }

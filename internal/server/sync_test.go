@@ -10,15 +10,15 @@ import (
 )
 
 func TestSyncMessagesCRUD(t *testing.T) {
-	t.Cleanup(SetSyncPathForTest(filepath.Join(t.TempDir(), "syncboard-test.json")))
+	t.Cleanup(testServer.setSyncPathForTest(filepath.Join(t.TempDir(), "syncboard-test.json")))
 
-	syncMu.Lock()
-	syncStore = make(map[string]*SyncMessage)
-	syncMu.Unlock()
+	testServer.syncMu.Lock()
+	testServer.syncStore = make(map[string]*SyncMessage)
+	testServer.syncMu.Unlock()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/sync/messages", nil)
 	w := httptest.NewRecorder()
-	HandleSyncMessages(w, req)
+	testServer.handleSyncMessages(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /api/sync/messages failed: status %d", w.Code)
 	}
@@ -33,7 +33,7 @@ func TestSyncMessagesCRUD(t *testing.T) {
 	payload, _ := json.Marshal(map[string]string{"key": "alpha", "value": "hello"})
 	req = httptest.NewRequest(http.MethodPost, "/api/sync/messages", strings.NewReader(string(payload)))
 	w = httptest.NewRecorder()
-	HandleSyncMessages(w, req)
+	testServer.handleSyncMessages(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("POST /api/sync/messages failed: status %d", w.Code)
 	}
@@ -45,7 +45,7 @@ func TestSyncMessagesCRUD(t *testing.T) {
 
 	req = httptest.NewRequest(http.MethodGet, "/api/sync/messages/alpha", nil)
 	w = httptest.NewRecorder()
-	HandleSyncMessages(w, req)
+	testServer.handleSyncMessages(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /api/sync/messages/alpha failed: status %d", w.Code)
 	}
@@ -58,14 +58,14 @@ func TestSyncMessagesCRUD(t *testing.T) {
 	payload, _ = json.Marshal(map[string]string{"key": "alpha", "value": "updated"})
 	req = httptest.NewRequest(http.MethodPost, "/api/sync/messages", strings.NewReader(string(payload)))
 	w = httptest.NewRecorder()
-	HandleSyncMessages(w, req)
+	testServer.handleSyncMessages(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("POST /api/sync/messages upsert failed: status %d", w.Code)
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/sync/messages/alpha", nil)
 	w = httptest.NewRecorder()
-	HandleSyncMessages(w, req)
+	testServer.handleSyncMessages(w, req)
 	json.NewDecoder(w.Body).Decode(&fetched)
 	if fetched.Value != "updated" {
 		t.Errorf("expected value 'updated', got %q", fetched.Value)
@@ -73,28 +73,28 @@ func TestSyncMessagesCRUD(t *testing.T) {
 
 	req = httptest.NewRequest(http.MethodGet, "/api/sync/messages/nonexistent", nil)
 	w = httptest.NewRecorder()
-	HandleSyncMessages(w, req)
+	testServer.handleSyncMessages(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("expected status 404, got %d", w.Code)
 	}
 
 	req = httptest.NewRequest(http.MethodDelete, "/api/sync/messages/alpha", nil)
 	w = httptest.NewRecorder()
-	HandleSyncMessages(w, req)
+	testServer.handleSyncMessages(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("DELETE /api/sync/messages/alpha failed: status %d", w.Code)
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/sync/messages/alpha", nil)
 	w = httptest.NewRecorder()
-	HandleSyncMessages(w, req)
+	testServer.handleSyncMessages(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("expected status 404 after delete, got %d", w.Code)
 	}
 
 	req = httptest.NewRequest(http.MethodDelete, "/api/sync/messages/nonexistent", nil)
 	w = httptest.NewRecorder()
-	HandleSyncMessages(w, req)
+	testServer.handleSyncMessages(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("expected status 404 on delete nonexistent, got %d", w.Code)
 	}
@@ -103,13 +103,13 @@ func TestSyncMessagesCRUD(t *testing.T) {
 	richPayload := `{"key":"rich-card","value":{"title":"Mockup","preview":"img.png","auto_open":true}}`
 	req = httptest.NewRequest(http.MethodPost, "/api/sync/messages", strings.NewReader(richPayload))
 	w = httptest.NewRecorder()
-	HandleSyncMessages(w, req)
+	testServer.handleSyncMessages(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("POST /api/sync/messages with raw JSON object failed: status %d", w.Code)
 	}
 	req = httptest.NewRequest(http.MethodGet, "/api/sync/messages/rich-card", nil)
 	w = httptest.NewRecorder()
-	HandleSyncMessages(w, req)
+	testServer.handleSyncMessages(w, req)
 	var richFetched SyncMessage
 	json.NewDecoder(w.Body).Decode(&richFetched)
 	if !strings.Contains(richFetched.Value, `"title":"Mockup"`) {

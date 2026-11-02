@@ -26,10 +26,10 @@ func withTempHomeForHistory(t *testing.T) string {
 
 func resetPromptHistoryState(t *testing.T) {
 	t.Helper()
-	promptHistoryStoreMu.Lock()
-	promptHistoryStore = nil
-	promptHistoryLoadErr = nil
-	promptHistoryStoreMu.Unlock()
+	testServer.promptHistoryStoreMu.Lock()
+	testServer.promptHistoryStore = nil
+	testServer.promptHistoryLoadErr = nil
+	testServer.promptHistoryStoreMu.Unlock()
 }
 
 func postJSON(t *testing.T, path, body string) *httptest.ResponseRecorder {
@@ -45,7 +45,7 @@ func TestHandlePromptHistoryAppend_RecordsAndPersists(t *testing.T) {
 	resetPromptHistoryState(t)
 
 	w := postJSON(t, "/api/prompt-history/append", `{"text":"fix the login bug","cwd":"/proj/a"}`)
-	HandlePromptHistoryAppend(w, httptest.NewRequest(http.MethodPost, "/api/prompt-history/append", strings.NewReader(`{"text":"fix the login bug","cwd":"/proj/a"}`)))
+	testServer.handlePromptHistoryAppend(w, httptest.NewRequest(http.MethodPost, "/api/prompt-history/append", strings.NewReader(`{"text":"fix the login bug","cwd":"/proj/a"}`)))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
@@ -67,7 +67,7 @@ func TestHandlePromptHistoryAppend_SkipsEmptyText(t *testing.T) {
 	resetPromptHistoryState(t)
 
 	w := postJSON(t, "/api/prompt-history/append", `{"text":"   ","cwd":"/p"}`)
-	HandlePromptHistoryAppend(w, httptest.NewRequest(http.MethodPost, "/api/prompt-history/append", strings.NewReader(`{"text":"   ","cwd":"/p"}`)))
+	testServer.handlePromptHistoryAppend(w, httptest.NewRequest(http.MethodPost, "/api/prompt-history/append", strings.NewReader(`{"text":"   ","cwd":"/p"}`)))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: %d", w.Code)
@@ -92,7 +92,7 @@ func TestHandlePromptHistoryRecent_FiltersByCwd(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/prompt-history/append",
 			strings.NewReader(`{"text":"`+p.text+`","cwd":"`+p.cwd+`"}`))
 		req.Header.Set("Content-Type", "application/json")
-		HandlePromptHistoryAppend(w, req)
+		testServer.handlePromptHistoryAppend(w, req)
 		if w.Code != http.StatusOK {
 			t.Fatalf("seed %s/%s: %d body=%s", p.cwd, p.text, w.Code, w.Body.String())
 		}
@@ -102,7 +102,7 @@ func TestHandlePromptHistoryRecent_FiltersByCwd(t *testing.T) {
 	{
 		req := httptest.NewRequest(http.MethodGet, "/api/prompt-history/recent?cwd=/proj/a&n=20", nil)
 		w := httptest.NewRecorder()
-		HandlePromptHistoryRecent(w, req)
+		testServer.handlePromptHistoryRecent(w, req)
 		if w.Code != http.StatusOK {
 			t.Fatalf("status: %d", w.Code)
 		}
@@ -124,7 +124,7 @@ func TestHandlePromptHistoryRecent_FiltersByCwd(t *testing.T) {
 	{
 		req := httptest.NewRequest(http.MethodGet, "/api/prompt-history/recent?cwd=/proj/b&n=20", nil)
 		w := httptest.NewRecorder()
-		HandlePromptHistoryRecent(w, req)
+		testServer.handlePromptHistoryRecent(w, req)
 		var entries []historyEntryForTest
 		if err := json.Unmarshal(w.Body.Bytes(), &entries); err != nil {
 			t.Fatalf("decode: %v", err)
@@ -144,7 +144,7 @@ func TestHandlePromptHistoryRecent_RequiresGet(t *testing.T) {
 	resetPromptHistoryState(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/prompt-history/recent", nil)
 	w := httptest.NewRecorder()
-	HandlePromptHistoryRecent(w, req)
+	testServer.handlePromptHistoryRecent(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", w.Code)
 	}
@@ -155,7 +155,7 @@ func TestHandlePromptHistoryAppend_RequiresPost(t *testing.T) {
 	resetPromptHistoryState(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/prompt-history/append", nil)
 	w := httptest.NewRecorder()
-	HandlePromptHistoryAppend(w, req)
+	testServer.handlePromptHistoryAppend(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", w.Code)
 	}

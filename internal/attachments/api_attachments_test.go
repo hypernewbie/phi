@@ -79,7 +79,7 @@ func TestHandleAttachments_HappyPath(t *testing.T) {
 
 	req := newMultipartRequest(t, "file", "client-name-ignored.png", "image/png", data)
 	w := httptest.NewRecorder()
-	HandleClipboard(w, req)
+	testAPI.HandleClipboard(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
@@ -119,7 +119,7 @@ func TestHandleAttachments_RejectsDisallowedMIME(t *testing.T) {
 	withTempHome(t)
 	req := newMultipartRequest(t, "file", "evil.html", "text/html", []byte("<html>"))
 	w := httptest.NewRecorder()
-	HandleClipboard(w, req)
+	testAPI.HandleClipboard(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", w.Code, w.Body.String())
 	}
@@ -132,7 +132,7 @@ func TestHandleAttachments_RejectsOversize(t *testing.T) {
 	data := attachmentFixturePNG(26 << 20)
 	req := newMultipartRequest(t, "file", "big.png", "image/png", data)
 	w := httptest.NewRecorder()
-	HandleClipboard(w, req)
+	testAPI.HandleClipboard(w, req)
 	if w.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("expected 413, got %d body=%s", w.Code, w.Body.String())
 	}
@@ -142,7 +142,7 @@ func TestHandleAttachments_RejectsNonPost(t *testing.T) {
 	withTempHome(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/attachments", nil)
 	w := httptest.NewRecorder()
-	HandleClipboard(w, req)
+	testAPI.HandleClipboard(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", w.Code)
 	}
@@ -161,7 +161,7 @@ func TestHandleAttachments_RejectsMissingFileField(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/attachments", &buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	w := httptest.NewRecorder()
-	HandleClipboard(w, req)
+	testAPI.HandleClipboard(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", w.Code, w.Body.String())
 	}
@@ -189,7 +189,7 @@ func TestHandleAttachments_SweepKeepsRecentTwenty(t *testing.T) {
 	data := attachmentFixturePNG(16)
 	req := newMultipartRequest(t, "file", "fresh.png", "image/png", data)
 	w := httptest.NewRecorder()
-	HandleClipboard(w, req)
+	testAPI.HandleClipboard(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
 	}
