@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/pkg/coders"
 )
 
@@ -17,10 +18,10 @@ import (
 // browser sees, and env-bound API keys must not reach it.
 func TestHandleGetCodersExcludesSecrets(t *testing.T) {
 	// Seed a custom backend with an env-bound secret. handleGetCoders
-	// reads from coderManager, so we add directly.
+	// reads from server.Coders, so we add directly.
 	withTempBackends(t) // not strictly needed but keeps the test honest
 	ensureCoderManager()
-	coderManager.Add(coders.Coder{
+	server.Coders.Add(coders.Coder{
 		ID:             "secret-agent",
 		Name:           "Secret Agent",
 		ShortLabel:     "SA",
@@ -101,8 +102,8 @@ func TestCustomBackendsNotInConfigSave(t *testing.T) {
 	withTempConfig(t)
 
 	ensureCoderManager()
-	coderManager.LoadFromDir(testCustomBackendsDir, nil)
-	coderManager.Add(coders.Coder{
+	server.Coders.LoadFromDir(testCustomBackendsDir, nil)
+	server.Coders.Add(coders.Coder{
 		ID:             "leaky-agent",
 		Name:           "Leaky",
 		Command:        "leak",

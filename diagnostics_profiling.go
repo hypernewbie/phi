@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/hypernewbie/phi/internal/diagnostics"
+	"github.com/hypernewbie/phi/internal/server"
 )
 
 // diagnosticsProcessStartedAt anchors elapsed_seconds in private snapshots.
@@ -21,20 +22,20 @@ func startPrivateDiagnostics(dir string) func() {
 	if dir == "" {
 		return noop
 	}
-	server, err := diagnostics.Start(dir, diagnosticsProcessStartedAt, Commit)
+	srv, err := diagnostics.Start(dir, diagnosticsProcessStartedAt, server.Commit)
 	if err != nil {
 		slog.Warn("private diagnostics unavailable; Phi will continue", "err", err)
 		return noop
 	}
-	server.SetOwnershipStats(func() any {
-		if wsHub == nil {
+	srv.SetOwnershipStats(func() any {
+		if server.Hub == nil {
 			return nil
 		}
-		return wsHub.MemoryStats()
+		return server.Hub.MemoryStats()
 	})
-	slog.Info("private diagnostics ready", "dir", server.Dir())
+	slog.Info("private diagnostics ready", "dir", srv.Dir())
 	return func() {
-		if err := server.Close(); err != nil {
+		if err := srv.Close(); err != nil {
 			slog.Warn("private diagnostics cleanup incomplete", "err", err)
 		}
 	}

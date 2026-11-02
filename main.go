@@ -23,10 +23,10 @@ import (
 	"github.com/hypernewbie/phi/internal/attachments"
 	"github.com/hypernewbie/phi/internal/gitapi"
 	"github.com/hypernewbie/phi/internal/piapp"
+	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/internal/webassets"
 	"github.com/hypernewbie/phi/pkg/bindaddr"
 	"github.com/hypernewbie/phi/pkg/coders"
-	"github.com/hypernewbie/phi/pkg/fleet"
 	"github.com/hypernewbie/phi/pkg/fswatch"
 	"github.com/hypernewbie/phi/pkg/obs"
 	"github.com/hypernewbie/phi/pkg/prompt_history"
@@ -41,44 +41,27 @@ import (
 )
 
 var (
-	ptyManager     *pty.Manager
-	coderManager   *coders.Manager
-	wsHub          *ws.Hub
-	piBridge       *piapp.Bridge
-	piAPI          = piapp.NewAPI(
+	piBridge *piapp.Bridge
+	piAPI    = piapp.NewAPI(
 		func() *piapp.Bridge { return piBridge },
 		func() *attachments.AttachmentStore { return attachments.Default },
-		func() *pty.Manager { return ptyManager },
+		func() *pty.Manager { return server.PTY },
 	)
-	mdWatcher      *fswatch.Watcher
+	gitAPI = gitapi.New(
+		func() string { return server.ActiveCWD },
+		func() *pty.Manager { return server.PTY },
+		func() []string { return server.WorkspaceRoots(loadConfig()) },
+	)
 	piTitleService *piTerminalTitleService
-	cpuSampler     = system.NewSampler()
-	activeCWD      string
-	serverPort     = 7070
-	staticHandler  http.Handler
-	fleetPoller    = fleet.NewPoller()
-	gitAPI         = gitapi.New(
-		func() string { return activeCWD },
-		func() *pty.Manager { return ptyManager },
-		func() []string { return workspaceRoots(loadConfig()) },
-	)
+	updateChecker  *update.Checker
+	updateApplier  *update.Applier
+	_              = atomic.Bool{}
 
+	// Build identity, stamped by the linker. The server package serves them.
 	Version     = "dev"
 	Commit      = "none"
 	Date        = "unknown"
 	BuildSource = "source"
-
-	// shuttingDown flips true on SIGTERM/SIGINT (or a programmatic trigger)
-	// so /readyz returns 503 and the load balancer drains us. Set inside
-	// gracefulShutdown, NOT inside the signal handler directly, so the
-	// /readyz 503 stays in lockstep with the actual drain starting.
-	shuttingDown atomic.Bool
-
-	// StartedAt is the unix-second timestamp of server startup. Returned
-	// in /api/version so the front-end can detect a server restart
-	// (the value jumps forward when the user restarts phi) and clear
-	// localStorage references to tabs that no longer exist.
-	StartedAt = time.Now().Unix()
 )
 
 func rollbackPreviousBinary() (string, error) {
@@ -148,7 +131,7 @@ func main() {
 	// The directory Phi is launched from becomes the default workspace.
 	// Switch between projects from the workspace picker in the UI.
 	var err error
-	activeCWD, err = os.Getwd()
+	server.ActiveCWD, err = os.Getwd()
 	if err != nil {
 		slog.Error("failed to resolve current working directory", "err", err)
 		os.Exit(1)
@@ -161,11 +144,11 @@ func main() {
 			os.Exit(1)
 		}
 		defer diskRoot.Close()
-		staticHandler = webassets.NewDisk(diskRoot.FS())
+		server.Static = webassets.NewDisk(diskRoot.FS())
 		slog.Info("serving web assets from disk", "dir", diskRoot.Name())
 	}
 
-	log.Printf("[main] Starting Phi in CWD: %s", activeCWD)
+	log.Printf("[main] Starting Phi in CWD: %s", server.ActiveCWD)
 
 	// Ensure config directory exists and contains CWD as a workspace
 	cfg, err := loadConfigWithError()
@@ -173,9 +156,11 @@ func main() {
 		slog.Error("config read failed", "path", configFilePath(), "err", err)
 		os.Exit(1)
 	}
-	// The manager resolves both collaborators at call time: wsHub is assigned
+	// The manager resolves both collaborators at call time: server.Hub is assigned
 	// later in startup, and configStore follows the active data dir.
-	access.Default = access.NewManager(configStore, func() *ws.Hub { return wsHub })
+	server.ConfigStore = configStore
+	server.Access = func() *access.Manager { return access.Default }
+	access.Default = access.NewManager(configStore, func() *ws.Hub { return server.Hub })
 	if err := access.Default.Configure(cfg.AccessPasswordHash); err != nil {
 		slog.Error("invalid access password configuration", "err", err)
 		os.Exit(1)
@@ -190,21 +175,21 @@ func main() {
 	}
 	found := false
 	for _, wsPath := range cfg.Workspaces {
-		if wsPath == activeCWD {
+		if wsPath == server.ActiveCWD {
 			found = true
 			break
 		}
 	}
 	if !found {
-		cfg.Workspaces = append(cfg.Workspaces, activeCWD)
+		cfg.Workspaces = append(cfg.Workspaces, server.ActiveCWD)
 		if access.Default.StateOwned() {
 			saveConfig(cfg)
 		}
 	}
 
 	// Initialize PTY and WebSocket subsystems
-	ptyManager = pty.NewManager()
-	coderManager = coders.NewManagerWithOptions(coders.BuiltinOptions{
+	server.PTY = pty.NewManager()
+	server.Coders = coders.NewManagerWithOptions(coders.BuiltinOptions{
 		OpenCodeLegacy:        cfg.OpenCodeLegacy,
 		OpenCodeCommand:       cfg.OpenCodeCommand,
 		OpenCodeLegacyCommand: cfg.OpenCodeLegacyCommand,
@@ -214,7 +199,7 @@ func main() {
 	// are already seeded by NewManager; custom profiles patch / add.
 	// Per-file failures are logged inside LoadFromDir and skipped so a
 	// single malformed file never breaks startup (R3).
-	if err := coderManager.LoadFromDir(customBackendsDir(), func(s string) { log.Print(s) }); err != nil {
+	if err := server.Coders.LoadFromDir(customBackendsDir(), func(s string) { log.Print(s) }); err != nil {
 		log.Printf("[backends] failed to load custom backends: %v", err)
 	}
 	rpcMgr := rpc.NewManager()
@@ -223,7 +208,7 @@ func main() {
 	if err := LoadSyncStore(); err != nil {
 		log.Printf("[sync] Failed to load sync store state: %v", err)
 	}
-	ptyManager.StartIdleWatcher(func(info pty.IdleNotification) {
+	server.PTY.StartIdleWatcher(func(info pty.IdleNotification) {
 		cfg := loadConfig()
 		host := reportedHostname(cfg)
 
@@ -254,18 +239,21 @@ func main() {
 		}
 	})
 	startOpenCodeIdleWatcher()
-	wsHub = ws.NewHub(*cfg.ReplayBufferBytes)
-	gitAPI.StartReadLoop = func(inst *pty.PTYInstance) { ws.StartPTYReadLoop(inst, wsHub) }
+	server.Hub = ws.NewHub(*cfg.ReplayBufferBytes)
+	gitAPI.StartReadLoop = func(inst *pty.PTYInstance) { ws.StartPTYReadLoop(inst, server.Hub) }
 	// Adopt the generation loaded from config so the first upgrade is admitted
 	// and later password changes fence older sockets.
-	wsHub.RotateAuth(access.Default.AccessGeneration())
+	server.Hub.RotateAuth(access.Default.AccessGeneration())
 	// Re-check every socket admission against live auth state: a family
 	// revocation or an expiring token between the middleware decision and the
 	// upgrade must refuse the connection rather than serve it.
-	wsHub.SetAuthValidator(access.Default.AdmitsFence)
-	if err := wsHub.SetRecordingDirectory(filepath.Join(system.PhiDataDir(), "recordings")); err != nil {
+	server.Hub.SetAuthValidator(access.Default.AdmitsFence)
+	if err := server.Hub.SetRecordingDirectory(filepath.Join(system.PhiDataDir(), "recordings")); err != nil {
 		slog.Error("terminal recording directory unavailable", "err", err)
 	}
+	server.Pi = piAPI
+	server.Git = gitAPI
+	server.Version, server.Commit, server.Date, server.BuildSource = Version, Commit, Date, BuildSource
 	attachments.Default, err = attachments.OpenAttachmentStore()
 	if err != nil {
 		slog.Warn("Pi attachments unavailable", "err", err)
@@ -273,11 +261,11 @@ func main() {
 	} else {
 		defer func() { _ = attachments.Default.Close() }()
 	}
-	attachments.SetPaneManager(func() *pty.Manager { return ptyManager })
+	attachments.SetPaneManager(func() *pty.Manager { return server.PTY })
 	// The Pi bridge serves before saved Pi tabs restore so relaunched
 	// panes provision against a live listener. A nil bridge (listener
 	// failure) leaves every launch on the unmanaged path.
-	piBridge = piapp.StartBridge(wsHub, piPhiRuntime, strings.TrimSpace(piPhiVersionAsset))
+	piBridge = piapp.StartBridge(server.Hub, piPhiRuntime, strings.TrimSpace(piPhiVersionAsset))
 	if piBridge != nil {
 		piBridge.Syncboard = http.HandlerFunc(handleSyncMessages)
 		piBridge.LoadConfig = loadConfigWithError
@@ -285,8 +273,8 @@ func main() {
 	restoreSavedTabs()
 	// Expiry starts only after restoration completes so saved panes
 	// are live (and protected) before the first sweep runs.
-	wsHub.StartRetentionSweeps()
-	piTitleService = newPiTerminalTitleService(ptyManager, wsHub)
+	server.Hub.StartRetentionSweeps()
+	piTitleService = newPiTerminalTitleService(server.PTY, server.Hub)
 	piTitleService.Start()
 
 	// Markdown watcher: fswatch over the resolved markdownDirs of every
@@ -294,8 +282,8 @@ func main() {
 	// can silently refresh the md file list. Watch set follows panes, not
 	// browsers: a worktree nobody has a pane in is not covered (accepted
 	// edge).
-	mdWatcher, err = fswatch.New(markdownWatchDirs, func(dir string) {
-		wsHub.BroadcastNotification(&wspb.Notification{
+	server.MDWatcher, err = fswatch.New(server.MarkdownWatchDirs, func(dir string) {
+		server.Hub.BroadcastNotification(&wspb.Notification{
 			Kind: &wspb.Notification_MarkdownChanged{MarkdownChanged: &wspb.MarkdownChanged{
 				Dir: proto.String(dir),
 			}},
@@ -304,20 +292,20 @@ func main() {
 	if err != nil {
 		slog.Warn("fswatch unavailable; markdown panel won't live-update", "err", err)
 	} else {
-		mdWatcher.Filter = fswatch.ExtFilter(".md")
-		mdWatcher.Start()
+		server.MDWatcher.Filter = fswatch.ExtFilter(".md")
+		server.MDWatcher.Start()
 	}
 
 	// Without --web, use embedded assets from any working directory.
 	// Ordinary builds embed web/ raw; release builds decompress webdist/.
-	if staticHandler == nil {
+	if server.Static == nil {
 		root, precompressed, subErr := newWebRoot()
 		if subErr != nil {
 			slog.Error("failed to load embedded web assets", "err", subErr)
 			os.Exit(1)
 		}
 		// compression_enabled is captured once here; toggling it needs a restart.
-		staticHandler = webassets.New(root, precompressed, cfg.CompressionEnabled)
+		server.Static = webassets.New(root, precompressed, cfg.CompressionEnabled)
 	}
 
 	// API Routing
@@ -341,89 +329,89 @@ func main() {
 	http.HandleFunc("/api/git/info", gitAPI.HandleGitInfo)
 	http.HandleFunc("/api/git/status-files", gitAPI.HandleGitStatusFiles)
 	http.HandleFunc("/api/git/action", gitAPI.HandleGitAction)
-	http.HandleFunc("/api/config", handleConfig)
+	http.HandleFunc("/api/config", server.HandleConfig)
 	http.HandleFunc("/api/config/pushover", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
-			handleGetPushoverConfig(w, r)
+			server.HandleGetPushoverConfig(w, r)
 		} else if r.Method == http.MethodPost {
-			handlePostPushoverConfig(w, r)
+			server.HandlePostPushoverConfig(w, r)
 		} else {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
-	http.HandleFunc("/api/config/pushover/test", handleTestPushover)
+	http.HandleFunc("/api/config/pushover/test", server.HandleTestPushover)
 	http.HandleFunc("/api/config/webhook", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
-			handleGetWebhookConfig(w, r)
+			server.HandleGetWebhookConfig(w, r)
 		} else if r.Method == http.MethodPost {
-			handlePostWebhookConfig(w, r)
+			server.HandlePostWebhookConfig(w, r)
 		} else {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
-	http.HandleFunc("/api/config/webhook/test", handleTestWebhook)
+	http.HandleFunc("/api/config/webhook/test", server.HandleTestWebhook)
 	http.HandleFunc("/api/config/simplepush", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
-			handleGetSimplepushConfig(w, r)
+			server.HandleGetSimplepushConfig(w, r)
 		} else if r.Method == http.MethodPost {
-			handlePostSimplepushConfig(w, r)
+			server.HandlePostSimplepushConfig(w, r)
 		} else {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
-	http.HandleFunc("/api/config/simplepush/test", handleTestSimplepush)
-	http.HandleFunc("/api/config/kanban-vault", handleKanbanVault)
-	http.HandleFunc("/api/config/export", handleConfigExport)
-	http.HandleFunc("/api/config/import", handleConfigImport)
-	http.HandleFunc("/api/config/export-models", handleConfigExportModels)
-	http.HandleFunc("/api/config/import-models", handleConfigImportModels)
+	http.HandleFunc("/api/config/simplepush/test", server.HandleTestSimplepush)
+	http.HandleFunc("/api/config/kanban-vault", server.HandleKanbanVault)
+	http.HandleFunc("/api/config/export", server.HandleConfigExport)
+	http.HandleFunc("/api/config/import", server.HandleConfigImport)
+	http.HandleFunc("/api/config/export-models", server.HandleConfigExportModels)
+	http.HandleFunc("/api/config/import-models", server.HandleConfigImportModels)
 	// Cmds export was split in v0.7.16: quick_commands (sent to active PTY)
 	// and terminal_commands (spawn new shell tabs) are now separate concepts
 	// with their own endpoints. The legacy /api/config/export-cmds route is
 	// gone; /api/config/import-cmds stays for paste backwards-compat.
-	http.HandleFunc("/api/config/export-quick-commands", handleConfigExportQuickCommands)
-	http.HandleFunc("/api/config/export-terminal-commands", handleConfigExportTerminalCommands)
-	http.HandleFunc("/api/config/import-cmds", handleConfigImportCmds)
-	http.HandleFunc("/api/config/workspaces", handleWorkspaceToggle)
-	http.HandleFunc("/api/config/models", handleModelPresets)
-	http.HandleFunc("/api/config/thinking-presets", handleThinkingPresets)
+	http.HandleFunc("/api/config/export-quick-commands", server.HandleConfigExportQuickCommands)
+	http.HandleFunc("/api/config/export-terminal-commands", server.HandleConfigExportTerminalCommands)
+	http.HandleFunc("/api/config/import-cmds", server.HandleConfigImportCmds)
+	http.HandleFunc("/api/config/workspaces", server.HandleWorkspaceToggle)
+	http.HandleFunc("/api/config/models", server.HandleModelPresets)
+	http.HandleFunc("/api/config/thinking-presets", server.HandleThinkingPresets)
 	http.HandleFunc("/api/fs/autocomplete", handleFSAutocomplete)
-	http.HandleFunc("/api/fs/list", handleFSList)
-	http.HandleFunc("/api/fs/browse", handleFSBrowse)
-	http.HandleFunc("/api/config/theme", handleThemeUpdate)
-	http.HandleFunc("/api/config/appearance", handleAppearanceUpdate)
-	http.HandleFunc("/api/config/mobile-appearance", handleMobileAppearance)
-	http.HandleFunc("/api/config/mobile-appearance/fence", handleMobileAppearanceFence)
+	http.HandleFunc("/api/fs/list", server.HandleFSList)
+	http.HandleFunc("/api/fs/browse", server.HandleFSBrowse)
+	http.HandleFunc("/api/config/theme", server.HandleThemeUpdate)
+	http.HandleFunc("/api/config/appearance", server.HandleAppearanceUpdate)
+	http.HandleFunc("/api/config/mobile-appearance", server.HandleMobileAppearance)
+	http.HandleFunc("/api/config/mobile-appearance/fence", server.HandleMobileAppearanceFence)
 	http.HandleFunc("/api/git/worktrees", handleGetWorktrees)
 	http.HandleFunc("/api/git/worktree-dirty", handleGetWorktreeDirtyStates)
 	http.HandleFunc("/api/config/worktree-state", handleWorktreeStateUpdate)
-	http.HandleFunc("/api/config/quick-commands", handleQuickCommands)
-	http.HandleFunc("/api/config/terminal-commands", handleTerminalCommands)
-	http.HandleFunc("/api/config/markdown-dirs", handleMarkdownDirs)
-	http.HandleFunc("/api/config/use-existing-terminal-tab", handleUseExistingTerminalTab)
-	http.HandleFunc("/api/config/use-hidden-terminal", handleUseHiddenTerminal)
-	http.HandleFunc("/api/cmd/run", handleRunCommand)
-	http.HandleFunc("/api/cmd/batch-run", handleRunCommand)
-	http.HandleFunc("/api/config/fast-mode", handleFastMode)
-	http.HandleFunc("/api/config/pi-offline", handlePiOffline)
-	http.HandleFunc("/api/config/pi-bridge-no-inject", handlePiBridgeNoInject)
-	http.HandleFunc("/api/config/claude-dangerously-skip-permissions", handleClaudeDangerouslySkipPermissions)
-	http.HandleFunc("/api/config/agy-theme-ansi", handleAgyThemeAnsi)
-	http.HandleFunc("/api/config/auto-reconnect", handleAutoReconnect)
+	http.HandleFunc("/api/config/quick-commands", server.HandleQuickCommands)
+	http.HandleFunc("/api/config/terminal-commands", server.HandleTerminalCommands)
+	http.HandleFunc("/api/config/markdown-dirs", server.HandleMarkdownDirs)
+	http.HandleFunc("/api/config/use-existing-terminal-tab", server.HandleUseExistingTerminalTab)
+	http.HandleFunc("/api/config/use-hidden-terminal", server.HandleUseHiddenTerminal)
+	http.HandleFunc("/api/cmd/run", server.HandleRunCommand)
+	http.HandleFunc("/api/cmd/batch-run", server.HandleRunCommand)
+	http.HandleFunc("/api/config/fast-mode", server.HandleFastMode)
+	http.HandleFunc("/api/config/pi-offline", server.HandlePiOffline)
+	http.HandleFunc("/api/config/pi-bridge-no-inject", server.HandlePiBridgeNoInject)
+	http.HandleFunc("/api/config/claude-dangerously-skip-permissions", server.HandleClaudeDangerouslySkipPermissions)
+	http.HandleFunc("/api/config/agy-theme-ansi", server.HandleAgyThemeAnsi)
+	http.HandleFunc("/api/config/auto-reconnect", server.HandleAutoReconnect)
 	http.HandleFunc("/api/opencode/service", handleOpenCodeService)
 	http.HandleFunc("/api/opencode/service/stop", handleOpenCodeServiceStop)
-	http.HandleFunc("/api/config/opencode-idle-stop", handleOpenCodeIdleStop)
-	http.HandleFunc("/api/markdown/files", handleMarkdownFiles)
-	http.HandleFunc("/api/markdown/file", handleMarkdownFile)
-	http.HandleFunc("/api/markdown/asset", handleMarkdownAsset)
-	http.HandleFunc("/api/file/asset", handleFileAsset)
-	http.HandleFunc("/api/markdown/paste", handleMarkdownPaste)
-	http.HandleFunc("/api/markdown/delete", handleMarkdownDelete)
-	http.HandleFunc("/api/markdown/copy-all-worktrees", handleMarkdownCopyAllWorktrees)
-	http.HandleFunc("/api/markdown/export-bundle", handleMarkdownExportBundle)
-	http.HandleFunc("/api/markdown/import-bundle", handleMarkdownImportBundle)
+	http.HandleFunc("/api/config/opencode-idle-stop", server.HandleOpenCodeIdleStop)
+	http.HandleFunc("/api/markdown/files", server.HandleMarkdownFiles)
+	http.HandleFunc("/api/markdown/file", server.HandleMarkdownFile)
+	http.HandleFunc("/api/markdown/asset", server.HandleMarkdownAsset)
+	http.HandleFunc("/api/file/asset", server.HandleFileAsset)
+	http.HandleFunc("/api/markdown/paste", server.HandleMarkdownPaste)
+	http.HandleFunc("/api/markdown/delete", server.HandleMarkdownDelete)
+	http.HandleFunc("/api/markdown/copy-all-worktrees", server.HandleMarkdownCopyAllWorktrees)
+	http.HandleFunc("/api/markdown/export-bundle", server.HandleMarkdownExportBundle)
+	http.HandleFunc("/api/markdown/import-bundle", server.HandleMarkdownImportBundle)
 	http.HandleFunc("/ws/md-events", func(w http.ResponseWriter, r *http.Request) {
-		ws.HandleEventsWS(w, r, wsHub)
+		ws.HandleEventsWS(w, r, server.Hub)
 	})
 	http.HandleFunc("/api/prompt-history/append", handlePromptHistoryAppend)
 	http.HandleFunc("/api/prompt-history/recent", handlePromptHistoryRecent)
@@ -452,18 +440,18 @@ func main() {
 	http.HandleFunc("/api/config/sync-coordinator", handleSyncCoordinator)
 
 	http.HandleFunc("/api/version", handleGetVersion)
-	http.HandleFunc("/api/peers/status", handleGetPeersStatus)
-	http.HandleFunc("/api/config/peers", handleConfigPeers)
+	http.HandleFunc("/api/peers/status", server.HandleGetPeersStatus)
+	http.HandleFunc("/api/config/peers", server.HandleConfigPeers)
 
-	http.HandleFunc("/api/update/status", handleUpdateStatus)
-	http.HandleFunc("/api/update/check", handleUpdateCheck)
-	http.HandleFunc("/api/update/apply", handleUpdateApply)
-	http.HandleFunc("/api/update/progress", handleUpdateProgress)
+	http.HandleFunc("/api/update/status", server.HandleUpdateStatus)
+	http.HandleFunc("/api/update/check", server.HandleUpdateCheck)
+	http.HandleFunc("/api/update/apply", server.HandleUpdateApply)
+	http.HandleFunc("/api/update/progress", server.HandleUpdateProgress)
 	http.HandleFunc("/api/restart", handleRestart)
-	http.HandleFunc("/api/diag", handleDiag)
+	http.HandleFunc("/api/diag", server.HandleDiag)
 
 	// Start fleet poller with current peer config
-	startFleetPoller()
+	server.StartFleetPoller()
 
 	// Start update checker (release builds only; dev builds hide the badge anyway).
 	if BuildSource == "release" {
@@ -484,6 +472,7 @@ func main() {
 		// Construct the applier so /api/update/apply + /api/update/progress
 		// work, even though only npm/standalone installs can use them.
 		updateApplier = update.NewApplier(Version, update.DetectInstallMethod(BuildSource))
+		server.InstallUpdater(updateChecker, updateApplier)
 
 		// Best-effort cleanup of stale .old, delayed so operators can run `phi --rollback`.
 		go func() {
@@ -496,11 +485,11 @@ func main() {
 	}
 
 	// Custom route for DELETE /api/terminals/:id and WS /ws/pane/:id
-	http.HandleFunc("/livez", handleLivez)
-	http.HandleFunc("/healthz", handleLivez) // alias
-	http.HandleFunc("/readyz", handleReadyz)
+	http.HandleFunc("/livez", server.HandleLivez)
+	http.HandleFunc("/healthz", server.HandleLivez) // alias
+	http.HandleFunc("/readyz", server.HandleReadyz)
 	http.HandleFunc("/", handleFallback)
-	http.HandleFunc("/ws/control", ws.HandleControl(wsHub, rpcMgr, func() string { return activeCWD }))
+	http.HandleFunc("/ws/control", ws.HandleControl(server.Hub, rpcMgr, func() string { return server.ActiveCWD }))
 
 	closeDiagnostics := startPrivateDiagnostics(*diagnosticsDirFlag)
 
@@ -621,8 +610,8 @@ func main() {
 	if piBridge != nil {
 		piBridge.SetListenerAddr(listeners[0].Addr())
 	}
-	serverPort = listeners[0].Addr().(*net.TCPAddr).Port
-	printWelcomeBanner(cfg, boundAddrs, serverPort)
+	server.Port = listeners[0].Addr().(*net.TCPAddr).Port
+	printWelcomeBanner(cfg, boundAddrs, server.Port)
 	var serveErr error
 	shutdownServers, serveErr = serveAndCapture(listeners)
 	closeDiagnostics()
@@ -734,7 +723,7 @@ func printWelcomeBanner(cfg Config, addrs []bindaddr.Addr, port int) {
 	}
 
 	fmt.Printf("%s── Status Dump ──────────────────────────────────────────%s\n", dimEsc, resetEsc)
-	fmt.Printf("  %sCWD:%s          %s\n", colorEsc, resetEsc, activeCWD)
+	fmt.Printf("  %sCWD:%s          %s\n", colorEsc, resetEsc, server.ActiveCWD)
 	fmt.Printf("  %sWorkspaces:%s   %d active\n", colorEsc, resetEsc, len(cfg.Workspaces))
 	fmt.Printf("  %sHostname:%s     %s\n", colorEsc, resetEsc, strings.ToUpper(host))
 	fmt.Printf("  %sCoordinator:%s  %s\n", colorEsc, resetEsc, cfg.SyncCoordinatorURL(coordinatorAddr))
@@ -811,17 +800,17 @@ func envDuration(key string, def time.Duration) time.Duration {
 // the load balancer stops routing), flushes state, tells clients,
 // gracefully terminates child PTYs, then drains in-flight HTTP. Returns
 // when done. Sequence matches what a k8s+drain-system expects:
-//  1. shuttingDown = true (so /readyz returns 503 and k8s removes us
+//  1. server.ShuttingDown = true (so /readyz returns 503 and k8s removes us
 //     from the service endpoints pool).
-//  2. ptyManager.BeginDrain() (so new spawn requests are rejected during
+//  2. server.PTY.BeginDrain() (so new spawn requests are rejected during
 //     the drain window).
 //  3. sleep drainDelay (k8s picks up the 503 and stops sending traffic).
 //  4. flush state to disk (so a restart picks up where we left off).
-//  5. wsHub.BroadcastShutdown (tell browsers to show the bulk-disconnect
+//  5. server.Hub.BroadcastShutdown (tell browsers to show the bulk-disconnect
 //     banner).
 //  6. small sleep (lets the WS 0x05 frame flush; matches current
 //     behavior).
-//  7. ptyManager.Shutdown(ptyGrace) — SIGTERM each agent, wait bounded
+//  7. server.PTY.Shutdown(ptyGrace) — SIGTERM each agent, wait bounded
 //     by ptyGrace, force-kill stragglers.
 //  8. drain in-flight HTTP via Server.Shutdown(ctx) within grace.
 //
@@ -837,13 +826,13 @@ func isInteractiveTTY() bool {
 }
 
 func gracefulShutdown(servers []*http.Server, drainDelay, ptyGrace, grace time.Duration) {
-	shuttingDown.Store(true) // /readyz -> 503
+	server.ShuttingDown.Store(true) // /readyz -> 503
 	stopOpenCodeIdleWatcher()
-	if mdWatcher != nil {
-		mdWatcher.Close()
+	if server.MDWatcher != nil {
+		server.MDWatcher.Close()
 	}
-	if ptyManager != nil {
-		ptyManager.BeginDrain() // reject new PTY spawns for the whole drain window
+	if server.PTY != nil {
+		server.PTY.BeginDrain() // reject new PTY spawns for the whole drain window
 	}
 	if piTitleService != nil {
 		piTitleService.Close()
@@ -854,17 +843,17 @@ func gracefulShutdown(servers []*http.Server, drainDelay, ptyGrace, grace time.D
 	if err := flushStateForRestart(); err != nil {
 		slog.Error("shutdown flush failed", "err", err)
 	}
-	if wsHub != nil {
-		wsHub.BroadcastShutdown("shutdown")
+	if server.Hub != nil {
+		server.Hub.BroadcastShutdown("shutdown")
 	}
 	time.Sleep(200 * time.Millisecond) // let the WS 0x05 frame flush
-	if ptyManager != nil {
-		ptyManager.Shutdown(ptyGrace)
+	if server.PTY != nil {
+		server.PTY.Shutdown(ptyGrace)
 		// Native exit notices can publish the exact resume ID during drain.
 		readCtx, readCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		ptyManager.WaitForReadLoops(readCtx)
+		server.PTY.WaitForReadLoops(readCtx)
 		readCancel()
-		if err := ptyManager.FlushSaveState(); err != nil {
+		if err := server.PTY.FlushSaveState(); err != nil {
 			slog.Error("shutdown tab snapshot", "err", err)
 		}
 	}

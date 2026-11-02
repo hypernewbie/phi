@@ -94,7 +94,6 @@ func (a *API) paneManager() *pty.Manager {
 	return a.pty()
 }
 
-
 type Bridge struct {
 	server       *pibridge.Server
 	endpoint     *pibridge.Endpoint

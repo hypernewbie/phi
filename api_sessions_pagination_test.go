@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/pkg/coders"
 	"github.com/hypernewbie/phi/pkg/session"
 )
@@ -63,13 +64,13 @@ func TestHandleGetSessionsPagination(t *testing.T) {
 		writePiSessionFixture(t, projectDir, id, cwd, base.Add(-time.Duration(i)*time.Minute))
 	}
 
-	before := coderManager
-	coderManager = coders.NewManager()
-	beforeCWD := activeCWD
-	activeCWD = cwd
+	before := server.Coders
+	server.Coders = coders.NewManager()
+	beforeCWD := server.ActiveCWD
+	server.ActiveCWD = cwd
 	t.Cleanup(func() {
-		coderManager = before
-		activeCWD = beforeCWD
+		server.Coders = before
+		server.ActiveCWD = beforeCWD
 	})
 
 	query := func(extra map[string]string) string {
@@ -191,14 +192,14 @@ func TestHandleGetSessionsPaginationEdges(t *testing.T) {
 		writePiSessionFixture(t, projectDir, id, cwd, base.Add(-time.Duration(i)*time.Minute))
 	}
 
-	beforeCoders := coderManager
-	coderManager = coders.NewManager()
-	coderManager.Add(coders.Coder{ID: "missing-source-coder", SessionSource: "missing-test-source"})
-	beforeCWD := activeCWD
-	activeCWD = cwd
+	beforeCoders := server.Coders
+	server.Coders = coders.NewManager()
+	server.Coders.Add(coders.Coder{ID: "missing-source-coder", SessionSource: "missing-test-source"})
+	beforeCWD := server.ActiveCWD
+	server.ActiveCWD = cwd
 	t.Cleanup(func() {
-		coderManager = beforeCoders
-		activeCWD = beforeCWD
+		server.Coders = beforeCoders
+		server.ActiveCWD = beforeCWD
 	})
 
 	encodedCwd := url.QueryEscape(cwd)
@@ -238,7 +239,7 @@ func TestHandleGetSessionsPaginationEdges(t *testing.T) {
 
 	fallback := decode(t, rawGet(t, "coder=pi&limit=10"))
 	if len(fallback) != 10 || fallback[0].ID != "s000" {
-		t.Fatalf("activeCWD fallback: %v", sessionIDsOf(fallback))
+		t.Fatalf("server.ActiveCWD fallback: %v", sessionIDsOf(fallback))
 	}
 
 	huge := strings.Repeat("9", 100)

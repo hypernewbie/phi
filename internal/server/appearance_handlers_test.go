@@ -1,7 +1,8 @@
-package main
+package server
 
 import (
 	"encoding/json"
+	"github.com/hypernewbie/phi/internal/config"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,7 +22,7 @@ func TestHandleAppearanceUpdate_PersistsFields(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/config/appearance", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	handleAppearanceUpdate(w, req)
+	HandleAppearanceUpdate(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
@@ -77,7 +78,7 @@ func TestHandleAppearanceUpdate_PartialUpdate(t *testing.T) {
 		strings.NewReader(`{"ui_font_size":13}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	handleAppearanceUpdate(w, req)
+	HandleAppearanceUpdate(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: %d", w.Code)
 	}
@@ -118,7 +119,7 @@ func TestHandleAppearanceUpdate_ClampsFontSize(t *testing.T) {
 				strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
-			handleAppearanceUpdate(w, req)
+			HandleAppearanceUpdate(w, req)
 			if w.Code != http.StatusOK {
 				t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
 			}
@@ -154,7 +155,7 @@ func TestHandleAppearanceUpdate_ClampsTerminalFontSize(t *testing.T) {
 				strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
-			handleAppearanceUpdate(w, req)
+			HandleAppearanceUpdate(w, req)
 			if w.Code != http.StatusOK {
 				t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
 			}
@@ -190,7 +191,7 @@ func TestHandleAppearanceUpdate_HostnameOverride(t *testing.T) {
 				strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
-			handleAppearanceUpdate(w, req)
+			HandleAppearanceUpdate(w, req)
 			if w.Code != http.StatusOK {
 				t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
 			}
@@ -216,7 +217,7 @@ func TestHandleAppearanceUpdate_HostnameOverrideRejects(t *testing.T) {
 			strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
-		handleAppearanceUpdate(w, req)
+		HandleAppearanceUpdate(w, req)
 		if w.Code != http.StatusOK {
 			t.Fatalf("in %q: status %d", bad, w.Code)
 		}
@@ -248,7 +249,7 @@ func TestHandleAppearanceUpdate_ClampsMobileScrollback(t *testing.T) {
 				strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
-			handleAppearanceUpdate(w, req)
+			HandleAppearanceUpdate(w, req)
 			if w.Code != http.StatusOK {
 				t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
 			}
@@ -266,7 +267,7 @@ func TestHandleAppearanceUpdate_RequiresPost(t *testing.T) {
 	for _, method := range []string{http.MethodGet, http.MethodDelete, http.MethodPut} {
 		req := httptest.NewRequest(method, "/api/config/appearance", nil)
 		w := httptest.NewRecorder()
-		handleAppearanceUpdate(w, req)
+		HandleAppearanceUpdate(w, req)
 		if w.Code != http.StatusMethodNotAllowed {
 			t.Errorf("%s: got %d want 405", method, w.Code)
 		}
@@ -281,7 +282,7 @@ func TestHandleAppearanceUpdate_RejectsGarbageBody(t *testing.T) {
 		strings.NewReader(`{not json`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	handleAppearanceUpdate(w, req)
+	HandleAppearanceUpdate(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("garbage body: got %d want 400", w.Code)
 	}
@@ -301,7 +302,7 @@ func TestHandleConfig_IncludesAppearanceFields(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	w := httptest.NewRecorder()
-	handleConfig(w, req)
+	HandleConfig(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: %d", w.Code)
 	}
@@ -377,7 +378,7 @@ func TestReportedHostname(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := reportedHostname(Config{HostnameOverride: tc.override}); got != tc.want {
+			if got := reportedHostname(config.Config{HostnameOverride: tc.override}); got != tc.want {
 				t.Errorf("override %q: got %q want %q", tc.override, got, tc.want)
 			}
 		})
@@ -391,7 +392,7 @@ func TestHandleConfig_ReportsOverrideHostname(t *testing.T) {
 	saveConfig(cfg)
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	w := httptest.NewRecorder()
-	handleConfig(w, req)
+	HandleConfig(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: %d", w.Code)
 	}

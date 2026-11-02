@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/pkg/coders"
 	"github.com/hypernewbie/phi/pkg/pty"
 )
@@ -15,18 +16,18 @@ import (
 func setupMockOpenCode(t *testing.T, serviceStatus string) {
 	t.Helper()
 	withTempConfig(t)
-	oldCoders, oldPTY := coderManager, ptyManager
+	oldCoders, oldPTY := server.Coders, server.PTY
 	t.Cleanup(func() {
-		coderManager = oldCoders
-		ptyManager = oldPTY
+		server.Coders = oldCoders
+		server.PTY = oldPTY
 		invalidateOpenCodeServiceCache()
 	})
-	coderManager = coders.NewManager()
-	ptyManager = pty.NewManager()
-	c, _ := coderManager.Get("opencode")
+	server.Coders = coders.NewManager()
+	server.PTY = pty.NewManager()
+	c, _ := server.Coders.Get("opencode")
 	c.Command = os.Args[0]
 	c.Env = map[string]string{"PHI_TEST_ROOT_OC_SERVICE": serviceStatus}
-	coderManager.Add(c)
+	server.Coders.Add(c)
 	invalidateOpenCodeServiceCache()
 }
 
@@ -76,8 +77,8 @@ func TestOpenCodeServiceStatusStopped(t *testing.T) {
 func TestOpenCodeServiceStopConflictWhenTabsActive(t *testing.T) {
 	setupMockOpenCode(t, "http://127.0.0.1:49374")
 
-	// Inject a simulated active OpenCode instance into ptyManager
-	ptyManager.AddInstanceForTesting(&pty.PTYInstance{
+	// Inject a simulated active OpenCode instance into server.PTY
+	server.PTY.AddInstanceForTesting(&pty.PTYInstance{
 		ID:        "test-pane-1",
 		Coder:     "opencode",
 		SessionID: "sess-1",
@@ -134,12 +135,12 @@ func TestOpenCodeServiceStopWhenNoTabs(t *testing.T) {
 
 func TestOpenCodeServiceUnsupportedOnLegacy(t *testing.T) {
 	withTempConfig(t)
-	oldCoders := coderManager
+	oldCoders := server.Coders
 	t.Cleanup(func() {
-		coderManager = oldCoders
+		server.Coders = oldCoders
 		invalidateOpenCodeServiceCache()
 	})
-	coderManager = coders.NewManagerWithOptions(coders.BuiltinOptions{OpenCodeLegacy: true})
+	server.Coders = coders.NewManagerWithOptions(coders.BuiltinOptions{OpenCodeLegacy: true})
 	invalidateOpenCodeServiceCache()
 
 	w := httptest.NewRecorder()

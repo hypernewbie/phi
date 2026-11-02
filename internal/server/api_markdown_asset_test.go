@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"net/http"
@@ -11,14 +11,14 @@ import (
 )
 
 // assetRequest runs a GET /api/markdown/asset for the given path through
-// handleMarkdownAsset. cwd is left empty everywhere: the tests configure
-// absolute markdown dirs, which sidesteps activeCWD entirely.
+// HandleMarkdownAsset. cwd is left empty everywhere: the tests configure
+// absolute markdown dirs, which sidesteps ActiveCWD entirely.
 func assetRequest(t *testing.T, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	q := url.Values{"path": {path}, "cwd": {""}}
 	req := httptest.NewRequest(http.MethodGet, "/api/markdown/asset?"+q.Encode(), nil)
 	w := httptest.NewRecorder()
-	handleMarkdownAsset(w, req)
+	HandleMarkdownAsset(w, req)
 	return w
 }
 
@@ -29,10 +29,10 @@ func TestHandleMarkdownAsset(t *testing.T) {
 	writeConfigWithMarkdownDirs(t, allowed)
 
 	// Anchor the workspace to the allowed temp dir so the confinement gate
-	// (workspaceRoots) treats it as a real project root; restore after.
-	origCWD := activeCWD
-	activeCWD = allowed
-	t.Cleanup(func() { activeCWD = origCWD })
+	// (WorkspaceRoots) treats it as a real project root; restore after.
+	origCWD := ActiveCWD
+	ActiveCWD = allowed
+	t.Cleanup(func() { ActiveCWD = origCWD })
 
 	pngPath := filepath.Join(allowed, "pic.png")
 	if err := os.WriteFile(pngPath, []byte("\x89PNG fake image bytes"), 0644); err != nil {
@@ -124,14 +124,14 @@ func TestHandleMarkdownAsset(t *testing.T) {
 		q := url.Values{"path": {outsidePng}, "cwd": {outside}}
 		req := httptest.NewRequest(http.MethodGet, "/api/markdown/asset?"+q.Encode(), nil)
 		rec := httptest.NewRecorder()
-		handleMarkdownAsset(rec, req)
+		HandleMarkdownAsset(rec, req)
 		if rec.Code != http.StatusForbidden {
 			t.Fatalf("status: got %d want 403 (body=%s)", rec.Code, rec.Body.String())
 		}
 	})
 }
 
-// markdownAssetHeadRequest builds a HEAD request against handleMarkdownAsset.
+// markdownAssetHeadRequest builds a HEAD request against HandleMarkdownAsset.
 func markdownAssetHeadRequest(t *testing.T, path string) *http.Request {
 	t.Helper()
 	q := url.Values{"path": {path}, "cwd": {""}}
@@ -144,9 +144,9 @@ func TestHandleMarkdownAssetHEAD(t *testing.T) {
 	withTempConfig(t)
 	allowed := t.TempDir()
 	writeConfigWithMarkdownDirs(t, allowed)
-	origCWD := activeCWD
-	activeCWD = allowed
-	t.Cleanup(func() { activeCWD = origCWD })
+	origCWD := ActiveCWD
+	ActiveCWD = allowed
+	t.Cleanup(func() { ActiveCWD = origCWD })
 
 	body := strings.Repeat("markdown-image-bytes", 64)
 	pngPath := filepath.Join(allowed, "head.png")
@@ -163,7 +163,7 @@ func TestHandleMarkdownAssetHEAD(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	handleMarkdownAsset(w, markdownAssetHeadRequest(t, pngPath))
+	HandleMarkdownAsset(w, markdownAssetHeadRequest(t, pngPath))
 	if w.Code != http.StatusOK {
 		t.Fatalf("HEAD: %d %s", w.Code, w.Body.String())
 	}
@@ -192,7 +192,7 @@ func TestHandleMarkdownAssetHEAD(t *testing.T) {
 			}
 		}
 		w := httptest.NewRecorder()
-		handleMarkdownAsset(w, markdownAssetHeadRequest(t, path))
+		HandleMarkdownAsset(w, markdownAssetHeadRequest(t, path))
 		if w.Code == http.StatusOK {
 			t.Errorf("%s: HEAD accepted (%d)", name, w.Code)
 		}
@@ -201,7 +201,7 @@ func TestHandleMarkdownAssetHEAD(t *testing.T) {
 		request := markdownAssetHeadRequest(t, pngPath)
 		request.Method = method
 		w := httptest.NewRecorder()
-		handleMarkdownAsset(w, request)
+		HandleMarkdownAsset(w, request)
 		if w.Code != http.StatusMethodNotAllowed {
 			t.Errorf("%s: status = %d want 405", method, w.Code)
 		}

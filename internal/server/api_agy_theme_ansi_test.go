@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bytes"
@@ -27,14 +27,14 @@ func TestAgyThemeAnsiSetting(t *testing.T) {
 		}
 	})
 
-	t.Run("toggles via handleAgyThemeAnsi endpoint", func(t *testing.T) {
+	t.Run("toggles via HandleAgyThemeAnsi endpoint", func(t *testing.T) {
 		withTempConfig(t)
 
 		// Toggle on
 		bodyOn := bytes.NewBufferString(`{"enabled": true}`)
 		reqOn := httptest.NewRequest(http.MethodPost, "/api/config/agy-theme-ansi", bodyOn)
 		wOn := httptest.NewRecorder()
-		handleAgyThemeAnsi(wOn, reqOn)
+		HandleAgyThemeAnsi(wOn, reqOn)
 
 		if wOn.Code != http.StatusOK {
 			t.Fatalf("expected 200 OK, got %d", wOn.Code)
@@ -47,7 +47,7 @@ func TestAgyThemeAnsiSetting(t *testing.T) {
 		bodyOff := bytes.NewBufferString(`{"enabled": false}`)
 		reqOff := httptest.NewRequest(http.MethodPost, "/api/config/agy-theme-ansi", bodyOff)
 		wOff := httptest.NewRecorder()
-		handleAgyThemeAnsi(wOff, reqOff)
+		HandleAgyThemeAnsi(wOff, reqOff)
 
 		if wOff.Code != http.StatusOK {
 			t.Fatalf("expected 200 OK, got %d", wOff.Code)
@@ -60,7 +60,7 @@ func TestAgyThemeAnsiSetting(t *testing.T) {
 	t.Run("rejects non-POST methods", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/config/agy-theme-ansi", nil)
 		w := httptest.NewRecorder()
-		handleAgyThemeAnsi(w, req)
+		HandleAgyThemeAnsi(w, req)
 
 		if w.Code != http.StatusMethodNotAllowed {
 			t.Fatalf("expected 405 Method Not Allowed, got %d", w.Code)
@@ -75,7 +75,7 @@ func TestAgyThemeAnsiSetting(t *testing.T) {
 
 		req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 		w := httptest.NewRecorder()
-		handleConfig(w, req)
+		HandleConfig(w, req)
 
 		if w.Code != http.StatusOK {
 			t.Fatalf("expected 200 OK, got %d", w.Code)

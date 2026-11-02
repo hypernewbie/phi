@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/pkg/ws"
 )
 
@@ -72,10 +73,10 @@ func TestRecordingResponseCompressionIsExactAndTinySpansStayRaw(t *testing.T) {
 func TestRecordingEndpointDefaultHTTPTransportInflatesWithoutChangingFrontiers(t *testing.T) {
 	setupHotHub(t)
 	data := bytes.Repeat([]byte("\x1b[31mLINE 你🙂\x1b[0m\r\n"), 1024)
-	if err := wsHub.Ingest("compressed", data); err != nil {
+	if err := server.Hub.Ingest("compressed", data); err != nil {
 		t.Fatal(err)
 	}
-	wsHub.RecordResize("compressed", 100, 30)
+	server.Hub.RecordResize("compressed", 100, 30)
 	srv := httptest.NewServer(http.HandlerFunc(handleFallback))
 	defer srv.Close()
 	// Same Go automatic gzip support used by phic; no custom decompressor.

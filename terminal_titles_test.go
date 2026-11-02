@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/pkg/fswatch"
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/session"
@@ -341,9 +342,9 @@ func TestPiTitleWorkerStepIsFairAndDoesNotBlockPTYOrHTTP(t *testing.T) {
 	first := spawnPiTitlePaneForTest(t, manager, "fair-first", cwd, "first-native", "First saved")
 	second := spawnPiTitlePaneForTest(t, manager, "fair-second", cwd, "second-native", "Second saved")
 	client := addTitleObserver(hub, first.ID)
-	oldManager := ptyManager
-	ptyManager = manager
-	t.Cleanup(func() { ptyManager = oldManager })
+	oldManager := server.PTY
+	server.PTY = manager
+	t.Cleanup(func() { server.PTY = oldManager })
 	service := newPiTerminalTitleService(manager, hub)
 	service.watcherFactory = func(func() []string, func(string)) (*fswatch.Watcher, error) {
 		return nil, errors.New("test does not need filesystem events")

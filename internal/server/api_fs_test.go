@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"encoding/json"
@@ -15,7 +15,7 @@ import (
 )
 
 // fsListRequest builds a /api/fs/list request with explicit cwd/path query
-// params — never rely on the activeCWD global, which is process-wide state.
+// params — never rely on the ActiveCWD global, which is process-wide state.
 func fsListRequest(cwd, path string) *http.Request {
 	q := url.Values{}
 	q.Set("cwd", cwd)
@@ -34,7 +34,7 @@ func TestHandleFSList_NonRepoListing(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	handleFSList(w, fsListRequest(dir, ""))
+	HandleFSList(w, fsListRequest(dir, ""))
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -70,7 +70,7 @@ func TestHandleFSList_TraversalRejected(t *testing.T) {
 				t.Skip("drive-letter paths are only absolute on windows")
 			}
 			w := httptest.NewRecorder()
-			handleFSList(w, fsListRequest(dir, c.path))
+			HandleFSList(w, fsListRequest(dir, c.path))
 			if w.Code != http.StatusBadRequest {
 				t.Errorf("path=%q: got %d want 400; body=%s", c.path, w.Code, w.Body.String())
 			}
@@ -89,7 +89,7 @@ func TestHandleFSList_SymlinkEscapeBlocked(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	handleFSList(w, fsListRequest(workspace, "link"))
+	HandleFSList(w, fsListRequest(workspace, "link"))
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("got %d want 403; body=%s", w.Code, w.Body.String())
 	}
@@ -116,7 +116,7 @@ func TestHandleFSList_RepoFiltering(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	handleFSList(w, fsListRequest(dir, ""))
+	HandleFSList(w, fsListRequest(dir, ""))
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -144,7 +144,7 @@ func TestHandleFSList_RepoFiltering(t *testing.T) {
 	mustWriteFile(t, filepath.Join(dir, "build", "shot.png"), "x")
 	mustWriteFile(t, filepath.Join(dir, "build", "doc.pdf"), "x")
 	w = httptest.NewRecorder()
-	handleFSList(w, fsListRequest(dir, "build"))
+	HandleFSList(w, fsListRequest(dir, "build"))
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -163,7 +163,7 @@ func TestHandleFSList_RepoFiltering(t *testing.T) {
 func TestHandleFSList_MissingDir(t *testing.T) {
 	dir := t.TempDir()
 	w := httptest.NewRecorder()
-	handleFSList(w, fsListRequest(dir, "nope"))
+	HandleFSList(w, fsListRequest(dir, "nope"))
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("got %d want 404; body=%s", w.Code, w.Body.String())
 	}
@@ -190,7 +190,7 @@ func decodeFSBrowseResponse(t *testing.T, w *httptest.ResponseRecorder) FSBrowse
 func TestHandleFSBrowse_MethodAndPathValidation(t *testing.T) {
 	post := httptest.NewRequest(http.MethodPost, "/api/fs/browse?path=/", nil)
 	w := httptest.NewRecorder()
-	handleFSBrowse(w, post)
+	HandleFSBrowse(w, post)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("POST: got %d want 405; body=%s", w.Code, w.Body.String())
 	}
@@ -198,7 +198,7 @@ func TestHandleFSBrowse_MethodAndPathValidation(t *testing.T) {
 	for _, path := range []string{"", "relative/path"} {
 		t.Run(strconv.Quote(path), func(t *testing.T) {
 			w := httptest.NewRecorder()
-			handleFSBrowse(w, fsBrowseRequest(path))
+			HandleFSBrowse(w, fsBrowseRequest(path))
 			if w.Code != http.StatusBadRequest {
 				t.Errorf("path=%q: got %d want 400; body=%s", path, w.Code, w.Body.String())
 			}
@@ -217,7 +217,7 @@ func TestHandleFSBrowse_ExpandsHomeAndCleansPath(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	handleFSBrowse(w, fsBrowseRequest("~"))
+	HandleFSBrowse(w, fsBrowseRequest("~"))
 	if w.Code != http.StatusOK {
 		t.Fatalf("home: got %d want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -231,7 +231,7 @@ func TestHandleFSBrowse_ExpandsHomeAndCleansPath(t *testing.T) {
 
 	dirtyPath := workspace + string(filepath.Separator) + "missing" + string(filepath.Separator) + ".."
 	w = httptest.NewRecorder()
-	handleFSBrowse(w, fsBrowseRequest(dirtyPath))
+	HandleFSBrowse(w, fsBrowseRequest(dirtyPath))
 	if w.Code != http.StatusOK {
 		t.Fatalf("cleaned path: got %d want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -248,7 +248,7 @@ func TestHandleFSBrowse_FilesystemRootHasNoParent(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	handleFSBrowse(w, fsBrowseRequest(root))
+	HandleFSBrowse(w, fsBrowseRequest(root))
 	if w.Code != http.StatusOK {
 		t.Fatalf("root: got %d want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -261,7 +261,7 @@ func TestHandleFSBrowse_FilesystemRootHasNoParent(t *testing.T) {
 func TestHandleFSBrowse_EmptyDirectoryHasEmptyArray(t *testing.T) {
 	dir := t.TempDir()
 	w := httptest.NewRecorder()
-	handleFSBrowse(w, fsBrowseRequest(dir))
+	HandleFSBrowse(w, fsBrowseRequest(dir))
 	if w.Code != http.StatusOK {
 		t.Fatalf("empty dir: got %d want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -284,7 +284,7 @@ func TestHandleFSBrowse_HidesFilesAndDotDirectories(t *testing.T) {
 	mustWriteFile(t, filepath.Join(dir, "file.txt"), "file")
 
 	w := httptest.NewRecorder()
-	handleFSBrowse(w, fsBrowseRequest(dir))
+	HandleFSBrowse(w, fsBrowseRequest(dir))
 	if w.Code != http.StatusOK {
 		t.Fatalf("listing: got %d want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -305,7 +305,7 @@ func TestHandleFSBrowse_ExcludesSymlinkedChildren(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	handleFSBrowse(w, fsBrowseRequest(workspace))
+	HandleFSBrowse(w, fsBrowseRequest(workspace))
 	if w.Code != http.StatusOK {
 		t.Fatalf("listing: got %d want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -330,7 +330,7 @@ func TestHandleFSBrowse_PreservesRequestedSymlinkAlias(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	handleFSBrowse(w, fsBrowseRequest(alias))
+	HandleFSBrowse(w, fsBrowseRequest(alias))
 	if w.Code != http.StatusOK {
 		t.Fatalf("alias: got %d want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -355,7 +355,7 @@ func TestHandleFSBrowse_IncludesGitIgnoredDirectories(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	handleFSBrowse(w, fsBrowseRequest(dir))
+	HandleFSBrowse(w, fsBrowseRequest(dir))
 	if w.Code != http.StatusOK {
 		t.Fatalf("listing: got %d want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -398,7 +398,7 @@ func TestHandleFSBrowse_SortsCaseInsensitivelyAndStably(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	handleFSBrowse(w, fsBrowseRequest(dir))
+	HandleFSBrowse(w, fsBrowseRequest(dir))
 	if w.Code != http.StatusOK {
 		t.Fatalf("listing: got %d want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -427,7 +427,7 @@ func TestHandleFSBrowse_TruncatesAtMaximum(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	handleFSBrowse(w, fsBrowseRequest(dir))
+	HandleFSBrowse(w, fsBrowseRequest(dir))
 	if w.Code != http.StatusOK {
 		t.Fatalf("listing: got %d want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -444,7 +444,7 @@ func TestHandleFSBrowse_MissingAndNonDirectoryPaths(t *testing.T) {
 	for _, path := range []string{filepath.Join(dir, "missing"), file} {
 		t.Run(filepath.Base(path), func(t *testing.T) {
 			w := httptest.NewRecorder()
-			handleFSBrowse(w, fsBrowseRequest(path))
+			HandleFSBrowse(w, fsBrowseRequest(path))
 			if w.Code != http.StatusNotFound {
 				t.Errorf("path=%q: got %d want 404; body=%s", path, w.Code, w.Body.String())
 			}
@@ -467,7 +467,7 @@ func TestHandleFSBrowse_UnreadableDirectory(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	handleFSBrowse(w, fsBrowseRequest(dir))
+	HandleFSBrowse(w, fsBrowseRequest(dir))
 	if w.Code == http.StatusOK {
 		t.Skip("runner privileges allow reading a mode-000 directory")
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"github.com/hypernewbie/phi/internal/server"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -34,7 +35,7 @@ func TestPiBridgeNoInjectSetting(t *testing.T) {
 		withTempConfig(t)
 		req := httptest.NewRequest(http.MethodPost, "/api/config/pi-bridge-no-inject", strings.NewReader(`{"enabled":true}`))
 		w := httptest.NewRecorder()
-		handlePiBridgeNoInject(w, req)
+		server.HandlePiBridgeNoInject(w, req)
 		if w.Code != http.StatusOK {
 			t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
 		}
@@ -57,7 +58,7 @@ func TestPiBridgeNoInjectSetting(t *testing.T) {
 		saveConfig(cfg)
 		req := httptest.NewRequest(http.MethodPost, "/api/config/pi-bridge-no-inject", strings.NewReader(`{"enabled":false}`))
 		w := httptest.NewRecorder()
-		handlePiBridgeNoInject(w, req)
+		server.HandlePiBridgeNoInject(w, req)
 		if w.Code != http.StatusOK {
 			t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
 		}
@@ -70,7 +71,7 @@ func TestPiBridgeNoInjectSetting(t *testing.T) {
 		withTempConfig(t)
 		req := httptest.NewRequest(http.MethodGet, "/api/config/pi-bridge-no-inject", nil)
 		w := httptest.NewRecorder()
-		handlePiBridgeNoInject(w, req)
+		server.HandlePiBridgeNoInject(w, req)
 		if w.Code != http.StatusMethodNotAllowed {
 			t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
 		}

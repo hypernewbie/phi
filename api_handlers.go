@@ -16,6 +16,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/pkg/clipboard"
 	"github.com/hypernewbie/phi/pkg/coders"
 	"github.com/hypernewbie/phi/pkg/pty"
@@ -60,7 +61,7 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		err := ptyManager.SetPinned(id, req.Pinned)
+		err := server.PTY.SetPinned(id, req.Pinned)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -81,7 +82,7 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		err := ptyManager.SetMarked(id, req.Marked)
+		err := server.PTY.SetMarked(id, req.Marked)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -102,7 +103,7 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		inst, ok := ptyManager.Get(id)
+		inst, ok := server.PTY.Get(id)
 		if !ok || inst == nil {
 			http.Error(w, "terminal instance not found", http.StatusNotFound)
 			return
@@ -137,7 +138,7 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		err := ptyManager.SetTitle(id, req.Title)
+		err := server.PTY.SetTitle(id, req.Title)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -166,7 +167,7 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		inst, ok := ptyManager.Get(id)
+		inst, ok := server.PTY.Get(id)
 		if !ok || inst.Pty == nil {
 			http.Error(w, "Pane not found", http.StatusNotFound)
 			return
@@ -182,7 +183,7 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/terminals/") {
 		id := strings.TrimPrefix(r.URL.Path, "/api/terminals/")
-		err := ptyManager.Kill(id)
+		err := server.PTY.Kill(id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -220,7 +221,7 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 		if after != "" {
 			var endCursor string
 			var cerr error
-			rec, endCursor, cerr = wsHub.RecordingAfterCursor(id, from, through, after)
+			rec, endCursor, cerr = server.Hub.RecordingAfterCursor(id, from, through, after)
 			if cerr != nil {
 				if errors.Is(cerr, ws.ErrEventCursorExpired) {
 					http.Error(w, cerr.Error(), http.StatusConflict)
@@ -232,7 +233,7 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 			rec.EventCursor = endCursor
 		} else {
 			var ok bool
-			rec, ok = wsHub.Recording(id, from, through)
+			rec, ok = server.Hub.Recording(id, from, through)
 			if !ok {
 				http.Error(w, "from is beyond the pane head", http.StatusBadRequest)
 				return
@@ -259,7 +260,7 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 				if after != "" {
 					var endCursor string
 					var cerr error
-					rec, endCursor, cerr = wsHub.RecordingAfterCursor(id, mfrom, mthrough, after)
+					rec, endCursor, cerr = server.Hub.RecordingAfterCursor(id, mfrom, mthrough, after)
 					if cerr != nil {
 						if errors.Is(cerr, ws.ErrEventCursorExpired) {
 							http.Error(w, cerr.Error(), http.StatusConflict)
@@ -271,7 +272,7 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 					rec.EventCursor = endCursor
 				} else {
 					var ok bool
-					rec, ok = wsHub.Recording(id, mfrom, mthrough)
+					rec, ok = server.Hub.Recording(id, mfrom, mthrough)
 					if !ok {
 						http.Error(w, "from is beyond the pane head", http.StatusBadRequest)
 						return
@@ -317,7 +318,7 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "checkpoint too large", http.StatusRequestEntityTooLarge)
 			return
 		}
-		if !wsHub.StoreCheckpoint(id, ws.CheckpointUpload{
+		if !server.Hub.StoreCheckpoint(id, ws.CheckpointUpload{
 			Epoch: req.Epoch, Through: req.Through, Cols: req.Cols, Rows: req.Rows, Ansi: ansi,
 		}) {
 			http.Error(w, "stale checkpoint (epoch/through mismatch)", http.StatusConflict)
@@ -329,22 +330,22 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 
 	if strings.HasPrefix(r.URL.Path, "/ws/pane/") {
 		id := strings.TrimPrefix(r.URL.Path, "/ws/pane/")
-		inst, ok := ptyManager.Get(id)
+		inst, ok := server.PTY.Get(id)
 		if !ok {
 			http.Error(w, "Pane not found", http.StatusNotFound)
 			return
 		}
-		ws.HandleWS(w, r, inst, ptyManager, wsHub)
+		ws.HandleWS(w, r, inst, server.PTY, server.Hub)
 		return
 	}
 
 	// Fallback to static assets (embedded by default, disk with --web).
-	staticHandler.ServeHTTP(w, r)
+	server.Static.ServeHTTP(w, r)
 }
 
 func handleGetCoders(w http.ResponseWriter, r *http.Request) {
 	ensureCoderManager()
-	list := coderManager.List()
+	list := server.Coders.List()
 	descriptors := coders.DescriptorsFor(list)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(descriptors)
@@ -355,10 +356,10 @@ func handleGetSessions(w http.ResponseWriter, r *http.Request) {
 	coderID := r.URL.Query().Get("coder")
 	cwd := r.URL.Query().Get("cwd")
 	if cwd == "" {
-		cwd = activeCWD
+		cwd = server.ActiveCWD
 	}
 
-	c, ok := coderManager.Get(coderID)
+	c, ok := server.Coders.Get(coderID)
 	if !ok {
 		http.Error(w, "Invalid coder", http.StatusBadRequest)
 		return
@@ -409,11 +410,11 @@ func handleGetSessions(w http.ResponseWriter, r *http.Request) {
 // ensureCoderManager lazily initializes the global coder manager so
 // handler-level unit tests that drive handleGetCoders / handleSpawnTerminal
 // without going through main() still have a usable registry. Production
-// always sets coderManager in main.go; this fallback only fires in
+// always sets server.Coders in main.go; this fallback only fires in
 // tests that drive a single handler.
 func ensureCoderManager() {
-	if coderManager == nil {
-		coderManager = coders.NewManager()
+	if server.Coders == nil {
+		server.Coders = coders.NewManager()
 	}
 }
 
@@ -434,8 +435,8 @@ func terminalOpenCodeMode(inst *pty.PTYInstance) string {
 	if inst.OpenCodeMode != "" {
 		return inst.OpenCodeMode
 	}
-	if coderManager != nil {
-		if c, ok := coderManager.Get(inst.Coder); ok {
+	if server.Coders != nil {
+		if c, ok := server.Coders.Get(inst.Coder); ok {
 			return c.OpenCodeMode
 		}
 	}
@@ -446,8 +447,8 @@ func terminalPiMode(inst *pty.PTYInstance) string {
 	if inst.PiMode != "" {
 		return inst.PiMode
 	}
-	if coderManager != nil {
-		if c, ok := coderManager.Get(inst.Coder); ok {
+	if server.Coders != nil {
+		if c, ok := server.Coders.Get(inst.Coder); ok {
 			return c.PiMode
 		}
 	}
@@ -456,7 +457,7 @@ func terminalPiMode(inst *pty.PTYInstance) string {
 
 func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
-		instances := ptyManager.ListActive()
+		instances := server.PTY.ListActive()
 		type terminalView struct {
 			pty.PTYInstanceSnapshot
 			ActiveWS      bool
@@ -496,7 +497,7 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cols and rows must both be supplied", http.StatusBadRequest)
 		return
 	}
-	c, ok := coderManager.Get(req.Coder)
+	c, ok := server.Coders.Get(req.Coder)
 	if req.OpenCodeMini {
 		var err error
 		c, err = coders.OpenCodeMini(c)
@@ -517,7 +518,7 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 	// Reattach only to the requested presentation of this session. Mini
 	// and full TUI clients may coexist; never replace a running process.
 	if req.SessionID != "" {
-		for _, inst := range ptyManager.ListActive() {
+		for _, inst := range server.PTY.ListActive() {
 			snapshot := inst.Snapshot()
 			if snapshot.Coder == req.Coder && snapshot.SessionID == req.SessionID {
 				mode := terminalOpenCodeMode(inst)
@@ -562,8 +563,8 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 
 	// A new pane may be the first live one in this cwd/worktree, so it
 	// can widen the markdown watch set.
-	if mdWatcher != nil {
-		mdWatcher.Recompute()
+	if server.MDWatcher != nil {
+		server.MDWatcher.Recompute()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -657,7 +658,7 @@ func handleFSAutocomplete(w http.ResponseWriter, r *http.Request) {
 func handleGetWorktrees(w http.ResponseWriter, r *http.Request) {
 	cwd := r.URL.Query().Get("cwd")
 	if cwd == "" {
-		cwd = activeCWD
+		cwd = server.ActiveCWD
 	}
 
 	wts, err := session.ListGitWorktrees(r.Context(), cwd)
@@ -706,7 +707,7 @@ func handleGetWorktrees(w http.ResponseWriter, r *http.Request) {
 func handleGetWorktreeDirtyStates(w http.ResponseWriter, r *http.Request) {
 	cwd := r.URL.Query().Get("cwd")
 	if cwd == "" {
-		cwd = activeCWD
+		cwd = server.ActiveCWD
 	}
 
 	wts, err := session.ListGitWorktrees(r.Context(), cwd)
@@ -773,7 +774,7 @@ func handleSystemCPU(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 500*time.Millisecond)
 	defer cancel()
 
-	stats, err := cpuSampler.Sample(ctx)
+	stats, err := server.CPU.Sample(ctx)
 	if err != nil {
 		// Don't 500 — the CPU indicator is decorative. Return a zero
 		// sample so the UI clears any active state.
@@ -798,8 +799,8 @@ func handleGetClipboard(w http.ResponseWriter, r *http.Request) {
 	// behavior (system clipboard, or package-global shim if set).
 	var shimPath string
 	if pane := r.URL.Query().Get("pane"); pane != "" {
-		if ptyManager != nil {
-			if inst, ok := ptyManager.Get(pane); ok && inst != nil && inst.Pty != nil {
+		if server.PTY != nil {
+			if inst, ok := server.PTY.Get(pane); ok && inst != nil && inst.Pty != nil {
 				shimPath = inst.Pty.ClipboardFile()
 			}
 		}
@@ -837,7 +838,7 @@ func handleGetSessionTranscript(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	cwd := r.URL.Query().Get("cwd")
 
-	c, ok := coderManager.Get(coder)
+	c, ok := server.Coders.Get(coder)
 	if !ok {
 		http.Error(w, "Invalid coder", http.StatusBadRequest)
 		return
@@ -911,12 +912,12 @@ func handleGetVersion(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"api":            "1",
-		"version":        Version,
-		"commit":         Commit,
-		"date":           Date,
-		"build_source":   BuildSource,
-		"install_method": update.DetectInstallMethod(BuildSource),
-		"started_at":     fmt.Sprintf("%d", StartedAt),
+		"version":        server.Version,
+		"commit":         server.Commit,
+		"date":           server.Date,
+		"build_source":   server.BuildSource,
+		"install_method": update.DetectInstallMethod(server.BuildSource),
+		"started_at":     fmt.Sprintf("%d", server.StartedAt),
 	})
 }
 

@@ -316,4 +316,3 @@ func TestHandleRawDiff_HeadHashCache(t *testing.T) {
 		t.Errorf("after invalidation HEAD should refresh, got %q (was %q)", got, firstHead)
 	}
 }
-

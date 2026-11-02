@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hypernewbie/phi/internal/access"
+	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/pkg/restart"
 )
 
@@ -33,8 +34,8 @@ func handleRestart(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[restart] flush failed: %v", err)
 	}
 
-	if wsHub != nil {
-		wsHub.BroadcastShutdown("restart")
+	if server.Hub != nil {
+		server.Hub.BroadcastShutdown("restart")
 	}
 
 	time.Sleep(150 * time.Millisecond)
@@ -55,8 +56,8 @@ func handleRestart(w http.ResponseWriter, r *http.Request) {
 }
 
 func flushStateForRestart() error {
-	if ptyManager != nil {
-		if err := ptyManager.FlushSaveState(); err != nil {
+	if server.PTY != nil {
+		if err := server.PTY.FlushSaveState(); err != nil {
 			return err
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/pkg/ws"
 )
 
@@ -16,7 +17,7 @@ import (
 // floor moves above zero, and returns the head.
 func writePastTheFloor(t *testing.T, pane string) uint64 {
 	t.Helper()
-	if err := wsHub.SetRecordingDirectory(t.TempDir()); err != nil {
+	if err := server.Hub.SetRecordingDirectory(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	chunk := bytes.Repeat([]byte("x"), 64*1024)
@@ -24,7 +25,7 @@ func writePastTheFloor(t *testing.T, pane string) uint64 {
 	// request that starts at zero used to invert into an empty window.
 	pages := (ws.RetentionWindowBytes + 1<<20) / len(chunk)
 	for i := 0; i < pages; i++ {
-		if err := wsHub.Ingest(pane, chunk); err != nil {
+		if err := server.Hub.Ingest(pane, chunk); err != nil {
 			t.Fatal(err)
 		}
 	}

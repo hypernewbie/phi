@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"testing"
@@ -24,9 +24,9 @@ func TestThemeEmoji_CoversThemes(t *testing.T) {
 	}
 
 	for theme, want := range cases {
-		got := themeEmoji(theme)
+		got := ThemeEmoji(theme)
 		if got != want {
-			t.Errorf("themeEmoji(%q) = %q, want %q", theme, got, want)
+			t.Errorf("ThemeEmoji(%q) = %q, want %q", theme, got, want)
 		}
 	}
 }

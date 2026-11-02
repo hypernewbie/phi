@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hypernewbie/phi/internal/access"
+	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/pkg/pty"
 )
 
@@ -23,10 +24,10 @@ func withPaneManager(t *testing.T) *pty.Manager {
 	t.Helper()
 	withTempConfig(t)
 	m := pty.NewManager()
-	orig := ptyManager
-	ptyManager = m
+	orig := server.PTY
+	server.PTY = m
 	t.Cleanup(func() {
-		ptyManager = orig
+		server.PTY = orig
 		m.Shutdown(testPaneShutdownGrace)
 	})
 	return m

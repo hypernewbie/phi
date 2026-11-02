@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/pkg/coders"
 	"github.com/hypernewbie/phi/pkg/pty"
 )
@@ -48,9 +49,9 @@ func TestOpenCodeConfigDefaultsAndLegacyRoundTrip(t *testing.T) {
 	if !read.OpenCodeLegacy || read.OpenCodeCommand != cfg.OpenCodeCommand || read.OpenCodeLegacyCommand != cfg.OpenCodeLegacyCommand {
 		t.Fatalf("config lost options: %+v", read)
 	}
-	before := coderManager
-	t.Cleanup(func() { coderManager = before })
-	coderManager = coders.NewManagerWithOptions(coders.BuiltinOptions{OpenCodeLegacy: read.OpenCodeLegacy, OpenCodeCommand: read.OpenCodeCommand, OpenCodeLegacyCommand: read.OpenCodeLegacyCommand})
+	before := server.Coders
+	t.Cleanup(func() { server.Coders = before })
+	server.Coders = coders.NewManagerWithOptions(coders.BuiltinOptions{OpenCodeLegacy: read.OpenCodeLegacy, OpenCodeCommand: read.OpenCodeCommand, OpenCodeLegacyCommand: read.OpenCodeLegacyCommand})
 	w := httptest.NewRecorder()
 	handleGetCoders(w, httptest.NewRequest(http.MethodGet, "/api/coders", nil))
 	var desc map[string]coders.CoderDescriptor
@@ -64,7 +65,7 @@ func TestOpenCodeConfigDefaultsAndLegacyRoundTrip(t *testing.T) {
 		t.Fatal("private executable path leaked in descriptors")
 	}
 	w = httptest.NewRecorder()
-	handleConfig(w, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+	server.HandleConfig(w, httptest.NewRequest(http.MethodGet, "/api/config", nil))
 	if strings.Contains(w.Body.String(), "/private/") {
 		t.Fatal("private executable path leaked in config API")
 	}
@@ -82,11 +83,11 @@ func TestOpenCodeMixedPresentationsReattachAndListActualMode(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".phi", "tabs.json"), []byte(data), 0600); err != nil {
 		t.Fatal(err)
 	}
-	oldCoders, oldPTY := coderManager, ptyManager
-	t.Cleanup(func() { coderManager = oldCoders; ptyManager = oldPTY })
-	coderManager = coders.NewManager()
-	ptyManager = pty.NewManager()
-	if err := ptyManager.LoadState(); err != nil {
+	oldCoders, oldPTY := server.Coders, server.PTY
+	t.Cleanup(func() { server.Coders = oldCoders; server.PTY = oldPTY })
+	server.Coders = coders.NewManager()
+	server.PTY = pty.NewManager()
+	if err := server.PTY.LoadState(); err != nil {
 		t.Fatal(err)
 	}
 	for _, test := range []struct{ body, id, mode string }{
@@ -112,20 +113,20 @@ func TestOpenCodeMixedPresentationsReattachAndListActualMode(t *testing.T) {
 	if modes["full"] != "tui" || modes["small"] != "mini" {
 		t.Fatalf("actual modes lost: %v", modes)
 	}
-	if coderManager.MustGet("opencode").OpenCodeMode != "tui" {
+	if server.Coders.MustGet("opencode").OpenCodeMode != "tui" {
 		t.Fatal("Mini changed default")
 	}
 }
 
 func TestOpenCodeV2RejectsInstalledV1BeforePTYSpawn(t *testing.T) {
 	withTempConfig(t)
-	before := coderManager
-	t.Cleanup(func() { coderManager = before })
-	coderManager = coders.NewManager()
-	c, _ := coderManager.Get("opencode")
+	before := server.Coders
+	t.Cleanup(func() { server.Coders = before })
+	server.Coders = coders.NewManager()
+	c, _ := server.Coders.Get("opencode")
 	c.Command = os.Args[0]
 	c.Env = map[string]string{"PHI_TEST_ROOT_OC_VERSION": "1.18.34"}
-	coderManager.Add(c)
+	server.Coders.Add(c)
 	for _, body := range []string{
 		`{"coder":"opencode"}`,
 		`{"coder":"opencode","opencode_mini":true}`,

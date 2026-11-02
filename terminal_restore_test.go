@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/pkg/coders"
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/ws"
@@ -38,21 +39,21 @@ func restoreHarness(t *testing.T) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	oldManager, oldCoders, oldHub, oldCwd, oldTitleService := ptyManager, coderManager, wsHub, activeCWD, piTitleService
-	ptyManager = pty.NewManager()
-	coderManager = coders.NewManager()
-	wsHub = ws.NewHub(64 * 1024)
-	activeCWD = home
+	oldManager, oldCoders, oldHub, oldCwd, oldTitleService := server.PTY, server.Coders, server.Hub, server.ActiveCWD, piTitleService
+	server.PTY = pty.NewManager()
+	server.Coders = coders.NewManager()
+	server.Hub = ws.NewHub(64 * 1024)
+	server.ActiveCWD = home
 	piTitleService = nil
 	t.Cleanup(func() {
 		if piTitleService != nil {
 			piTitleService.Close()
 		}
-		for _, inst := range ptyManager.ListActive() {
-			_ = ptyManager.Kill(inst.ID)
+		for _, inst := range server.PTY.ListActive() {
+			_ = server.PTY.Kill(inst.ID)
 		}
-		_ = ptyManager.FlushSaveState()
-		ptyManager, coderManager, wsHub, activeCWD, piTitleService = oldManager, oldCoders, oldHub, oldCwd, oldTitleService
+		_ = server.PTY.FlushSaveState()
+		server.PTY, server.Coders, server.Hub, server.ActiveCWD, piTitleService = oldManager, oldCoders, oldHub, oldCwd, oldTitleService
 	})
 	return home
 }
@@ -60,16 +61,16 @@ func restoreHarness(t *testing.T) string {
 func TestRestoreBackendSlotsKeepIdentityMetadataAndExactResumeArgs(t *testing.T) {
 	home := restoreHarness(t)
 	for _, id := range []string{"claude", "pi", "agy", "codex", "bash", "pwsh"} {
-		c := coderManager.MustGet(id)
+		c := server.Coders.MustGet(id)
 		c.Command = os.Args[0]
 		c.Args = nil
 		c.SessionSource = "none"
 		path := filepath.Join(home, id+".args")
 		c.Env = map[string]string{"PHI_TEST_RESTORE_CHILD": "1", "PHI_TEST_RESTORE_ARGS": path}
-		coderManager.Add(c)
+		server.Coders.Add(c)
 		tab := pty.SavedTab{PTYInstanceSnapshot: pty.PTYInstanceSnapshot{ID: "pane-" + id, Coder: id, SessionID: "exact-native-id", Cwd: home, Title: "Keep title", Workspace: "workspace", Pinned: true, Marked: true}}
 		restoreSavedTab(tab)
-		inst, ok := ptyManager.Get(tab.ID)
+		inst, ok := server.PTY.Get(tab.ID)
 		if !ok || inst.IsPtyDead() {
 			t.Fatalf("%s restored as a ghost", id)
 		}
@@ -97,20 +98,20 @@ func TestRestoreBackendSlotsKeepIdentityMetadataAndExactResumeArgs(t *testing.T)
 
 func TestSpawnedPiPaneRegistersThroughSharedLaunchPath(t *testing.T) {
 	home := restoreHarness(t)
-	coder := coderManager.MustGet("pi")
+	coder := server.Coders.MustGet("pi")
 	coder.Command = os.Args[0]
 	coder.Args = nil
 	coder.SessionSource = "none"
 	coder.Env = map[string]string{"PHI_TEST_RESTORE_CHILD": "1"}
-	coderManager.Add(coder)
-	service := newPiTerminalTitleService(ptyManager, wsHub)
+	server.Coders.Add(coder)
+	service := newPiTerminalTitleService(server.PTY, server.Hub)
 	piTitleService = service
 
 	tab := pty.SavedTab{PTYInstanceSnapshot: pty.PTYInstanceSnapshot{
 		ID: "registered-pi-pane", Coder: "pi", Cwd: home, SessionID: "native-id", Title: "Saved title",
 	}}
 	restoreSavedTab(tab)
-	instance, ok := ptyManager.Get(tab.ID)
+	instance, ok := server.PTY.Get(tab.ID)
 	if !ok || instance.IsPtyDead() {
 		t.Fatal("Pi pane did not launch through the shared terminal path")
 	}
@@ -124,15 +125,15 @@ func TestSpawnedPiPaneRegistersThroughSharedLaunchPath(t *testing.T) {
 
 func TestRestoreInvalidNativeResumeFallsBackWithoutAbortingOtherTabs(t *testing.T) {
 	home := restoreHarness(t)
-	c := coderManager.MustGet("codex")
+	c := server.Coders.MustGet("codex")
 	c.Command = os.Args[0]
 	c.Args = nil
 	c.SessionSource = "none"
 	path := filepath.Join(home, "fallback.args")
 	c.Env = map[string]string{"PHI_TEST_RESTORE_CHILD": "1", "PHI_TEST_RESTORE_ARGS": path, "PHI_TEST_RESTORE_REJECT_RESUME": "1"}
-	coderManager.Add(c)
+	server.Coders.Add(c)
 	restoreSavedTab(pty.SavedTab{PTYInstanceSnapshot: pty.PTYInstanceSnapshot{ID: "bad-resume", Coder: "codex", SessionID: "stale", Cwd: home, Title: "Keep tab"}})
-	inst, ok := ptyManager.Get("bad-resume")
+	inst, ok := server.PTY.Get("bad-resume")
 	if !ok || inst.IsPtyDead() || inst.Snapshot().SessionID != "" {
 		t.Fatal("failed resume did not become a fresh live tab")
 	}
@@ -147,7 +148,7 @@ func TestRestoreCorruptFileNeverAbortsStartup(t *testing.T) {
 	_ = os.MkdirAll(filepath.Join(home, ".phi"), 0700)
 	_ = os.WriteFile(filepath.Join(home, ".phi", "tabs.json"), []byte("invalid"), 0600)
 	restoreSavedTabs()
-	if len(ptyManager.ListActive()) != 0 {
+	if len(server.PTY.ListActive()) != 0 {
 		t.Fatal("corrupt state published ghost tabs")
 	}
 }

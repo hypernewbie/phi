@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/pkg/ws"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
@@ -32,9 +33,9 @@ func handleTerminalState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unsupported terminal state kind", http.StatusBadRequest)
 		return
 	}
-	state := wsHub.HistoricalStateContext
+	state := server.Hub.HistoricalStateContext
 	if kind == "ansi-v1" {
-		state = wsHub.HistoricalANSIStateContext
+		state = server.Hub.HistoricalANSIStateContext
 	}
 	var pos ws.PanePosition
 	var data []byte
@@ -42,9 +43,9 @@ func handleTerminalState(w http.ResponseWriter, r *http.Request) {
 	if latest {
 		switch kind {
 		case "ansi-v1":
-			pos, data, cols, rows, err = wsHub.LiveANSIState(id, epoch)
+			pos, data, cols, rows, err = server.Hub.LiveANSIState(id, epoch)
 		case "ghostty-ready-v1":
-			pos, data, cols, rows, err = wsHub.LiveGhosttyState(id, epoch)
+			pos, data, cols, rows, err = server.Hub.LiveGhosttyState(id, epoch)
 		default:
 			http.Error(w, "latest requires ansi-v1 or ghostty-ready-v1", http.StatusBadRequest)
 			return

@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"encoding/json"
@@ -49,7 +49,7 @@ var serverStartedAt = time.Now()
 // handleDiag returns a snapshot of server state for the diag panel.
 // GET /api/diag. Intentionally unauthenticated — this is a local
 // tool, not a public API. Pair with risk R6 (v0.9 auth) for hardening.
-func handleDiag(w http.ResponseWriter, r *http.Request) {
+func HandleDiag(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -72,8 +72,8 @@ func handleDiag(w http.ResponseWriter, r *http.Request) {
 	resp.MemAllocMB = float64(m.Alloc) / (1024 * 1024)
 	resp.NumGC = m.NumGC
 
-	if ptyManager != nil {
-		insts := ptyManager.ListActive()
+	if PTY != nil {
+		insts := PTY.ListActive()
 		resp.PTYs = len(insts)
 		for _, inst := range insts {
 			busy, lastActivity := inst.BusyState()
@@ -84,8 +84,8 @@ func handleDiag(w http.ResponseWriter, r *http.Request) {
 				Busy:         busy,
 				LastActivity: lastActivity,
 			}
-			if wsHub != nil {
-				pd.ClientCount, pd.RingBytes, pd.RingCapacity = wsHub.PaneStats(inst.ID)
+			if Hub != nil {
+				pd.ClientCount, pd.RingBytes, pd.RingCapacity = Hub.PaneStats(inst.ID)
 			}
 			resp.Panes = append(resp.Panes, pd)
 		}

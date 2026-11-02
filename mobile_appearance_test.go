@@ -13,18 +13,19 @@ import (
 	"testing"
 
 	"github.com/hypernewbie/phi/internal/access"
+	"github.com/hypernewbie/phi/internal/server"
 )
 
-func mobileRequest(t *testing.T, fence bool, body string, want int) mobileAppearanceState {
+func mobileRequest(t *testing.T, fence bool, body string, want int) server.MobileAppearanceState {
 	t.Helper()
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/config/mobile-appearance", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json; charset=utf-8")
-	serveMobileAppearance(w, r, fence, configStore().Update)
+	server.ServeMobileAppearance(w, r, fence, configStore().Update)
 	if w.Code != want {
 		t.Fatalf("status=%d want=%d body=%s", w.Code, want, w.Body.String())
 	}
-	var state mobileAppearanceState
+	var state server.MobileAppearanceState
 	if want == 200 || want == 409 {
 		if err := json.Unmarshal(w.Body.Bytes(), &state); err != nil {
 			t.Fatal(err)
@@ -52,7 +53,7 @@ func TestMobileAppearancePersistenceAndReset(t *testing.T) {
 	saveConfig(legacy)
 	cfg := loadConfig()
 	if cfg.MobileAppearanceRevision != 2 || *cfg.MobileUIFontSize != 21 || *cfg.MobileUIFontFamily != "" || *cfg.MobileTerminalFontFamily != "Mobile terminal" || *cfg.MobileTerminalFontSize != 20 || !cfg.UseHiddenTerminal {
-		t.Fatalf("stale save lost owned data: %+v", mobileAppearanceFromConfig(cfg))
+		t.Fatalf("stale save lost owned data: %+v", server.MobileAppearanceFromConfig(cfg))
 	}
 	state = mobileRequest(t, false, `{"revision":2,"fields":{"ui_font_family":null}}`, 200)
 	if state.UIFontFamily != nil || *state.UIFontSize != 21 || *state.TerminalFontSize != 20 {
@@ -75,8 +76,8 @@ func TestMobileAppearanceConcurrentDesktopAndAtomicBatch(t *testing.T) {
 		body    string
 		handler http.HandlerFunc
 	}{
-		{`{"revision":0,"fields":{"ui_font_size":21,"terminal_font_size":22,"ui_font_family":"Mobile UI","terminal_font_family":"Mobile terminal"}}`, handleMobileAppearance},
-		{`{"ui_font_size":19,"terminal_font_size":20,"ui_font_family":"Desktop UI","terminal_font_family":"Desktop terminal"}`, handleAppearanceUpdate},
+		{`{"revision":0,"fields":{"ui_font_size":21,"terminal_font_size":22,"ui_font_family":"Mobile UI","terminal_font_family":"Mobile terminal"}}`, server.HandleMobileAppearance},
+		{`{"ui_font_size":19,"terminal_font_size":20,"ui_font_family":"Desktop UI","terminal_font_family":"Desktop terminal"}`, server.HandleAppearanceUpdate},
 	} {
 		wg.Add(1)
 		go func() {
@@ -155,7 +156,7 @@ func TestMobileAppearanceRejectsWithoutMutation(t *testing.T) {
 			if ct != "missing" {
 				r.Header.Set("Content-Type", ct)
 			}
-			serveMobileAppearance(w, r, tc.fence, configStore().Update)
+			server.ServeMobileAppearance(w, r, tc.fence, configStore().Update)
 			if w.Code != tc.status {
 				t.Fatalf("status=%d want=%d body=%s", w.Code, tc.status, w.Body.String())
 			}
@@ -178,7 +179,7 @@ func TestMobileAppearanceFenceAndConcurrency(t *testing.T) {
 			w := httptest.NewRecorder()
 			r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(fmt.Sprintf(`{"revision":0,"fields":{"ui_font_size":%d}}`, size)))
 			r.Header.Set("Content-Type", "application/json")
-			handleMobileAppearance(w, r)
+			server.HandleMobileAppearance(w, r)
 			codes <- w.Code
 		}(size)
 	}
@@ -214,7 +215,7 @@ func TestMobileAppearanceReadWriteErrorsAndRevisionLimit(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"revision":1,"fields":{"ui_font_size":24}}`))
 	r.Header.Set("Content-Type", "application/json")
-	serveMobileAppearance(w, r, false, func(mutate func(*Config) error) (Config, error) {
+	server.ServeMobileAppearance(w, r, false, func(mutate func(*Config) error) (Config, error) {
 		cfg, err := configStore().ReadAuthoritative()
 		if err != nil {
 			return Config{}, err
@@ -227,7 +228,7 @@ func TestMobileAppearanceReadWriteErrorsAndRevisionLimit(t *testing.T) {
 		t.Fatalf("failed write status=%d mutated=%t", w.Code, !bytes.Equal(before, after))
 	}
 	if _, err := configStore().Update(func(cfg *Config) error {
-		cfg.MobileAppearanceRevision = maxMobileAppearanceRevision
+		cfg.MobileAppearanceRevision = server.MaxMobileAppearanceRevision
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -238,7 +239,7 @@ func TestMobileAppearanceReadWriteErrorsAndRevisionLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	w = httptest.NewRecorder()
-	handleMobileAppearance(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	server.HandleMobileAppearance(w, httptest.NewRequest(http.MethodGet, "/", nil))
 	if w.Code != 500 {
 		t.Fatalf("malformed config GET=%d", w.Code)
 	}
@@ -253,13 +254,13 @@ func TestMobileAppearanceMethodsAndAuthorization(t *testing.T) {
 	auth := useTestAccessAuth(t)
 	for _, fence := range []bool{false, true} {
 		w := httptest.NewRecorder()
-		serveMobileAppearance(w, httptest.NewRequest(http.MethodDelete, "/", nil), fence, configStore().Update)
+		server.ServeMobileAppearance(w, httptest.NewRequest(http.MethodDelete, "/", nil), fence, configStore().Update)
 		if w.Code != 405 {
 			t.Fatalf("DELETE=%d", w.Code)
 		}
 	}
 	w := httptest.NewRecorder()
-	handleMobileAppearance(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	server.HandleMobileAppearance(w, httptest.NewRequest(http.MethodGet, "/", nil))
 	if w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" || !strings.Contains(w.Body.String(), `"ui_font_size":null`) {
 		t.Fatalf("GET=%d %s", w.Code, w.Body.String())
 	}
@@ -267,8 +268,8 @@ func TestMobileAppearanceMethodsAndAuthorization(t *testing.T) {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/config/mobile-appearance", handleMobileAppearance)
-	mux.HandleFunc("/api/config/mobile-appearance/fence", handleMobileAppearanceFence)
+	mux.HandleFunc("/api/config/mobile-appearance", server.HandleMobileAppearance)
+	mux.HandleFunc("/api/config/mobile-appearance/fence", server.HandleMobileAppearanceFence)
 	protected := access.Middleware(mux)
 	for _, path := range []string{"/api/config/mobile-appearance", "/api/config/mobile-appearance/fence"} {
 		for _, method := range []string{http.MethodGet, http.MethodPost} {

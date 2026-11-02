@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/hypernewbie/phi/internal/server"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -279,7 +280,7 @@ func TestOpenCodeIdleStopAPI(t *testing.T) {
 	// 1. Method Not Allowed
 	req := httptest.NewRequest(http.MethodGet, "/api/config/opencode-idle-stop", nil)
 	w := httptest.NewRecorder()
-	handleOpenCodeIdleStop(w, req)
+	server.HandleOpenCodeIdleStop(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", w.Code)
 	}
@@ -287,7 +288,7 @@ func TestOpenCodeIdleStopAPI(t *testing.T) {
 	// 2. Bad JSON
 	req = httptest.NewRequest(http.MethodPost, "/api/config/opencode-idle-stop", bytes.NewBufferString("invalid json"))
 	w = httptest.NewRecorder()
-	handleOpenCodeIdleStop(w, req)
+	server.HandleOpenCodeIdleStop(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for bad json, got %d", w.Code)
 	}
@@ -309,7 +310,7 @@ func TestOpenCodeIdleStopAPI(t *testing.T) {
 		body, _ := json.Marshal(map[string]int{"minutes": ct.input})
 		req = httptest.NewRequest(http.MethodPost, "/api/config/opencode-idle-stop", bytes.NewReader(body))
 		w = httptest.NewRecorder()
-		handleOpenCodeIdleStop(w, req)
+		server.HandleOpenCodeIdleStop(w, req)
 		if w.Code != http.StatusOK {
 			t.Fatalf("input %d: expected 200, got %d", ct.input, w.Code)
 		}
@@ -331,7 +332,7 @@ func TestOpenCodeIdleStopAPI(t *testing.T) {
 	// 4. Verify /api/config includes opencode_idle_stop_minutes
 	req = httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	w = httptest.NewRecorder()
-	handleConfig(w, req)
+	server.HandleConfig(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /api/config: expected 200, got %d", w.Code)
 	}

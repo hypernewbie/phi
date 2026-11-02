@@ -223,7 +223,7 @@ func (a *API) HandleGetDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-		if a.StartReadLoop != nil {
+	if a.StartReadLoop != nil {
 		a.StartReadLoop(inst)
 	}
 

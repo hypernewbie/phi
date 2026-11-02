@@ -9,15 +9,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
 func TestStateEndpointValidatesEpochAndRequestedFrontier(t *testing.T) {
 	setupHotHub(t)
-	if err := wsHub.Ingest("state", []byte("requested book\r\nLATEST")); err != nil {
+	if err := server.Hub.Ingest("state", []byte("requested book\r\nLATEST")); err != nil {
 		t.Fatal(err)
 	}
-	pos, _, _, _, err := wsHub.State("state")
+	pos, _, _, _, err := server.Hub.State("state")
 	if err != nil {
 		t.Fatal(err)
 	}

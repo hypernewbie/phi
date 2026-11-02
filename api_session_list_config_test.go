@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"github.com/hypernewbie/phi/internal/server"
 	"net/http/httptest"
 	"os"
 	"testing"
@@ -36,7 +37,7 @@ func TestSessionListPageSizeConfig(t *testing.T) {
 			}
 
 			rec := httptest.NewRecorder()
-			handleConfig(rec, httptest.NewRequest("GET", "/api/config", nil))
+			server.HandleConfig(rec, httptest.NewRequest("GET", "/api/config", nil))
 			if rec.Code != 200 {
 				t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 			}
@@ -82,7 +83,7 @@ func TestSessionListPageSizeConfig(t *testing.T) {
 		}
 
 		rec := httptest.NewRecorder()
-		handleConfig(rec, httptest.NewRequest("GET", "/api/config", nil))
+		server.HandleConfig(rec, httptest.NewRequest("GET", "/api/config", nil))
 		var payload map[string]any
 		if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 			t.Fatalf("decode payload: %v", err)

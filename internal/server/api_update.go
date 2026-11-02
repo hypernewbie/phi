@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"encoding/json"
@@ -14,7 +14,7 @@ var (
 
 // handleUpdateStatus returns the current cached update check result.
 // GET /api/update/status
-func handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
+func HandleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -38,7 +38,14 @@ func handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 
 // handleUpdateCheck triggers a fresh check (subject to min interval).
 // POST /api/update/check
-func handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
+// InstallUpdater publishes the release-build checker and applier to the
+// update routes. Dev builds leave both nil and the routes report unavailable.
+func InstallUpdater(checker *update.Checker, applier *update.Applier) {
+	updateChecker = checker
+	updateApplier = applier
+}
+
+func HandleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -64,7 +71,7 @@ func handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 // handleUpdateApply kicks off a T2 staged swap. POST /api/update/apply
 // with body {"version":"v0.8.2"}. Returns immediately with the initial
 // progress snapshot; client polls /api/update/progress to track.
-func handleUpdateApply(w http.ResponseWriter, r *http.Request) {
+func HandleUpdateApply(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -100,7 +107,7 @@ func handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 
 // handleUpdateProgress returns the current apply pipeline status.
 // GET /api/update/progress
-func handleUpdateProgress(w http.ResponseWriter, r *http.Request) {
+func HandleUpdateProgress(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return

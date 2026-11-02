@@ -14,6 +14,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/hypernewbie/phi/internal/access"
+	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/pkg/ws"
 )
 
@@ -23,7 +24,7 @@ import (
 func useTestAccessAuth(t *testing.T) *access.Manager {
 	t.Helper()
 	previous := access.Default
-	manager := access.NewManager(configStore, func() *ws.Hub { return wsHub })
+	manager := access.NewManager(configStore, func() *ws.Hub { return server.Hub })
 	access.Default = manager
 	t.Cleanup(func() {
 		manager.Close()
@@ -85,14 +86,14 @@ func TestAccessConfigExportHidesVerifierAndMigrationMetadata(t *testing.T) {
 	}
 
 	exportResponse := httptest.NewRecorder()
-	handleConfigExport(exportResponse, httptest.NewRequest(http.MethodGet, "/api/config/export", nil))
+	server.HandleConfigExport(exportResponse, httptest.NewRequest(http.MethodGet, "/api/config/export", nil))
 	var exported struct {
 		Config string `json:"config"`
 	}
 	if err := json.Unmarshal(exportResponse.Body.Bytes(), &exported); err != nil {
 		t.Fatal(err)
 	}
-	payload, err := decodeConfigData(exported.Config, "PHICONFIG")
+	payload, err := server.DecodeConfigData(exported.Config, "PHICONFIG")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +107,7 @@ func TestAccessConfigExportHidesVerifierAndMigrationMetadata(t *testing.T) {
 func configResponseBody(t *testing.T) string {
 	t.Helper()
 	w := httptest.NewRecorder()
-	handleConfig(w, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+	server.HandleConfig(w, httptest.NewRequest(http.MethodGet, "/api/config", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("/api/config status = %d", w.Code)
 	}

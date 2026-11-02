@@ -15,7 +15,7 @@ import (
 
 const (
 	attachmentMultipartOverhead = 64 << 10
-	PaneMaxBytes      = 256
+	PaneMaxBytes                = 256
 )
 
 var attachmentPutReadTimeout = 10 * time.Minute

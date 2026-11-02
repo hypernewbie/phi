@@ -1,11 +1,11 @@
-package main
+package server
 
 import (
 	"encoding/json"
 	"net/http"
 )
 
-func handleKanbanVault(w http.ResponseWriter, r *http.Request) {
+func HandleKanbanVault(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		cfg := loadConfig()

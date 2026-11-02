@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/pkg/coders"
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/session"
@@ -58,7 +59,7 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg Co
 		}
 	}
 	plan, err := coders.ResolveLaunch(c, coders.SpawnRequest{Coder: req.Coder, Cwd: req.Cwd, SessionID: req.SessionID, ExtraArgs: req.ExtraArgs, ExtensionArgs: bridgeExtArgs}, coders.LaunchOptions{
-		Config: coders.ConfigView{PiOffline: cfg.PiOffline, ClaudeDangerouslySkipPermissions: cfg.ClaudeDangerouslySkipPermissions}, DefaultCwd: activeCWD,
+		Config: coders.ConfigView{PiOffline: cfg.PiOffline, ClaudeDangerouslySkipPermissions: cfg.ClaudeDangerouslySkipPermissions}, DefaultCwd: server.ActiveCWD,
 	})
 	if err != nil {
 		revokeBridge()
@@ -68,7 +69,7 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg Co
 	opts.Cols, opts.Rows = req.Cols, req.Rows
 	opts.ExtraArgs = req.ExtraArgs
 	var inst *pty.PTYInstance
-	nativeObserver := session.ResumeReferenceObserver(c, func(nativeID string) { ptyManager.BindSession(inst, nativeID) })
+	nativeObserver := session.ResumeReferenceObserver(c, func(nativeID string) { server.PTY.BindSession(inst, nativeID) })
 	firstOutput := make(chan struct{})
 	outputSeen := false
 	opts.ObserveOutput = func(data []byte) {
@@ -80,7 +81,7 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg Co
 			nativeObserver(data)
 		}
 	}
-	inst, err = ptyManager.SpawnWithOptions(ctx, plan.Cwd, plan.Command, plan.Args, c.ID, id, opts, plan.Env, bridgeEnv)
+	inst, err = server.PTY.SpawnWithOptions(ctx, plan.Cwd, plan.Command, plan.Args, c.ID, id, opts, plan.Env, bridgeEnv)
 	if err != nil {
 		revokeBridge()
 		return nil, terminalLaunchError{http.StatusInternalServerError, err}
@@ -92,9 +93,9 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg Co
 		piTitleService.Register(inst)
 	}
 	if req.Cols != 0 && req.Rows != 0 {
-		wsHub.RecordResize(inst.ID, req.Cols, req.Rows)
+		server.Hub.RecordResize(inst.ID, req.Cols, req.Rows)
 	}
-	ws.StartPTYReadLoop(inst, wsHub)
+	ws.StartPTYReadLoop(inst, server.Hub)
 	if probe {
 		// Catch immediate CLI resume/config failures before publishing a dead
 		// process as a restored tab. A failure does not block other tabs.
@@ -103,12 +104,12 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg Co
 		select {
 		case <-firstOutput:
 		case <-inst.Pty.Closed:
-			_ = ptyManager.Kill(inst.ID)
+			_ = server.PTY.Kill(inst.ID)
 			revokeBridge() // synchronous: the restore retry reuses this tab ID
 			return nil, fmt.Errorf("backend exited before restoration (code %d)", inst.Pty.ExitCode())
 		case <-ctx.Done():
 			if inst.IsPtyDead() {
-				_ = ptyManager.Kill(inst.ID)
+				_ = server.PTY.Kill(inst.ID)
 				revokeBridge()
 				return nil, ctx.Err()
 			}
@@ -118,13 +119,13 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg Co
 		select {
 		case <-inst.Pty.Closed:
 			timer.Stop()
-			_ = ptyManager.Kill(inst.ID)
+			_ = server.PTY.Kill(inst.ID)
 			revokeBridge()
 			return nil, fmt.Errorf("backend exited during restoration (code %d)", inst.Pty.ExitCode())
 		case <-timer.C:
 		case <-ctx.Done():
 			timer.Stop()
-			_ = ptyManager.Kill(inst.ID)
+			_ = server.PTY.Kill(inst.ID)
 			revokeBridge()
 			return nil, ctx.Err()
 		}
@@ -141,8 +142,8 @@ func restoreSavedTabs() {
 		log.Printf("[tabs] cannot read saved tabs; continuing startup: %v", err)
 		return
 	}
-	ptyManager.BeginRestore()
-	defer ptyManager.EndRestore()
+	server.PTY.BeginRestore()
+	defer server.PTY.EndRestore()
 	pty.SortSavedTabs(tabs)
 	seen := map[string]bool{}
 	jobs := make(chan pty.SavedTab)
@@ -167,16 +168,16 @@ func restoreSavedTabs() {
 	}
 	close(jobs)
 	workers.Wait()
-	if err := ptyManager.FlushSaveState(); err != nil {
+	if err := server.PTY.FlushSaveState(); err != nil {
 		log.Printf("[tabs] restore snapshot: %v", err)
 	}
 }
 
 func restoreSavedTab(tab pty.SavedTab) {
 	cfg := loadConfig()
-	c, known := coderManager.Get(tab.Coder)
+	c, known := server.Coders.Get(tab.Coder)
 	if !known {
-		c = coderManager.MustGet("bash")
+		c = server.Coders.MustGet("bash")
 	}
 	if known && c.ID == "opencode" {
 		// The registry chooses the default for NEW panes, not the generation
@@ -208,7 +209,7 @@ func restoreSavedTab(tab pty.SavedTab) {
 		req.ExtraArgs = nil
 	}
 	if info, err := os.Stat(req.Cwd); err != nil || !info.IsDir() {
-		req.Cwd = activeCWD
+		req.Cwd = server.ActiveCWD
 	}
 	if req.SessionID != "" && c.SessionSource != "none" && c.SessionSource != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

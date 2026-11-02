@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/hypernewbie/phi/internal/attachments"
+	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/pkg/pty"
 )
 
@@ -12,16 +13,16 @@ import (
 // registry for the bridge attachment routes.
 func withAttachmentTestGlobals(t *testing.T) {
 	t.Helper()
-	oldStore, oldManager := attachments.Default, ptyManager
+	oldStore, oldManager := attachments.Default, server.PTY
 	store, err := attachments.OpenAttachmentStoreAt(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	attachments.Default = store
-	ptyManager = pty.NewManager()
-	attachments.SetPaneManager(func() *pty.Manager { return ptyManager })
+	server.PTY = pty.NewManager()
+	attachments.SetPaneManager(func() *pty.Manager { return server.PTY })
 	t.Cleanup(func() {
-		attachments.Default, ptyManager = oldStore, oldManager
+		attachments.Default, server.PTY = oldStore, oldManager
 		attachments.SetPaneManager(nil)
 		_ = store.Close()
 	})

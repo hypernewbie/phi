@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bytes"
@@ -170,7 +170,7 @@ func TestHandleMarkdownExportBundle_HappyPath(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/markdown/export-bundle", strings.NewReader(`{"cwd":""}`))
 	w := httptest.NewRecorder()
-	handleMarkdownExportBundle(w, req)
+	HandleMarkdownExportBundle(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d body=%s", w.Code, w.Body.String())
 	}
@@ -204,7 +204,7 @@ func TestHandleMarkdownExportBundle_RequiresPost(t *testing.T) {
 	withTempConfig(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/markdown/export-bundle", nil)
 	w := httptest.NewRecorder()
-	handleMarkdownExportBundle(w, req)
+	HandleMarkdownExportBundle(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", w.Code)
 	}
@@ -217,7 +217,7 @@ func TestHandleMarkdownExportBundle_NoFiles(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/markdown/export-bundle", strings.NewReader(`{}`))
 	w := httptest.NewRecorder()
-	handleMarkdownExportBundle(w, req)
+	HandleMarkdownExportBundle(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d", w.Code)
 	}
@@ -241,7 +241,7 @@ func TestHandleMarkdownImportBundle_HappyPath(t *testing.T) {
 	// json.Marshal so paths / base64 with slashes are encoded correctly.
 	expReq := httptest.NewRequest(http.MethodPost, "/api/markdown/export-bundle", strings.NewReader(`{"cwd":""}`))
 	expW := httptest.NewRecorder()
-	handleMarkdownExportBundle(expW, expReq)
+	HandleMarkdownExportBundle(expW, expReq)
 	if expW.Code != http.StatusOK {
 		t.Fatalf("export %d", expW.Code)
 	}
@@ -256,7 +256,7 @@ func TestHandleMarkdownImportBundle_HappyPath(t *testing.T) {
 	})
 	impReq := httptest.NewRequest(http.MethodPost, "/api/markdown/import-bundle", bytes.NewReader(impBody))
 	impW := httptest.NewRecorder()
-	handleMarkdownImportBundle(impW, impReq)
+	HandleMarkdownImportBundle(impW, impReq)
 	if impW.Code != http.StatusOK {
 		t.Fatalf("import status %d body=%s", impW.Code, impW.Body.String())
 	}
@@ -297,7 +297,7 @@ func TestHandleMarkdownImportBundle_SkipsExistingWithoutOverwrite(t *testing.T) 
 	body, _ := json.Marshal(MDImportRequest{TargetDir: dir, Blob: blob})
 	req := httptest.NewRequest(http.MethodPost, "/api/markdown/import-bundle", bytes.NewReader(body))
 	w := httptest.NewRecorder()
-	handleMarkdownImportBundle(w, req)
+	HandleMarkdownImportBundle(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d", w.Code)
 	}
@@ -325,7 +325,7 @@ func TestHandleMarkdownImportBundle_OverwriteReplacesFile(t *testing.T) {
 	body, _ := json.Marshal(MDImportRequest{TargetDir: dir, Blob: blob, Overwrite: true})
 	req := httptest.NewRequest(http.MethodPost, "/api/markdown/import-bundle", bytes.NewReader(body))
 	w := httptest.NewRecorder()
-	handleMarkdownImportBundle(w, req)
+	HandleMarkdownImportBundle(w, req)
 	var imp MDImportResponse
 	_ = json.Unmarshal(w.Body.Bytes(), &imp)
 	if len(imp.Written) != 1 || len(imp.Skipped) != 0 {
@@ -349,7 +349,7 @@ func TestHandleMarkdownImportBundle_RejectsPathTraversal(t *testing.T) {
 	body, _ := json.Marshal(MDImportRequest{TargetDir: dir, Blob: blob})
 	req := httptest.NewRequest(http.MethodPost, "/api/markdown/import-bundle", bytes.NewReader(body))
 	w := httptest.NewRecorder()
-	handleMarkdownImportBundle(w, req)
+	HandleMarkdownImportBundle(w, req)
 	var imp MDImportResponse
 	_ = json.Unmarshal(w.Body.Bytes(), &imp)
 	if len(imp.Written) != 0 || len(imp.Skipped) != 1 {
@@ -364,7 +364,7 @@ func TestHandleMarkdownImportBundle_RequiresPost(t *testing.T) {
 	withTempConfig(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/markdown/import-bundle", nil)
 	w := httptest.NewRecorder()
-	handleMarkdownImportBundle(w, req)
+	HandleMarkdownImportBundle(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", w.Code)
 	}
@@ -377,7 +377,7 @@ func TestHandleMarkdownImportBundle_NoMarkdownDirs(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/markdown/import-bundle",
 		strings.NewReader(`{"blob":"PHIMD:abc:def"}`))
 	w := httptest.NewRecorder()
-	handleMarkdownImportBundle(w, req)
+	HandleMarkdownImportBundle(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d (body=%s)", w.Code, w.Body.String())
 	}
@@ -392,7 +392,7 @@ func TestHandleMarkdownImportBundle_RejectsBadBlob(t *testing.T) {
 		body, _ := json.Marshal(MDImportRequest{TargetDir: dir, Blob: bad})
 		req := httptest.NewRequest(http.MethodPost, "/api/markdown/import-bundle", bytes.NewReader(body))
 		w := httptest.NewRecorder()
-		handleMarkdownImportBundle(w, req)
+		HandleMarkdownImportBundle(w, req)
 		if w.Code == http.StatusOK {
 			t.Fatalf("expected error for blob %q, got 200", bad)
 		}

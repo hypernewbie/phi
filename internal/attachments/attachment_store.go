@@ -42,16 +42,16 @@ const (
 
 var (
 	// ErrInvalid rejects a malformed request.
-	ErrInvalid = errors.New("attachment: invalid request")
-	errAttachmentConflict    = errors.New("attachment: id conflict")
-	errAttachmentReceiving   = errors.New("attachment: item is receiving")
+	ErrInvalid             = errors.New("attachment: invalid request")
+	errAttachmentConflict  = errors.New("attachment: id conflict")
+	errAttachmentReceiving = errors.New("attachment: item is receiving")
 	// ErrNotFound reports a missing item owned by another pane or absent.
-	ErrNotFound = errors.New("attachment: item not found")
-	errAttachmentForbidden   = errors.New("attachment: owner mismatch")
-	ErrLimit       = errors.New("attachment: limit reached")
-	ErrUnsupported = errors.New("attachment: unsupported image")
-	errAttachmentChanged     = errors.New("attachment: source changed")
-	errAttachmentStorage     = errors.New("attachment: storage unavailable")
+	ErrNotFound            = errors.New("attachment: item not found")
+	errAttachmentForbidden = errors.New("attachment: owner mismatch")
+	ErrLimit               = errors.New("attachment: limit reached")
+	ErrUnsupported         = errors.New("attachment: unsupported image")
+	errAttachmentChanged   = errors.New("attachment: source changed")
+	errAttachmentStorage   = errors.New("attachment: storage unavailable")
 )
 
 // AttachmentItem is metadata for one immutable item. Path is a server-local

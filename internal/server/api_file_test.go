@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"io"
@@ -12,7 +12,7 @@ import (
 )
 
 // fileAssetRequest builds a /api/file/asset request with explicit
-// cwd/path query params — never relies on activeCWD global, which is
+// cwd/path query params — never relies on ActiveCWD global, which is
 // process-wide state and would race across parallel tests.
 func fileAssetRequest(cwd, path string) *http.Request {
 	q := url.Values{}
@@ -32,7 +32,7 @@ func TestHandleFileAsset_ServesFileBytes(t *testing.T) {
 	mustWriteFile(t, filepath.Join(dir, "a.txt"), "hello world")
 
 	w := httptest.NewRecorder()
-	handleFileAsset(w, fileAssetRequest(dir, "a.txt"))
+	HandleFileAsset(w, fileAssetRequest(dir, "a.txt"))
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -60,7 +60,7 @@ func TestHandleFileAsset_RejectsTraversal(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			handleFileAsset(w, fileAssetRequest(dir, c.path))
+			HandleFileAsset(w, fileAssetRequest(dir, c.path))
 			if w.Code != http.StatusBadRequest {
 				t.Errorf("got %d want 400; body=%s", w.Code, w.Body.String())
 			}
@@ -80,7 +80,7 @@ func TestHandleFileAsset_RejectsSymlinkEscape(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	handleFileAsset(w, fileAssetRequest(dir, "leak.txt"))
+	HandleFileAsset(w, fileAssetRequest(dir, "leak.txt"))
 	// EvalSymlinks + HasPrefix check resolves the symlink and confirms
 	// it's outside cwd, returning 403.
 	if w.Code != http.StatusForbidden {
@@ -94,7 +94,7 @@ func TestHandleFileAsset_RejectsDirectory(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	w := httptest.NewRecorder()
-	handleFileAsset(w, fileAssetRequest(dir, "sub"))
+	HandleFileAsset(w, fileAssetRequest(dir, "sub"))
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("got %d want 400; body=%s", w.Code, w.Body.String())
 	}
@@ -103,7 +103,7 @@ func TestHandleFileAsset_RejectsDirectory(t *testing.T) {
 func TestHandleFileAsset_NotFound(t *testing.T) {
 	dir := t.TempDir()
 	w := httptest.NewRecorder()
-	handleFileAsset(w, fileAssetRequest(dir, "missing.txt"))
+	HandleFileAsset(w, fileAssetRequest(dir, "missing.txt"))
 	if w.Code != http.StatusNotFound {
 		t.Errorf("got %d want 404; body=%s", w.Code, w.Body.String())
 	}
@@ -118,7 +118,7 @@ func TestHandleFileAsset_NeuteredHTML(t *testing.T) {
 		"<!DOCTYPE html><script>alert(1)</script>")
 
 	w := httptest.NewRecorder()
-	handleFileAsset(w, fileAssetRequest(dir, "evil.html"))
+	HandleFileAsset(w, fileAssetRequest(dir, "evil.html"))
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -147,7 +147,7 @@ func TestHandleFileAsset_NeuteredJS(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			mustWriteFile(t, filepath.Join(dir, name), "evil-content")
 			w := httptest.NewRecorder()
-			handleFileAsset(w, fileAssetRequest(dir, name))
+			HandleFileAsset(w, fileAssetRequest(dir, name))
 			if w.Code != http.StatusOK {
 				t.Fatalf("got %d want 200", w.Code)
 			}
@@ -171,7 +171,7 @@ func TestHandleFileAsset_SVGInline(t *testing.T) {
 		`<svg xmlns="http://www.w3.org/2000/svg"></svg>`)
 
 	w := httptest.NewRecorder()
-	handleFileAsset(w, fileAssetRequest(dir, "logo.svg"))
+	HandleFileAsset(w, fileAssetRequest(dir, "logo.svg"))
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d want 200", w.Code)
 	}
@@ -186,7 +186,7 @@ func TestHandleFileAsset_SVGInline(t *testing.T) {
 func TestHandleFileAsset_RejectsAbsolutePath(t *testing.T) {
 	dir := t.TempDir()
 	w := httptest.NewRecorder()
-	handleFileAsset(w, fileAssetRequest(dir, "/etc/passwd"))
+	HandleFileAsset(w, fileAssetRequest(dir, "/etc/passwd"))
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("got %d want 400", w.Code)
 	}
@@ -196,7 +196,7 @@ func TestHandleFileAsset_RejectsBadCwd(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "a.txt"), "ok")
 	w := httptest.NewRecorder()
-	handleFileAsset(w, fileAssetRequest(filepath.Join(dir, "missing"), "a.txt"))
+	HandleFileAsset(w, fileAssetRequest(filepath.Join(dir, "missing"), "a.txt"))
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("got %d want 400", w.Code)
 	}
@@ -210,7 +210,7 @@ func TestHandleFileAsset_HEADSupported(t *testing.T) {
 	mustWriteFile(t, filepath.Join(dir, "video.mp4"), "fake-mp4-bytes")
 
 	w := httptest.NewRecorder()
-	handleFileAsset(w, fileAssetHeadRequest(dir, "video.mp4"))
+	HandleFileAsset(w, fileAssetHeadRequest(dir, "video.mp4"))
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d want 200", w.Code)
 	}
@@ -230,7 +230,7 @@ func TestHandleFileAsset_RangeSupported(t *testing.T) {
 	r := fileAssetRequest(dir, "video.mp4")
 	r.Header.Set("Range", "bytes=0-3")
 	w := httptest.NewRecorder()
-	handleFileAsset(w, r)
+	HandleFileAsset(w, r)
 	if w.Code != http.StatusPartialContent {
 		t.Errorf("got %d want 206; body=%s", w.Code, w.Body.String())
 	}
@@ -245,7 +245,7 @@ func TestHandleFileAsset_RejectsNonGetOrHead(t *testing.T) {
 		r := fileAssetRequest(dir, "a.txt")
 		r.Method = m
 		w := httptest.NewRecorder()
-		handleFileAsset(w, r)
+		HandleFileAsset(w, r)
 		if w.Code != http.StatusMethodNotAllowed {
 			t.Errorf("%s: got %d want 405", m, w.Code)
 		}

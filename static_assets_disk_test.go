@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/internal/webassets"
 )
 
@@ -26,9 +27,9 @@ func setupStaticAssets(t *testing.T) string {
 	h := webassets.New(root, precompressed, loadConfig().CompressionEnabled)
 	testWebRoot = root
 	testStatic = h
-	staticHandler = h
+	server.Static = h
 	t.Cleanup(func() {
-		testWebRoot, testStatic, staticHandler = nil, nil, nil
+		testWebRoot, testStatic, server.Static = nil, nil, nil
 	})
 	return cfgPath
 }
@@ -93,13 +94,13 @@ func assertDiskResponse(t *testing.T, rec *httptest.ResponseRecorder, status int
 // over the embedded handler, and dropping it restores embedded serving
 // with its own validators. Pure disk serving lives in internal/webassets.
 func TestDiskDispatch(t *testing.T) {
-	diskHandlerSaved, testStaticSaved := staticHandler, testStatic
+	diskHandlerSaved, testStaticSaved := server.Static, testStatic
 	testWebRootSaved := testWebRoot
 	t.Cleanup(func() {
-		staticHandler, testStatic = diskHandlerSaved, testStaticSaved
+		server.Static, testStatic = diskHandlerSaved, testStaticSaved
 		testWebRoot = testWebRootSaved
 	})
-	staticHandler = nil
+	server.Static = nil
 	setupStaticAssets(t)
 	etags := make(map[string]string)
 	for _, enc := range []string{"gzip", "br"} {
@@ -111,16 +112,16 @@ func TestDiskDispatch(t *testing.T) {
 	}
 	dir := t.TempDir()
 	writeDiskAsset(t, dir, "app.js", "fresh disk bytes")
-	staticHandler = diskHandler(t, dir)
+	server.Static = diskHandler(t, dir)
 	for _, enc := range []string{"gzip", "br"} {
-		rec := requestDisk(staticHandler, http.MethodGet, "/app.js", map[string]string{
+		rec := requestDisk(server.Static, http.MethodGet, "/app.js", map[string]string{
 			"Accept-Encoding":   enc,
 			"If-None-Match":     etags[enc],
 			"If-Modified-Since": time.Now().Add(time.Hour).UTC().Format(http.TimeFormat),
 		})
 		assertDiskResponse(t, rec, http.StatusOK, "fresh disk bytes")
 	}
-	staticHandler = testStatic
+	server.Static = testStatic
 	for _, enc := range []string{"gzip", "br"} {
 		rec := getStatic(t, "/app.js", map[string]string{"Accept-Encoding": enc})
 		if rec.Header().Get("Etag") != etags[enc] || rec.Header().Get("Content-Encoding") != enc || rec.Header().Get("Cache-Control") != "no-cache" {

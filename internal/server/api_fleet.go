@@ -1,14 +1,16 @@
-package main
+package server
 
 import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/hypernewbie/phi/internal/config"
 	"github.com/hypernewbie/phi/pkg/fleet"
 )
 
 // startFleetPoller reads peers from config and starts the poller.
-func startFleetPoller() {
+// StartFleetPoller begins polling the configured peers.
+func StartFleetPoller() {
 	cfg := loadConfig()
 	peers := make([]fleet.PeerCfg, 0, len(cfg.Peers))
 	for _, p := range cfg.Peers {
@@ -16,17 +18,17 @@ func startFleetPoller() {
 			peers = append(peers, fleet.PeerCfg{Name: p.Name, URL: p.URL})
 		}
 	}
-	fleetPoller.Start(peers)
+	Fleet.Start(peers)
 }
 
 // handleGetPeersStatus returns cached fleet status for all configured peers.
-func handleGetPeersStatus(w http.ResponseWriter, r *http.Request) {
+func HandleGetPeersStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	statuses := fleetPoller.Status()
+	statuses := Fleet.Status()
 	if statuses == nil {
 		statuses = []fleet.PeerStatus{}
 	}
@@ -36,7 +38,7 @@ func handleGetPeersStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleConfigPeers handles GET/POST for the peers config array.
-func handleConfigPeers(w http.ResponseWriter, r *http.Request) {
+func HandleConfigPeers(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		cfg := loadConfig()
@@ -44,7 +46,7 @@ func handleConfigPeers(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(cfg.Peers)
 
 	case http.MethodPost:
-		var peers []PeerConfig
+		var peers []config.PeerConfig
 		if err := json.NewDecoder(r.Body).Decode(&peers); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -54,7 +56,7 @@ func handleConfigPeers(w http.ResponseWriter, r *http.Request) {
 		saveConfig(cfg)
 
 		// Restart fleet poller with updated peers
-		startFleetPoller()
+		StartFleetPoller()
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(peers)

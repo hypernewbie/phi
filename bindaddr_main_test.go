@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/pkg/bindaddr"
 )
 
@@ -130,12 +131,12 @@ func waitDone(wg *sync.WaitGroup, t *testing.T, msg string) {
 // with the correct label. Also verifies the loopback line uses
 // "local" and the others use the kind label.
 func TestPrintWelcomeBanner_MultiAddr(t *testing.T) {
-	// activeCWD is package-level; setting it via the test helper path
+	// server.ActiveCWD is package-level; setting it via the test helper path
 	// would require deep plumbing. We accept whatever value the test
 	// environment has and only assert on the bind summary lines.
-	prevActiveCWD := activeCWD
-	activeCWD = "/test/cwd"
-	t.Cleanup(func() { activeCWD = prevActiveCWD })
+	prevActiveCWD := server.ActiveCWD
+	server.ActiveCWD = "/test/cwd"
+	t.Cleanup(func() { server.ActiveCWD = prevActiveCWD })
 
 	addrs := []bindaddr.Addr{
 		{IP: net.IPv4(127, 0, 0, 1), Kind: bindaddr.Loopback},
@@ -176,9 +177,9 @@ func TestPrintWelcomeBanner_MultiAddr(t *testing.T) {
 // surface the "public reachable" warning so the user knows the
 // server is exposed on every interface.
 func TestPrintWelcomeBanner_ExplicitZero(t *testing.T) {
-	prevActiveCWD := activeCWD
-	activeCWD = "/test/cwd"
-	t.Cleanup(func() { activeCWD = prevActiveCWD })
+	prevActiveCWD := server.ActiveCWD
+	server.ActiveCWD = "/test/cwd"
+	t.Cleanup(func() { server.ActiveCWD = prevActiveCWD })
 
 	out := captureStdout(t, func() {
 		printWelcomeBanner(Config{ThemeColor: "purple"},
@@ -197,9 +198,9 @@ func TestPrintWelcomeBanner_ExplicitZero(t *testing.T) {
 // interfaces are detected. Banner should still render and advertise
 // the loopback URL.
 func TestPrintWelcomeBanner_LoopbackOnly(t *testing.T) {
-	prevActiveCWD := activeCWD
-	activeCWD = "/test/cwd"
-	t.Cleanup(func() { activeCWD = prevActiveCWD })
+	prevActiveCWD := server.ActiveCWD
+	server.ActiveCWD = "/test/cwd"
+	t.Cleanup(func() { server.ActiveCWD = prevActiveCWD })
 
 	out := captureStdout(t, func() {
 		printWelcomeBanner(Config{ThemeColor: "purple"},
@@ -214,9 +215,9 @@ func TestPrintWelcomeBanner_LoopbackOnly(t *testing.T) {
 // (127.0.0.1 and 127.0.1.1) are bound, 127.0.0.1 is rendered as the primary
 // "Server running on:" URL and 127.0.1.1 is cleanly listed with the "local:" label.
 func TestPrintWelcomeBanner_With127011(t *testing.T) {
-	prevActiveCWD := activeCWD
-	activeCWD = "/test/cwd"
-	t.Cleanup(func() { activeCWD = prevActiveCWD })
+	prevActiveCWD := server.ActiveCWD
+	server.ActiveCWD = "/test/cwd"
+	t.Cleanup(func() { server.ActiveCWD = prevActiveCWD })
 
 	addrs := []bindaddr.Addr{
 		{IP: net.IPv4(127, 0, 0, 1), Kind: bindaddr.Loopback},

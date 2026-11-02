@@ -18,22 +18,23 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/internal/termstate"
 	"github.com/hypernewbie/phi/pkg/ws"
 )
 
 func setupHotHub(t *testing.T) {
 	t.Helper()
-	orig := wsHub
-	wsHub = ws.NewHub(4096)
-	t.Cleanup(func() { wsHub = orig })
+	orig := server.Hub
+	server.Hub = ws.NewHub(4096)
+	t.Cleanup(func() { server.Hub = orig })
 }
 
 func TestRecordingEndpointServesFramedBytes(t *testing.T) {
 	setupHotHub(t)
-	wsHub.Ingest("pane-1", []byte("hello "))
-	wsHub.Ingest("pane-1", []byte("world"))
-	wsHub.RecordResize("pane-1", 100, 30)
+	server.Hub.Ingest("pane-1", []byte("hello "))
+	server.Hub.Ingest("pane-1", []byte("world"))
+	server.Hub.RecordResize("pane-1", 100, 30)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/terminals/pane-1/recording?from=0&through=11", nil)
 	w := httptest.NewRecorder()
@@ -64,7 +65,7 @@ func TestRecordingEndpointServesFramedBytes(t *testing.T) {
 
 func TestRecordingEndpointPartialRangeAndErrors(t *testing.T) {
 	setupHotHub(t)
-	wsHub.Ingest("pane-2", []byte("0123456789"))
+	server.Hub.Ingest("pane-2", []byte("0123456789"))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/terminals/pane-2/recording?from=3&through=7", nil)
 	w := httptest.NewRecorder()
@@ -99,9 +100,9 @@ func TestRecordingEndpointPartialRangeAndErrors(t *testing.T) {
 
 func TestRecordingEndpointRejectsWrongEpoch(t *testing.T) {
 	setupHotHub(t)
-	wsHub.Ingest("pane-3", []byte("hello"))
+	server.Hub.Ingest("pane-3", []byte("hello"))
 
-	ph, ok := wsHub.LookupPane("pane-3")
+	ph, ok := server.Hub.LookupPane("pane-3")
 	if !ok {
 		t.Fatal("pane-3 missing")
 	}
@@ -124,10 +125,10 @@ func TestRecordingEndpointRejectsWrongEpoch(t *testing.T) {
 
 func TestCheckpointEndpointStoreAndConflict(t *testing.T) {
 	setupHotHub(t)
-	wsHub.Ingest("pane-3", []byte("abcdef")) // head=6
+	server.Hub.Ingest("pane-3", []byte("abcdef")) // head=6
 
 	epochOf := func() uint64 {
-		ph, ok := wsHub.LookupPane("pane-3")
+		ph, ok := server.Hub.LookupPane("pane-3")
 		if !ok {
 			t.Fatal("pane missing")
 		}
@@ -168,7 +169,7 @@ func itoa(v uint64) string { return strconv.FormatUint(v, 10) }
 
 func TestRecordingHaveNegotiation(t *testing.T) {
 	setupHotHub(t)
-	wsHub.Ingest("pane-have", []byte("0123456789abcdefghij")) // head=20
+	server.Hub.Ingest("pane-have", []byte("0123456789abcdefghij")) // head=20
 
 	get := func(query string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, "/api/terminals/pane-have/recording"+query, nil)
@@ -223,22 +224,22 @@ func TestRecordingHaveNegotiation(t *testing.T) {
 
 func TestRecordingEndpointCursorFiltersAnd409(t *testing.T) {
 	setupHotHub(t)
-	if err := wsHub.SetRecordingDirectory(t.TempDir()); err != nil {
+	if err := server.Hub.SetRecordingDirectory(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	const pane = "cursor-pane"
 	payload := bytes.Repeat([]byte("0123456789abcdef"), 4096) // 64 KiB
-	if err := wsHub.Ingest(pane, payload); err != nil {
+	if err := server.Hub.Ingest(pane, payload); err != nil {
 		t.Fatal(err)
 	}
-	wsHub.RecordResize(pane, 80, 24)
-	wsHub.RecordResize(pane, 100, 30)
-	wsHub.RecordResize(pane, 120, 40)
+	server.Hub.RecordResize(pane, 80, 24)
+	server.Hub.RecordResize(pane, 100, 30)
+	server.Hub.RecordResize(pane, 120, 40)
 	at := uint64(len(payload))
-	if err := wsHub.Ingest(pane, payload); err != nil {
+	if err := server.Hub.Ingest(pane, payload); err != nil {
 		t.Fatal(err)
 	}
-	ph, ok := wsHub.LookupPane(pane)
+	ph, ok := server.Hub.LookupPane(pane)
 	if !ok {
 		t.Fatal("pane missing")
 	}
@@ -298,7 +299,7 @@ func TestRecordingEndpointCursorFiltersAnd409(t *testing.T) {
 	}
 
 	// Evict the boundary, then prove the stale cursor expires with 409.
-	if err := wsHub.Ingest(pane, bytes.Repeat([]byte("x"), 5<<20)); err != nil {
+	if err := server.Hub.Ingest(pane, bytes.Repeat([]byte("x"), 5<<20)); err != nil {
 		t.Fatal(err)
 	}
 	floorProbe := get("from=0&through=999999999")
@@ -329,14 +330,14 @@ func TestTerminalStateMissingPaneReturns404(t *testing.T) {
 
 func TestTerminalStateLatestANSICarriesContinuation(t *testing.T) {
 	setupHotHub(t)
-	if err := wsHub.SetRecordingDirectory(t.TempDir()); err != nil {
+	if err := server.Hub.SetRecordingDirectory(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	// An unfinished UTF-8 sequence: the live suffix completes it.
-	if err := wsHub.Ingest("cont-pane", []byte("A\xe2\x82")); err != nil {
+	if err := server.Hub.Ingest("cont-pane", []byte("A\xe2\x82")); err != nil {
 		t.Fatal(err)
 	}
-	ph, ok := wsHub.LookupPane("cont-pane")
+	ph, ok := server.Hub.LookupPane("cont-pane")
 	if !ok {
 		t.Fatal("pane missing")
 	}
@@ -374,13 +375,13 @@ func TestTerminalStateLatestANSICarriesContinuation(t *testing.T) {
 
 func TestTerminalStateLatestGhosttyServesLiveSnapshot(t *testing.T) {
 	setupHotHub(t)
-	if err := wsHub.SetRecordingDirectory(t.TempDir()); err != nil {
+	if err := server.Hub.SetRecordingDirectory(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	if err := wsHub.Ingest("ghostty-pane", []byte("live screen\r\n")); err != nil {
+	if err := server.Hub.Ingest("ghostty-pane", []byte("live screen\r\n")); err != nil {
 		t.Fatal(err)
 	}
-	ph, ok := wsHub.LookupPane("ghostty-pane")
+	ph, ok := server.Hub.LookupPane("ghostty-pane")
 	if !ok {
 		t.Fatal("pane missing")
 	}

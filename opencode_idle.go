@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/pkg/coders"
 	"github.com/hypernewbie/phi/pkg/obs"
 )
@@ -47,7 +48,7 @@ func newOpenCodeIdleWatcher() *openCodeIdleWatcher {
 		nowFunc: time.Now,
 		statusFunc: func(ctx context.Context) (bool, bool, error) {
 			ensureCoderManager()
-			c, ok := coderManager.Get("opencode")
+			c, ok := server.Coders.Get("opencode")
 			if !ok || c.SessionSource != "opencode_v2" || c.OpenCodeMode == "legacy" {
 				return false, false, nil
 			}
@@ -56,7 +57,7 @@ func newOpenCodeIdleWatcher() *openCodeIdleWatcher {
 		},
 		stopFunc: func(ctx context.Context) error {
 			ensureCoderManager()
-			c, ok := coderManager.Get("opencode")
+			c, ok := server.Coders.Get("opencode")
 			if !ok || c.SessionSource != "opencode_v2" || c.OpenCodeMode == "legacy" {
 				return nil
 			}
@@ -67,22 +68,22 @@ func newOpenCodeIdleWatcher() *openCodeIdleWatcher {
 			return err
 		},
 		lastActivityFunc: func() time.Time {
-			if ptyManager == nil {
+			if server.PTY == nil {
 				return time.Time{}
 			}
-			return ptyManager.LastOpenCodeActivity()
+			return server.PTY.LastOpenCodeActivity()
 		},
 		activeTabsCount: func() int {
-			if ptyManager == nil {
+			if server.PTY == nil {
 				return 0
 			}
-			return ptyManager.ActiveOpenCodeTabsCount()
+			return server.PTY.ActiveOpenCodeTabsCount()
 		},
 		idleMinutesFunc: func() int {
 			return loadConfig().OpenCodeIdleStopMinutes
 		},
 		isShuttingDown: func() bool {
-			return shuttingDown.Load() || (ptyManager != nil && ptyManager.IsDraining())
+			return server.ShuttingDown.Load() || (server.PTY != nil && server.PTY.IsDraining())
 		},
 	}
 }

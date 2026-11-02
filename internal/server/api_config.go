@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"crypto/sha256"
@@ -34,18 +34,18 @@ func resolvedSessionListPageSize(size int) int {
 	}
 }
 
-func handleConfig(w http.ResponseWriter, r *http.Request) {
+func HandleConfig(w http.ResponseWriter, r *http.Request) {
 	cfg := loadConfig()
 	hName := strings.ToUpper(reportedHostname(cfg))
 	addr, _ := r.Context().Value(http.LocalAddrContextKey).(*net.TCPAddr)
 	if addr == nil {
-		addr = &net.TCPAddr{Port: serverPort}
+		addr = &net.TCPAddr{Port: Port}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"workspaces":                          cfg.Workspaces,
-		"active_cwd":                          activeCWD,
+		"active_cwd":                          ActiveCWD,
 		"theme_color":                         cfg.ThemeColor,
 		"hostname":                            hName,
 		"model_presets":                       cfg.ModelPresets,
@@ -74,7 +74,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func handleWorkspaceToggle(w http.ResponseWriter, r *http.Request) {
+func HandleWorkspaceToggle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -119,7 +119,7 @@ func handleWorkspaceToggle(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func handleModelPresets(w http.ResponseWriter, r *http.Request) {
+func HandleModelPresets(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -145,7 +145,7 @@ func handleModelPresets(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == http.MethodPost {
 		if cfg.ModelPresets == nil {
-			cfg.ModelPresets = make(ModelPresetsMap)
+			cfg.ModelPresets = make(config.ModelPresetsMap)
 		}
 		if oldModel != "" {
 			for i, m := range cfg.ModelPresets[coder] {
@@ -221,7 +221,7 @@ func validateThinkingPresetList(levels []string) ([]string, bool) {
 // handleThinkingPresets owns the saved Thinking fallback list. Reads and
 // writes are transactional against the latest config file, so a stale
 // in-memory snapshot can never drop the list or another field.
-func handleThinkingPresets(w http.ResponseWriter, r *http.Request) {
+func HandleThinkingPresets(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		cfg, err := configStore().LoadWithError()
@@ -264,7 +264,7 @@ func handleThinkingPresets(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Invalid thinking preset list", http.StatusBadRequest)
 			return
 		}
-		if _, err := configStore().Update(func(cfg *Config) error {
+		if _, err := configStore().Update(func(cfg *config.Config) error {
 			cfg.ThinkingPresets = levels
 			return nil
 		}); err != nil {
@@ -278,7 +278,7 @@ func handleThinkingPresets(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func handleQuickCommands(w http.ResponseWriter, r *http.Request) {
+func HandleQuickCommands(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -294,7 +294,7 @@ func handleQuickCommands(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == http.MethodPost {
 		// Try parsing as slice/array first for bulk overwrite
-		var listReq []QuickCommand
+		var listReq []config.QuickCommand
 		if err := json.Unmarshal(bodyBytes, &listReq); err == nil {
 			cfg.QuickCommands = listReq
 			saveConfig(cfg)
@@ -328,13 +328,13 @@ func handleQuickCommands(w http.ResponseWriter, r *http.Request) {
 		}
 		for i, qc := range cfg.QuickCommands {
 			if qc.Name == targetName {
-				cfg.QuickCommands[i] = QuickCommand{Name: singleReq.Name, Command: singleReq.Command}
+				cfg.QuickCommands[i] = config.QuickCommand{Name: singleReq.Name, Command: singleReq.Command}
 				found = true
 				break
 			}
 		}
 		if !found {
-			cfg.QuickCommands = append(cfg.QuickCommands, QuickCommand{Name: singleReq.Name, Command: singleReq.Command})
+			cfg.QuickCommands = append(cfg.QuickCommands, config.QuickCommand{Name: singleReq.Name, Command: singleReq.Command})
 		}
 		saveConfig(cfg)
 	} else if r.Method == http.MethodDelete {
@@ -350,7 +350,7 @@ func handleQuickCommands(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		newCmds := []QuickCommand{}
+		newCmds := []config.QuickCommand{}
 		for _, qc := range cfg.QuickCommands {
 			if qc.Name != singleReq.Name {
 				newCmds = append(newCmds, qc)
@@ -363,7 +363,7 @@ func handleQuickCommands(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func handleTerminalCommands(w http.ResponseWriter, r *http.Request) {
+func HandleTerminalCommands(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -379,7 +379,7 @@ func handleTerminalCommands(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == http.MethodPost {
 		// Try parsing as slice/array first for bulk overwrite
-		var listReq []QuickCommand
+		var listReq []config.QuickCommand
 		if err := json.Unmarshal(bodyBytes, &listReq); err == nil {
 			cfg.TerminalCommands = listReq
 			saveConfig(cfg)
@@ -413,13 +413,13 @@ func handleTerminalCommands(w http.ResponseWriter, r *http.Request) {
 		}
 		for i, tc := range cfg.TerminalCommands {
 			if tc.Name == targetName {
-				cfg.TerminalCommands[i] = QuickCommand{Name: singleReq.Name, Command: singleReq.Command}
+				cfg.TerminalCommands[i] = config.QuickCommand{Name: singleReq.Name, Command: singleReq.Command}
 				found = true
 				break
 			}
 		}
 		if !found {
-			cfg.TerminalCommands = append(cfg.TerminalCommands, QuickCommand{Name: singleReq.Name, Command: singleReq.Command})
+			cfg.TerminalCommands = append(cfg.TerminalCommands, config.QuickCommand{Name: singleReq.Name, Command: singleReq.Command})
 		}
 		saveConfig(cfg)
 	} else if r.Method == http.MethodDelete {
@@ -435,7 +435,7 @@ func handleTerminalCommands(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		newCmds := []QuickCommand{}
+		newCmds := []config.QuickCommand{}
 		for _, tc := range cfg.TerminalCommands {
 			if tc.Name != singleReq.Name {
 				newCmds = append(newCmds, tc)
@@ -448,7 +448,7 @@ func handleTerminalCommands(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func handleThemeUpdate(w http.ResponseWriter, r *http.Request) {
+func HandleThemeUpdate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -496,9 +496,10 @@ func sanitizeHostnameOverride(v string) (string, bool) {
 	return v, true
 }
 
-const maxMobileAppearanceRevision uint64 = 9007199254740991
+// MaxMobileAppearanceRevision caps the revision at the JS safe integer.
+const MaxMobileAppearanceRevision uint64 = 9007199254740991
 
-type mobileAppearanceState struct {
+type MobileAppearanceState struct {
 	Revision           uint64  `json:"revision"`
 	UIFontSize         *int    `json:"ui_font_size"`
 	TerminalFontSize   *int    `json:"terminal_font_size"`
@@ -506,17 +507,18 @@ type mobileAppearanceState struct {
 	TerminalFontFamily *string `json:"terminal_font_family"`
 }
 
-func mobileAppearanceFromConfig(cfg Config) mobileAppearanceState {
-	return mobileAppearanceState{cfg.MobileAppearanceRevision, cfg.MobileUIFontSize,
+// MobileAppearanceFromConfig projects the stored appearance fields.
+func MobileAppearanceFromConfig(cfg config.Config) MobileAppearanceState {
+	return MobileAppearanceState{cfg.MobileAppearanceRevision, cfg.MobileUIFontSize,
 		cfg.MobileTerminalFontSize, cfg.MobileUIFontFamily, cfg.MobileTerminalFontFamily}
 }
 
-func handleMobileAppearance(w http.ResponseWriter, r *http.Request) {
-	serveMobileAppearance(w, r, false, configStore().Update)
+func HandleMobileAppearance(w http.ResponseWriter, r *http.Request) {
+	ServeMobileAppearance(w, r, false, configStore().Update)
 }
 
-func handleMobileAppearanceFence(w http.ResponseWriter, r *http.Request) {
-	serveMobileAppearance(w, r, true, configStore().Update)
+func HandleMobileAppearanceFence(w http.ResponseWriter, r *http.Request) {
+	ServeMobileAppearance(w, r, true, configStore().Update)
 }
 
 // Revision outcomes the writer reports back so the handler can map them to
@@ -528,12 +530,15 @@ var (
 )
 
 // The update argument permits deterministic disk-failure tests without a global hook.
-func serveMobileAppearance(w http.ResponseWriter, r *http.Request, fence bool, update func(func(*Config) error) (Config, error)) {
+// ServeMobileAppearance serves /api/config/mobile-appearance with the
+// caller-supplied update path so the fence and prefetch variants share one
+// implementation.
+func ServeMobileAppearance(w http.ResponseWriter, r *http.Request, fence bool, update func(func(*config.Config) error) (config.Config, error)) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method == http.MethodGet && !fence {
 		cfg, err := configStore().LoadWithError()
-		state := mobileAppearanceFromConfig(cfg)
-		if err != nil || state.Revision > maxMobileAppearanceRevision {
+		state := MobileAppearanceFromConfig(cfg)
+		if err != nil || state.Revision > MaxMobileAppearanceRevision {
 			http.Error(w, "Failed to read config", http.StatusInternalServerError)
 			return
 		}
@@ -579,11 +584,11 @@ func serveMobileAppearance(w http.ResponseWriter, r *http.Request, fence bool, u
 	} else {
 		rawRevision := body["revision"]
 		valid = valid && len(body) == 2 && len(rawRevision) > 0 && string(rawRevision) != "null" &&
-			json.Unmarshal(rawRevision, &revision) == nil && revision <= maxMobileAppearanceRevision &&
+			json.Unmarshal(rawRevision, &revision) == nil && revision <= MaxMobileAppearanceRevision &&
 			json.Unmarshal(body["fields"], &fields) == nil && len(fields) > 0
 	}
 	// Decode the patch before locking. Map presence distinguishes omission from null.
-	var patch mobileAppearanceState
+	var patch MobileAppearanceState
 	for key, raw := range fields {
 		switch key {
 		case "ui_font_size", "terminal_font_size":
@@ -628,14 +633,14 @@ func serveMobileAppearance(w http.ResponseWriter, r *http.Request, fence bool, u
 		return
 	}
 
-	cfg, err := update(func(cfg *Config) error {
-		if cfg.MobileAppearanceRevision > maxMobileAppearanceRevision {
+	cfg, err := update(func(cfg *config.Config) error {
+		if cfg.MobileAppearanceRevision > MaxMobileAppearanceRevision {
 			return errMobileAppearanceInvalid
 		}
 		if !fence && cfg.MobileAppearanceRevision != revision {
 			return errMobileAppearanceConflict
 		}
-		if cfg.MobileAppearanceRevision == maxMobileAppearanceRevision {
+		if cfg.MobileAppearanceRevision == MaxMobileAppearanceRevision {
 			return errMobileAppearanceExhausted
 		}
 		if _, ok := fields["ui_font_size"]; ok {
@@ -660,7 +665,7 @@ func serveMobileAppearance(w http.ResponseWriter, r *http.Request, fence bool, u
 	case errors.Is(err, errMobileAppearanceInvalid), errors.Is(err, errMobileAppearanceExhausted):
 		status = http.StatusInternalServerError
 	}
-	state := mobileAppearanceFromConfig(cfg)
+	state := MobileAppearanceFromConfig(cfg)
 	if err != nil {
 		http.Error(w, "Failed to save config", http.StatusInternalServerError)
 		return
@@ -675,7 +680,7 @@ func serveMobileAppearance(w http.ResponseWriter, r *http.Request, fence bool, u
 // is left unchanged on disk; an empty string clears it (client falls
 // back to the built-in default). UIFontSize is clamped to 10..24 to
 // prevent rendering breakage.
-func handleAppearanceUpdate(w http.ResponseWriter, r *http.Request) {
+func HandleAppearanceUpdate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -769,7 +774,7 @@ func handleAppearanceUpdate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func handleUseExistingTerminalTab(w http.ResponseWriter, r *http.Request) {
+func HandleUseExistingTerminalTab(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -791,7 +796,7 @@ func handleUseExistingTerminalTab(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": cfg.UseExistingTerminalTab})
 }
 
-func handleUseHiddenTerminal(w http.ResponseWriter, r *http.Request) {
+func HandleUseHiddenTerminal(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -818,7 +823,7 @@ func handleUseHiddenTerminal(w http.ResponseWriter, r *http.Request) {
 // current clients store low power mode in the browser (localStorage
 // `phi_low_power`) and never call this — a true value here is only a
 // one-time migration seed the client adopts locally.
-func handleFastMode(w http.ResponseWriter, r *http.Request) {
+func HandleFastMode(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -843,7 +848,7 @@ func handleFastMode(w http.ResponseWriter, r *http.Request) {
 // handlePiOffline toggles whether the pi coder is spawned with --offline.
 // Takes effect on the next spawn: an already-running pi process cannot be
 // switched, since the flag is set at exec time.
-func handlePiOffline(w http.ResponseWriter, r *http.Request) {
+func HandlePiOffline(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -868,7 +873,7 @@ func handlePiOffline(w http.ResponseWriter, r *http.Request) {
 // handlePiBridgeNoInject toggles whether phi omits --extension when
 // spawning the pi coder, for manual bridge installs. Same shape as
 // handlePiOffline: takes effect on the next spawn.
-func handlePiBridgeNoInject(w http.ResponseWriter, r *http.Request) {
+func HandlePiBridgeNoInject(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -894,7 +899,7 @@ func handlePiBridgeNoInject(w http.ResponseWriter, r *http.Request) {
 // is spawned with --dangerously-skip-permissions. Same shape as
 // handlePiOffline: takes effect on the next spawn, an already-running
 // claude process cannot be switched because the flag is set at exec time.
-func handleClaudeDangerouslySkipPermissions(w http.ResponseWriter, r *http.Request) {
+func HandleClaudeDangerouslySkipPermissions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -918,7 +923,7 @@ func handleClaudeDangerouslySkipPermissions(w http.ResponseWriter, r *http.Reque
 
 // handleAgyThemeAnsi toggles whether xterm's ANSI colour palette dynamically
 // matches Phi's active accent theme for agy coder tabs.
-func handleAgyThemeAnsi(w http.ResponseWriter, r *http.Request) {
+func HandleAgyThemeAnsi(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -944,7 +949,7 @@ func handleAgyThemeAnsi(w http.ResponseWriter, r *http.Request) {
 // network-restore, and passive backoff redials of the active tab). Stored
 // values are "visible" (on) and "off"; the wire contract is {enabled: bool}
 // to match the other settings toggles.
-func handleAutoReconnect(w http.ResponseWriter, r *http.Request) {
+func HandleAutoReconnect(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -972,7 +977,7 @@ func handleAutoReconnect(w http.ResponseWriter, r *http.Request) {
 
 // handleOpenCodeIdleStop sets the idle timeout in minutes before stopping the
 // OpenCode background server. 0 disables the auto-stop. Clamped to 5..1440 when > 0.
-func handleOpenCodeIdleStop(w http.ResponseWriter, r *http.Request) {
+func HandleOpenCodeIdleStop(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -996,7 +1001,8 @@ func handleOpenCodeIdleStop(w http.ResponseWriter, r *http.Request) {
 }
 
 // encodeConfigData serializes, base64-encodes, hashes, and formats with a prefix.
-func encodeConfigData(prefix string, data interface{}) (string, error) {
+// EncodeConfigData wraps a config payload in the export envelope.
+func EncodeConfigData(prefix string, data interface{}) (string, error) {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
 		return "", err
@@ -1010,7 +1016,8 @@ func encodeConfigData(prefix string, data interface{}) (string, error) {
 }
 
 // decodeConfigData validates prefix, hash, and decodes the base64 payload.
-func decodeConfigData(raw string, expectedPrefix string) ([]byte, error) {
+// DecodeConfigData decodes the exported config payload envelope.
+func DecodeConfigData(raw string, expectedPrefix string) ([]byte, error) {
 	raw = strings.TrimSpace(raw)
 	if !strings.HasPrefix(raw, expectedPrefix+":") {
 		return nil, fmt.Errorf("invalid configuration format (missing or incorrect sentinel)")
@@ -1029,7 +1036,7 @@ func decodeConfigData(raw string, expectedPrefix string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(b64Payload)
 }
 
-func handleConfigExport(w http.ResponseWriter, r *http.Request) {
+func HandleConfigExport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1037,16 +1044,16 @@ func handleConfigExport(w http.ResponseWriter, r *http.Request) {
 
 	cfg := loadConfig()
 	exportData := struct {
-		ModelPresets     ModelPresetsMap `json:"model_presets"`
-		QuickCommands    []QuickCommand  `json:"quick_commands"`
-		TerminalCommands []QuickCommand  `json:"terminal_commands"`
+		ModelPresets     config.ModelPresetsMap `json:"model_presets"`
+		QuickCommands    []config.QuickCommand  `json:"quick_commands"`
+		TerminalCommands []config.QuickCommand  `json:"terminal_commands"`
 	}{
 		ModelPresets:     cfg.ModelPresets,
 		QuickCommands:    cfg.QuickCommands,
 		TerminalCommands: cfg.TerminalCommands,
 	}
 
-	formatted, err := encodeConfigData("PHICONFIG", exportData)
+	formatted, err := EncodeConfigData("PHICONFIG", exportData)
 	if err != nil {
 		http.Error(w, "Failed to serialize export data: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -1058,7 +1065,7 @@ func handleConfigExport(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func handleConfigImport(w http.ResponseWriter, r *http.Request) {
+func HandleConfigImport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1072,16 +1079,16 @@ func handleConfigImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonData, err := decodeConfigData(req.Config, "PHICONFIG")
+	jsonData, err := DecodeConfigData(req.Config, "PHICONFIG")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	var importedData struct {
-		ModelPresets     ModelPresetsMap `json:"model_presets"`
-		QuickCommands    []QuickCommand  `json:"quick_commands"`
-		TerminalCommands []QuickCommand  `json:"terminal_commands"`
+		ModelPresets     config.ModelPresetsMap `json:"model_presets"`
+		QuickCommands    []config.QuickCommand  `json:"quick_commands"`
+		TerminalCommands []config.QuickCommand  `json:"terminal_commands"`
 	}
 
 	if err := json.Unmarshal(jsonData, &importedData); err != nil {
@@ -1104,7 +1111,7 @@ func handleConfigImport(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func handleConfigExportModels(w http.ResponseWriter, r *http.Request) {
+func HandleConfigExportModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1112,12 +1119,12 @@ func handleConfigExportModels(w http.ResponseWriter, r *http.Request) {
 
 	cfg := loadConfig()
 	exportData := struct {
-		ModelPresets ModelPresetsMap `json:"model_presets"`
+		ModelPresets config.ModelPresetsMap `json:"model_presets"`
 	}{
 		ModelPresets: cfg.ModelPresets,
 	}
 
-	formatted, err := encodeConfigData("PHIMODELS", exportData)
+	formatted, err := EncodeConfigData("PHIMODELS", exportData)
 	if err != nil {
 		http.Error(w, "Failed to serialize export data: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -1129,7 +1136,7 @@ func handleConfigExportModels(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func handleConfigImportModels(w http.ResponseWriter, r *http.Request) {
+func HandleConfigImportModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1143,14 +1150,14 @@ func handleConfigImportModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonData, err := decodeConfigData(req.Config, "PHIMODELS")
+	jsonData, err := DecodeConfigData(req.Config, "PHIMODELS")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	var importedData struct {
-		ModelPresets ModelPresetsMap `json:"model_presets"`
+		ModelPresets config.ModelPresetsMap `json:"model_presets"`
 	}
 
 	if err := json.Unmarshal(jsonData, &importedData); err != nil {
@@ -1171,7 +1178,7 @@ func handleConfigImportModels(w http.ResponseWriter, r *http.Request) {
 // dropup that sends commands to the active PTY). Decoupled from terminal
 // commands in v0.7.16 — the two concepts were being conflated under the
 // old /api/config/export-cmds endpoint which dumped both.
-func handleConfigExportQuickCommands(w http.ResponseWriter, r *http.Request) {
+func HandleConfigExportQuickCommands(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1179,12 +1186,12 @@ func handleConfigExportQuickCommands(w http.ResponseWriter, r *http.Request) {
 
 	cfg := loadConfig()
 	exportData := struct {
-		QuickCommands []QuickCommand `json:"quick_commands"`
+		QuickCommands []config.QuickCommand `json:"quick_commands"`
 	}{
 		QuickCommands: cfg.QuickCommands,
 	}
 
-	formatted, err := encodeConfigData("PHIQUICKCMDS", exportData)
+	formatted, err := EncodeConfigData("PHIQUICKCMDS", exportData)
 	if err != nil {
 		http.Error(w, "Failed to serialize export data: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -1199,7 +1206,7 @@ func handleConfigExportQuickCommands(w http.ResponseWriter, r *http.Request) {
 // handleConfigExportTerminalCommands exports ONLY the terminal_commands list
 // (the cmd panel — commands that spawn new shell tabs). Decoupled from quick
 // commands in v0.7.16.
-func handleConfigExportTerminalCommands(w http.ResponseWriter, r *http.Request) {
+func HandleConfigExportTerminalCommands(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1207,12 +1214,12 @@ func handleConfigExportTerminalCommands(w http.ResponseWriter, r *http.Request) 
 
 	cfg := loadConfig()
 	exportData := struct {
-		TerminalCommands []QuickCommand `json:"terminal_commands"`
+		TerminalCommands []config.QuickCommand `json:"terminal_commands"`
 	}{
 		TerminalCommands: cfg.TerminalCommands,
 	}
 
-	formatted, err := encodeConfigData("PHITERMCMDS", exportData)
+	formatted, err := EncodeConfigData("PHITERMCMDS", exportData)
 	if err != nil {
 		http.Error(w, "Failed to serialize export data: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -1230,7 +1237,7 @@ func handleConfigExportTerminalCommands(w http.ResponseWriter, r *http.Request) 
 // are imported - so a user can paste a quick-commands config into a
 // session that previously only had terminal commands, and vice versa,
 // without overwriting the other. Unknown prefixes return 400.
-func handleConfigImportCmds(w http.ResponseWriter, r *http.Request) {
+func HandleConfigImportCmds(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1249,14 +1256,14 @@ func handleConfigImportCmds(w http.ResponseWriter, r *http.Request) {
 	var jsonData []byte
 	var prefix string
 	for _, p := range []string{"PHIQUICKCMDS", "PHITERMCMDS", "PHICMDS"} {
-		if jd, err := decodeConfigData(req.Config, p); err == nil {
+		if jd, err := DecodeConfigData(req.Config, p); err == nil {
 			jsonData = jd
 			prefix = p
 			break
 		}
 	}
 	if jsonData == nil {
-		http.Error(w, "Config is missing or uses an unknown prefix (expected PHIQUICKCMDS, PHITERMCMDS, or PHICMDS)", http.StatusBadRequest)
+		http.Error(w, "config.Config is missing or uses an unknown prefix (expected PHIQUICKCMDS, PHITERMCMDS, or PHICMDS)", http.StatusBadRequest)
 		return
 	}
 	_ = prefix // accepted whichever matched; payload below decides what to write
@@ -1264,8 +1271,8 @@ func handleConfigImportCmds(w http.ResponseWriter, r *http.Request) {
 	// The payload may contain either field, or both (legacy). Only overwrite
 	// the fields actually present in the JSON.
 	var importedData struct {
-		QuickCommands    []QuickCommand `json:"quick_commands"`
-		TerminalCommands []QuickCommand `json:"terminal_commands"`
+		QuickCommands    []config.QuickCommand `json:"quick_commands"`
+		TerminalCommands []config.QuickCommand `json:"terminal_commands"`
 	}
 	if err := json.Unmarshal(jsonData, &importedData); err != nil {
 		http.Error(w, "Failed to parse configuration JSON: "+err.Error(), http.StatusBadRequest)
@@ -1283,7 +1290,7 @@ func handleConfigImportCmds(w http.ResponseWriter, r *http.Request) {
 		changed = true
 	}
 	if !changed {
-		http.Error(w, "Config contained no recognized command lists", http.StatusBadRequest)
+		http.Error(w, "config.Config contained no recognized command lists", http.StatusBadRequest)
 		return
 	}
 

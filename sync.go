@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/pkg/system"
 	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"google.golang.org/protobuf/proto"
@@ -192,8 +193,8 @@ func handleSyncMessages(w http.ResponseWriter, r *http.Request) {
 		syncMu.Unlock()
 		TriggerSaveSyncStore()
 
-		if wsHub != nil {
-			wsHub.BroadcastNotification(&wspb.Notification{
+		if server.Hub != nil {
+			server.Hub.BroadcastNotification(&wspb.Notification{
 				Kind: &wspb.Notification_SyncChanged{SyncChanged: &wspb.SyncChanged{
 					Action: proto.String("upsert"),
 					Key:    proto.String(msg.Key),
@@ -224,8 +225,8 @@ func handleSyncMessages(w http.ResponseWriter, r *http.Request) {
 		syncMu.Unlock()
 		if exists {
 			TriggerSaveSyncStore()
-			if wsHub != nil {
-				wsHub.BroadcastNotification(&wspb.Notification{
+			if server.Hub != nil {
+				server.Hub.BroadcastNotification(&wspb.Notification{
 					Kind: &wspb.Notification_SyncChanged{SyncChanged: &wspb.SyncChanged{
 						Action: proto.String("delete"),
 						Key:    proto.String(key),

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hypernewbie/phi/internal/server"
 	"github.com/hypernewbie/phi/pkg/coders"
 )
 
@@ -44,11 +45,11 @@ func invalidateOpenCodeServiceCache() {
 }
 
 func countActiveOpenCodeTabs() int {
-	if ptyManager == nil {
+	if server.PTY == nil {
 		return 0
 	}
 	count := 0
-	for _, inst := range ptyManager.ListActive() {
+	for _, inst := range server.PTY.ListActive() {
 		if inst.Coder == "opencode" && !inst.IsPtyDead() {
 			count++
 		}
@@ -62,7 +63,7 @@ func handleOpenCodeService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ensureCoderManager()
-	c, ok := coderManager.Get("opencode")
+	c, ok := server.Coders.Get("opencode")
 	if !ok || c.SessionSource != "opencode_v2" || c.OpenCodeMode == "legacy" {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -85,8 +86,8 @@ func handleOpenCodeService(w http.ResponseWriter, r *http.Request) {
 	cfg := loadConfig()
 	if cfg.OpenCodeIdleStopMinutes > 0 {
 		resp["idle_stop_minutes"] = cfg.OpenCodeIdleStopMinutes
-		if ptyManager != nil {
-			lastAct := ptyManager.LastOpenCodeActivity()
+		if server.PTY != nil {
+			lastAct := server.PTY.LastOpenCodeActivity()
 			rem := time.Duration(cfg.OpenCodeIdleStopMinutes)*time.Minute - time.Since(lastAct)
 			if rem < 0 {
 				rem = 0
@@ -106,7 +107,7 @@ func handleOpenCodeServiceStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ensureCoderManager()
-	c, ok := coderManager.Get("opencode")
+	c, ok := server.Coders.Get("opencode")
 	if !ok || c.SessionSource != "opencode_v2" || c.OpenCodeMode == "legacy" {
 		http.Error(w, "OpenCode 2 is not enabled", http.StatusBadRequest)
 		return
