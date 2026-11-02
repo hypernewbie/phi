@@ -7,6 +7,31 @@ import { renderMarkdownSafe, highlightCodeIn } from './md-render.js';
 const SYNC_NOTIF_MARKER = 'PHI_NOTIF';
 const SYNC_ALARM_MARKER = 'PHI_ALARM';
 const SYNC_TITLE_MAX = 120;
+/** Trim a bounded, control-character-free string; anything else is absent. */
+function payloadText(value, max = 4096) {
+    if (typeof value !== 'string')
+        return undefined;
+    const trimmed = value.trim();
+    if (trimmed === '' || trimmed.length > max)
+        return undefined;
+    return trimmed;
+}
+function payloadObject(value, keys) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return undefined;
+    }
+    const record = value;
+    if (!keys.some((key) => key in record))
+        return undefined;
+    return record;
+}
+/**
+ * Reads one Sync Board value into the shape the cards render. Another
+ * machine on the tailnet writes these values, so every field is checked
+ * here instead of being cast: an entry with the wrong type is dropped and
+ * the rest of the card still renders. A value with no recognizable field
+ * returns null and displays as plain text.
+ */
 export function parseActionPayload(val) {
     let obj = null;
     if (typeof val === 'object' && val !== null) {
@@ -25,23 +50,71 @@ export function parseActionPayload(val) {
     }
     if (!obj || typeof obj !== 'object' || Array.isArray(obj))
         return null;
-    const hasRichKeys = 'preview' in obj ||
-        'image' in obj ||
-        'file' in obj ||
-        'url' in obj ||
-        'link' in obj ||
-        'diff' in obj ||
-        'checklist' in obj ||
-        'actions' in obj ||
-        typeof obj.done === 'string' ||
-        'title' in obj ||
-        'description' in obj ||
-        'desc' in obj ||
-        'toast' in obj;
-    if (hasRichKeys) {
-        return obj;
+    const raw = obj;
+    const payload = {};
+    const done = payloadText(raw.done);
+    if (done !== undefined)
+        payload.done = done;
+    const machine = payloadText(raw.machine, 256);
+    if (machine !== undefined)
+        payload.machine = machine;
+    const title = payloadText(raw.title, 512);
+    if (title !== undefined)
+        payload.title = title;
+    const description = payloadText(raw.description);
+    if (description !== undefined)
+        payload.description = description;
+    const desc = payloadText(raw.desc);
+    if (desc !== undefined)
+        payload.desc = desc;
+    const text = payloadText(raw.text);
+    if (text !== undefined)
+        payload.text = text;
+    const toast = payloadText(raw.toast, 512);
+    if (toast !== undefined)
+        payload.toast = toast;
+    const preview = payloadText(raw.preview);
+    if (preview !== undefined)
+        payload.preview = preview;
+    const image = payloadText(raw.image);
+    if (image !== undefined)
+        payload.image = image;
+    const file = payloadText(raw.file);
+    if (file !== undefined)
+        payload.file = file;
+    const url = payloadText(raw.url, 2048);
+    if (url !== undefined)
+        payload.url = url;
+    const link = payloadText(raw.link, 2048);
+    if (link !== undefined)
+        payload.link = link;
+    if (typeof raw.diff === 'boolean' || typeof raw.diff === 'string') {
+        payload.diff = raw.diff;
     }
-    return null;
+    else {
+        const diffTarget = payloadObject(raw.diff, [
+            'commit',
+            'target',
+            'files',
+            'modal',
+        ]);
+        if (diffTarget)
+            payload.diff = diffTarget;
+    }
+    if (Array.isArray(raw.checklist)) {
+        const items = raw.checklist.filter((item) => typeof item === 'string' ||
+            (typeof item === 'object' && item !== null));
+        if (items.length > 0)
+            payload.checklist = items;
+    }
+    if (typeof raw.auto_open === 'boolean')
+        payload.auto_open = raw.auto_open;
+    if (Array.isArray(raw.actions)) {
+        const actions = raw.actions.filter((act) => typeof act === 'object' && act !== null && !Array.isArray(act));
+        if (actions.length > 0)
+            payload.actions = actions;
+    }
+    return Object.keys(payload).length > 0 ? payload : null;
 }
 export function formatDoneSummary(value) {
     const words = value.trim().replace(/\s+/g, ' ').split(' ').filter(Boolean);
