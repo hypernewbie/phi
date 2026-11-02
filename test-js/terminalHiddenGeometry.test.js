@@ -208,7 +208,13 @@ describe('hidden replay and history geometry ownership', () => {
         try {
             h.show(true);
             vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
-            h.pty.ws.head({ epoch: 7, oldest: 0, head: 0 });
+            h.pty.ws.head({
+                epoch: 7,
+                oldest: 0,
+                head: 0,
+                initialCols: 240,
+                initialRows: 12,
+            });
             h.pty.ws.output(0, prefix);
             h.pty.ws.output(prefix.length, tail);
             await h.settle();
@@ -226,39 +232,42 @@ describe('hidden replay and history geometry ownership', () => {
         }
     });
 
-    it('same-epoch reconnect applies authoritative checkpoint geometry while hidden', async () => {
-        const h = hiddenReplay(encode('OLD'));
+    it('same-epoch reconnect applies recorded replay geometry while hidden', async () => {
+        const old = encode('OLD'),
+            suffix = encode('CURRENT');
+        const source = new Uint8Array([...old, ...suffix]);
+        const h = hiddenReplay(source, ({ from, to }) =>
+            recordingEnvelope(source.slice(from, to), from, to, {
+                resizes: from === 0 ? [] : [[from, 90, 15]],
+            }),
+        );
         try {
-            h.pty.ws.head({ epoch: 7, oldest: 0, head: 3 });
+            h.pty.ws.head({
+                epoch: 7,
+                oldest: 0,
+                head: old.length,
+                initialCols: 240,
+                initialRows: 12,
+            });
             await h.settle();
+            expect([h.term.cols, h.term.rows]).toEqual([240, 12]);
             const next = h.socket();
             vi.spyOn(next, 'sendResize');
-            const bytes = encode('\x1b[6;60HCURRENT');
-            next.ws.head(
-                {
-                    epoch: 7,
-                    oldest: 0,
-                    head: 3,
-                    ckpt: {
-                        kind: 'ansi-v1',
-                        through: 3,
-                        cols: 90,
-                        rows: 15,
-                        len: bytes.length,
-                    },
-                },
-                bytes,
-            );
+            next.ws.head({
+                epoch: 7,
+                oldest: 0,
+                head: source.length,
+                eventCursor: `v1.7.${source.length}.1`,
+                initialCols: 240,
+                initialRows: 12,
+            });
             await h.settle();
             expectDeferred(h.tab);
             expect([h.term.cols, h.term.rows]).toEqual([90, 15]);
-            expect(snapshot(h.term).lines[5]).toContain('CURRENT');
-            expect(snapshot(h.term).lines.join('\n')).not.toContain('OLD');
-            expect(h.tab._serverStateAvailable).toBe(true);
+            expect(h.tape.join('')).toBe('OLDCURRENT');
             expect(h.tab._bootstrapGate).toBeNull();
             expect(next.holding).toBe(false);
-            expect(h.tab.drainedSeq).toBe(3);
-            expect(h.requests).toHaveLength(1);
+            expect(h.tab.drainedSeq).toBe(source.length);
         } finally {
             h.dispose();
         }
@@ -271,7 +280,13 @@ describe('hidden replay and history geometry ownership', () => {
         const source = encode(prefix + gap + tail);
         const h = hiddenReplay(source);
         try {
-            h.pty.ws.head({ epoch: 7, oldest: 0, head: encode(prefix).length });
+            h.pty.ws.head({
+                epoch: 7,
+                oldest: 0,
+                head: encode(prefix).length,
+                initialCols: 240,
+                initialRows: 12,
+            });
             await h.settle();
             h.pty.ws.output(encode(prefix + gap).length, encode(tail));
             await h.settle();
@@ -291,9 +306,10 @@ describe('hidden replay and history geometry ownership', () => {
     it('orders recorded resizes before their bytes even while hidden', async () => {
         const prefix = '\x1b[6;60HBEFORE\r\n',
             suffix = 'recorded wide text '.repeat(12);
-        const start = 10,
-            cut = start + encode(prefix).length;
-        const source = encode(' '.repeat(start) + prefix + suffix);
+        // The raw journal never evicts: a fresh replay starts at byte
+        // zero, so the fixture carries no skipped prefix.
+        const cut = encode(prefix).length;
+        const source = encode(prefix + suffix);
         const h = hiddenReplay(source, ({ from, to }) =>
             recordingEnvelope(source.slice(from, to), from, to, {
                 resizes: [
@@ -311,7 +327,12 @@ describe('hidden replay and history geometry ownership', () => {
             await write(reference, prefix);
             reference.resize(120, 10);
             await write(reference, suffix);
-            h.pty.ws.head({ epoch: 7, oldest: start, head: source.length });
+            h.pty.ws.head({
+                epoch: 7,
+                oldest: 0,
+                head: source.length,
+                eventCursor: `v1.7.${source.length}.2`,
+            });
             await h.settle();
             expectDeferred(h.tab);
             expect(snapshot(h.term)).toEqual(snapshot(reference));
@@ -324,118 +345,43 @@ describe('hidden replay and history geometry ownership', () => {
         }
     });
 
-    it('returns from a saved local history view without fitting a newly hidden panel', async () => {
-        const prefix = 'LIVE\r\n',
-            tail = 'TAIL\r\n';
-        const h = hiddenReplay(encode(prefix + tail));
+    it('replay completion defers a panel hidden during fetch', async () => {
+        const source = encode('BOOK TAIL\r\n');
+        let finishFetch;
+        const gate = new Promise((resolve) => {
+            finishFetch = resolve;
+        });
+        const h = hiddenReplay(source, ({ from, to }) =>
+            gate.then(() =>
+                recordingEnvelope(source.slice(from, to), from, to, {
+                    resizes: [[0, 90, 15]],
+                }),
+            ),
+        );
         h.manager._queuePanelFit = vi.fn();
         try {
-            h.pty.ws.head({ epoch: 7, oldest: 0, head: encode(prefix).length });
-            await h.settle();
-            h.tab._serverStateAvailable = false;
-            h.tab._historyBrowsing = true;
-            h.tab._historyLiveState = {
-                epoch: 7,
-                cols: 80,
-                rows: 9,
-                through: encode(prefix).length,
-                head: encode(prefix).length,
-                ansi: prefix,
-            };
-            h.pty.ws.output(encode(prefix).length, encode(tail));
-            await h.settle();
             h.show(true);
-            const restore = h.manager._restoreLatestHistory(h.tab);
+            h.tab._pendingPanelFit = h.tab._pendingForceResize = false;
+            h.pty.ws.head({
+                epoch: 7,
+                oldest: 0,
+                head: source.length,
+                eventCursor: `v1.7.${source.length}.1`,
+                initialCols: 240,
+                initialRows: 12,
+            });
             h.show(false);
-            await restore;
+            finishFetch();
             await h.settle();
             expectDeferred(h.tab);
-            expect([h.term.cols, h.term.rows]).toEqual([80, 9]);
-            expect(snapshot(h.term).lines.filter(Boolean)).toEqual([
-                'LIVE',
-                'TAIL',
-            ]);
-            expect(h.tab._historyBrowsing).toBe(false);
-            expect(h.tab._historyLiveState).toBeNull();
+            expect([h.term.cols, h.term.rows]).toEqual([90, 15]);
+            expect(h.tape.join('')).toBe('BOOK TAIL\r\n');
             expect(h.tab._bootstrapGate).toBeNull();
-            expect(h.tab._historyLoading).toBe(false);
-            expect(h.tab.drainedSeq).toBe(encode(prefix + tail).length);
+            expect(h.tab._historyParsing).toBe(false);
             expect(h.pty.holding).toBe(false);
+            expect(h.tab.drainedSeq).toBe(source.length);
         } finally {
             h.dispose();
         }
     });
-
-    it.each([false, true])(
-        'state history completion defers a panel hidden during fetch (latest=%s)',
-        async (latest) => {
-            const source = encode('BOOK TAIL\r\n');
-            const h = hiddenReplay(source);
-            h.manager._queuePanelFit = vi.fn();
-            try {
-                h.pty.ws.head({ epoch: 7, oldest: 0, head: source.length });
-                await h.settle();
-                h.show(true);
-                h.tab._pendingPanelFit = h.tab._pendingForceResize = false;
-                const recordingFetch = h.fetcher;
-                let finishState, started;
-                const requested = new Promise((resolve) => {
-                    started = resolve;
-                });
-                const response = new Promise((resolve) => {
-                    finishState = resolve;
-                });
-                vi.stubGlobal(
-                    'fetch',
-                    vi.fn((url, options) => {
-                        if (String(url).includes('/state?')) {
-                            started();
-                            return response;
-                        }
-                        return recordingFetch(url, options);
-                    }),
-                );
-                const task = h.manager._loadStateHistory(h.tab, latest);
-                await requested;
-                expect(h.pty.holding).toBe(false);
-                h.show(false);
-                const bytes = encode(latest ? 'CURRENT\r\n' : 'ARCHIVE ');
-                const frontier = latest ? source.length : 0;
-                finishState(
-                    recordingEnvelope(bytes, frontier, frontier, {
-                        oldest: 0,
-                        head: frontier,
-                        ckpt: {
-                            kind: 'ansi-v1',
-                            through: frontier,
-                            cols: 90,
-                            rows: 15,
-                            len: bytes.length,
-                        },
-                    }),
-                );
-                await task;
-                await h.settle();
-                expectDeferred(h.tab);
-                expect([h.term.cols, h.term.rows]).toEqual([90, 15]);
-                expect(snapshot(h.term).lines.filter(Boolean)).toEqual([
-                    latest ? 'CURRENT' : 'ARCHIVE BOOK TAIL',
-                ]);
-                expect(h.tab._historyBrowsing).toBe(!latest);
-                expect(h.tab._historyError).toBeNull();
-                expect(h.tab._bootstrapGate).toBeNull();
-                expect(h.tab._historyRequest).toBeNull();
-                expect(h.tab._historyTask).toBeNull();
-                expect(h.tab._historyLoading).toBe(false);
-                expect(h.tab._historyParsing).toBe(false);
-                expect(h.pty.holding).toBe(false);
-                expect(h.manager._queuePanelFit).toHaveBeenLastCalledWith(
-                    h.tab,
-                    { forceResize: true },
-                );
-            } finally {
-                h.dispose();
-            }
-        },
-    );
 });

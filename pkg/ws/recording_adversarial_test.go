@@ -10,44 +10,50 @@ import (
 )
 
 func TestAdversarialColdReadAfterRestartWithoutLiveWriter(t *testing.T) {
-	for _, cache := range []int{0, 8, 128} {
-		for _, closed := range []bool{false, true} {
-			name := "live"
-			if closed {
-				name = "exited"
-			}
-			t.Run(fmt.Sprintf("%s/cache-%d", name, cache), func(t *testing.T) {
-				dir := t.TempDir()
-				first := NewHub(cache)
-				second := NewHub(cache)
-				t.Cleanup(func() {
-					_ = first.Close()
-					_ = second.Close()
-				})
-				if err := first.SetRecordingDirectory(dir); err != nil {
-					t.Fatal(err)
-				}
-				data := []byte("retained output from a process that need not be relaunched\r\n")
-				if err := first.Ingest("pane", data); err != nil {
-					t.Fatal(err)
-				}
-				if closed {
-					first.ClosePane("pane")
-				}
-				// A restart closes the first owner before the second
-				// opens the same group.
-				if err := first.Close(); err != nil {
-					t.Fatal(err)
-				}
-				if err := second.SetRecordingDirectory(dir); err != nil {
-					t.Fatal(err)
-				}
-				recording, ok := second.Recording("pane", 0, uint64(len(data)))
-				if !ok || !bytes.Equal(recording.Data, data) {
-					t.Fatalf("existing cold data requires a new live writer: found=%t data=%q", ok, recording.Data)
-				}
-			})
+	for _, closed := range []bool{false, true} {
+		name := "live"
+		if closed {
+			name = "exited"
 		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			first := NewHub(64)
+			if err := first.SetRecordingDirectory(dir); err != nil {
+				t.Fatal(err)
+			}
+			if err := first.InitPaneJournal("pane", 80, 24); err != nil {
+				t.Fatal(err)
+			}
+			data := []byte("retained output from a process that need not be relaunched\r\n")
+			if err := first.Ingest("pane", data); err != nil {
+				t.Fatal(err)
+			}
+			if closed {
+				first.ClosePane("pane")
+			}
+			// A restart closes the first owner before the second
+			// opens the same journal.
+			if err := first.Close(); err != nil {
+				t.Fatal(err)
+			}
+			second := NewHub(64)
+			t.Cleanup(func() { _ = second.Close() })
+			if err := second.SetRecordingDirectory(dir); err != nil {
+				t.Fatal(err)
+			}
+			// The backend respawn reopens the journal; the epoch is
+			// per-hub-lifetime, so the client learns it from attach.
+			if err := second.InitPaneJournal("pane", 80, 24); err != nil {
+				t.Fatal(err)
+			}
+			c := &Client{Send: make(chan []byte, 4)}
+			second.AttachHot("pane", c)
+			attach := parseAttach(t, drainOne(c.Send))
+			page, err := second.Replay("pane", ReplayRequest{Epoch: attach.GetEpoch(), From: 0, Latest: true})
+			if err != nil || !bytes.Equal(page.Data, data) {
+				t.Fatalf("existing cold data requires a new live writer: err=%v data=%q", err, page.Data)
+			}
+		})
 	}
 }
 
@@ -102,21 +108,37 @@ func TestAdversarialInvalidResizeCannotPoisonAllLaterReplay(t *testing.T) {
 		t.Run(fmt.Sprintf("%dx%d", size[0], size[1]), func(t *testing.T) {
 			h := NewHub(8)
 			t.Cleanup(func() { _ = h.Close() })
-			h.RecordResize("p", 80, 24)
+			if err := h.SetRecordingDirectory(t.TempDir()); err != nil {
+				t.Fatal(err)
+			}
+			if err := h.InitPaneJournal("p", 80, 24); err != nil {
+				t.Fatal(err)
+			}
 			if err := h.Ingest("p", []byte("before")); err != nil {
 				t.Fatal(err)
 			}
-			h.RecordResize("p", size[0], size[1])
+			// A zero dimension is a no-op, never a marker.
+			commit, _, err := h.StagePaneResize("p", size[0], size[1])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := commit(); err != nil {
+				t.Fatal(err)
+			}
 			if err := h.Ingest("p", []byte("after")); err != nil {
 				t.Fatal(err)
 			}
-			rec, ok := h.Recording("p", 0, 100)
-			if !ok {
-				t.Fatal("lost recording")
+			ph, _ := h.LookupPane("p")
+			page, err := h.Replay("p", ReplayRequest{Epoch: ph.EpochOf(), From: 0, Latest: true})
+			if err != nil {
+				t.Fatalf("lost recording: %v", err)
 			}
-			for _, m := range rec.Resizes {
+			if string(page.Data) != "beforeafter" {
+				t.Fatalf("recording = %q", page.Data)
+			}
+			for _, m := range page.Resizes {
 				if m.Cols == 0 || m.Rows == 0 {
-					t.Fatalf("authenticated malformed resize made every strict client reject subsequent recording: %+v", m)
+					t.Fatalf("malformed resize marker poisoned replay: %+v", m)
 				}
 			}
 		})
@@ -131,33 +153,4 @@ func perCommitDurability(t *testing.T) {
 	old := retentionFlushBytes
 	retentionFlushBytes = 0
 	t.Cleanup(func() { retentionFlushBytes = old })
-}
-
-func TestAdversarialTransientResizeJournalFailureDoesNotLoseGeometry(t *testing.T) {
-	perCommitDurability(t)
-	h := NewHub(8)
-	t.Cleanup(func() { _ = h.Close() })
-	h.RecordResize("p", 80, 24)
-	if err := h.Ingest("p", []byte("before")); err != nil {
-		t.Fatal(err)
-	}
-	ph, _ := h.LookupPane("p")
-	// ReadPump has no return value to prevent the actual PTY resize. Its
-	// failure must be retained for retry, not disappear before new output.
-	ph.recording.faults.rszSync = fmt.Errorf("injected resize sync failure")
-	h.RecordResize("p", 100, 40)
-	if ph.pendingResize == nil {
-		t.Fatal("failed resize was not retained for retry")
-	}
-	if err := h.Ingest("p", []byte("output generated in 100x40")); err != nil {
-		t.Fatal(err)
-	}
-	rec, ok := h.Recording("p", 0, 1000)
-	if !ok {
-		t.Fatal("missing recording")
-	}
-	last := rec.Resizes[len(rec.Resizes)-1]
-	if last.Cols != 100 || last.Rows != 40 || last.AtSeq != 6 {
-		t.Fatalf("new bytes admitted under a lost resize: %+v", last)
-	}
 }

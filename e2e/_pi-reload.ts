@@ -1,5 +1,5 @@
 // Native Reload fixture helpers: session-start counting, host
-// selection, bridge/recording readers, and the review hold. Real
+// selection, bridge/replay readers, and the review hold. Real
 // pinned Pi plus the compact loopback stub; no mocks.
 import {
     existsSync,
@@ -22,6 +22,8 @@ import {
     type CompactSeed,
     type CompactStub,
 } from './_pi-context-compact.js';
+
+import { readReplay } from './_terminal-replay.js';
 
 export { COMPACT_SESSION_ID, startCompactStub };
 export type { CompactStub };
@@ -125,11 +127,7 @@ export async function paneRecording(
     url: string,
     paneID: string,
 ): Promise<string> {
-    const rec = await request.get(
-        `${url}/api/terminals/${paneID}/recording?from=0&through=2097152`,
-    );
-    if (!rec.ok()) return '';
-    return (await rec.body()).toString('utf8');
+    return (await readReplay(url, paneID)).data.toString('utf8');
 }
 
 // Stage one synthetic image through the real paste handler and wait

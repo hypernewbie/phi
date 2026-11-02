@@ -1,51 +1,53 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { setupDomHarness, mockFetch } from './_dom.js';
+import { setupDomHarness } from './_dom.js';
 import { DiffController } from '../web/diff.js';
+import { TabManager } from '../web/terminal.js';
 import { TerminalServerFrame } from '../web/proto/terminal.js';
+import { recordingEnvelope } from './_terminalReplayHarness.js';
 
 setupDomHarness();
-
 class FakeWebSocket {
     static OPEN = 1;
-    constructor(url) {
-        this.url = url;
-        this.readyState = FakeWebSocket.OPEN;
+    constructor() {
+        this.readyState = 1;
     }
     send() {}
-    close() {}
+    close() {
+        this.closed = true;
+    }
 }
-
-const ansi = '\x1b[2J\x1b[H\x1b[33mabc1234\x1b[0m checkpoint\r\n';
-
+const encode = (text) => new TextEncoder().encode(text);
+const ansi = '\x1b[2J\x1b[H\x1b[33mabc1234\x1b[0m\r\n';
 function context() {
     const pendingWrites = [];
     return Object.assign(Object.create(DiffController.prototype), {
-        app: { sessionsManager: { activeCWD: '/linked tree' } },
+        app: {
+            sessionsManager: { activeCWD: '/linked tree' },
+            tabManager: Object.create(TabManager.prototype),
+        },
         activeTab: 'log',
         isPanelOpen: true,
         currentWs: null,
         _diffStreamToken: 0,
-        gitManageMemory: new Map(),
-        gitFiles: [],
-        gitFilesKey: '',
-        gitFilesMemory: new Map(),
-        gitFilesPending: new Set(),
-        gitFilesStatus: '',
-        gitFilesRequestKey: '',
-        gitViewMemory: new Map(),
-        gitManageCancels: new Set(),
-        gitManageRetryTimer: null,
-        gitManageRetryDelay: 1000,
         gitManageGeneration: 0,
         gitManageContextKey: '',
         gitManageRequestKey: '',
+        gitManageMemory: new Map(),
+        gitViewMemory: new Map(),
+        gitFilesMemory: new Map(),
         gitManageRecord: null,
         gitManageRecordKey: '',
         gitManageInfo: null,
         gitManageInfoKey: '',
-        gitManageBusy: false,
-        gitManageStatus: '',
+        gitFiles: [],
+        gitFilesKey: '',
+        gitFilesPending: new Set(),
+        gitFilesStatus: '',
+        gitFilesRequestKey: '',
+        gitManageCancels: new Set(),
+        gitManageRetryTimer: null,
+        gitManageRetryDelay: 1000,
         commitSelect: { value: 'unstaged' },
         _setPanel: vi.fn(),
         fitTerminal: vi.fn(),
@@ -60,196 +62,187 @@ function context() {
         },
     });
 }
-
-function sendPayload(pty, payload) {
+function send(pty, type, value) {
     const frame = TerminalServerFrame.encode(
-        TerminalServerFrame.fromPartial({ payload }),
+        TerminalServerFrame.fromPartial({ payload: { $case: type, value } }),
     ).finish();
     pty.ws.onmessage({ data: new Uint8Array(frame).buffer });
 }
-
-function attach(pty, withCheckpoint = true) {
-    sendPayload(pty, {
-        $case: 'attach',
-        value: {
-            epoch: 7n,
-            oldest: 0n,
-            head: 40n,
-            ...(withCheckpoint
-                ? {
-                      checkpoint: {
-                          kind: 'ansi-v1',
-                          through: 40n,
-                          cols: 120,
-                          rows: 30,
-                          data: new TextEncoder().encode(ansi),
-                      },
-                  }
-                : {}),
-        },
+function attach(pty, head, ordinal = 0) {
+    send(pty, 'attach', {
+        epoch: 7n,
+        oldest: 0n,
+        head: BigInt(head),
+        initialCols: 120,
+        initialRows: 30,
+        eventCursor: `v1.7.${head}.${ordinal}`,
     });
 }
-
+async function tick() {
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+}
+let replayResponder;
 beforeEach(() => {
-    vi.useFakeTimers();
     vi.stubGlobal('WebSocket', FakeWebSocket);
-    mockFetch((url) =>
-        new URL(url, window.location.href).pathname === '/api/git/raw-log'
-            ? { ok: false, status: 404, text: 'Not found' }
-            : { pane_id: 'log-pane' },
+    replayResponder = async () => ({ ok: false, status: 404 });
+    vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url) => {
+            const u = new URL(String(url), window.location.href);
+            if (u.pathname.endsWith('/replay')) return replayResponder(u);
+            if (u.pathname === '/api/git/raw-log')
+                return {
+                    ok: false,
+                    status: 404,
+                    headers: { get: () => null },
+                    text: async () => 'Not found',
+                };
+            const body = { pane_id: 'log-pane' };
+            return {
+                ok: true,
+                status: 200,
+                headers: { get: () => 'application/json' },
+                json: async () => body,
+                text: async () => JSON.stringify(body),
+            };
+        }),
     );
 });
-
 afterEach(() => {
-    vi.clearAllTimers();
-    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
 });
 
-describe('diff log attach wiring', () => {
-    it('fits before attach, writes the checkpoint, and releases the real socket', async () => {
+describe('diff log replay', () => {
+    it('chains fenced pages only after parsing the prior page, then releases live output', async () => {
         const ctx = context();
+        const bytes = encode(ansi);
+        const head = bytes.length * 2;
+        const queries = [];
+        replayResponder = async (u) => {
+            queries.push(u.searchParams);
+            const from = Number(u.searchParams.get('from'));
+            return recordingEnvelope(bytes, from, from + bytes.length, {
+                through: head,
+                through_event_cursor: `v1.7.${head}.0`,
+                initial_cols: 120,
+                initial_rows: 30,
+            });
+        };
         await ctx.refreshDiff();
-        expect(ctx.fitTerminal).toHaveBeenCalledTimes(1);
         const pty = ctx.currentWs;
         const release = vi.spyOn(pty, 'release');
-        expect(
-            fetch.mock.calls.some(
-                ([url]) =>
-                    url ===
-                    '/api/diff?cwd=%2Flinked%20tree&type=log&commit=unstaged',
-            ),
-        ).toBe(true);
-        attach(pty);
-        expect(ctx.term.resize).toHaveBeenCalledWith(120, 30);
+        attach(pty, head);
+        await tick();
+        expect(queries).toHaveLength(1);
+        expect(release).not.toHaveBeenCalled();
         expect(ctx.term.write).toHaveBeenCalledWith(ansi, expect.any(Function));
-        expect(release).toHaveBeenCalledOnce();
-        const checkpointOrder = ctx.term.write.mock.invocationCallOrder[1];
-        expect(ctx.term.resize.mock.invocationCallOrder[0]).toBeLessThan(
-            checkpointOrder,
-        );
-        expect(checkpointOrder).toBeLessThan(
-            release.mock.invocationCallOrder[0],
-        );
-        expect(ctx.fitTerminal).toHaveBeenCalledTimes(1);
-        const live = '\x1b[32mlive output\x1b[0m\r\n';
-        sendPayload(pty, {
-            $case: 'output',
-            value: { start: 40n, data: new TextEncoder().encode(live) },
-        });
-        expect(ctx.term.write).toHaveBeenLastCalledWith(live);
-        expect(
-            ctx.term.write.mock.calls.map(([text]) => text).slice(1),
-        ).toEqual([ansi, live]);
-        expect(ctx.fitTerminal).toHaveBeenCalledTimes(1);
         ctx.pendingWrites.shift()();
-        expect(ctx.fitTerminal).toHaveBeenCalledTimes(2);
-    });
-
-    it('fits immediately and again after a delayed checkpoint parses', async () => {
-        const ctx = context();
-        await ctx.refreshDiff();
-        vi.advanceTimersByTime(1000);
-        expect(ctx.fitTerminal).toHaveBeenCalledTimes(1);
-        attach(ctx.currentWs);
-        expect(ctx.fitTerminal).toHaveBeenCalledTimes(1);
+        await tick();
+        expect(queries).toHaveLength(2);
+        expect(queries[1].get('after_event_cursor')).toBe(
+            `v1.7.${bytes.length}.0`,
+        );
+        for (const q of queries)
+            expect(q.get('through_event_cursor')).toBe(`v1.7.${head}.0`);
+        expect(release).not.toHaveBeenCalled();
         ctx.pendingWrites.shift()();
-        expect(ctx.fitTerminal).toHaveBeenCalledTimes(2);
-    });
-
-    it('fits and releases an attach with no checkpoint', async () => {
-        const ctx = context();
-        await ctx.refreshDiff();
-        expect(ctx.fitTerminal).toHaveBeenCalledTimes(1);
-        const release = vi.spyOn(ctx.currentWs, 'release');
-        attach(ctx.currentWs, false);
+        await tick();
         expect(release).toHaveBeenCalledOnce();
-        expect(ctx.fitTerminal).toHaveBeenCalledTimes(2);
-        sendPayload(ctx.currentWs, {
-            $case: 'output',
-            value: { start: 40n, data: new TextEncoder().encode('live') },
-        });
+        send(pty, 'output', { start: BigInt(head), data: encode('live') });
         expect(ctx.term.write).toHaveBeenLastCalledWith('live');
     });
 
-    it('ignores a superseded socket attach, release, and fit', async () => {
+    it('applies a page resize after earlier text parses and before later text', async () => {
         const ctx = context();
+        replayResponder = async () =>
+            recordingEnvelope(encode('abcd'), 0, 4, {
+                event_cursor: 'v1.7.4.1',
+                resizes: [[2, 100, 20]],
+            });
         await ctx.refreshDiff();
-        const first = ctx.currentWs;
-        const staleAttach = first.onAttachHead;
-        expect(staleAttach).toBeTypeOf('function');
-        attach(first);
-        ctx.pendingWrites.shift()();
-        const close = vi.spyOn(first, 'close');
-        const release = vi.spyOn(first, 'release');
-        ctx.fitTerminal.mockClear();
-        await ctx.refreshDiff();
-        expect(close).toHaveBeenCalledOnce();
-        expect(close.mock.invocationCallOrder[0]).toBeLessThan(
-            ctx.term.clear.mock.invocationCallOrder[1],
+        attach(ctx.currentWs, 4, 1);
+        await tick();
+        expect(ctx.term.write).toHaveBeenLastCalledWith(
+            'ab',
+            expect.any(Function),
         );
-        expect(ctx.currentWs).not.toBe(first);
-        expect(first.ws.onmessage).toBeNull();
-        expect(ctx.fitTerminal).toHaveBeenCalledTimes(2);
-        ctx.term.write.mockClear();
-        staleAttach({ epoch: 7, oldest: 0, head: 40, ckpt: null });
-        expect(release).not.toHaveBeenCalled();
-        expect(ctx.fitTerminal).toHaveBeenCalledTimes(2);
+        expect(ctx.term.resize).not.toHaveBeenCalledWith(100, 20);
+        ctx.pendingWrites.shift()();
+        await tick();
+        expect(ctx.term.resize).toHaveBeenCalledWith(100, 20);
+        expect(ctx.term.write).toHaveBeenLastCalledWith(
+            'cd',
+            expect.any(Function),
+        );
+        ctx.pendingWrites.shift()();
+        await tick();
     });
 
-    it('decodes a checkpoint that ends mid-codepoint with the live stream', async () => {
+    it('replays geometry even when the attach byte head is zero', async () => {
+        const ctx = context();
+        replayResponder = async () =>
+            recordingEnvelope(new Uint8Array(), 0, 0, {
+                event_cursor: 'v1.7.0.1',
+                resizes: [[0, 100, 20]],
+            });
+        await ctx.refreshDiff();
+        const release = vi.spyOn(ctx.currentWs, 'release');
+        attach(ctx.currentWs, 0, 1);
+        await tick();
+        expect(ctx.term.resize).toHaveBeenCalledWith(100, 20);
+        expect(release).toHaveBeenCalledOnce();
+    });
+
+    it('preserves split UTF-8 across replay and live output', async () => {
+        const ctx = context();
+        const bytes = encode('你');
+        replayResponder = async () =>
+            recordingEnvelope(bytes.slice(0, 1), 0, 1);
+        await ctx.refreshDiff();
+        const pty = ctx.currentWs;
+        attach(pty, 1);
+        await tick();
+        ctx.pendingWrites.shift()();
+        await tick();
+        send(pty, 'output', { start: 1n, data: bytes.slice(1) });
+        expect(ctx.term.write).toHaveBeenLastCalledWith('你');
+        expect(
+            ctx.term.write.mock.calls.map(([s]) => s).join(''),
+        ).not.toContain('�');
+    });
+
+    it('does not release across a missing prefix or report successful recovery', async () => {
         const ctx = context();
         await ctx.refreshDiff();
         const pty = ctx.currentWs;
-        const full = 'bounded screen \u4f60 live\r\n';
-        const bytes = new TextEncoder().encode(full);
-        const cut = new TextEncoder().encode('bounded screen ').length + 1;
-        sendPayload(pty, {
-            $case: 'attach',
-            value: {
-                epoch: 7n,
-                oldest: 0n,
-                head: BigInt(cut),
-                checkpoint: {
-                    kind: 'ansi-v1',
-                    through: BigInt(cut),
-                    cols: 120,
-                    rows: 30,
-                    data: bytes.slice(0, cut),
-                },
-            },
-        });
-        const checkpointText = ctx.term.write.mock.calls.at(-1)[0];
-        expect(checkpointText).toBe('bounded screen ');
-        expect(checkpointText).not.toContain('\ufffd');
-        sendPayload(pty, {
-            $case: 'output',
-            value: { start: BigInt(cut), data: bytes.slice(cut) },
-        });
-        expect(checkpointText + ctx.term.write.mock.calls.at(-1)[0]).toBe(full);
+        const release = vi.spyOn(pty, 'release');
+        attach(pty, 40);
+        await tick();
+        expect(release).not.toHaveBeenCalled();
+        expect(pty.ws.closed).toBe(true);
+        expect(ctx.term.write).toHaveBeenLastCalledWith(
+            expect.stringContaining('History replay failed'),
+        );
     });
 
-    it('drops a streaming response the user already replaced', async () => {
+    it('does not paint or release a replay superseded by another view', async () => {
         const ctx = context();
-        let resolveLog;
-        mockFetch((url) => {
-            const path = new URL(url, window.location.href).pathname;
-            if (path === '/api/git/raw-log')
-                return { ok: false, status: 404, text: 'Not found' };
-            if (path === '/api/diff')
-                return new Promise((resolve) => {
-                    resolveLog = resolve;
-                });
-            return { text: 'raw diff body' };
-        });
-        const slow = ctx.refreshDiff();
-        await vi.waitFor(() => expect(resolveLog).toBeTypeOf('function'));
-        ctx.activeTab = 'diff';
+        let resolve;
+        replayResponder = () =>
+            new Promise((done) => {
+                resolve = done;
+            });
         await ctx.refreshDiff();
-        resolveLog({ pane_id: 'stale-pane' });
-        await slow;
-        expect(ctx.currentWs).toBeNull();
-        expect(
-            ctx.term.write.mock.calls.map(([text]) => text).join(''),
-        ).not.toContain('checkpoint');
+        const pty = ctx.currentWs;
+        const release = vi.spyOn(pty, 'release');
+        attach(pty, 4);
+        await tick();
+        ctx.currentWs = null;
+        ctx.term.write.mockClear();
+        resolve(recordingEnvelope(encode('old!'), 0, 4));
+        await tick();
+        expect(ctx.term.write).not.toHaveBeenCalled();
+        expect(release).not.toHaveBeenCalled();
     });
 });

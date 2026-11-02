@@ -8,6 +8,7 @@ import {
 import { copyFileSync, writeFileSync } from 'node:fs';
 import { stripVTControlCharacters } from 'node:util';
 import { startPhi } from './_server.js';
+import { readReplay } from './_terminal-replay.js';
 
 interface TerminalView {
     element?: HTMLElement;
@@ -149,23 +150,8 @@ async function sendUI(page: Page, command: string) {
     await page.locator('#send-input-btn').click();
 }
 async function recorded(request: APIRequestContext, url: string, pane: string) {
-    const response = await request.get(
-        `${url}/api/terminals/${encodeURIComponent(pane)}/recording?from=0&through=18446744073709551615`,
-    );
-    expect(response.status()).toBe(200);
-    const body = await response.body();
-    expect(body.length).toBeGreaterThanOrEqual(4);
-    const headerSize = body.readUInt32BE(0);
-    expect(headerSize).toBeGreaterThan(0);
-    expect(headerSize + 4).toBeLessThanOrEqual(body.length);
-    const header = JSON.parse(
-        body.subarray(4, headerSize + 4).toString('utf8'),
-    ) as { start: number; end: number };
-    expect(header.start).toBe(0);
-    expect(header.end).toBeLessThan(2 * 1024 * 1024);
-    return stripVTControlCharacters(
-        body.subarray(headerSize + 4).toString('utf8'),
-    )
+    const { data } = await readReplay(url, pane);
+    return stripVTControlCharacters(data.toString('utf8'))
         .replaceAll('\r', '')
         .split('\n');
 }
@@ -271,7 +257,7 @@ for (const mobile of [false, true]) {
                 await page.route(
                     (url) =>
                         url.pathname.startsWith('/api/terminals/') &&
-                        url.pathname.endsWith('/recording'),
+                        url.pathname.endsWith('/replay'),
                     async (route) => {
                         if (faultEnabled && scenario === 'slow') {
                             delayed++;

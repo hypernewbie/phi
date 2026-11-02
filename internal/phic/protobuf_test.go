@@ -23,47 +23,15 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// testAttach builds one encoded attach server frame with no checkpoint.
+// testAttach builds one encoded v2 attach with the default spawn grid.
 func testAttach(t *testing.T, epoch, head uint64) []byte {
 	t.Helper()
 	raw, err := wireproto.EncodeAttachFrame(&wspb.TerminalAttach{
-		Epoch:  proto.Uint64(epoch),
-		Oldest: proto.Uint64(0),
-		Head:   proto.Uint64(head),
-	})
-	if err != nil {
-		t.Fatalf("encode attach: %v", err)
-	}
-	return raw
-}
-
-// testAttachOldest builds one encoded attach server frame with a nonzero oldest.
-func testAttachOldest(t *testing.T, epoch, oldest, head uint64) []byte {
-	t.Helper()
-	raw, err := wireproto.EncodeAttachFrame(&wspb.TerminalAttach{
-		Epoch:  proto.Uint64(epoch),
-		Oldest: proto.Uint64(oldest),
-		Head:   proto.Uint64(head),
-	})
-	if err != nil {
-		t.Fatalf("encode attach: %v", err)
-	}
-	return raw
-}
-
-// testAttachCkpt builds one encoded attach server frame carrying a checkpoint.
-func testAttachCkpt(t *testing.T, epoch, head uint64, kind string, through uint64, cols, rows uint32, data []byte) []byte {
-	t.Helper()
-	raw, err := wireproto.EncodeAttachFrame(&wspb.TerminalAttach{
-		Epoch: proto.Uint64(epoch),
-		Head:  proto.Uint64(head),
-		Checkpoint: &wspb.TerminalCheckpoint{
-			Kind:    proto.String(kind),
-			Through: proto.Uint64(through),
-			Cols:    proto.Uint32(cols),
-			Rows:    proto.Uint32(rows),
-			Data:    data,
-		},
+		Epoch:       proto.Uint64(epoch),
+		Oldest:      proto.Uint64(0),
+		Head:        proto.Uint64(head),
+		InitialCols: proto.Uint32(80), InitialRows: proto.Uint32(24),
+		EventCursor: proto.String((replayPosition{epoch, head, 0}).String()),
 	})
 	if err != nil {
 		t.Fatalf("encode attach: %v", err)
@@ -133,80 +101,6 @@ func clientResize(t *testing.T, raw []byte) (uint32, uint32) {
 }
 
 func TestWebSocketProtobufNativeCodec(t *testing.T) {
-	attach := func(epoch, oldest, head, replayFrom uint64, ckpt *wspb.TerminalCheckpoint) []byte {
-		raw, err := wireproto.EncodeAttachFrame(&wspb.TerminalAttach{
-			Epoch:      proto.Uint64(epoch),
-			Oldest:     proto.Uint64(oldest),
-			Head:       proto.Uint64(head),
-			Checkpoint: ckpt,
-			ReplayFrom: proto.Uint64(replayFrom),
-		})
-		if err != nil {
-			t.Fatalf("encode attach: %v", err)
-		}
-		return raw
-	}
-
-	t.Run("attach span bounds", func(t *testing.T) {
-		got, err := ParseAttachHead(attach(7, 1, 5, 0, nil))
-		if err != nil {
-			t.Fatalf("valid attach rejected: %v", err)
-		}
-		if got.GetEpoch() != 7 || got.GetOldest() != 1 || got.GetHead() != 5 {
-			t.Fatalf("attach = %+v", got)
-		}
-		if _, err := ParseAttachHead(attach(7, 1, 5, 3, nil)); err != nil {
-			t.Fatalf("in-window replay_from rejected: %v", err)
-		}
-		for name, raw := range map[string][]byte{
-			"zero epoch":        attach(0, 1, 5, 0, nil),
-			"oldest above head": attach(7, 6, 5, 0, nil),
-			"replay below old":  attach(7, 2, 5, 1, nil),
-			"replay above head": attach(7, 1, 5, 6, nil),
-		} {
-			if _, err := ParseAttachHead(raw); err == nil {
-				t.Fatalf("%s accepted", name)
-			}
-		}
-	})
-
-	t.Run("checkpoint bounds", func(t *testing.T) {
-		valid := &wspb.TerminalCheckpoint{
-			Through: proto.Uint64(3),
-			Cols:    proto.Uint32(80),
-			Rows:    proto.Uint32(24),
-			Data:    []byte("snap"),
-		}
-		got, err := ParseAttachHead(attach(7, 1, 5, 0, valid))
-		if err != nil {
-			t.Fatalf("valid checkpoint rejected: %v", err)
-		}
-		if string(got.GetCheckpoint().GetData()) != "snap" {
-			t.Fatalf("checkpoint data = %q", got.GetCheckpoint().GetData())
-		}
-		clone := func(mut func(*wspb.TerminalCheckpoint)) *wspb.TerminalCheckpoint {
-			c := &wspb.TerminalCheckpoint{
-				Through: proto.Uint64(3),
-				Cols:    proto.Uint32(80),
-				Rows:    proto.Uint32(24),
-				Data:    []byte("snap"),
-			}
-			mut(c)
-			return c
-		}
-		for name, ckpt := range map[string]*wspb.TerminalCheckpoint{
-			"through below oldest": clone(func(c *wspb.TerminalCheckpoint) { c.Through = proto.Uint64(0) }),
-			"through above head":   clone(func(c *wspb.TerminalCheckpoint) { c.Through = proto.Uint64(6) }),
-			"zero cols":            clone(func(c *wspb.TerminalCheckpoint) { c.Cols = proto.Uint32(0) }),
-			"zero rows":            clone(func(c *wspb.TerminalCheckpoint) { c.Rows = proto.Uint32(0) }),
-			"oversize data":        clone(func(c *wspb.TerminalCheckpoint) { c.Data = make([]byte, MaxNativePayloadBytes+1) }),
-		} {
-			if _, err := ParseAttachHead(attach(7, 1, 5, 0, ckpt)); err == nil {
-				t.Fatalf("%s accepted", name)
-			}
-		}
-	})
-
 	t.Run("output bytes and overflow", func(t *testing.T) {
 		data := []byte{0xff, 0xfe, 'a', 0x80}
 		raw, err := wireproto.EncodeOutputFrame(100, data)

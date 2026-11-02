@@ -183,7 +183,6 @@ function makePopupLifecycleManager({
     tm.updateDirectModeUI = vi.fn();
     tm.updateDocumentTitle = vi.fn();
     tm.updateDisconnectBanner = vi.fn();
-    tm._cancelHistoryRequest = vi.fn();
     tm.hideEmptyState = vi.fn();
     tm.showEmptyState = vi.fn();
     tm.loadTabDraft = vi.fn(() => null);

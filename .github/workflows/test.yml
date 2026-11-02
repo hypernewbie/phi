@@ -41,10 +41,10 @@ jobs:
       - name: Run Go Tests
         run: go test -race -v ./...
 
-      # Run packages whose source changes under profiling. The server owns
-      # both diagnostics and the tag-gated HTTP timing tests.
+      # Run packages whose source changes under profiling, including the
+      # hub's memory accounting and the server's HTTP timing tests.
       - name: Run Go Tests (profiling)
-        run: go test -tags=profiling ./internal/diagnostics/... ./internal/server/... ./internal/termstate/... ./internal/termemu/... ./pkg/obs/...
+        run: go test -tags=profiling ./internal/diagnostics/... ./internal/server/... ./internal/termstate/... ./internal/termemu/... ./pkg/obs/... ./pkg/ws/...
 
       # Only auth_observability_otel_test.go is gated on the otel tag; main.go
       # is byte-identical with and without it, since the tag swaps the pkg/obs

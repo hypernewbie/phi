@@ -3,6 +3,7 @@ package ws
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,7 +15,9 @@ func TestPersistentRecordingAcrossHubRestart(t *testing.T) {
 	if err := first.SetRecordingDirectory(dir); err != nil {
 		t.Fatal(err)
 	}
-	first.RecordResize("p", 80, 24)
+	if err := first.InitPaneJournal("p", 80, 24); err != nil {
+		t.Fatal(err)
+	}
 	if err := first.Ingest("p", []byte("old output\r\n")); err != nil {
 		t.Fatal(err)
 	}
@@ -28,21 +31,29 @@ func TestPersistentRecordingAcrossHubRestart(t *testing.T) {
 	if err := second.SetRecordingDirectory(dir); err != nil {
 		t.Fatal(err)
 	}
+	if err := second.InitPaneJournal("p", 80, 24); err != nil {
+		t.Fatal(err)
+	}
 	if err := second.Ingest("p", []byte("new output\r\n")); err != nil {
 		t.Fatal(err)
 	}
-	rec, ok := second.Recording("p", 0, 1000)
-	if !ok || !bytes.Equal(rec.Data, []byte("old output\r\nnew output\r\n")) {
-		t.Fatalf("restart data: %+v", rec)
+	ph2, _ := second.LookupPane("p")
+	page, err := second.Replay("p", ReplayRequest{Epoch: ph2.EpochOf(), From: 0, Latest: true})
+	if err != nil || !bytes.Equal(page.Data, []byte("old output\r\nnew output\r\n")) {
+		t.Fatalf("restart data: %+v %v", page, err)
 	}
-	if rec.Epoch == oldEpoch {
+	if page.Epoch == oldEpoch {
 		t.Fatal("new server reused the old live/cache identity")
 	}
-	if len(rec.Resizes) != 1 || rec.Resizes[0].Cols != 80 {
+	if page.InitCols != 80 || page.InitRows != 24 {
 		t.Fatal("restart lost geometry")
 	}
-	// One manifest, one raw file, and one resize file: no rotation yet,
-	// so no base checkpoint exists.
+	// A clean shutdown marks its journals closed, so the reopened
+	// history carries no spurious incomplete warning.
+	if page.Incomplete {
+		t.Fatal("clean restart reopened with incomplete history")
+	}
+	// One journal file plus one manifest.
 	var files int
 	if err := filepath.WalkDir(second.recordingPath("p"), func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
@@ -62,8 +73,8 @@ func TestPersistentRecordingAcrossHubRestart(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if files != 3 {
-		t.Fatalf("recording and bounded-state files=%d", files)
+	if files != 2 {
+		t.Fatalf("journal files=%d", files)
 	}
 }
 
@@ -101,21 +112,27 @@ func TestRecordingRecoversATornFinalAppend(t *testing.T) {
 func TestRecordingWriteFailureDoesNotAdvanceFrontier(t *testing.T) {
 	h := NewHub(8)
 	t.Cleanup(func() { _ = h.Close() })
+	if err := h.SetRecordingDirectory(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.InitPaneJournal("p", 80, 24); err != nil {
+		t.Fatal(err)
+	}
 	if err := h.Ingest("p", []byte("retained")); err != nil {
 		t.Fatal(err)
 	}
 	ph, _ := h.LookupPane("p")
 	ph.mu.Lock()
-	if err := ph.recording.close(); err != nil {
-		ph.mu.Unlock()
-		t.Fatal(err)
-	}
+	ph.journal.faults.journalSync = errors.New("injected journal sync failure")
 	ph.mu.Unlock()
 	if err := h.Ingest("p", []byte("not admitted")); err == nil {
-		t.Fatal("closed recording accepted bytes")
+		t.Fatal("failed journal write accepted bytes")
 	}
-	if ph.total != 8 {
-		t.Fatalf("failure advanced head to %d", ph.total)
+	ph.mu.Lock()
+	total, head := ph.total, ph.journal.head
+	ph.mu.Unlock()
+	if total != 8 || head != 8 {
+		t.Fatalf("failure advanced frontier to total=%d head=%d", total, head)
 	}
 }
 

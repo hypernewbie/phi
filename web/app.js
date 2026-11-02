@@ -3479,6 +3479,9 @@ export class App {
         if (checkUpdate) {
             this.checkForUpdate(scope);
         }
+        // Terminal protocol discovery: v2 clients refuse v1 servers
+        // instead of attaching to a protocol they cannot replay.
+        this.tabManager?.onServerVersion?.(data);
     }
 
     async loadVersion(scope) {

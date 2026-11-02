@@ -71,18 +71,23 @@ class FakeWebSocket {
                       : {}),
               }
             : undefined;
+        const epoch = hdr.epoch ?? 0;
+        const head = hdr.head ?? 0;
         const frame = TerminalServerFrame.encode(
             TerminalServerFrame.fromPartial({
                 payload: {
                     $case: 'attach',
                     value: {
-                        epoch: BigInt(hdr.epoch ?? 0),
+                        epoch: BigInt(epoch),
                         oldest: BigInt(hdr.oldest ?? 0),
-                        head: BigInt(hdr.head ?? 0),
+                        head: BigInt(head),
                         ...(ckpt ? { checkpoint: ckpt } : {}),
                         ...(hdr.replay_from !== undefined
                             ? { replayFrom: BigInt(hdr.replay_from) }
                             : {}),
+                        initialCols: hdr.initialCols ?? 80,
+                        initialRows: hdr.initialRows ?? 24,
+                        eventCursor: hdr.eventCursor ?? `v1.${epoch}.${head}.0`,
                     },
                 },
             }),
@@ -189,7 +194,17 @@ function stubTerminalGlobal() {
 function recordingResponse(text, start, end) {
     const bytes = new TextEncoder().encode(text);
     const json = new TextEncoder().encode(
-        JSON.stringify({ epoch: 7, start, end, resizes: [] }),
+        JSON.stringify({
+            epoch: 7,
+            start,
+            end,
+            through: end,
+            through_event_cursor: `v1.7.${end}.0`,
+            event_cursor: `v1.7.${end}.0`,
+            resizes: [],
+            initial_cols: 80,
+            initial_rows: 24,
+        }),
     );
     const buf = new Uint8Array(4 + json.byteLength + bytes.byteLength);
     const view = new DataView(buf.buffer);
@@ -222,7 +237,7 @@ describe('Terminal History Preservation', () => {
 
         tm.createTab('p-hist-1', 's1', 'T', 'bash', '', '', false);
         const tab = tm.tabs.get('p-hist-1');
-        tab.ws.ws.emitAttachHead({ epoch: 12, oldest: 0, head: 5000 });
+        tab.ws.ws.emitAttachHead({ epoch: 12, oldest: 0, head: 0 });
         tab.serializeAddon = fakeAddon;
         tab.paneEpoch = 12;
         tab.drainedSeq = 5000;

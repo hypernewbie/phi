@@ -60,6 +60,16 @@ export class ReplayWire {
               }
             : undefined;
         const replayFrom = big(info.replay_from);
+        // v2 attach carries the replay baseline and durability flags. The
+        // checkpoint field stays accepted but ignored: the client never
+        // serves it.
+        const initialCols = info.initialCols ?? 80;
+        const initialRows = info.initialRows ?? 24;
+        const eventCursor =
+            info.eventCursor ??
+            (info.head !== undefined && info.epoch !== undefined
+                ? `v1.${info.epoch}.${info.head}.0`
+                : undefined);
         const frame = TerminalServerFrame.encode(
             TerminalServerFrame.fromPartial({
                 payload: {
@@ -70,6 +80,15 @@ export class ReplayWire {
                         ...(head !== undefined ? { head } : {}),
                         ...(ckpt ? { checkpoint: ckpt } : {}),
                         ...(replayFrom !== undefined ? { replayFrom } : {}),
+                        initialCols,
+                        initialRows,
+                        ...(eventCursor !== undefined ? { eventCursor } : {}),
+                        ...(info.historyIncomplete !== undefined
+                            ? { historyIncomplete: info.historyIncomplete }
+                            : {}),
+                        ...(info.ephemeral !== undefined
+                            ? { ephemeral: info.ephemeral }
+                            : {}),
                     },
                 },
             }),
@@ -98,8 +117,23 @@ export class ReplayWire {
 }
 
 export function recordingEnvelope(bytes, start, end, extra = {}) {
+    const epoch = extra.epoch ?? 7;
+    const eventCursor =
+        extra.event_cursor ??
+        `v1.${epoch}.${end}.${extra.resizes?.length ?? 0}`;
     const json = encode(
-        JSON.stringify({ epoch: 7, start, end, resizes: [], ...extra }),
+        JSON.stringify({
+            epoch,
+            start,
+            end,
+            through: extra.through ?? end,
+            through_event_cursor: extra.through_event_cursor ?? eventCursor,
+            event_cursor: eventCursor,
+            resizes: [],
+            initial_cols: 80,
+            initial_rows: 24,
+            ...extra,
+        }),
     );
     const body = new Uint8Array(4 + json.length + bytes.length);
     new DataView(body.buffer).setUint32(0, json.length);
@@ -144,18 +178,37 @@ export function replayHarness(source, fault = null) {
     const fetcher = vi.fn(async (url) => {
         const query = new URL(url, 'http://localhost').searchParams;
         const from = Number(query.get('from'));
-        const to = Number(query.get('through'));
+        const through = query.get('through');
+        const to = through === 'latest' ? source.length : Number(through);
+        const epoch = Number(query.get('epoch') ?? 7);
         requests.push({ from, to, url: String(url) });
-        const result = fault?.({ from, to, attempt: requests.length });
+        const result = fault?.({
+            from,
+            to,
+            attempt: requests.length,
+            throughCursor: query.get('through_event_cursor'),
+            afterCursor: query.get('after_event_cursor'),
+        });
         if (result !== undefined && result !== null) return result;
-        return recordingEnvelope(source.slice(from, to), from, to);
+        const end = Math.min(to, from + (2 << 20));
+        return recordingEnvelope(source.slice(from, end), from, end, {
+            epoch,
+            through: to,
+            through_event_cursor: `v1.${epoch}.${to}.0`,
+        });
     });
     vi.stubGlobal('fetch', fetcher);
     const socket = () => {
         const pty = new PTYWebSocket(
             tab.paneId,
             (text) => manager._paneData(tab, text),
-            null,
+            (control) => {
+                if (control.type === 'terminal-geometry') {
+                    const task = manager._adoptLiveGeometry(tab, control, pty);
+                    tasks.push(task);
+                    return task;
+                }
+            },
             null,
             null,
             {
@@ -175,6 +228,7 @@ export function replayHarness(source, fault = null) {
         return pty;
     };
     const pty = socket();
+    manager.tabs.set(tab.paneId, tab);
     return {
         manager,
         term,

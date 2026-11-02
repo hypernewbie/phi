@@ -16,12 +16,11 @@ function manager() {
     return Object.assign(Object.create(TabManager.prototype), {});
 }
 
-function tab({ viewportY = 675, baseY = 675, browsing = false } = {}) {
+function tab({ viewportY = 675, baseY = 675 } = {}) {
     const calls = [];
     return {
         calls,
         tab: {
-            _historyBrowsing: browsing,
             term: {
                 buffer: { active: { viewportY, baseY } },
                 scrollToTop: () => calls.push('top'),
@@ -52,16 +51,6 @@ describe('_resyncViewportScroll', () => {
         const empty = tab({ viewportY: 0, baseY: 0 });
         manager()._resyncViewportScroll(empty.tab);
         expect(empty.calls).toEqual([]);
-    });
-
-    it('resyncs historical views and restores their row', () => {
-        const { calls, tab: t } = tab({
-            viewportY: 23,
-            baseY: 675,
-            browsing: true,
-        });
-        manager()._resyncViewportScroll(t);
-        expect(calls).toEqual(['top', 'bottom', 'line:23']);
     });
 
     it('is a no-op for a missing or closed terminal', () => {

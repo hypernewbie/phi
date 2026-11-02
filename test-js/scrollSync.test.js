@@ -418,14 +418,14 @@ describe('terminal paste throw paths keep one recovery copy', () => {
         vi.spyOn(tab.ws, 'sendInput').mockReturnValue(false);
         helperOf(tab).dispatchEvent(pasteEvent('FIRST_FAIL'));
         expect(tab.pasteRecovery).toBe('unconfirmed');
-        tab._resyncNeeded = true;
+        tab.ws.ws.readyState = 3;
         helperOf(tab).dispatchEvent(pasteEvent('SECOND_HELD'));
         expect(tab.pasteRecovery).toBe('unconfirmed');
         expect(tab.__tm.inputTextArea.value).toBe(
             'seeded draftFIRST_FAILSECOND_HELD',
         );
         expect(tab._inputRestriction).toBe(
-            'Paste held until live output is resynced.',
+            'Paste preserved; delivery unconfirmed. Check the terminal before sending.',
         );
     });
 });
@@ -434,42 +434,36 @@ describe('terminal paste refusal sends zero bytes and holds one copy', () => {
     function helperOf(tab) {
         return tab.termContainer.querySelector('.xterm-helper-textarea');
     }
-    it('holds a frozen single-line paste in the draft', () => {
+    it('holds a single-line paste in the draft while the socket is down', () => {
         const tab = mountPasteTab();
-        tab._resyncNeeded = true;
+        tab.ws.ws.readyState = 3;
         const tm = tab.__tm;
-        const resync = vi.spyOn(tm, '_resyncRetainedView');
         const send = vi.spyOn(tab.ws, 'sendInput');
         helperOf(tab).dispatchEvent(pasteEvent('FROZEN_LINE'));
         expect(send).not.toHaveBeenCalled();
         expect(tab.term.paste).not.toHaveBeenCalled();
-        expect(resync).not.toHaveBeenCalled();
         expect(tm.inputTextArea.value).toBe('seeded draftFROZEN_LINE');
         expect(tab.draft).toBe('seeded draftFROZEN_LINE');
         expect(tab.pasteRecovery).toBe('not_sent');
-        expect(tab._inputRestriction).toBe(
-            'Paste held until live output is resynced.',
-        );
+        expect(tab._inputRestriction).toBe('Paste saved locally, not sent.');
         expect(tab._terminalPaste).toBeFalsy();
     });
     it('normalizes CRLF/CR to newlines in the held copy', () => {
         const tab = mountPasteTab();
-        tab._resyncNeeded = true;
+        tab.ws.ws.readyState = 3;
         const send = vi.spyOn(tab.ws, 'sendInput');
         helperOf(tab).dispatchEvent(pasteEvent('aa\r\nbb\rcc'));
         expect(send).not.toHaveBeenCalled();
         expect(tab.__tm.inputTextArea.value).toBe('seeded draftaa\nbb\ncc');
         expect(tab.pasteRecovery).toBe('not_sent');
     });
-    it('holds a frozen newline-only paste without requesting resync', () => {
+    it('holds a newline-only paste while the socket is down', () => {
         const tab = mountPasteTab();
-        tab._resyncNeeded = true;
-        const resync = vi.spyOn(tab.__tm, '_resyncRetainedView');
+        tab.ws.ws.readyState = 3;
         const send = vi.spyOn(tab.ws, 'sendInput');
         helperOf(tab).dispatchEvent(pasteEvent('\n'));
         expect(send).not.toHaveBeenCalled();
         expect(tab.term.paste).not.toHaveBeenCalled();
-        expect(resync).not.toHaveBeenCalled();
         expect(tab.__tm.inputTextArea.value).toBe('seeded draft\n');
         expect(tab.pasteRecovery).toBe('not_sent');
     });
@@ -515,7 +509,7 @@ describe('terminal paste refusal sends zero bytes and holds one copy', () => {
             source: 'paste',
         };
         tab.__tm.stagedAttachments = [att];
-        tab._resyncNeeded = true;
+        tab.ws.ws.readyState = 3;
         helperOf(tab).dispatchEvent(pasteEvent('HELD'));
         expect(tab.draft).toBe('seeded draftHELD');
         expect(tab.draftAttachments).toEqual([att]);
@@ -551,7 +545,7 @@ describe('terminal paste recovery stays pane-owned', () => {
         const tab = mountPasteTab();
         const sib = addSibling(tab.__tm);
         sib.draft = 'sibling draft';
-        tab._resyncNeeded = true;
+        tab.ws.ws.readyState = 3;
         helperOf(tab).dispatchEvent(pasteEvent('ONLY_P1'));
         expect(tab.draft).toBe('seeded draftONLY_P1');
         expect(sib.draft).toBe('sibling draft');
@@ -564,7 +558,7 @@ describe('terminal paste recovery stays pane-owned', () => {
         addSibling(tm);
         tm.activePaneId = 'p2';
         tab.draft = 'parked draft';
-        tab._resyncNeeded = true;
+        tab.ws.ws.readyState = 3;
         helperOf(tab).dispatchEvent(pasteEvent('INACTIVE_HELD'));
         expect(tm.inputTextArea.value).toBe('seeded draft');
         expect(tab.draft).toBe('parked draftINACTIVE_HELD');
@@ -577,14 +571,12 @@ describe('terminal paste recovery stays pane-owned', () => {
         document.body.appendChild(line);
         tm.activePaneId = 'p1';
         tm._renderInputRestriction();
-        expect(line.textContent).toBe(
-            'Paste held until live output is resynced.',
-        );
+        expect(line.textContent).toBe('Paste saved locally, not sent.');
         expect(line.classList.contains('hidden')).toBe(false);
     });
     it('does not save under a pane ID now owned by a replacement', () => {
         const tab = mountPasteTab();
-        tab._resyncNeeded = true;
+        tab.ws.ws.readyState = 3;
         tab.__tm.tabs.set('p1', {
             paneId: 'p1',
             draft: 'replacement',
@@ -603,7 +595,7 @@ describe('terminal paste recovery stays pane-owned', () => {
     it('restores text, status, and staged mode on reload, even for direct-mode coders', () => {
         const tab = mountPasteTab('bash');
         expect(tab.directMode).toBe(true);
-        tab._resyncNeeded = true;
+        tab.ws.ws.readyState = 3;
         helperOf(tab).dispatchEvent(pasteEvent('RELOAD_ME'));
         expect(tab.directMode).toBe(false);
         const re = mountRealTab({ coder: 'bash' });
@@ -612,59 +604,37 @@ describe('terminal paste recovery stays pane-owned', () => {
         expect(re.directMode).toBe(false);
         expect(re._inputRestriction).toBe('Paste saved locally, not sent.');
     });
-    it('keeps the recovery warning after resync until the text is sent or cleared', () => {
+    it('keeps the recovery warning after the socket heals until the text is sent or cleared', () => {
         const tab = mountPasteTab();
-        tab._resyncNeeded = true;
+        tab.ws.ws.readyState = 3;
         helperOf(tab).dispatchEvent(pasteEvent('HELD_THROUGH_RESYNC'));
-        tab.__tm._updateResyncAffordance = vi.fn();
-        tab.__tm._clearResyncNeeded(tab);
-        expect(tab._resyncNeeded).toBe(false);
+        tab.ws.ws.readyState = 1;
         expect(tab.pasteRecovery).toBe('not_sent');
         expect(tab._inputRestriction).toBe('Paste saved locally, not sent.');
     });
     it('clears the recovery state when the held text is explicitly cleared', () => {
         const tab = mountPasteTab();
         const tm = tab.__tm;
-        tab._resyncNeeded = true;
+        tab.ws.ws.readyState = 3;
         helperOf(tab).dispatchEvent(pasteEvent('TEMP_HELD'));
         expect(tab.pasteRecovery).toBe('not_sent');
-        tab._resyncNeeded = false;
+        tab.ws.ws.readyState = 1;
         tm.inputTextArea.value = '';
         tm.saveActiveDraft();
         expect(tab.pasteRecovery).toBeUndefined();
         expect(tab._inputRestriction).toBe('');
         expect(localStorage.getItem('phi_tab_draft_p1')).toBeNull();
     });
-    it('keeps the frozen restriction when the draft is cleared while still frozen', () => {
-        const tab = mountPasteTab();
-        const tm = tab.__tm;
-        tab._resyncNeeded = true;
-        helperOf(tab).dispatchEvent(pasteEvent('STILL_FROZEN'));
-        tm.inputTextArea.value = '';
-        tm.saveActiveDraft();
-        expect(tab.pasteRecovery).toBeUndefined();
-        expect(tab._inputRestriction).toBe(
-            'Paste held until live output is resynced.',
-        );
-        tm._updateResyncAffordance = vi.fn();
-        tm._clearResyncNeeded(tab);
-        expect(tab._inputRestriction).toBe('');
-    });
     it('warns session-only on oversized recovery and clears after a later successful save', () => {
         const tab = mountPasteTab();
         const tm = tab.__tm;
-        tab._resyncNeeded = true;
+        tab.ws.ws.readyState = 3;
         helperOf(tab).dispatchEvent(pasteEvent('y'.repeat(1024 * 1024)));
         expect(tab.pasteRecovery).toBe('not_sent');
         expect(tm.inputTextArea.value).toHaveLength(
             'seeded draft'.length + 1024 * 1024,
         );
         expect(tab._pasteRecoveryUnsaved).toBe(true);
-        expect(tab._inputRestriction).toBe(
-            'Paste held until live output is resynced. Kept for this session only; copy it before reloading.',
-        );
-        tm._updateResyncAffordance = vi.fn();
-        tm._clearResyncNeeded(tab);
         expect(tab._inputRestriction).toBe(
             'Paste saved locally, not sent. Kept for this session only; copy it before reloading.',
         );
@@ -975,133 +945,6 @@ describe('DOM scroll listener installed by createTab (drives the real handler)',
     });
 });
 
-describe('manual older-history button', () => {
-    function historyTab(viewportY = 0) {
-        const tab = mountRealTab();
-        tab.ws.mode = 'hot';
-        tab._historyOmitted = true;
-        tab.term.buffer.active.viewportY = viewportY;
-        tab.term.emitScroll();
-        return tab;
-    }
-
-    it('appears within one screen of the top, not for a tiny scroll from the bottom', () => {
-        const load = vi
-            .spyOn(TabManager.prototype, '_loadColdHistory')
-            .mockResolvedValue();
-        const tab = historyTab(99);
-        expect(tab.loadHistoryBtn.classList.contains('hidden')).toBe(true);
-        tab.term.buffer.active.viewportY = tab.term.rows;
-        tab.term.emitScroll();
-        expect(tab.loadHistoryBtn.classList.contains('hidden')).toBe(false);
-        expect(tab.loadHistoryBtn.disabled).toBe(false);
-        expect(load).not.toHaveBeenCalled();
-        tab.term.buffer.active.viewportY = tab.term.rows + 1;
-        tab.term.emitScroll();
-        expect(tab.loadHistoryBtn.classList.contains('hidden')).toBe(true);
-    });
-
-    it('wheel, touch, scrollbar, keyboard, and programmatic scrolls never request an older book', () => {
-        const load = vi
-            .spyOn(TabManager.prototype, '_loadColdHistory')
-            .mockResolvedValue();
-        const tab = historyTab();
-        tab.termContainer.dispatchEvent(
-            new WheelEvent('wheel', { deltaY: -120, bubbles: true }),
-        );
-        for (const [type, clientY] of [
-            ['touchstart', 100],
-            ['touchmove', 200],
-        ]) {
-            const event = new Event(type, { bubbles: true });
-            Object.assign(event, { touches: [{ clientY }] });
-            tab.termContainer.dispatchEvent(event);
-        }
-        tab.term.element
-            .querySelector('.xterm-viewport')
-            .dispatchEvent(new Event('scroll'));
-        tab.termContainer.dispatchEvent(
-            new KeyboardEvent('keydown', { key: 'PageUp', bubbles: true }),
-        );
-        tab.term.emitScroll();
-        expect(tab.loadHistoryBtn.classList.contains('hidden')).toBe(false);
-        expect(load).not.toHaveBeenCalled();
-        tab.loadHistoryBtn.click();
-        expect(load).toHaveBeenCalledExactlyOnceWith(tab);
-    });
-
-    it.each([
-        ['no omitted history', { _historyOmitted: false }],
-        ['dead pane', { isDead: true }],
-        ['closing pane', { finalizing: true }],
-    ])('hides for %s', (_reason, state) => {
-        const tab = historyTab();
-        Object.assign(tab, state);
-        tab.term.emitScroll();
-        expect(tab.loadHistoryBtn.classList.contains('hidden')).toBe(true);
-        expect(tab.loadHistoryBtn.disabled).toBe(true);
-        expect(tab.loadHistoryBtn.tabIndex).toBe(-1);
-    });
-
-    it('does not offer archive loading inside a live alternate-screen application', () => {
-        const tab = historyTab();
-        tab.term.buffer.active.type = 'alternate';
-        tab.term.emitScroll();
-        expect(tab.loadHistoryBtn.classList.contains('hidden')).toBe(true);
-        tab._historyBrowsing = true;
-        tab.term.emitScroll();
-        expect(tab.loadHistoryBtn.classList.contains('hidden')).toBe(false);
-    });
-
-    it('shows a disabled busy state during a request, then lets the user retry', () => {
-        const load = vi
-            .spyOn(TabManager.prototype, '_loadColdHistory')
-            .mockResolvedValue();
-        const tab = historyTab();
-        tab._historyLoading = true;
-        tab.term.emitScroll();
-        expect(tab.loadHistoryBtn.disabled).toBe(true);
-        expect(tab.loadHistoryBtn.getAttribute('aria-busy')).toBe('true');
-        tab.loadHistoryBtn.click();
-        expect(load).not.toHaveBeenCalled();
-        tab._historyLoading = false;
-        tab.term.emitScroll();
-        expect(tab.loadHistoryBtn.disabled).toBe(false);
-        expect(tab.loadHistoryBtn.getAttribute('aria-busy')).toBe('false');
-        tab.loadHistoryBtn.click();
-        expect(load).toHaveBeenCalledExactlyOnceWith(tab);
-    });
-
-    it('keeps terminal/input focus on pointer activation', () => {
-        const tab = historyTab();
-        const input = document.createElement('textarea');
-        document.body.appendChild(input);
-        input.focus();
-        const event = new MouseEvent('mousedown', {
-            bubbles: true,
-            cancelable: true,
-        });
-        tab.loadHistoryBtn.dispatchEvent(event);
-        expect(event.defaultPrevented).toBe(true);
-        expect(document.activeElement).toBe(input);
-    });
-
-    it('updates visibility after a write is parsed, including a checkpoint with no local scrollback', () => {
-        const tab = historyTab(99);
-        let parsed;
-        tab.term.nativeWrite.mockImplementation((_data, cb) => {
-            parsed = cb;
-        });
-        const callback = vi.fn();
-        tab.term.write('checkpoint', callback);
-        tab.term.buffer.active.viewportY = 0;
-        tab.term.buffer.active.baseY = 0;
-        parsed();
-        expect(callback).toHaveBeenCalledOnce();
-        expect(tab.loadHistoryBtn.classList.contains('hidden')).toBe(false);
-    });
-});
-
 // clientHeight/scrollHeight are getter-only in jsdom (no layout engine), so
 // they need defineProperty; scrollTop is a plain writable property.
 function setViewportScrollMetrics(
@@ -1356,11 +1199,11 @@ describe('alternate-screen exit resumes follow only for the app', () => {
         expect(tab.userFollowBottom).toBe(false);
     });
 
-    it('a history load in progress leaves the view to the loader', () => {
+    it('a replay parse in progress leaves the view to the loader', () => {
         const tab = mountRealTab({ coder: 'bash' });
         const tm = tab.__tm;
         tm._spamScrollToBottom = vi.fn();
-        for (const flag of ['_historyParsing', '_historyBrowsing']) {
+        for (const flag of ['_historyParsing']) {
             tab.userFollowBottom = false;
             tab[flag] = true;
             tab.term.emitBufferChange('normal');
@@ -1391,18 +1234,5 @@ describe('replay provenance for OSC 52', () => {
         tab.term.emitOsc(52, clip('archived copy'));
         tab._historyParsing = false;
         expect(tm._agentClipboardCopy).not.toHaveBeenCalled();
-    });
-
-    it('a copy parsed against a browsed window is dropped', () => {
-        const tab = mountRealTab({ coder: 'bash' });
-        const tm = tab.__tm;
-        tm._agentClipboardCopy = vi.fn();
-        tab._historyBrowsing = true;
-        tab.term.emitOsc(52, clip('archived copy'));
-        expect(tm._agentClipboardCopy).not.toHaveBeenCalled();
-        // Leaving the archive restores genuine live copies.
-        tab._historyBrowsing = false;
-        tab.term.emitOsc(52, clip('live again'));
-        expect(tm._agentClipboardCopy).toHaveBeenCalledWith('live again');
     });
 });

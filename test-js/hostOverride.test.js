@@ -40,7 +40,7 @@ describe('socket URLs ignore hostname_override', () => {
         expect(pty.url).toBe(
             `${window.location.origin}/ws/pane/p1?state=ansi-v1`,
         );
-        expect(seen[0][1]).toBe('phi.terminal.protobuf.v1');
+        expect(seen[0][1]).toBe('phi.terminal.protobuf.v2');
         pty.ws?.close?.();
     });
     it('pane socket dials the page origin with the label unset', () => {

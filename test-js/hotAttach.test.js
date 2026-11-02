@@ -9,9 +9,10 @@ import {
 } from '../web/proto/terminal.js';
 
 // Hot terminal client contract (see temp/SUPERHIGHWAY.md). These tests pin the
-// e2e behavior: fresh attach with checkpoint queues the snapshot and a
-// bounded delta BEFORE open, reconnects resume from the drain watermark
-// without resetting, and gap repairs flush in order.
+// e2e behavior: fresh attach replays the raw prefix BEFORE open, reconnects
+// resume from the drain watermark without resetting, and gap repairs flush
+// in order. No snapshot is ever served: geometry rides the attach and the
+// replay pages.
 
 setupDomHarness();
 
@@ -71,18 +72,30 @@ class FakeWebSocket {
                       : {}),
               }
             : undefined;
+        const epoch = hdr.epoch ?? 0;
+        const head = hdr.head ?? 0;
         this.emitFrame(
             TerminalServerFrame.encode(
                 TerminalServerFrame.fromPartial({
                     payload: {
                         $case: 'attach',
                         value: {
-                            epoch: BigInt(hdr.epoch ?? 0),
+                            epoch: BigInt(epoch),
                             oldest: BigInt(hdr.oldest ?? 0),
-                            head: BigInt(hdr.head ?? 0),
+                            head: BigInt(head),
                             ...(ckpt ? { checkpoint: ckpt } : {}),
                             ...(hdr.replay_from !== undefined
                                 ? { replayFrom: BigInt(hdr.replay_from) }
+                                : {}),
+                            initialCols: hdr.initialCols ?? 80,
+                            initialRows: hdr.initialRows ?? 24,
+                            eventCursor:
+                                hdr.eventCursor ?? `v1.${epoch}.${head}.0`,
+                            ...(hdr.historyIncomplete !== undefined
+                                ? { historyIncomplete: hdr.historyIncomplete }
+                                : {}),
+                            ...(hdr.ephemeral !== undefined
+                                ? { ephemeral: hdr.ephemeral }
                                 : {}),
                         },
                     },
@@ -157,7 +170,17 @@ async function flushBootstrap(tab) {
 function recordingResponse(text, start, end, epoch = 7) {
     const bytes = new TextEncoder().encode(text.padEnd(end - start, ' '));
     const json = new TextEncoder().encode(
-        JSON.stringify({ epoch, start, end, resizes: [] }),
+        JSON.stringify({
+            epoch,
+            start,
+            end,
+            event_cursor: `v1.${epoch}.${end}.0`,
+            through: end,
+            through_event_cursor: `v1.${epoch}.${end}.0`,
+            resizes: [],
+            initial_cols: 80,
+            initial_rows: 24,
+        }),
     );
     const buf = new Uint8Array(4 + json.byteLength + bytes.byteLength);
     const view = new DataView(buf.buffer);
@@ -190,6 +213,11 @@ describe('PTYWebSocket hot framing', () => {
             oldest: 0,
             head: 10,
             ckpt: null,
+            initialCols: 80,
+            initialRows: 24,
+            eventCursor: 'v1.7.10.0',
+            historyIncomplete: false,
+            ephemeral: false,
         });
 
         // Held: not delivered until release.
@@ -205,7 +233,7 @@ describe('PTYWebSocket hot framing', () => {
         expect(data).toHaveBeenCalledWith('!');
     });
 
-    it('ATTACH_HEAD carries the opaque checkpoint', () => {
+    it('ATTACH_HEAD carries the replay baseline and durability flags', () => {
         const onAttachHead = vi.fn();
         const pty = new PTYWebSocket('p', () => {}, null, null, null, {
             onAttachHead,
@@ -216,14 +244,23 @@ describe('PTYWebSocket hot framing', () => {
                 epoch: 7,
                 oldest: 0,
                 head: 100,
+                initialCols: 120,
+                initialRows: 40,
+                eventCursor: 'v1.7.100.3',
+                historyIncomplete: true,
                 ckpt: { through: 60, cols: 120, rows: 40, len: ansi.length },
             },
             ansi,
         );
         const info = onAttachHead.mock.calls[0][0];
+        expect(info.initialCols).toBe(120);
+        expect(info.initialRows).toBe(40);
+        expect(info.eventCursor).toBe('v1.7.100.3');
+        expect(info.historyIncomplete).toBe(true);
+        expect(info.ephemeral).toBe(false);
+        // The snapshot still parses for tolerance, but the client never
+        // serves it: recovery always replays the raw prefix.
         expect(info.ckpt.through).toBe(60);
-        expect(info.ckpt.cols).toBe(120);
-        expect(info.ckpt.ansi).toBe('\x1b[2Jscreen');
     });
 
     it('reports gaps, patches them, and flushes held frames in order', async () => {
@@ -253,11 +290,11 @@ describe('PTYWebSocket hot framing', () => {
         const pty = new PTYWebSocket('p', data, null, null, null, { onGap });
         pty.ws.emitAttachHead({ epoch: 7, oldest: 0, head: 100 });
         pty.ws.emitHot(100, 'aa'); // held (pre-release)
-        pty.ws.emitHot(110, 'bb'); // held + onGap(100, 110)
-        expect(onGap).toHaveBeenCalledWith(100, 110);
+        pty.ws.emitHot(110, 'bb'); // held; no gap decision before release
+        expect(onGap).not.toHaveBeenCalled();
         pty.release();
         expect(data.mock.calls.map((c) => c[0])).toEqual(['aa']);
-        expect(onGap).toHaveBeenLastCalledWith(102, 110);
+        expect(onGap).toHaveBeenCalledExactlyOnceWith(102, 110);
         expect(pty.liveSeq).toBe(102);
         // Host patches the remainder; the held tail flushes in order.
         pty.applyGapPatch(new TextEncoder().encode('01234567'));
@@ -426,10 +463,11 @@ describe('PTYWebSocket hot framing', () => {
 });
 
 describe('TabManager hot attach bootstrap', () => {
-    it('holds live until the delta enqueues: checkpoint, delta, live in order', async () => {
-        // Busy-pane attach: live frames arriving during the delta fetch
+    it('holds live until the replay enqueues: replay, live in order', async () => {
+        // Busy-pane attach: live frames arriving during the replay fetch
         // must not jump ahead of it, or older bytes land below newer
-        // ones and watermarks regress.
+        // ones and watermarks regress. A served snapshot, if any, is
+        // ignored: recovery always replays the raw prefix.
         stubTerminalGlobal();
         const tm = makeTm();
         let resolveFetch;
@@ -452,16 +490,16 @@ describe('TabManager hot attach bootstrap', () => {
             },
             ansi,
         );
-        // Live arrives while the delta fetch is still in flight: held.
+        // Live arrives while the replay fetch is still in flight: held.
         tab.ws.ws.emitHot(100, 'live!');
         await new Promise((r) => setTimeout(r, 0));
-        expect(tab.term.writes).toEqual(['CHECKPOINT-ANSI']);
-        // Delta resolves: enqueued before the held live frames release.
-        resolveFetch(recordingResponse('delta-bytes', 60, 100));
+        expect(tab.term.writes).toEqual([]);
+        // Replay resolves: enqueued before the held live frames release.
+        // The snapshot never paints.
+        resolveFetch(recordingResponse('replay-bytes', 0, 100));
         await flushBootstrap(tab);
         expect(tab.term.writes).toEqual([
-            'CHECKPOINT-ANSI',
-            'delta-bytes'.padEnd(40, ' '),
+            'replay-bytes'.padEnd(100, ' '),
             'live!',
         ]);
         expect(tab.queuedSeq).toBe(105);
@@ -469,8 +507,8 @@ describe('TabManager hot attach bootstrap', () => {
 
     it('gap during the bootstrap window heals in order after release', async () => {
         // The exact tablet scenario: busy attach (live held for the
-        // delta) plus a backpressure drop inside the held frames.
-        // Expected stream: ckpt, delta [80,100), live [100,102),
+        // replay) plus a backpressure drop inside the held frames.
+        // Expected stream: replay [0,100), live [100,102),
         // patch [102,110), held tail [110,112) — fully contiguous,
         // zero loss, zero duplication.
         stubTerminalGlobal();
@@ -479,13 +517,12 @@ describe('TabManager hot attach bootstrap', () => {
         vi.stubGlobal(
             'fetch',
             vi.fn().mockImplementation((url) => {
-                const m = String(url).match(/from=(\d+).*through=(\d+)/);
+                const m = String(url).match(/from=(\d+).*through=([^&]+)/);
                 const from = Number(m[1]);
-                const through = Number(m[2]);
-                seenRanges.push([from, through]);
-                if (from === 80)
+                seenRanges.push([from, m[2]]);
+                if (from === 0)
                     return gateDelta.then(() =>
-                        recordingResponse('D'.repeat(20), 80, 100),
+                        recordingResponse('D'.repeat(100), 0, 100),
                     );
                 return Promise.resolve(
                     recordingResponse('P'.repeat(8), 102, 110),
@@ -498,20 +535,11 @@ describe('TabManager hot attach bootstrap', () => {
         });
         tm.createTab('p11', 's11', 'T', 'bash', '', '', false);
         const tab = tm.tabs.get('p11');
-        const ansi = new TextEncoder().encode('CHECKPOINT-ANSI');
-        tab.ws.ws.emitAttachHead(
-            {
-                epoch: 7,
-                oldest: 0,
-                head: 100,
-                ckpt: { through: 80, cols: 120, rows: 40, len: ansi.length },
-            },
-            ansi,
-        );
+        tab.ws.ws.emitAttachHead({ epoch: 7, oldest: 0, head: 100 });
         tab.ws.ws.emitHot(100, 'aa');
         tab.ws.ws.emitHot(110, 'bb'); // dropped [102,110) behind it
         await new Promise((r) => setTimeout(r, 0));
-        expect(tab.term.writes).toEqual(['CHECKPOINT-ANSI']);
+        expect(tab.term.writes).toEqual([]);
         resolveDelta();
         await flushBootstrap(tab);
         // The gap-patch tail crosses fetch + message-callback chains;
@@ -520,7 +548,7 @@ describe('TabManager hot attach bootstrap', () => {
         {
             const deadline = Date.now() + 5000;
             for (;;) {
-                if (tab.term.writes.length === 5) break;
+                if (tab.term.writes.length === 4) break;
                 if (Date.now() > deadline) {
                     throw new Error(
                         `gap tail never settled (writes=${JSON.stringify(tab.term.writes)})`,
@@ -529,13 +557,13 @@ describe('TabManager hot attach bootstrap', () => {
                 await new Promise((r) => setTimeout(r, 10));
             }
         }
-        expect(seenRanges).toContainEqual([80, 100]);
-        expect(seenRanges).toContainEqual([102, 110]);
+        expect(seenRanges).toContainEqual([0, '100']);
+        // Gap repair drains without a fence: through=latest, trimmed.
+        expect(seenRanges).toContainEqual([102, 'latest']);
         // The superseded [100,110) gate-waiter dissolves: never fetched.
-        expect(seenRanges).not.toContainEqual([100, 110]);
+        expect(seenRanges).not.toContainEqual([100, 'latest']);
         expect(tab.term.writes).toEqual([
-            'CHECKPOINT-ANSI',
-            'D'.repeat(20),
+            'D'.repeat(100),
             'aa',
             'P'.repeat(8),
             'bb',
@@ -573,43 +601,36 @@ describe('TabManager hot attach bootstrap', () => {
         expect(releaseSpy).not.toHaveBeenCalled();
     });
 
-    it('writes checkpoint + delta before open, then live continues', async () => {
+    it('writes the replay before open, then live continues', async () => {
         stubTerminalGlobal();
         const tm = makeTm();
         const fetchMock = vi
             .fn()
-            .mockResolvedValue(recordingResponse('delta-bytes', 60, 100));
+            .mockResolvedValue(recordingResponse('replay-bytes', 0, 100));
         vi.stubGlobal('fetch', fetchMock);
 
         tm.createTab('p1', 's1', 'T', 'bash', '', '', false);
         const tab = tm.tabs.get('p1');
         expect(tab._termOpened).toBe(false);
 
-        const ansi = new TextEncoder().encode('CHECKPOINT-ANSI');
-        tab.ws.ws.emitAttachHead(
-            {
-                epoch: 7,
-                oldest: 0,
-                head: 100,
-                ckpt: { through: 60, cols: 120, rows: 40, len: ansi.length },
-            },
-            ansi,
-        );
+        tab.ws.ws.emitAttachHead({
+            epoch: 7,
+            oldest: 0,
+            head: 100,
+            initialCols: 120,
+            initialRows: 40,
+        });
         await flushBootstrap(tab);
 
-        // Terminal sized to the checkpoint before anything renders.
+        // Terminal sized to the recorded geometry before anything renders.
         expect(tab.term.cols).toBe(120);
-        // Order: checkpoint, then the fetched delta [60,100).
-        expect(tab.term.writes).toEqual([
-            'CHECKPOINT-ANSI',
-            'delta-bytes'.padEnd(40, ' '),
-        ]);
+        expect(tab.term.writes).toEqual(['replay-bytes'.padEnd(100, ' ')]);
         expect(tab.term.opened).toBe(true);
         expect(tab.drainedSeq).toBe(100);
 
         // Live frames continue in order after release.
         tab.ws.ws.emitHot(100, 'live!');
-        expect(tab.term.writes[2]).toBe('live!');
+        expect(tab.term.writes[1]).toBe('live!');
         expect(tab.queuedSeq).toBe(105);
     });
 
@@ -940,100 +961,5 @@ describe('a held live queue is bounded', () => {
 
         expect(close).toHaveBeenCalled();
         expect(data).not.toHaveBeenCalled();
-    });
-
-    it('discarding stores nothing and reports no gap', () => {
-        const data = vi.fn();
-        const onGap = vi.fn();
-        const pty = new PTYWebSocket('p', data, null, null, null, { onGap });
-        const ws = pty.ws;
-        ws.emitAttachHead({ epoch: 7, oldest: 0, head: 0 });
-        pty.discard();
-
-        // A skipped range would be a gap on a live parser; a retained view
-        // must absorb it without queuing, decoding, or asking for a patch.
-        ws.emitHot(4096, 'later');
-        ws.emitHot(4100, 'more');
-
-        expect(onGap).not.toHaveBeenCalled();
-        expect(data).not.toHaveBeenCalled();
-        expect(pty.held).toHaveLength(0);
-    });
-});
-
-// Slice 3d capture: a reset keeps the bytes it already received, so the
-// replay only has to cover the gap between the checkpoint and the fence.
-describe('a capture window resumes at a fixed fence', () => {
-    const open = () => {
-        const data = vi.fn();
-        const pty = new PTYWebSocket('p', data, null, null, null, {});
-        pty.ws.emitAttachHead({ epoch: 7, oldest: 0, head: 0 });
-        return { pty, ws: pty.ws, data };
-    };
-    const decode = (bytes) => new TextDecoder().decode(bytes);
-
-    it('returns the contiguous captured suffix from the fence', () => {
-        const { pty, ws } = open();
-        expect(pty.beginCapture(0)).toBe(true);
-        ws.emitHot(0, 'abc');
-        ws.emitHot(3, 'def');
-        expect(pty.receivedThrough).toBe(6);
-        const captured = pty.finishCapture(0);
-        expect(captured.from).toBe(0);
-        expect(captured.through).toBe(6);
-        expect(decode(captured.bytes)).toBe('abcdef');
-        expect(pty.discarding).toBe(false);
-    });
-
-    it('trims bytes the reset already covered and keeps the tail', () => {
-        const { pty, ws } = open();
-        pty.beginCapture(0);
-        ws.emitHot(0, 'abc');
-        ws.emitHot(3, 'def');
-        const captured = pty.finishCapture(3);
-        expect(captured.through).toBe(6);
-        expect(decode(captured.bytes)).toBe('def');
-    });
-
-    it('refuses a window with a hole instead of delivering a gap', () => {
-        const { pty, ws } = open();
-        pty.beginCapture(0);
-        ws.emitHot(0, 'abc');
-        ws.emitHot(10, 'later');
-        expect(pty.finishCapture(0)).toBe(null);
-        expect(pty.discarding).toBe(true);
-    });
-
-    it('abandons an overflowing window instead of growing without bound', () => {
-        const { pty, ws } = open();
-        pty.beginCapture(0);
-        const chunk = new Uint8Array(8 * 1024).fill(65);
-        let start = 0;
-        for (let i = 0; i < 300; i++) {
-            ws.emitHot(start, chunk);
-            start += chunk.byteLength;
-        }
-        expect(pty.capturedBytes).toBe(0);
-        expect(pty.finishCapture(0)).toBe(null);
-        expect(pty.discarding).toBe(true);
-    });
-
-    it('commits an empty suffix when nothing arrived beyond the fence', () => {
-        const { pty, ws, data } = open();
-        pty.beginCapture(0);
-        const captured = pty.finishCapture(0);
-        expect(captured.through).toBe(0);
-        expect(captured.bytes.byteLength).toBe(0);
-        pty.release();
-        ws.emitHot(0, 'after');
-        expect(data).toHaveBeenCalledTimes(1);
-    });
-
-    it('abortCapture drops the window and returns to discard', () => {
-        const { pty } = open();
-        pty.beginCapture(0);
-        pty.abortCapture();
-        expect(pty.finishCapture(0)).toBe(null);
-        expect(pty.capturedBytes).toBe(0);
     });
 });

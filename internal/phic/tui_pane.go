@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"sync"
 	"time"
@@ -96,6 +97,7 @@ type paneActor struct {
 	events                             chan<- paneEvent
 	mu                                 sync.Mutex
 	frontier, head, epoch              uint64
+	replayOrdinal                      uint64
 	oldest                             uint64
 	epochSet                           bool
 	frame                              termemu.Frame
@@ -106,17 +108,14 @@ type paneActor struct {
 	dirty, exited, uncertainInput      bool
 	emuCols, emuRows                   int // parser-owner geometry, distinct from desired panel size
 	exitCode                           int
+	serverDraining                     bool            // parser owner; wait for readiness before reconnecting
+	historicalUntil                    *replayPosition // original cold fence survives partial replay failures
 	mouseButton, mouseMotion, mouseAny bool
 	connMu                             sync.Mutex
 	conn                               *websocket.Conn
 	outbox                             chan paneWrite
 	inbox                              chan paneInput
 	resizes                            chan paneInput // latest geometry, separate from input backlog
-	histories                          chan historyResult
-	history                            termemu.Terminal
-	historyThrough, historyGen         uint64
-	historyPending                     bool
-	historyCancel                      context.CancelFunc
 	historyOffset                      int
 	ctx                                context.Context
 	cancel                             context.CancelFunc
@@ -128,7 +127,7 @@ func newPaneActor(parent context.Context, api *apiClient, spec paneSpec, events 
 		return nil, fmt.Errorf("phic: pane geometry must be positive")
 	}
 	ctx, cancel := context.WithCancel(parent)
-	p := &paneActor{spec: spec, api: api, build: build, events: events, cols: spec.Cols, rows: spec.Rows, lastInteraction: time.Now(), ctx: ctx, cancel: cancel, done: make(chan struct{}), writerDone: make(chan struct{}), outbox: make(chan paneWrite, 256), inbox: make(chan paneInput, 128), resizes: make(chan paneInput, 1), histories: make(chan historyResult, 1)}
+	p := &paneActor{spec: spec, api: api, build: build, events: events, cols: spec.Cols, rows: spec.Rows, lastInteraction: time.Now(), ctx: ctx, cancel: cancel, done: make(chan struct{}), writerDone: make(chan struct{}), outbox: make(chan paneWrite, 256), inbox: make(chan paneInput, 128), resizes: make(chan paneInput, 1)}
 	go p.writeLoop()
 	go p.run()
 	return p, nil
@@ -366,7 +365,24 @@ func (p *paneActor) mouseOwned() bool {
 }
 
 func (p *paneActor) dial(ctx context.Context) (*websocket.Conn, wireAttach, error) {
-	u, err := mustWebsocketURL(p.api.base.String() + "/ws/pane/" + url.PathEscape(p.spec.Key.ID) + "?state=ghostty-ready-v1")
+	if p.serverDraining {
+		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, p.api.base.String()+"/readyz", nil)
+		if err != nil {
+			return nil, wireAttach{}, err
+		}
+		resp, err := p.api.http.Do(req)
+		if err != nil {
+			return nil, wireAttach{}, err
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, wireAttach{}, &apiError{Code: resp.StatusCode, Message: "server is restarting"}
+		}
+		p.serverDraining = false
+	}
+	u, err := mustWebsocketURL(p.api.base.String() + "/ws/pane/" + url.PathEscape(p.spec.Key.ID))
 	if err != nil {
 		return nil, wireAttach{}, err
 	}
@@ -440,12 +456,7 @@ func (p *paneActor) run() {
 		return
 	}
 	p.emu = emu
-	defer func() {
-		_ = p.emu.Close()
-		if p.history != nil {
-			_ = p.history.Close()
-		}
-	}() // Disposal stays on the parser owner.
+	defer func() { _ = p.emu.Close() }() // Disposal stays on the parser owner.
 	if err = p.attachAndRun(); err != nil && p.ctx.Err() == nil {
 		p.sendEvent(paneEvent{Key: p.spec.Key, Kind: paneError, Status: err.Error()})
 	}
@@ -505,76 +516,56 @@ func (p *paneActor) bootstrap(h wireAttach) error {
 	if exited {
 		return errPaneExited
 	}
-	cold := !attached
-	if attached && epoch != h.Header.GetEpoch() {
-		p.returnLive() // Historical views and in-flight pages belong to the old epoch.
-		cols, rows := p.geometry()
-		emu, err := p.newTerminal(cols, rows)
+	cold := !attached || epoch != h.Header.GetEpoch()
+	if attached && cold {
+		p.returnLive()
+		emu, err := p.newTerminal(int(h.Header.GetInitialCols()), int(h.Header.GetInitialRows()))
 		if err != nil {
 			return err
 		}
 		_ = p.emu.Close()
 		p.emu = emu
 		frontier = 0
-		cold = true
 		p.spec.Fresh = false
 		p.mu.Lock()
 		p.frontier = 0
 		p.frameOK = false
 		p.mu.Unlock()
 	}
-	ckpt := h.Header.GetCheckpoint()
-	if ckpt != nil && ckpt.GetKind() == "ghostty-ready-v1" {
-		restorer, ok := p.emu.(interface{ RestoreReady([]byte) error })
-		if !ok {
-			return fmt.Errorf("phic: emulator cannot restore bounded terminal state")
-		}
-		if err := restorer.RestoreReady(ckpt.GetData()); err != nil {
+	if cold {
+		if err := p.resizeEmulator(int(h.Header.GetInitialCols()), int(h.Header.GetInitialRows())); err != nil {
 			return err
 		}
-		p.emuCols, p.emuRows = int(ckpt.GetCols()), int(ckpt.GetRows())
-		if p.history == nil {
-			p.historyOffset = 0
+		p.replayOrdinal = 0
+		p.historicalUntil = nil
+		if !p.spec.Fresh {
+			fence, err := parseReplayPosition(h.Header.GetEventCursor())
+			if err != nil {
+				return err
+			}
+			p.historicalUntil = &fence
 		}
-		frontier = ckpt.GetThrough()
-		p.mu.Lock()
-		p.frontier = frontier
-		p.frameOK = false
-		p.mu.Unlock()
 	}
-	p.mu.Lock()
-	p.oldest = h.Header.GetOldest()
-	p.epoch = h.Header.GetEpoch()
-	p.mu.Unlock()
 	head := h.Header.GetHead()
-	if h.Header.GetOldest() > frontier {
-		if err := p.healFromLiveState(p.ctx); err != nil {
-			return err
-		}
-		p.mu.Lock()
-		frontier = p.frontier
-		p.mu.Unlock()
-		// The live snapshot can include output produced after this attach.
-		head = max(head, frontier)
-	}
-	if frontier > head {
-		return fmt.Errorf("%w: frontier exceeds attach head", errProtocol)
+	if frontier > head || h.Header.GetOldest() != 0 {
+		return fmt.Errorf("%w: invalid attach frontier", errProtocol)
 	}
 	p.mu.Lock()
-	p.epochSet = true
-	p.head = head
+	p.oldest, p.epoch, p.epochSet, p.head = 0, h.Header.GetEpoch(), true, head
 	p.mu.Unlock()
-	after := ""
-	if ckpt := h.Header.GetCheckpoint(); ckpt != nil {
-		after = ckpt.GetEventCursor()
+	if fence := p.historicalUntil; fence != nil {
+		if err := p.recover(p.ctx, frontier, fence.seq, true, fence.String()); err != nil {
+			return err
+		}
+		frontier = fence.seq
+		p.historicalUntil = nil
 	}
-	if err := p.recover(p.ctx, frontier, head, cold && !p.spec.Fresh, after); err != nil {
+	if err := p.recover(p.ctx, frontier, head, false, h.Header.GetEventCursor()); err != nil {
 		return err
 	}
+	// Request the desired panel size; only its committed geometry frame
+	// may resize the parser. Queued output still belongs to the old grid.
 	cols, rows := p.geometry()
-	if err := p.resizeEmulator(cols, rows); err != nil {
-		return err
-	}
 	if !p.enqueueResize(cols, rows) {
 		return errPaneResize
 	}
@@ -627,10 +618,6 @@ func (p *paneActor) consume(reads <-chan paneRead) error {
 			if err := p.handleInput(in); err != nil {
 				return err
 			}
-		case result := <-p.histories:
-			if err := p.applyHistory(result); err != nil {
-				p.sendEvent(paneEvent{Key: p.spec.Key, Kind: paneError, Status: "history: " + err.Error()})
-			}
 		case in := <-p.resizes:
 			if err := p.handleInput(in); err != nil {
 				return err
@@ -667,7 +654,7 @@ func (p *paneActor) handleFrame(msg []byte) error {
 		frontier := p.frontier
 		p.mu.Unlock()
 		if start > frontier {
-			if err = p.recover(p.ctx, frontier, start, false, ""); err != nil {
+			if err = p.recoverLatest(p.ctx); err != nil {
 				return err
 			}
 			// Recovery may have healed from a live checkpoint past
@@ -691,6 +678,34 @@ func (p *paneActor) handleFrame(msg []byte) error {
 		p.frontier = max(p.frontier, end)
 		p.head = max(p.head, end)
 		p.mu.Unlock()
+	case *wspb.TerminalServerFrame_Geometry:
+		geom := payload.Geometry
+		pos, err := parseReplayPosition(geom.GetEventCursor())
+		if err != nil || pos.epoch != p.epochValue() || pos.seq != geom.GetAtSeq() ||
+			geom.GetCols() == 0 || geom.GetCols() > 65535 || geom.GetRows() == 0 || geom.GetRows() > 65535 {
+			return errProtocol
+		}
+		if pos.ordinal <= p.replayOrdinal {
+			return nil
+		} // replay already parsed it
+		p.mu.Lock()
+		frontier := p.frontier
+		p.mu.Unlock()
+		if pos.seq > frontier {
+			if err := p.recoverLatest(p.ctx); err != nil {
+				return err
+			}
+			if pos.ordinal <= p.replayOrdinal {
+				return nil
+			}
+		}
+		if pos.seq != frontier || pos.ordinal != p.replayOrdinal+1 {
+			return errProtocol
+		}
+		if err := p.resizeEmulator(int(geom.GetCols()), int(geom.GetRows())); err != nil {
+			return err
+		}
+		p.replayOrdinal = pos.ordinal
 	case *wspb.TerminalServerFrame_Exit:
 		code, err := terminalExitCode(payload.Exit)
 		if err != nil {
@@ -711,10 +726,17 @@ func (p *paneActor) handleFrame(msg []byte) error {
 		return nil
 	case *wspb.TerminalServerFrame_DropNotice:
 		return p.drainExit()
+	case *wspb.TerminalServerFrame_Notification:
+		if payload.Notification.GetShutdown() != nil {
+			p.serverDraining = true
+			// Shutdown terminates the old child before restoring the pane.
+			// Reconnect instead of treating that old child's exit as final.
+			return io.EOF
+		}
+		return nil
 	case *wspb.TerminalServerFrame_Title,
 		*wspb.TerminalServerFrame_BridgeState,
-		*wspb.TerminalServerFrame_Settlement,
-		*wspb.TerminalServerFrame_Notification:
+		*wspb.TerminalServerFrame_Settlement:
 		// Browser UI hints; no terminal output, no sequence impact.
 		return nil
 	default:
@@ -723,107 +745,59 @@ func (p *paneActor) handleFrame(msg []byte) error {
 	return nil
 }
 
-// healFromLiveState restores the current parser snapshot when the recorded
-// prefix is gone. Only the live emulator is touched; a browsed historical
-// book stays installed.
-func (p *paneActor) healFromLiveState(ctx context.Context) error {
-	header, data, err := p.api.liveState(ctx, p.spec.Key.ID, p.epochValue(), "ghostty-ready-v1")
+// Exit carries no head. Capture latest once and finish that finite target,
+// including zero-byte pages that advance only the resize ordinal.
+func (p *paneActor) drainExit() error { return p.recoverLatest(p.ctx) }
+func (p *paneActor) recoverLatest(ctx context.Context) error {
+	p.mu.Lock()
+	from := p.frontier
+	p.mu.Unlock()
+	after := (replayPosition{p.epochValue(), from, p.replayOrdinal}).String()
+	h, data, err := p.api.replay(ctx, p.spec.Key.ID, p.epochValue(), from, 0, after, "", true)
 	if err != nil {
 		return err
 	}
-	restorer, ok := p.emu.(interface{ RestoreReady([]byte) error })
-	if !ok {
-		return fmt.Errorf("phic: emulator cannot restore bounded terminal state")
-	}
-	if err := restorer.RestoreReady(data); err != nil {
+	if err = p.admitReplay(h, data, termemu.SourceLive); err != nil {
 		return err
 	}
-	p.emuCols, p.emuRows = int(header.Ckpt.Cols), int(header.Ckpt.Rows)
-	p.mu.Lock()
-	p.frontier = header.Head
-	p.head = max(p.head, header.Head)
-	p.frameOK = false
-	p.mu.Unlock()
-	p.dirty = true
-	return nil
+	return p.recover(ctx, h.End, h.Through, false, h.ThroughCursor)
 }
-
-// An exit/dropped notice carries no final frontier. Read until the recording
-// actually ends, rather than treating the last received live frame as its head.
-func (p *paneActor) drainExit() error {
-	after := ""
-	for {
-		p.mu.Lock()
-		from := p.frontier
-		p.mu.Unlock()
-		if from > ^uint64(0)-recordingPageBytes {
-			return errInvalidRecording
-		}
-		h, b, err := p.fetch(p.ctx, from, from+recordingPageBytes, after)
-		if err != nil {
-			if isRecordingExpired(err) {
-				if herr := p.healFromLiveState(p.ctx); herr != nil {
-					return herr
-				}
-				after = ""
-				continue
-			}
-			return err
-		}
-		after = h.EventCursor
-		if err = p.feedRecording(h, b, termemu.SourceLive); err != nil {
-			return err
-		}
-		p.mu.Lock()
-		p.frontier = h.End
-		p.head = max(p.head, h.End)
-		p.mu.Unlock()
-		if len(b) < recordingPageBytes {
-			return nil
-		}
-	}
-}
-func (p *paneActor) recover(ctx context.Context, from, through uint64, historical bool, after string) error {
+func (p *paneActor) recover(ctx context.Context, from, through uint64, historical bool, fence string) error {
 	source := termemu.SourceLive
 	if historical {
 		source = termemu.SourceReplay
 	}
-	for from < through {
-		end := pageEnd(from, through)
-		h, b, err := p.fetch(ctx, from, end, after)
+	target, err := parseReplayPosition(fence)
+	if err != nil || target.epoch != p.epochValue() || target.seq != through || target.ordinal < p.replayOrdinal {
+		return errInvalidRecording
+	}
+	for from < through || p.replayOrdinal < target.ordinal {
+		after := (replayPosition{p.epochValue(), from, p.replayOrdinal}).String()
+		h, data, err := p.api.replay(ctx, p.spec.Key.ID, p.epochValue(), from, through, after, fence, false)
 		if err != nil {
-			if isRecordingExpired(err) {
-				if herr := p.healFromLiveState(ctx); herr != nil {
-					return herr
-				}
-				p.mu.Lock()
-				frontier := p.frontier
-				p.mu.Unlock()
-				if frontier < through {
-					return fmt.Errorf("%w: checkpoint did not cover the gap", errRecordingExpired)
-				}
-				return nil
-			}
 			return err
 		}
-		if h.End != end {
-			return fmt.Errorf("%w: unavailable interval", errInvalidRecording)
-		}
-		if err = p.feedRecording(h, b, source); err != nil {
+		if err = p.admitReplay(h, data, source); err != nil {
 			return err
 		}
-		p.mu.Lock()
-		p.frontier = end
-		p.head = max(p.head, end)
-		p.mu.Unlock()
-		after = h.EventCursor
-		from = end
+		from = h.End
 	}
 	return nil
 }
-func (p *paneActor) fetch(ctx context.Context, from, through uint64, after string) (wireproto.RecordingHeader, []byte, error) {
-	// Requests are cancellable. Permanent/malformed responses never spin forever.
-	return p.api.recording(ctx, p.spec.Key.ID, p.epochValue(), from, through, after)
+func (p *paneActor) admitReplay(h wireproto.ReplayHeader, b []byte, source termemu.Source) error {
+	if err := p.feedRecording(wireproto.RecordingHeader{Start: h.Start, End: h.End, Resizes: h.Resizes}, b, source); err != nil {
+		return err
+	}
+	pos, err := parseReplayPosition(h.EventCursor)
+	if err != nil {
+		return err
+	}
+	p.replayOrdinal = pos.ordinal
+	p.mu.Lock()
+	p.frontier = h.End
+	p.head = max(p.head, h.End)
+	p.mu.Unlock()
+	return nil
 }
 func (p *paneActor) feedRecording(h wireproto.RecordingHeader, b []byte, source termemu.Source) error {
 	at := h.Start
@@ -876,9 +850,6 @@ func (p *paneActor) handleInput(in paneInput) error {
 		p.cols, p.rows = in.Cols, in.Rows
 		p.mu.Unlock()
 		localChange := in.Cols != p.emuCols || in.Rows != p.emuRows
-		if err := p.resizeEmulator(in.Cols, in.Rows); err != nil {
-			return err
-		}
 		if !same || localChange || in.ForceResize {
 			if !p.enqueueResize(in.Cols, in.Rows) {
 				return errPaneResize
@@ -896,16 +867,9 @@ func (p *paneActor) handleInput(in paneInput) error {
 	}
 	if in.Kind == paneInputScroll {
 		target := p.emu
-		if p.history != nil {
-			target = p.history
-		}
 		p.mu.Lock()
 		historyRows := p.frame.History
 		p.mu.Unlock()
-		if p.history != nil && in.Scroll > 0 && p.historyOffset+in.Scroll >= 0 {
-			p.returnLive()
-			return nil
-		}
 		if scroller, ok := target.(interface{ ScrollViewport(int) error }); ok {
 			if err := scroller.ScrollViewport(in.Scroll); err != nil {
 				return err
@@ -950,9 +914,6 @@ func (p *paneActor) handleInput(in paneInput) error {
 }
 func (p *paneActor) refreshFrame() error {
 	target := p.emu
-	if p.history != nil {
-		target = p.history
-	}
 	frame, err := target.Snapshot()
 	if err != nil {
 		p.sendEvent(paneEvent{Key: p.spec.Key, Kind: paneError, Status: err.Error()})
@@ -964,16 +925,7 @@ func (p *paneActor) refreshFrame() error {
 	p.mu.Lock()
 	p.frame = frame
 	p.frameOK = true
-	older := p.frontier > p.oldest
-	if p.history != nil {
-		older = p.historyThrough > p.oldest
-	}
-	p.historyView = paneHistoryView{
-		Older:    older && (!frame.Alt || p.history != nil),
-		NearTop:  frame.History+p.historyOffset <= frame.Rows,
-		Browsing: p.history != nil,
-		Loading:  p.historyPending,
-	}
+	p.historyView = paneHistoryView{Browsing: p.historyOffset < 0}
 	p.lastPaint = time.Now()
 	p.mouseButton, p.mouseMotion, p.mouseAny = mb, mm, ma
 	p.mu.Unlock()

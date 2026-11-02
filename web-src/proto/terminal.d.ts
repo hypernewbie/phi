@@ -48,6 +48,9 @@ export interface TerminalServerFrame {
     } | {
         $case: "notification";
         value: Notification;
+    } | {
+        $case: "geometry";
+        value: TerminalGeometry;
     } | undefined;
 }
 export interface TerminalAttach {
@@ -56,6 +59,11 @@ export interface TerminalAttach {
     head?: bigint | undefined;
     checkpoint: TerminalCheckpoint | undefined;
     replayFrom?: bigint | undefined;
+    initialCols?: number | undefined;
+    initialRows?: number | undefined;
+    eventCursor?: string | undefined;
+    historyIncomplete?: boolean | undefined;
+    ephemeral?: boolean | undefined;
 }
 export interface TerminalCheckpoint {
     kind?: string | undefined;
@@ -68,6 +76,17 @@ export interface TerminalCheckpoint {
 export interface TerminalOutput {
     start?: bigint | undefined;
     data: Uint8Array;
+}
+/**
+ * TerminalGeometry is one committed backend resize on the live stream.
+ * Every byte at seq >= at_seq was produced under cols x rows. Receivers
+ * adopt it for their parser and never answer with a resize of their own.
+ */
+export interface TerminalGeometry {
+    atSeq?: bigint | undefined;
+    cols?: number | undefined;
+    rows?: number | undefined;
+    eventCursor?: string | undefined;
 }
 export interface TerminalPong {
 }
@@ -140,6 +159,7 @@ export declare const TerminalServerFrame: MessageFns<TerminalServerFrame>;
 export declare const TerminalAttach: MessageFns<TerminalAttach>;
 export declare const TerminalCheckpoint: MessageFns<TerminalCheckpoint>;
 export declare const TerminalOutput: MessageFns<TerminalOutput>;
+export declare const TerminalGeometry: MessageFns<TerminalGeometry>;
 export declare const TerminalPong: MessageFns<TerminalPong>;
 export declare const TerminalExit: MessageFns<TerminalExit>;
 export declare const TerminalDropNotice: MessageFns<TerminalDropNotice>;

@@ -4006,7 +4006,7 @@ export class DiffController {
             if (data?.notGitRepo) return notAGitRepo('this view', true);
 
             // Connect and stream diff/log output. The PTY holds output
-            // until the checkpoint is rendered and release() runs.
+            // until the replay prefix is rendered and release() runs.
             let streamOutput = '';
             const ws = new PTYWebSocket(
                 data.pane_id,
@@ -4029,14 +4029,38 @@ export class DiffController {
                         );
                     }
                 },
-                null,
+                (control) => {
+                    if (
+                        control.type !== 'terminal-geometry' ||
+                        this.currentWs !== ws
+                    )
+                        return;
+                    ws.hold();
+                    this.term.write('', () => {
+                        if (this.currentWs !== ws) return;
+                        this.term.resize(
+                            Number(control.cols),
+                            Number(control.rows),
+                        );
+                        ws.release();
+                    });
+                },
                 () =>
                     console.log(`[diff] Stream finished for ${this.activeTab}`),
                 null,
                 {
                     onAttachHead: (info) => {
                         if (this.currentWs !== ws) return;
-                        if (!info.ckpt) {
+                        try {
+                            this.term.resize(
+                                info.initialCols,
+                                info.initialRows,
+                            );
+                        } catch {}
+                        if (
+                            !info.head &&
+                            info.eventCursor === `v1.${info.epoch}.0.0`
+                        ) {
                             if (paintedCache) {
                                 this.term.reset();
                                 this.term.clear();
@@ -4045,48 +4069,123 @@ export class DiffController {
                             ws.release();
                             return;
                         }
-                        try {
-                            this.term.resize(info.ckpt.cols, info.ckpt.rows);
-                        } catch {}
-                        const checkpointText = info.ckpt.bytes
-                            ? ws.decodeOutput(info.ckpt.bytes)
-                            : info.ckpt.ansi;
-                        if (paintedCache) {
-                            this.term.reset();
-                            this.term.clear();
-                        }
-                        streamOutput = checkpointText;
-                        if (
-                            this.activeTab === 'log' &&
-                            this.isCurrentGitManageContext(gitContext)
-                        ) {
-                            this.cacheGitView(
-                                gitContext,
-                                this.gitViewRoot(gitContext),
-                                'log',
-                                'recent',
-                                streamOutput,
-                                this.gitManageInfo?.target?.head || '',
-                                this.gitManageInfo?.target?.branch || '',
-                            );
-                        }
-                        this.term.write(
-                            // Decode through the socket's own decoder: a
-                            // checkpoint can end mid-codepoint, and only
-                            // the stream decoder carries the split bytes
-                            // into the next live frame.
-                            checkpointText,
-                            () => {
-                                if (this.currentWs === ws) this.fitTerminal();
-                            },
-                        );
-                        ws.release();
+                        // The log prefix replays from the raw journal.
+                        // Missing history never authorizes skipping bytes.
+                        const paneId = data.pane_id;
+                        void (async () => {
+                            try {
+                                // Share the terminal's bounded, validated fetch
+                                // path. Parse each page before fetching another;
+                                // never collect an entire archive in memory.
+                                let start = 0;
+                                let after = `v1.${info.epoch}.0.0`;
+                                const current = () => this.currentWs === ws;
+                                let reset = false;
+                                const write = (bytes: Uint8Array) =>
+                                    new Promise<void>((resolve) => {
+                                        const text = ws.decodeOutput(bytes);
+                                        streamOutput += text;
+                                        this.term.write(text, resolve);
+                                    });
+                                while (
+                                    start < info.head ||
+                                    after !== info.eventCursor
+                                ) {
+                                    const page =
+                                        await this.app.tabManager._fetchReplayPages(
+                                            paneId,
+                                            start,
+                                            info.head,
+                                            info.epoch,
+                                            {
+                                                throughCursor: info.eventCursor,
+                                                afterCursor: after,
+                                            },
+                                        );
+                                    if (!current()) return;
+                                    if (
+                                        !page ||
+                                        (page.end === start &&
+                                            page.endCursor === after)
+                                    )
+                                        throw new Error(
+                                            'replay: incomplete prefix',
+                                        );
+                                    if (!reset) {
+                                        if (paintedCache) {
+                                            this.term.reset();
+                                            this.term.clear();
+                                        }
+                                        this.term.resize(
+                                            info.initialCols,
+                                            info.initialRows,
+                                        );
+                                        reset = true;
+                                    }
+                                    let at = page.start;
+                                    for (const [
+                                        seq,
+                                        cols,
+                                        rows,
+                                    ] of page.resizes) {
+                                        if (seq > at) {
+                                            await write(
+                                                page.bytes.subarray(
+                                                    at - page.start,
+                                                    seq - page.start,
+                                                ),
+                                            );
+                                            if (!current()) return;
+                                        }
+                                        this.term.resize(cols, rows);
+                                        at = seq;
+                                    }
+                                    if (at < page.end) {
+                                        await write(
+                                            page.bytes.subarray(
+                                                at - page.start,
+                                            ),
+                                        );
+                                        if (!current()) return;
+                                    }
+                                    start = page.end;
+                                    after = page.endCursor;
+                                }
+                                if (
+                                    this.activeTab === 'log' &&
+                                    this.isCurrentGitManageContext(gitContext)
+                                ) {
+                                    this.cacheGitView(
+                                        gitContext,
+                                        this.gitViewRoot(gitContext),
+                                        'log',
+                                        'recent',
+                                        streamOutput,
+                                        this.gitManageInfo?.target?.head || '',
+                                        this.gitManageInfo?.target?.branch ||
+                                            '',
+                                    );
+                                }
+                                this.fitTerminal();
+                                ws.release();
+                            } catch (e) {
+                                console.warn('[diff] replay failed:', e);
+                                if (this.currentWs !== ws) return;
+                                // A missing prefix is not a complete recovery.
+                                // Keep the last view; stop rather than silently
+                                // joining live output to an untrusted parser.
+                                ws.close();
+                                this.term.write(
+                                    '\r\nHistory replay failed. Refresh this view to retry.\r\n',
+                                );
+                            }
+                        })();
                     },
                 },
             );
             this.currentWs = ws;
             // Fit now: geometry must not depend on the attach frame.
-            // The checkpoint resize above corrects it when it arrives.
+            // The replay baseline resize above corrects it when it arrives.
             this.fitTerminal();
         } catch (e) {
             if (streamToken !== this._diffStreamToken || !this.isPanelOpen)

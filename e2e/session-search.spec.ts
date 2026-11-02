@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { tabList } from './_tabs.js';
 import { startPhi, type PhiServer } from './_server.js';
+import { readReplay, terminalHead } from './_terminal-replay.js';
 
 test.describe.configure({ timeout: 120_000 });
 
@@ -137,14 +138,10 @@ async function waitForRecordedText(
     paneId: string,
     marker = 'FIND-MATCH-037',
 ) {
-    const endpoint = `${phiServer.url}/api/terminals/${paneId}/recording?from=0&through=1048576`;
     await expect
         .poll(
-            async () => {
-                const response = await fetch(endpoint);
-                if (!response.ok) return '';
-                return new TextDecoder().decode(await response.arrayBuffer());
-            },
+            async () =>
+                (await readReplay(phiServer.url, paneId)).data.toString('utf8'),
             { timeout: 20_000 },
         )
         .toContain(marker);
@@ -155,27 +152,8 @@ async function readTerminalHead(
     paneId: string,
     request: import('@playwright/test').APIRequestContext,
 ) {
-    const response = await request.get(
-        `${phiServer.url}/api/terminals/${paneId}/recording?from=0&through=1048576`,
-    );
-    if (!response.ok())
-        throw new Error(`terminal recording read failed: ${response.status()}`);
-    const body = new Uint8Array(await response.body());
-    if (body.length < 4) throw new Error('short terminal state envelope');
-    const headerLength = new DataView(
-        body.buffer,
-        body.byteOffset,
-        body.byteLength,
-    ).getUint32(0);
-    if (headerLength > 4096 || headerLength + 4 > body.length)
-        throw new Error('invalid terminal state header');
-    const header = JSON.parse(
-        new TextDecoder().decode(body.subarray(4, 4 + headerLength)),
-    ) as {
-        epoch: number;
-        end: number;
-    };
-    return { epoch: header.epoch, head: header.end };
+    const { epoch, head } = await terminalHead(phiServer.url, paneId);
+    return { epoch, head };
 }
 
 test('Ctrl/Cmd+F searches resident terminal output without sending search keys to the PTY', async ({

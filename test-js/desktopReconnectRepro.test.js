@@ -33,7 +33,6 @@ beforeEach(() => {
             pane.reconnectInFlight = true;
         }),
         updateDocumentTitle: vi.fn(),
-        _updateHistoryButton: vi.fn(),
         _refreshPiBridgeModels: vi.fn(),
         _invalidatePiBridgeCompact: vi.fn(),
         getActiveTab: vi.fn(),

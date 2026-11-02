@@ -6,6 +6,7 @@ phic runtime dependency. Tests startup, repeated client views, detach, and
 historical reattachment without provider prompts.
 """
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -35,13 +36,15 @@ def main():
         parser.error("tmux is required for this native test")
     run = Path(tempfile.mkdtemp(prefix="phic-native-"))
     home, work = run / "home", run / "work"
+    runtime_tmp = run / "tmp"
+    runtime_tmp.mkdir(mode=0o700)
     (home / ".phi" / "backends").mkdir(parents=True)
     work.mkdir()
     (work / "temp").mkdir()
     (work / "temp" / "native.md").write_text("# PHIC_MD_NATIVE_VIEW\n\nThis paragraph remains readable across the full terminal viewport rather than a narrow side panel.\n\n**Phi** Markdown works.\n\n- one\n- two\n")
     # No provider credentials, SSH agent, or caller backend state is inherited.
     env = {k: v for k, v in os.environ.items() if k in ("PATH", "TMPDIR", "LANG", "LC_ALL", "SHELL")}
-    env.update(HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"),
+    env.update(HOME=str(home), TMPDIR=str(runtime_tmp), XDG_CONFIG_HOME=str(home / ".config"),
                XDG_DATA_HOME=str(home / ".local/share"), XDG_CACHE_HOME=str(home / ".cache"),
                TERM="xterm-256color", COLORTERM="truecolor",
                SHELL=shutil.which("bash") or "/bin/sh", PS1="PHIC NATIVE work $ ",
@@ -83,6 +86,17 @@ def main():
     log = open(run / "server.log", "wb")
     server = subprocess.Popen([str(server_bin), "--ip", "127.0.0.1", "--port", url.rsplit(":", 1)[1]],
                               cwd=work, env=env, stdout=log, stderr=log)
+    server_start = subprocess.check_output(["ps", "-p", str(server.pid), "-o", "lstart="], text=True).strip()
+    binary_hash = hashlib.sha256(server_bin.read_bytes()).hexdigest()
+
+    def verify_server():
+        start = subprocess.check_output(["ps", "-p", str(server.pid), "-o", "lstart="], text=True).strip()
+        command = subprocess.check_output(["ps", "-p", str(server.pid), "-o", "command="], text=True).strip()
+        if start != server_start or not command.startswith(str(server_bin) + " "):
+            raise RuntimeError("owned server identity changed; leaving process and evidence intact")
+        if hashlib.sha256(server_bin.read_bytes()).hexdigest() != binary_hash:
+            raise RuntimeError("owned server binary changed; leaving process and evidence intact")
+
     socket_path = str(run / "tmux.sock")
 
     def tmux(*argv, check=True):
@@ -159,6 +173,16 @@ def main():
             if server.poll() is not None or time.monotonic() >= deadline:
                 raise RuntimeError("Phi failed to start; see server.log")
             time.sleep(.05)
+        verify_server()
+        listener = subprocess.check_output(["lsof", "-nP", "-a", "-p", str(server.pid), "-iTCP", "-sTCP:LISTEN"], text=True)
+        if "127.0.0.1:" + url.rsplit(":", 1)[1] not in listener:
+            raise RuntimeError("owned server does not own the expected listener")
+        build = subprocess.check_output(["go", "version", "-m", str(server_bin)], text=True)
+        (run / "server-identity.json").write_text(json.dumps({
+            "pid": server.pid, "start": server_start, "binary": str(server_bin), "sha256": binary_hash,
+            "build": [line.strip() for line in build.splitlines() if "vcs." in line],
+            "url": url, "directory": str(run), "listener": listener,
+        }, indent=2))
         for coder in coders:
             name = coder.replace("-", "_")
             started = time.monotonic()
@@ -188,14 +212,18 @@ def main():
                 wait_view(name, "PHIC_UNSUBMITTED")
             reference = settled(name) if ready else None
             for key, marker, leave in [("?", "phic help", "Escape"), ("s", "SESSIONS", "Escape"),
-                                       ("w", "Worktree", "Escape"), ("h", "Recording", "Escape"),
+                                       ("w", "Worktree", "Escape"), ("h", None, "Escape"),
                                        ("b", "Φ", "Escape"), ("?", "phic help", "Escape")]:
                 if reference is None:
                     break
                 try:
                     tmux("send-keys", "-t", name, "C-]", key)
-                    wait_view(name, marker)
-                    view = snapshot(name)
+                    # History now browses local scrollback, not a Recording
+                    # modal. Enter/Escape must still preserve the backend view
+                    # and the unfinished input line.
+                    if marker:
+                        wait_view(name, marker)
+                    view = snapshot(name) if marker else settled(name)
                     if key == "s":
                         plain = re.sub(r"\x1b\[[0-9;]*m", "", view["cells"])
                         if "New Session" not in plain or "▣" not in plain:
@@ -327,12 +355,15 @@ def main():
             print(json.dumps({k: v for k, v in row.items() if k != "pane"}), flush=True)
     finally:
         tmux("kill-server", check=False)
-        server.terminate()
-        try:
-            server.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            server.kill()
-            server.wait()
+        if server.poll() is None:
+            verify_server()
+            server.terminate()
+            try:
+                server.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                verify_server()
+                server.kill()
+                server.wait()
         log.close()
         if opencode:
             try:
