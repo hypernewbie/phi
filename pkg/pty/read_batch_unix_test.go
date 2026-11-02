@@ -55,3 +55,30 @@ func TestReadBatchDrainsAvailableWithoutWaiting(t *testing.T) {
 		t.Fatalf("second ReadBatch returned %q", buf[:n2])
 	}
 }
+
+func TestReadBatchConcurrentClose(t *testing.T) {
+	for i := 0; i < 256; i++ {
+		pt, err := gopty.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := &Pty{pt: pt}
+		if _, err := pt.(gopty.UnixPty).Slave().Write([]byte("pending output\n")); err != nil {
+			p.closePTY()
+			t.Fatal(err)
+		}
+		started, done := make(chan struct{}), make(chan struct{})
+		go func() {
+			close(started)
+			_, _ = p.ReadBatch(make([]byte, 32*1024))
+			close(done)
+		}()
+		<-started
+		p.closePTY()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("ReadBatch did not finish after PTY close")
+		}
+	}
+}
