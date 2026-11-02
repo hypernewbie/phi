@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/hypernewbie/phi/internal/access"
 	"github.com/hypernewbie/phi/pkg/restart"
 )
 
@@ -42,44 +43,14 @@ func handleRestart(w http.ResponseWriter, r *http.Request) {
 
 	switch runtime.GOOS {
 	case "windows":
-		restartOnWindows(accessAuth, func() (int, error) {
+		access.RestartOnWindows(access.Default, func() (int, error) {
 			return restart.SpawnDetached(args, os.Environ())
 		}, os.Exit)
 	default:
 		log.Printf("[restart] exec-replacing self: %v", args)
-		restartOnUnix(accessAuth, func() error {
+		access.RestartOnUnix(access.Default, func() error {
 			return restart.ExecSelf(args, os.Environ())
 		})
-	}
-}
-
-func restartOnWindows(auth *accessAuthManager, spawnDetached func() (int, error), exit func(int)) {
-	if !auth.claimRestartAttempt() {
-		return
-	}
-	pid, err := spawnDetached()
-	if err != nil {
-		auth.cancelRestartAttempt()
-		log.Printf("[restart] SpawnDetached failed: %v", err)
-		return
-	}
-	log.Printf("[restart] spawned detached child pid=%d, exiting parent", pid)
-	if !auth.beginClaimedRestart() {
-		log.Printf("[restart] could not begin auth shutdown after child spawn")
-		return
-	}
-	exit(0)
-}
-
-func restartOnUnix(auth *accessAuthManager, execSelf func() error) {
-	if !auth.beginRestart() {
-		return
-	}
-	if err := execSelf(); err != nil {
-		log.Printf("[restart] ExecSelf failed: %v", err)
-		if !auth.recoverRestart() {
-			log.Printf("[restart] auth ownership recovery failed; authentication remains unavailable")
-		}
 	}
 }
 

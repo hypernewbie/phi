@@ -1,4 +1,4 @@
-package main
+package access
 
 import (
 	"bytes"
@@ -163,12 +163,12 @@ func TestAccessObservabilityLogsNoCredentials(t *testing.T) {
 	sink := captureAccessLogs(t)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/auth/status", handleAccessAuthStatus)
-	mux.HandleFunc("/api/auth/login", handleAccessAuthLogin)
-	mux.HandleFunc("/api/auth/password", handleAccessPassword)
-	mux.HandleFunc("/api/auth/v2/status", handleAccessV2Status)
-	mux.HandleFunc("/api/auth/v2/login", handleAccessV2Login)
-	mux.HandleFunc("/api/auth/v2/password", handleAccessV2Password)
+	mux.HandleFunc("/api/auth/status", HandleAccessAuthStatus)
+	mux.HandleFunc("/api/auth/login", HandleAccessAuthLogin)
+	mux.HandleFunc("/api/auth/password", HandleAccessPassword)
+	mux.HandleFunc("/api/auth/v2/status", HandleAccessV2Status)
+	mux.HandleFunc("/api/auth/v2/login", HandleAccessV2Login)
+	mux.HandleFunc("/api/auth/v2/password", HandleAccessV2Password)
 	mux.HandleFunc("/api/config", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -179,7 +179,7 @@ func TestAccessObservabilityLogsNoCredentials(t *testing.T) {
 		ws.HandleEventsWS(w, r, hub)
 	})
 	mux.HandleFunc("/ws/control", ws.HandleControl(hub, rpc.NewManager(), func() string { return home }))
-	server := httptest.NewServer(accessAuthMiddleware(mux))
+	server := httptest.NewServer(Middleware(mux))
 	defer server.Close()
 
 	var bodies []string
@@ -207,7 +207,7 @@ func TestAccessObservabilityLogsNoCredentials(t *testing.T) {
 
 	// v1 login: derive the verifier locally, as the browser does, and post a
 	// one-time proof. The server issues a session cookie.
-	_, saltB64, challenge, iterations, err := accessAuth.statusAndChallenge()
+	_, saltB64, challenge, iterations, err := Default.statusAndChallenge()
 	if err != nil {
 		t.Fatalf("status challenge: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestAccessObservabilityLogsNoCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v1Login := record(testAccessServe(handleAccessAuthLogin, httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(loginBody))))
+	v1Login := record(testAccessServe(HandleAccessAuthLogin, httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(loginBody))))
 	if v1Login.Code != http.StatusOK {
 		t.Fatalf("v1 login: %d %s", v1Login.Code, v1Login.Body.String())
 	}
@@ -258,7 +258,7 @@ func TestAccessObservabilityLogsNoCredentials(t *testing.T) {
 	// v2 status, then rotate the password through the bearer-only route.
 	v2StatusRequest := httptest.NewRequest(http.MethodGet, "/api/auth/v2/status", nil)
 	v2StatusRequest.Header.Set("Authorization", "Bearer "+firstToken)
-	record(testAccessServe(handleAccessV2Status, v2StatusRequest))
+	record(testAccessServe(HandleAccessV2Status, v2StatusRequest))
 	rotateBody, err := json.Marshal(map[string]string{"password": rotatedPassword})
 	if err != nil {
 		t.Fatal(err)
@@ -406,11 +406,11 @@ func TestAccessObservabilityLogsNoRefreshOrCookieCredentials(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/auth/v2/status", handleAccessV2Status)
-	mux.HandleFunc("/api/auth/v2/login", handleAccessV2Login)
-	mux.HandleFunc("/api/auth/v2/password", handleAccessV2Password)
-	mux.HandleFunc("/api/auth/v2/refresh", handleAccessV2Refresh)
-	mux.HandleFunc("/api/auth/v2/logout", handleAccessV2Logout)
+	mux.HandleFunc("/api/auth/v2/status", HandleAccessV2Status)
+	mux.HandleFunc("/api/auth/v2/login", HandleAccessV2Login)
+	mux.HandleFunc("/api/auth/v2/password", HandleAccessV2Password)
+	mux.HandleFunc("/api/auth/v2/refresh", HandleAccessV2Refresh)
+	mux.HandleFunc("/api/auth/v2/logout", HandleAccessV2Logout)
 	mux.HandleFunc("/api/config", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -421,7 +421,7 @@ func TestAccessObservabilityLogsNoRefreshOrCookieCredentials(t *testing.T) {
 		ws.HandleEventsWS(w, r, hub)
 	})
 	mux.HandleFunc("/ws/control", ws.HandleControl(hub, rpc.NewManager(), func() string { return home }))
-	server := httptest.NewServer(accessAuthMiddleware(mux))
+	server := httptest.NewServer(Middleware(mux))
 	defer server.Close()
 
 	sink := captureAccessLogs(t)

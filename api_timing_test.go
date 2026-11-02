@@ -3,12 +3,14 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/hypernewbie/phi/internal/access"
 	"github.com/hypernewbie/phi/pkg/obs"
 )
 
@@ -17,7 +19,7 @@ import (
 func timingTestCookie(t *testing.T) *http.Cookie {
 	t.Helper()
 	statusW := httptest.NewRecorder()
-	handleAccessAuthStatus(statusW, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+	access.HandleAccessAuthStatus(statusW, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
 	if statusW.Code != http.StatusOK {
 		t.Fatalf("status: got %d", statusW.Code)
 	}
@@ -25,16 +27,13 @@ func timingTestCookie(t *testing.T) *http.Cookie {
 	if err := json.Unmarshal(statusW.Body.Bytes(), &status); err != nil {
 		t.Fatal(err)
 	}
-	record, err := parseAccessPasswordHash(testAccessHash())
-	if err != nil {
-		t.Fatal(err)
-	}
+	verifier := bytes.Repeat([]byte{0x22}, 32)
 	challenge := status["challenge"].(string)
-	body := `{"challenge":"` + challenge + `","proof":"` + testAccessProof(t, record.Verifier, challenge) + `"}`
+	body := `{"challenge":"` + challenge + `","proof":"` + testAccessProof(verifier, challenge) + `"}`
 	loginReq := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(body))
 	loginReq.RemoteAddr = "192.0.2.15:12345"
 	loginW := httptest.NewRecorder()
-	handleAccessAuthLogin(loginW, loginReq)
+	access.HandleAccessAuthLogin(loginW, loginReq)
 	if loginW.Code != http.StatusOK {
 		t.Fatalf("login: got %d body=%s", loginW.Code, loginW.Body.String())
 	}
@@ -54,7 +53,7 @@ func TestTimingSkipsRejectedAuthRequests(t *testing.T) {
 	reached := false
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/thing", func(w http.ResponseWriter, r *http.Request) { reached = true })
-	handler := accessAuthMiddleware(obs.WrapTimingHTTP(mux))
+	handler := access.Middleware(obs.WrapTimingHTTP(mux))
 
 	capture, ok := obs.BeginTimingCapture()
 	if !ok {
@@ -87,7 +86,7 @@ func TestTimingRecordsAuthenticatedRequests(t *testing.T) {
 		reached = true
 		w.WriteHeader(http.StatusNoContent)
 	})
-	handler := accessAuthMiddleware(obs.WrapTimingHTTP(mux))
+	handler := access.Middleware(obs.WrapTimingHTTP(mux))
 
 	capture, ok := obs.BeginTimingCapture()
 	if !ok {

@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hypernewbie/phi/internal/access"
 	"github.com/hypernewbie/phi/internal/pibridge"
 	"github.com/hypernewbie/phi/internal/webassets"
 	"github.com/hypernewbie/phi/pkg/bindaddr"
@@ -71,7 +72,7 @@ var (
 )
 
 func rollbackPreviousBinary() (string, error) {
-	release, err := acquireAccessRollbackGuard()
+	release, err := access.AcquireRollbackGuard(configStore())
 	if err != nil {
 		return "", err
 	}
@@ -162,15 +163,18 @@ func main() {
 		slog.Error("config read failed", "path", configFilePath(), "err", err)
 		os.Exit(1)
 	}
-	if err := accessAuth.configure(cfg.AccessPasswordHash); err != nil {
+	// The manager resolves both collaborators at call time: wsHub is assigned
+	// later in startup, and configStore follows the active data dir.
+	access.Default = access.NewManager(configStore, func() *ws.Hub { return wsHub })
+	if err := access.Default.Configure(cfg.AccessPasswordHash); err != nil {
 		slog.Error("invalid access password configuration", "err", err)
 		os.Exit(1)
 	}
-	if err := accessAuth.validateOrigins(); err != nil {
+	if err := access.Default.ValidateOrigins(); err != nil {
 		slog.Error("invalid auth_origins configuration", "err", err)
 		os.Exit(1)
 	}
-	if !accessAuth.stateOwned() {
+	if !access.Default.StateOwned() {
 		slog.Warn("another phi instance owns the access state for this directory; " +
 			"this instance serves the UI but refuses all authentication until it exits")
 	}
@@ -183,7 +187,7 @@ func main() {
 	}
 	if !found {
 		cfg.Workspaces = append(cfg.Workspaces, activeCWD)
-		if accessAuth.stateOwned() {
+		if access.Default.StateOwned() {
 			saveConfig(cfg)
 		}
 	}
@@ -243,11 +247,11 @@ func main() {
 	wsHub = ws.NewHub(*cfg.ReplayBufferBytes)
 	// Adopt the generation loaded from config so the first upgrade is admitted
 	// and later password changes fence older sockets.
-	wsHub.RotateAuth(accessAuth.accessGeneration())
+	wsHub.RotateAuth(access.Default.AccessGeneration())
 	// Re-check every socket admission against live auth state: a family
 	// revocation or an expiring token between the middleware decision and the
 	// upgrade must refuse the connection rather than serve it.
-	wsHub.SetAuthValidator(accessAuth.admitsFence)
+	wsHub.SetAuthValidator(access.Default.AdmitsFence)
 	if err := wsHub.SetRecordingDirectory(filepath.Join(system.PhiDataDir(), "recordings")); err != nil {
 		slog.Error("terminal recording directory unavailable", "err", err)
 	}
@@ -301,14 +305,14 @@ func main() {
 	}
 
 	// API Routing
-	http.HandleFunc("/api/auth/status", handleAccessAuthStatus)
-	http.HandleFunc("/api/auth/login", handleAccessAuthLogin)
-	http.HandleFunc("/api/auth/password", handleAccessPassword)
-	http.HandleFunc("/api/auth/v2/status", handleAccessV2Status)
-	http.HandleFunc("/api/auth/v2/login", handleAccessV2Login)
-	http.HandleFunc("/api/auth/v2/password", handleAccessV2Password)
-	http.HandleFunc("/api/auth/v2/refresh", handleAccessV2Refresh)
-	http.HandleFunc("/api/auth/v2/logout", handleAccessV2Logout)
+	http.HandleFunc("/api/auth/status", access.HandleAccessAuthStatus)
+	http.HandleFunc("/api/auth/login", access.HandleAccessAuthLogin)
+	http.HandleFunc("/api/auth/password", access.HandleAccessPassword)
+	http.HandleFunc("/api/auth/v2/status", access.HandleAccessV2Status)
+	http.HandleFunc("/api/auth/v2/login", access.HandleAccessV2Login)
+	http.HandleFunc("/api/auth/v2/password", access.HandleAccessV2Password)
+	http.HandleFunc("/api/auth/v2/refresh", access.HandleAccessV2Refresh)
+	http.HandleFunc("/api/auth/v2/logout", access.HandleAccessV2Logout)
 	http.HandleFunc("/api/coders", handleGetCoders)
 	http.HandleFunc("/api/sessions", handleGetSessions)
 	http.HandleFunc("/api/terminals", handleSpawnTerminal)
@@ -520,7 +524,7 @@ func main() {
 				envDuration("PHI_SHUTDOWN_PTY_GRACE", ptyGrace),
 				envDuration("PHI_SHUTDOWN_GRACE", httpGrace),
 			)
-			accessAuth.beginRestart()
+			access.Default.BeginRestart()
 			piBridge.Stop()
 			if err := obsShutdown(context.Background()); err != nil {
 				slog.Error("obs shutdown", "err", err)
@@ -755,7 +759,7 @@ func printWelcomeBanner(cfg Config, addrs []bindaddr.Addr, port int) {
 // returns the servers so the shutdown path can drain them. Blocks until all
 // listeners exit; ErrServerClosed (from Shutdown) is a clean stop, not fatal.
 func serveAll(listeners []net.Listener) ([]*http.Server, <-chan error) {
-	handler := obs.WrapHTTP(accessAuthMiddleware(obs.WrapTimingHTTP(http.DefaultServeMux)))
+	handler := obs.WrapHTTP(access.Middleware(obs.WrapTimingHTTP(http.DefaultServeMux)))
 	servers := make([]*http.Server, len(listeners))
 	errCh := make(chan error, len(listeners))
 	for i, ln := range listeners {

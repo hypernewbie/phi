@@ -11,7 +11,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
+
+	"github.com/hypernewbie/phi/internal/access"
 )
 
 func mobileRequest(t *testing.T, fence bool, body string, want int) mobileAppearanceState {
@@ -268,7 +269,7 @@ func TestMobileAppearanceMethodsAndAuthorization(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/config/mobile-appearance", handleMobileAppearance)
 	mux.HandleFunc("/api/config/mobile-appearance/fence", handleMobileAppearanceFence)
-	protected := accessAuthMiddleware(mux)
+	protected := access.Middleware(mux)
 	for _, path := range []string{"/api/config/mobile-appearance", "/api/config/mobile-appearance/fence"} {
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
 			w := httptest.NewRecorder()
@@ -278,12 +279,7 @@ func TestMobileAppearanceMethodsAndAuthorization(t *testing.T) {
 			}
 		}
 	}
-	auth.mu.Lock()
-	token, err := auth.newSessionLocked(time.Now())
-	auth.mu.Unlock()
-	if err != nil {
-		t.Fatal(err)
-	}
+	cookie := loginTestCookie(t)
 	for _, tc := range []struct {
 		method, path, body string
 		status             int
@@ -296,7 +292,7 @@ func TestMobileAppearanceMethodsAndAuthorization(t *testing.T) {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
 		r.Header.Set("Content-Type", "application/json")
-		r.AddCookie(&http.Cookie{Name: accessSessionCookie, Value: token})
+		r.AddCookie(cookie)
 		protected.ServeHTTP(w, r)
 		if w.Code != tc.status {
 			t.Fatalf("authorized %s %s=%d", tc.method, tc.path, w.Code)

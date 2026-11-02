@@ -1,4 +1,4 @@
-package main
+package access
 
 import (
 	"context"
@@ -126,7 +126,7 @@ func newAuthSocketServer(t *testing.T) (*ws.Hub, string) {
 		ws.HandleEventsWS(w, r, hub)
 	})
 	mux.HandleFunc("/ws/control", ws.HandleControl(hub, rpc.NewManager(), func() string { return home }))
-	server := httptest.NewServer(accessAuthMiddleware(mux))
+	server := httptest.NewServer(Middleware(mux))
 	t.Cleanup(server.Close)
 
 	return hub, "ws" + strings.TrimPrefix(server.URL, "http")
@@ -162,21 +162,21 @@ func TestAccessRestartFailureClosesAndFencesAdmittedSockets(t *testing.T) {
 	auth := useTestAccessAuth(t)
 	token := testAccessEnableV2(t, testAccessPassword)
 	hub, dial := newAuthSocketFixture(t)
-	hub.SetAuthValidator(auth.admitsFence)
-	hub.RotateAuth(auth.accessGeneration())
+	hub.SetAuthValidator(auth.AdmitsFence)
+	hub.RotateAuth(auth.AccessGeneration())
 	cookie := testAccessCookieFor(t, auth)
 	v1Socket := dial("/ws/md-events", wireproto.EventsSubprotocol, "", cookie.Value)
 	v2Socket := dial("/ws/md-events", wireproto.EventsSubprotocol, token, "")
 	waitForEventsClients(t, hub, 2)
-	oldGeneration := auth.accessGeneration()
+	oldGeneration := auth.AccessGeneration()
 
 	execFailure := errors.New("injected exec failure")
-	restartOnUnix(auth, func() error {
+	RestartOnUnix(auth, func() error {
 		if auth.db != nil || auth.owner.held() {
 			t.Error("Unix replacement started before auth DB and ownership were closed")
 		}
 		status := httptest.NewRecorder()
-		handleAccessAuthStatus(status, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+		HandleAccessAuthStatus(status, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
 		if status.Code != http.StatusServiceUnavailable || auth.db != nil || auth.owner.held() || auth.ownedNow() {
 			t.Errorf("status request reopened auth during restart: status=%d db=%v owner=%v owned=%v", status.Code, auth.db != nil, auth.owner.held(), auth.ownedNow())
 		}
@@ -207,8 +207,8 @@ func TestAccessShutdownFencesSocketsBeforeOwnershipHandoff(t *testing.T) {
 	auth := useTestAccessAuth(t)
 	token := testAccessEnableV2(t, testAccessPassword)
 	hub, dial := newAuthSocketFixture(t)
-	hub.SetAuthValidator(auth.admitsFence)
-	hub.RotateAuth(auth.accessGeneration())
+	hub.SetAuthValidator(auth.AdmitsFence)
+	hub.RotateAuth(auth.AccessGeneration())
 	cookie := testAccessCookieFor(t, auth)
 	v1Socket := dial("/ws/md-events", wireproto.EventsSubprotocol, "", cookie.Value)
 	v2Socket := dial("/ws/md-events", wireproto.EventsSubprotocol, token, "")
@@ -218,7 +218,7 @@ func TestAccessShutdownFencesSocketsBeforeOwnershipHandoff(t *testing.T) {
 	shutdownStarted := make(chan struct{})
 	shutdownDone := make(chan struct{})
 	go func() {
-		auth.beginRestart()
+		auth.BeginRestart()
 		close(shutdownStarted)
 		<-cleanupGate
 		close(shutdownDone)
@@ -235,8 +235,8 @@ func TestAccessShutdownFencesSocketsBeforeOwnershipHandoff(t *testing.T) {
 	expectClosed(t, v1Socket)
 	expectClosed(t, v2Socket)
 
-	contender := newAccessAuthManager()
-	if err := contender.configure(""); err != nil {
+	contender := NewManager(testConfigStore, testSocketHub)
+	if err := contender.Configure(""); err != nil {
 		contender.close()
 		t.Fatalf("take over auth ownership during shutdown cleanup: %v", err)
 	}
@@ -372,7 +372,7 @@ func TestAccessWSSameVerifierUncertainCommitFencesV1Socket(t *testing.T) {
 		t.Fatal(err)
 	}
 	hub, dial := newAuthSocketFixture(t)
-	hub.RotateAuth(auth.accessGeneration())
+	hub.RotateAuth(auth.AccessGeneration())
 	cookie := testAccessCookieFor(t, auth)
 	socket := dial("/ws/md-events", wireproto.EventsSubprotocol, "", cookie.Value)
 	waitForEventsClients(t, hub, 1)
@@ -398,7 +398,7 @@ func TestAccessWSSameVerifierUncertainCommitFencesV1Socket(t *testing.T) {
 	}
 	request := httptest.NewRequest(http.MethodPost, "/api/auth/password", strings.NewReader(string(body)))
 	request.AddCookie(cookie)
-	response := testAccessServe(handleAccessPassword, request)
+	response := testAccessServe(HandleAccessPassword, request)
 	auth.mu.Lock()
 	auth.db.commit = previousCommit
 	newRecordID, newGeneration := auth.v2.recordID, auth.generation
@@ -425,12 +425,12 @@ func TestAccessWSSocketsFollowEveryRecordChange(t *testing.T) {
 	}
 	cases := []struct {
 		name    string
-		mutate  func(t *testing.T, auth *accessAuthManager, token string)
+		mutate  func(t *testing.T, auth *Manager, token string)
 		changed bool
 	}{
 		{
 			name: "encoded v1 change",
-			mutate: func(t *testing.T, auth *accessAuthManager, token string) {
+			mutate: func(t *testing.T, auth *Manager, token string) {
 				if _, err := auth.setEncodedPassword(testAccessHash(), bearer(token)); err != nil {
 					t.Fatalf("encoded change: %v", err)
 				}
@@ -439,7 +439,7 @@ func TestAccessWSSocketsFollowEveryRecordChange(t *testing.T) {
 		},
 		{
 			name: "raw v2 change",
-			mutate: func(t *testing.T, auth *accessAuthManager, token string) {
+			mutate: func(t *testing.T, auth *Manager, token string) {
 				if _, err := auth.setRawPassword("test-pass-5678", bearer(token)); err != nil {
 					t.Fatalf("raw change: %v", err)
 				}
@@ -448,7 +448,7 @@ func TestAccessWSSocketsFollowEveryRecordChange(t *testing.T) {
 		},
 		{
 			name: "clear",
-			mutate: func(t *testing.T, auth *accessAuthManager, token string) {
+			mutate: func(t *testing.T, auth *Manager, token string) {
 				if _, err := auth.clearPassword(bearer(token)); err != nil {
 					t.Fatalf("clear: %v", err)
 				}
@@ -457,7 +457,7 @@ func TestAccessWSSocketsFollowEveryRecordChange(t *testing.T) {
 		},
 		{
 			name: "failed write",
-			mutate: func(t *testing.T, auth *accessAuthManager, token string) {
+			mutate: func(t *testing.T, auth *Manager, token string) {
 				_ = failAccessDBCommitForTest(t, auth)
 				if _, err := auth.setRawPassword("test-pass-5678", bearer(token)); err == nil {
 					t.Fatal("failed database transaction reported success")
@@ -506,7 +506,7 @@ func TestAccessWSSocketsCloseOnStaleRecordRehash(t *testing.T) {
 	}
 	// Production startup syncs the hub to the configured generation; without
 	// this the sockets would be rejected before the rehash could revoke them.
-	hub.RotateAuth(auth.accessGeneration())
+	hub.RotateAuth(auth.AccessGeneration())
 	cookie := testAccessCookieFor(t, auth).Value
 	token := testAccessSignedToken(t, auth)
 	events := dial("/ws/md-events", wireproto.EventsSubprotocol, token, "")
@@ -572,7 +572,7 @@ func TestAccessWSLateRegistrationAfterRotationIsRejected(t *testing.T) {
 	token := testAccessEnableV2(t, testAccessPassword)
 	gate, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
-	server := httptest.NewServer(accessAuthMiddleware(gatedEventsHandler(hub, gate, release, &once)))
+	server := httptest.NewServer(Middleware(gatedEventsHandler(hub, gate, release, &once)))
 	defer server.Close()
 
 	type result struct {
@@ -600,7 +600,7 @@ func TestAccessWSLateRegistrationAfterRotationIsRejected(t *testing.T) {
 // --- M1c: admission identity, deadlines, and family revocation ---
 
 // testAccessFamilyOf returns the family a v2 token names.
-func testAccessFamilyOf(t *testing.T, auth *accessAuthManager, token string) string {
+func testAccessFamilyOf(t *testing.T, auth *Manager, token string) string {
 	t.Helper()
 	auth.mu.Lock()
 	defer auth.mu.Unlock()
@@ -613,7 +613,7 @@ func testAccessFamilyOf(t *testing.T, auth *accessAuthManager, token string) str
 
 // testAccessShortLivedToken mints a token for an existing family that expires
 // after lifetime, so a socket deadline can be observed without waiting an hour.
-func testAccessShortLivedToken(t *testing.T, auth *accessAuthManager, familyID string, lifetime time.Duration) string {
+func testAccessShortLivedToken(t *testing.T, auth *Manager, familyID string, lifetime time.Duration) string {
 	t.Helper()
 	auth.mu.Lock()
 	defer auth.mu.Unlock()
@@ -933,7 +933,7 @@ func TestAccessWSFamilyRemovalClosesSockets(t *testing.T) {
 }
 
 // authFamilyExists reports whether the manager still holds a live family.
-func authFamilyExists(t *testing.T, auth *accessAuthManager, familyID string) (struct{}, bool) {
+func authFamilyExists(t *testing.T, auth *Manager, familyID string) (struct{}, bool) {
 	t.Helper()
 	auth.mu.Lock()
 	defer auth.mu.Unlock()
@@ -948,11 +948,11 @@ func TestAccessWSLateExpiryRegistrationIsRejected(t *testing.T) {
 	withTempConfig(t)
 	auth := useTestAccessAuth(t)
 	hub := testAccessUseHub(t)
-	hub.SetAuthValidator(auth.admitsFence)
+	hub.SetAuthValidator(auth.AdmitsFence)
 	token := testAccessEnableV2(t, testAccessPassword)
 	gate, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
-	server := httptest.NewServer(accessAuthMiddleware(gatedEventsHandler(hub, gate, release, &once)))
+	server := httptest.NewServer(Middleware(gatedEventsHandler(hub, gate, release, &once)))
 	defer server.Close()
 
 	type result struct {
@@ -1025,7 +1025,7 @@ func requireDialed(t *testing.T, socketURL, path, subprotocol, token, cookie str
 }
 
 // testAccessExpiryOf returns the admitted exp a token names.
-func testAccessExpiryOf(t *testing.T, auth *accessAuthManager, token string) time.Time {
+func testAccessExpiryOf(t *testing.T, auth *Manager, token string) time.Time {
 	t.Helper()
 	auth.mu.Lock()
 	defer auth.mu.Unlock()
@@ -1199,7 +1199,7 @@ func TestAccessWSClearAndRehashCloseSockets(t *testing.T) {
 
 		// A same-encoded submission must not touch Config: the deterministic v1
 		// signature cannot rotate, so only the state file changes.
-		previousWriter := configWriter
+		previousWriter := testWriter
 		if previousWriter == nil {
 			previousWriter = system.WriteFileAtomicPreserveExisting
 		}
@@ -1258,7 +1258,7 @@ func TestAccessWSEnableDisableAdmissionFence(t *testing.T) {
 		hub := testAccessUseHub(t)
 		gate, release := make(chan struct{}), make(chan struct{})
 		var once sync.Once
-		server := httptest.NewServer(accessAuthMiddleware(gatedEventsHandler(hub, gate, release, &once)))
+		server := httptest.NewServer(Middleware(gatedEventsHandler(hub, gate, release, &once)))
 		defer server.Close()
 
 		type result struct {
@@ -1296,7 +1296,7 @@ func TestAccessWSEnableDisableAdmissionFence(t *testing.T) {
 		token := testAccessEnableV2(t, testAccessPassword)
 		gate, release := make(chan struct{}), make(chan struct{})
 		var once sync.Once
-		server := httptest.NewServer(accessAuthMiddleware(gatedEventsHandler(hub, gate, release, &once)))
+		server := httptest.NewServer(Middleware(gatedEventsHandler(hub, gate, release, &once)))
 		defer server.Close()
 
 		type result struct {
@@ -1387,7 +1387,7 @@ func TestAccessSocketTokenHeaderIsNotAnHTTPCredential(t *testing.T) {
 	// The v2 status route reports the cached truth instead of trusting it.
 	status := httptest.NewRequest(http.MethodGet, "/api/auth/v2/status", nil)
 	status.Header.Set(accessSocketTokenHeader, token)
-	enabled, authenticated, _ := accessAuth.v2Status(status)
+	enabled, authenticated, _ := Default.v2Status(status)
 	if !enabled || authenticated {
 		t.Fatalf("status accepted the host carrier: enabled=%v authenticated=%v", enabled, authenticated)
 	}
@@ -1395,7 +1395,7 @@ func TestAccessSocketTokenHeaderIsNotAnHTTPCredential(t *testing.T) {
 	// The refresh route treats it as a carrier mix-up, not a fallback.
 	refresh := testAccessV2Request(http.MethodPost, "/api/auth/v2/refresh", `{}`)
 	refresh.Header.Set(accessSocketTokenHeader, token)
-	if w := testAccessServe(handleAccessV2Refresh, refresh); w.Code != http.StatusUnauthorized {
+	if w := testAccessServe(HandleAccessV2Refresh, refresh); w.Code != http.StatusUnauthorized {
 		t.Fatalf("refresh accepted the host carrier: %d", w.Code)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	pibridgepb "github.com/hypernewbie/phi/internal/pibridge/pb"
+	"github.com/hypernewbie/phi/internal/access"
 	"github.com/hypernewbie/phi/pkg/pty"
 )
 
@@ -210,7 +211,7 @@ func TestTranscriptSearchRouteUsesAccessAuthGate(t *testing.T) {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/pi-bridge/transcript-search", handlePiBridgeTranscriptSearch)
-	protected := accessAuthMiddleware(mux)
+	protected := access.Middleware(mux)
 	req := httptest.NewRequest(http.MethodPost, "/api/pi-bridge/transcript-search", strings.NewReader(
 		`{"pane":"unknown","query":"needle","generation":"1","initial":true}`,
 	))

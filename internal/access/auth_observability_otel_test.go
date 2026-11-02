@@ -1,6 +1,6 @@
 //go:build otel
 
-package main
+package access
 
 import (
 	"context"
@@ -21,7 +21,7 @@ import (
 )
 
 // The optional-trace half of the auth observability contract: with the otel
-// tag compiled in, main.go serves obs.WrapHTTP(accessAuthMiddleware(mux)), so
+// tag compiled in, main.go serves obs.WrapHTTP(Middleware(mux)), so
 // every auth request produces an otelhttp server span. Those spans must not
 // carry a password, a token, an Authorization value, or a token-bearing URL —
 // notably not the WebSocket query credential.
@@ -79,14 +79,14 @@ func TestAccessObservabilitySpansCarryNoCredentials(t *testing.T) {
 	var tokens []string
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/auth/status", handleAccessAuthStatus)
-	mux.HandleFunc("/api/auth/login", handleAccessAuthLogin)
-	mux.HandleFunc("/api/auth/password", handleAccessPassword)
-	mux.HandleFunc("/api/auth/v2/status", handleAccessV2Status)
-	mux.HandleFunc("/api/auth/v2/login", handleAccessV2Login)
-	mux.HandleFunc("/api/auth/v2/password", handleAccessV2Password)
-	mux.HandleFunc("/api/auth/v2/refresh", handleAccessV2Refresh)
-	mux.HandleFunc("/api/auth/v2/logout", handleAccessV2Logout)
+	mux.HandleFunc("/api/auth/status", HandleAccessAuthStatus)
+	mux.HandleFunc("/api/auth/login", HandleAccessAuthLogin)
+	mux.HandleFunc("/api/auth/password", HandleAccessPassword)
+	mux.HandleFunc("/api/auth/v2/status", HandleAccessV2Status)
+	mux.HandleFunc("/api/auth/v2/login", HandleAccessV2Login)
+	mux.HandleFunc("/api/auth/v2/password", HandleAccessV2Password)
+	mux.HandleFunc("/api/auth/v2/refresh", HandleAccessV2Refresh)
+	mux.HandleFunc("/api/auth/v2/logout", HandleAccessV2Logout)
 	mux.HandleFunc("/api/config", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -100,7 +100,7 @@ func TestAccessObservabilitySpansCarryNoCredentials(t *testing.T) {
 		})
 	}
 	// Same order as main.go.
-	server := httptest.NewServer(obs.WrapHTTP(accessAuthMiddleware(mux)))
+	server := httptest.NewServer(obs.WrapHTTP(Middleware(mux)))
 	defer server.Close()
 
 	post := func(path, bearer, body string) *http.Response {

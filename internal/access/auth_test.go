@@ -1,4 +1,4 @@
-package main
+package access
 
 import (
 	"bytes"
@@ -15,19 +15,13 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-func useTestAccessAuth(t *testing.T) *accessAuthManager {
+func useTestAccessAuth(t *testing.T) *Manager {
 	t.Helper()
-	previous := accessAuth
-	manager := newAccessAuthManager()
-	accessAuth = manager
-	t.Cleanup(func() {
-		manager.close()
-		accessAuth = previous
-	})
+	manager := newTestManager(t)
 	// Owning the (temporary) state directory is what lets a manager authorize
 	// anything at all, so a test manager starts as the owner with auth disabled.
 	if testConfigPath != "" {
-		if err := manager.configure(""); err != nil {
+		if err := manager.Configure(""); err != nil {
 			t.Fatalf("configure test manager: %v", err)
 		}
 	}
@@ -42,7 +36,7 @@ func testAccessHash() string {
 
 // setTestAccessRecord changes the test manager through the same SQLite
 // transaction used by password changes; Config remains migration input only.
-func setTestAccessRecord(manager *accessAuthManager, encoded string) error {
+func setTestAccessRecord(manager *Manager, encoded string) error {
 	record, err := parseAccessPasswordHash(encoded)
 	if err != nil {
 		return err
@@ -109,11 +103,11 @@ func TestAccessPasswordHashRoundTripAndRejectsInvalidValues(t *testing.T) {
 func TestAccessAuthMiddlewareDisabledAndEnabledCoverage(t *testing.T) {
 	withTempConfig(t)
 	auth := useTestAccessAuth(t)
-	if err := auth.configure(""); err != nil {
+	if err := auth.Configure(""); err != nil {
 		t.Fatal(err)
 	}
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
-	handler := accessAuthMiddleware(next)
+	handler := Middleware(next)
 
 	for _, path := range []string{"/api/coders", "/ws/pane/a"} {
 		w := httptest.NewRecorder()
@@ -149,7 +143,7 @@ func TestAccessLoginUsesOneTimeProofAndIssuesSession(t *testing.T) {
 	}
 
 	statusW := httptest.NewRecorder()
-	handleAccessAuthStatus(statusW, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+	HandleAccessAuthStatus(statusW, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
 	if statusW.Code != http.StatusOK {
 		t.Fatalf("status: got %d body=%s", statusW.Code, statusW.Body.String())
 	}
@@ -173,7 +167,7 @@ func TestAccessLoginUsesOneTimeProofAndIssuesSession(t *testing.T) {
 	loginReq := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(loginBody))
 	loginReq.RemoteAddr = "192.0.2.14:12345"
 	loginW := httptest.NewRecorder()
-	handleAccessAuthLogin(loginW, loginReq)
+	HandleAccessAuthLogin(loginW, loginReq)
 	if loginW.Code != http.StatusOK {
 		t.Fatalf("login: got %d body=%s", loginW.Code, loginW.Body.String())
 	}
@@ -182,7 +176,7 @@ func TestAccessLoginUsesOneTimeProofAndIssuesSession(t *testing.T) {
 		t.Fatalf("unexpected session cookie: %#v", cookies)
 	}
 
-	protected := accessAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	protected := Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
 	protectedReq := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
 	protectedReq.AddCookie(cookies[0])
 	protectedW := httptest.NewRecorder()
@@ -193,7 +187,7 @@ func TestAccessLoginUsesOneTimeProofAndIssuesSession(t *testing.T) {
 	statusReq := httptest.NewRequest(http.MethodGet, "/api/auth/status", nil)
 	statusReq.AddCookie(cookies[0])
 	statusWithSessionW := httptest.NewRecorder()
-	handleAccessAuthStatus(statusWithSessionW, statusReq)
+	HandleAccessAuthStatus(statusWithSessionW, statusReq)
 	var statusWithSession map[string]any
 	if err := json.Unmarshal(statusWithSessionW.Body.Bytes(), &statusWithSession); err != nil || statusWithSession["authenticated"] != true {
 		t.Errorf("status did not recognize durable session: body=%s err=%v", statusWithSessionW.Body.String(), err)
@@ -203,7 +197,7 @@ func TestAccessLoginUsesOneTimeProofAndIssuesSession(t *testing.T) {
 	replayReq := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(loginBody))
 	replayReq.RemoteAddr = "192.0.2.14:12345"
 	replayW := httptest.NewRecorder()
-	handleAccessAuthLogin(replayW, replayReq)
+	HandleAccessAuthLogin(replayW, replayReq)
 	if replayW.Code != http.StatusUnauthorized {
 		t.Errorf("replayed proof: got %d want 401", replayW.Code)
 	}
@@ -215,7 +209,7 @@ func TestAccessPasswordHandlerPersistsAndInvalidatesSessions(t *testing.T) {
 
 	setReq := httptest.NewRequest(http.MethodPost, "/api/auth/password", strings.NewReader(`{"password_hash":"`+testAccessHash()+`"}`))
 	setW := httptest.NewRecorder()
-	handleAccessPassword(setW, setReq)
+	HandleAccessPassword(setW, setReq)
 	if setW.Code != http.StatusOK {
 		t.Fatalf("set password: got %d body=%s", setW.Code, setW.Body.String())
 	}
@@ -226,11 +220,8 @@ func TestAccessPasswordHandlerPersistsAndInvalidatesSessions(t *testing.T) {
 	if got := loadConfig().AccessPasswordHash; got != "" {
 		t.Errorf("completed migration retained verifier in Config: %q", got)
 	}
-	configW := httptest.NewRecorder()
-	handleConfig(configW, httptest.NewRequest(http.MethodGet, "/api/config", nil))
-	if strings.Contains(configW.Body.String(), "access_password_hash") || strings.Contains(configW.Body.String(), testAccessHash()) {
-		t.Errorf("/api/config leaked the access verifier: %s", configW.Body.String())
-	}
+	// Verifier redaction from /api/config is application integration coverage
+	// (root access_export_test.go): the handler lives there, not here.
 
 	// Generate a valid different verifier rather than relying on base64 text.
 	changedHash := accessPasswordRecord{
@@ -241,12 +232,12 @@ func TestAccessPasswordHandlerPersistsAndInvalidatesSessions(t *testing.T) {
 	changeReq := httptest.NewRequest(http.MethodPost, "/api/auth/password", strings.NewReader(`{"password_hash":"`+changedHash+`"}`))
 	changeReq.AddCookie(firstCookie)
 	changeW := httptest.NewRecorder()
-	handleAccessPassword(changeW, changeReq)
+	HandleAccessPassword(changeW, changeReq)
 	if changeW.Code != http.StatusOK {
 		t.Fatalf("change password: got %d body=%s", changeW.Code, changeW.Body.String())
 	}
 
-	protected := accessAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	protected := Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
 	oldSessionReq := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
 	oldSessionReq.AddCookie(firstCookie)
 	oldSessionW := httptest.NewRecorder()
@@ -258,18 +249,18 @@ func TestAccessPasswordHandlerPersistsAndInvalidatesSessions(t *testing.T) {
 	clearReq := httptest.NewRequest(http.MethodPost, "/api/auth/password", strings.NewReader(`{"password_hash":""}`))
 	clearReq.AddCookie(changeW.Result().Cookies()[0])
 	clearW := httptest.NewRecorder()
-	handleAccessPassword(clearW, clearReq)
+	HandleAccessPassword(clearW, clearReq)
 	if clearW.Code != http.StatusOK {
 		t.Fatalf("clear password: got %d body=%s", clearW.Code, clearW.Body.String())
 	}
-	if got := testAccessDBPasswordRecord(t); got != "" || accessAuth.enabled() {
-		t.Errorf("clear did not disable access password: database=%q enabled=%v", got, accessAuth.enabled())
+	if got := testAccessDBPasswordRecord(t); got != "" || Default.enabled() {
+		t.Errorf("clear did not disable access password: database=%q enabled=%v", got, Default.enabled())
 	}
 }
 
 // testAccessReleaseStateOwnership drops the state lock so a test can hand
 // ownership to a replacement manager, which is what a real restart does.
-func testAccessReleaseStateOwnership(auth *accessAuthManager) {
+func testAccessReleaseStateOwnership(auth *Manager) {
 	auth.close()
 }
 
@@ -300,19 +291,19 @@ func TestAccessSessionSurvivesServerRestart(t *testing.T) {
 	// Simulate server process restart: the first manager must release the state
 	// lock, because a second live process is refused all authentication.
 	testAccessReleaseStateOwnership(auth)
-	restartedAuth := newAccessAuthManager()
-	if err := restartedAuth.configure(testAccessHash()); err != nil {
+	restartedAuth := NewManager(testConfigStore, testSocketHub)
+	if err := restartedAuth.Configure(testAccessHash()); err != nil {
 		restartedAuth.close()
 		t.Fatal(err)
 	}
-	previous := accessAuth
-	accessAuth = restartedAuth
+	previous := Default
+	Default = restartedAuth
 	t.Cleanup(func() {
 		restartedAuth.close()
-		accessAuth = previous
+		Default = previous
 	})
 
-	protected := accessAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	protected := Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
@@ -327,7 +318,7 @@ func TestAccessSessionSurvivesServerRestart(t *testing.T) {
 	statusReq := httptest.NewRequest(http.MethodGet, "/api/auth/status", nil)
 	statusReq.AddCookie(cookie)
 	statusW := httptest.NewRecorder()
-	handleAccessAuthStatus(statusW, statusReq)
+	HandleAccessAuthStatus(statusW, statusReq)
 	var status map[string]any
 	if err := json.Unmarshal(statusW.Body.Bytes(), &status); err != nil || status["authenticated"] != true {
 		t.Fatalf("status did not recognize session after restart: %v", status)
@@ -341,7 +332,7 @@ func TestAccessSessionRejectsTamperedOrInvalidTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	protected := accessAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	protected := Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 

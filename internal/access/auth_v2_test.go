@@ -1,4 +1,4 @@
-package main
+package access
 
 import (
 	"bytes"
@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/hypernewbie/phi/internal/config"
 	"github.com/hypernewbie/phi/pkg/ws"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
@@ -533,7 +534,7 @@ func TestAccessJWTRevocationRequiresCurrentRecordEpochAndFamily(t *testing.T) {
 	// Reconfiguring the same record keeps the durable identity: restarting phi
 	// must not sign every browser out, so record identity lives in the state
 	// file rather than in memory.
-	if err := auth.configure(encoded); err != nil {
+	if err := auth.Configure(encoded); err != nil {
 		t.Fatal(err)
 	}
 	auth.mu.Lock()
@@ -607,8 +608,8 @@ func TestAccessJWTFullClaimsAcceptedThroughMiddleware(t *testing.T) {
 	}
 
 	// A correctly signed token missing one required claim is refused.
-	key := mustTestAccessJWTKey(t, accessAuth)
-	auth := accessAuth
+	key := mustTestAccessJWTKey(t, Default)
+	auth := Default
 	auth.mu.Lock()
 	claims := accessJWTRevocation{RecordID: auth.v2.recordID, Epoch: auth.v2.epoch}
 	familyID, _, err := auth.issueAccessFamilyLocked(time.Now())
@@ -691,7 +692,7 @@ func TestAccessJWTWebsocketAdmissionUsesExpiryWithoutAllowance(t *testing.T) {
 	}
 }
 
-func mustTestAccessJWTKey(t *testing.T, auth *accessAuthManager) []byte {
+func mustTestAccessJWTKey(t *testing.T, auth *Manager) []byte {
 	t.Helper()
 	auth.mu.Lock()
 	defer auth.mu.Unlock()
@@ -704,18 +705,18 @@ func mustTestAccessJWTKey(t *testing.T, auth *accessAuthManager) []byte {
 func TestAccessConfigureDerivesJWTKeyAndAdvancesGeneration(t *testing.T) {
 	withTempConfig(t)
 	seedTestLegacyConfig(t, testAccessHash())
-	auth := newAccessAuthManager()
-	previous := accessAuth
-	accessAuth = auth
+	auth := NewManager(testConfigStore, testSocketHub)
+	previous := Default
+	Default = auth
 	t.Cleanup(func() {
 		auth.close()
-		accessAuth = previous
+		Default = previous
 	})
-	start := auth.accessGeneration()
-	if err := auth.configure(""); err != nil {
+	start := auth.AccessGeneration()
+	if err := auth.Configure(""); err != nil {
 		t.Fatalf("configure migrated verifier: %v", err)
 	}
-	if got := auth.accessGeneration(); got != start+1 {
+	if got := auth.AccessGeneration(); got != start+1 {
 		t.Errorf("generation = %d want %d", got, start+1)
 	}
 
@@ -739,7 +740,7 @@ func TestAccessConfigureDerivesJWTKeyAndAdvancesGeneration(t *testing.T) {
 	if key != nil {
 		t.Errorf("disabled record kept a signing key: %x", key)
 	}
-	if got := auth.accessGeneration(); got != start+2 {
+	if got := auth.AccessGeneration(); got != start+2 {
 		t.Errorf("generation after clear = %d want %d", got, start+2)
 	}
 }
@@ -765,7 +766,7 @@ func testAccessV2PasswordRequest(t *testing.T, body, bearer string) *httptest.Re
 	if bearer != "" {
 		r.Header.Set("Authorization", "Bearer "+bearer)
 	}
-	return testAccessServe(handleAccessV2Password, r)
+	return testAccessServe(HandleAccessV2Password, r)
 }
 
 // testAccessV2Request builds the request shape the v2 POST routes require: the
@@ -782,7 +783,7 @@ func testAccessV2LoginBody(t *testing.T, body, remoteAddr string) *httptest.Resp
 	t.Helper()
 	r := testAccessV2Request(http.MethodPost, "/api/auth/v2/login", body)
 	r.RemoteAddr = remoteAddr
-	return testAccessServe(handleAccessV2Login, r)
+	return testAccessServe(HandleAccessV2Login, r)
 }
 
 func testAccessV2LoginRequest(t *testing.T, password, remoteAddr string) *httptest.ResponseRecorder {
@@ -826,7 +827,7 @@ func testAccessEnableV2(t *testing.T, password string) string {
 }
 
 func testAccessProtected() http.Handler {
-	return accessAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	return Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 }
@@ -835,7 +836,7 @@ func TestAccessV1StatusAdvertisesProtocols(t *testing.T) {
 	withTempConfig(t)
 	auth := useTestAccessAuth(t)
 
-	disabled := testAccessServe(handleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+	disabled := testAccessServe(HandleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
 	var disabledPayload struct {
 		Enabled   bool     `json:"enabled"`
 		Protocols []string `json:"protocols"`
@@ -854,7 +855,7 @@ func TestAccessV1StatusAdvertisesProtocols(t *testing.T) {
 	if err := setTestAccessRecord(auth, testAccessHash()); err != nil {
 		t.Fatal(err)
 	}
-	enabled := testAccessServe(handleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+	enabled := testAccessServe(HandleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
 	var enabledPayload struct {
 		Enabled    bool     `json:"enabled"`
 		Iterations int      `json:"iterations"`
@@ -891,7 +892,7 @@ func TestAccessV2PasswordLifecycle(t *testing.T) {
 		Enabled       bool `json:"enabled"`
 		Authenticated bool `json:"authenticated"`
 	}
-	testAccessJSONBody(t, testAccessServe(handleAccessV2Status,
+	testAccessJSONBody(t, testAccessServe(HandleAccessV2Status,
 		httptest.NewRequest(http.MethodGet, "/api/auth/v2/status", nil)), &statusPayload)
 	if !statusPayload.Enabled || statusPayload.Authenticated {
 		t.Fatalf("anonymous v2 status = %+v", statusPayload)
@@ -899,7 +900,7 @@ func TestAccessV2PasswordLifecycle(t *testing.T) {
 
 	authedStatus := httptest.NewRequest(http.MethodGet, "/api/auth/v2/status", nil)
 	authedStatus.Header.Set("Authorization", "Bearer "+token)
-	testAccessJSONBody(t, testAccessServe(handleAccessV2Status, authedStatus), &statusPayload)
+	testAccessJSONBody(t, testAccessServe(HandleAccessV2Status, authedStatus), &statusPayload)
 	if !statusPayload.Authenticated {
 		t.Fatalf("bearer v2 status = %+v", statusPayload)
 	}
@@ -916,14 +917,14 @@ func TestAccessV2PasswordLifecycle(t *testing.T) {
 	loginBody := `{"challenge":"` + challenge + `","proof":"` + testAccessProof(t, record.Verifier, challenge) + `"}`
 	loginReq := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(loginBody))
 	loginReq.RemoteAddr = "192.0.2.20:1"
-	loginW := testAccessServe(handleAccessAuthLogin, loginReq)
+	loginW := testAccessServe(HandleAccessAuthLogin, loginReq)
 	if loginW.Code != http.StatusOK {
 		t.Fatalf("v1 login: %d %s", loginW.Code, loginW.Body.String())
 	}
 	cookie := loginW.Result().Cookies()[0]
 	cookieStatus := httptest.NewRequest(http.MethodGet, "/api/auth/v2/status", nil)
 	cookieStatus.AddCookie(cookie)
-	testAccessJSONBody(t, testAccessServe(handleAccessV2Status, cookieStatus), &statusPayload)
+	testAccessJSONBody(t, testAccessServe(HandleAccessV2Status, cookieStatus), &statusPayload)
 	if statusPayload.Authenticated {
 		t.Fatal("v2 status authenticated a cookie-only request")
 	}
@@ -1070,7 +1071,7 @@ func TestAccessCredentialPriority(t *testing.T) {
 	token := testAccessEnableV2(t, testAccessPassword)
 	protected := testAccessProtected()
 
-	cookie := accessAuth.mustTestCookie(t)
+	cookie := Default.mustTestCookie(t)
 
 	cases := []struct {
 		name    string
@@ -1121,7 +1122,7 @@ func TestAccessCredentialPriority(t *testing.T) {
 }
 
 // mustTestCookie logs in through the v1 route and returns its session cookie.
-func (m *accessAuthManager) mustTestCookie(t *testing.T) *http.Cookie {
+func (m *Manager) mustTestCookie(t *testing.T) *http.Cookie {
 	t.Helper()
 	record, err := parseAccessPasswordHash(testAccessDBPasswordRecord(t))
 	if err != nil {
@@ -1134,7 +1135,7 @@ func (m *accessAuthManager) mustTestCookie(t *testing.T) *http.Cookie {
 	body := `{"challenge":"` + challenge + `","proof":"` + testAccessProof(t, record.Verifier, challenge) + `"}`
 	r := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(body))
 	r.RemoteAddr = "192.0.2.40:1"
-	w := testAccessServe(handleAccessAuthLogin, r)
+	w := testAccessServe(HandleAccessAuthLogin, r)
 	if w.Code != http.StatusOK {
 		t.Fatalf("v1 login: %d %s", w.Code, w.Body.String())
 	}
@@ -1155,7 +1156,7 @@ func TestAccessSharedRateLimit(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/api/auth/login",
 		strings.NewReader(`{"challenge":"`+challenge+`","proof":"`+badProof+`"}`))
 	r.RemoteAddr = "198.51.100.7:1000"
-	if w := testAccessServe(handleAccessAuthLogin, r); w.Code != http.StatusUnauthorized {
+	if w := testAccessServe(HandleAccessAuthLogin, r); w.Code != http.StatusUnauthorized {
 		t.Fatalf("bad v1 proof: got %d", w.Code)
 	}
 	auth.mu.Lock()
@@ -1199,7 +1200,7 @@ func TestAccessSharedRateLimit(t *testing.T) {
 	good := `{"challenge":"` + challenge + `","proof":"` + testAccessProof(t, record.Verifier, challenge) + `"}`
 	r = httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(good))
 	r.RemoteAddr = "198.51.100.8:3000"
-	if w := testAccessServe(handleAccessAuthLogin, r); w.Code != http.StatusTooManyRequests {
+	if w := testAccessServe(HandleAccessAuthLogin, r); w.Code != http.StatusTooManyRequests {
 		t.Fatalf("v1 login ignored the shared backoff: %d", w.Code)
 	}
 	if w := testAccessV2LoginRequest(t, testAccessPassword, "198.51.100.9:1000"); w.Code != http.StatusOK {
@@ -1218,7 +1219,7 @@ func TestAccessRecordTransactionFailureKeepsOldState(t *testing.T) {
 	auth := useTestAccessAuth(t)
 	token := testAccessEnableV2(t, testAccessPassword)
 	before := testAccessDBPasswordRecord(t)
-	generation := auth.accessGeneration()
+	generation := auth.AccessGeneration()
 
 	restoreCommit := failAccessDBCommitForTest(t, auth)
 	if w := testAccessV2PasswordRequest(t, `{"password":"test-pass-5678"}`, token); w.Code != http.StatusInternalServerError {
@@ -1228,7 +1229,7 @@ func TestAccessRecordTransactionFailureKeepsOldState(t *testing.T) {
 	if got := testAccessDBPasswordRecord(t); got != before {
 		t.Fatalf("failed transaction changed the database record: %q", got)
 	}
-	if got := auth.accessGeneration(); got != generation {
+	if got := auth.AccessGeneration(); got != generation {
 		t.Fatalf("failed write advanced generation: %d want %d", got, generation)
 	}
 	request := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
@@ -1245,13 +1246,13 @@ func TestAccessRecordTransactionFailureKeepsOldState(t *testing.T) {
 	v1Body := `{"password_hash":"` + testAccessHash() + `"}`
 	r := httptest.NewRequest(http.MethodPost, "/api/auth/password", strings.NewReader(v1Body))
 	r.AddCookie(testAccessCookieFor(t, auth))
-	if w := testAccessServe(handleAccessPassword, r); w.Code != http.StatusInternalServerError {
+	if w := testAccessServe(HandleAccessPassword, r); w.Code != http.StatusInternalServerError {
 		t.Fatalf("v1 failed write: got %d want 500 body=%s", w.Code, w.Body.String())
 	}
 }
 
 // testAccessCookieFor mints a v1 session cookie from the current record.
-func testAccessCookieFor(t *testing.T, auth *accessAuthManager) *http.Cookie {
+func testAccessCookieFor(t *testing.T, auth *Manager) *http.Cookie {
 	t.Helper()
 	auth.mu.Lock()
 	defer auth.mu.Unlock()
@@ -1264,7 +1265,7 @@ func testAccessCookieFor(t *testing.T, auth *accessAuthManager) *http.Cookie {
 
 // testAccessSignedToken mints a bearer from the current record without a
 // login, so a socket can be admitted before the record changes.
-func testAccessSignedToken(t *testing.T, auth *accessAuthManager) string {
+func testAccessSignedToken(t *testing.T, auth *Manager) string {
 	t.Helper()
 	auth.mu.Lock()
 	defer auth.mu.Unlock()
@@ -1410,21 +1411,21 @@ func TestAccessRestartAfterV2Change(t *testing.T) {
 	withTempConfig(t)
 	useTestAccessAuth(t)
 	token := testAccessEnableV2(t, testAccessPassword)
-	cookie := testAccessCookieFor(t, accessAuth)
+	cookie := testAccessCookieFor(t, Default)
 
 	// A second live process is refused all authentication, so a simulated
 	// restart must hand the state lock over before configuring.
-	testAccessReleaseStateOwnership(accessAuth)
-	restarted := newAccessAuthManager()
-	if err := restarted.configure(loadConfig().AccessPasswordHash); err != nil {
+	testAccessReleaseStateOwnership(Default)
+	restarted := NewManager(testConfigStore, testSocketHub)
+	if err := restarted.Configure(loadConfig().AccessPasswordHash); err != nil {
 		restarted.close()
 		t.Fatal(err)
 	}
-	previous := accessAuth
-	accessAuth = restarted
+	previous := Default
+	Default = restarted
 	t.Cleanup(func() {
 		restarted.close()
-		accessAuth = previous
+		Default = previous
 	})
 
 	// The v1 cookie is stateless and survives restart unchanged.
@@ -1472,10 +1473,10 @@ func (s *testAuthSocket) closedForTest() bool { return s.closed }
 func testAccessUseHub(t *testing.T) *ws.Hub {
 	t.Helper()
 	hub := ws.NewHub(0)
-	previous := wsHub
-	wsHub = hub
+	previous := testHub
+	testHub = hub
 	t.Cleanup(func() {
-		wsHub = previous
+		testHub = previous
 		_ = hub.Close()
 	})
 	return hub
@@ -1487,13 +1488,13 @@ func TestAccessFailedWriteClosesNoSockets(t *testing.T) {
 	hub := testAccessUseHub(t)
 
 	token := testAccessEnableV2(t, testAccessPassword)
-	generation := accessAuth.accessGeneration()
+	generation := Default.AccessGeneration()
 	socket := &testAuthSocket{}
 	if !hub.AdmitAuth(socket, ws.AuthFence{Generation: generation}) {
 		t.Fatal("socket was not admitted at the current generation")
 	}
 
-	restoreCommit := failAccessDBCommitForTest(t, accessAuth)
+	restoreCommit := failAccessDBCommitForTest(t, Default)
 	if w := testAccessV2PasswordRequest(t, `{"password":"test-pass-5678"}`, token); w.Code != http.StatusInternalServerError {
 		t.Fatalf("failed transaction: got %d want 500", w.Code)
 	}
@@ -1514,7 +1515,7 @@ func TestAccessMiddlewareAttachesWSFence(t *testing.T) {
 	withTempConfig(t)
 	useTestAccessAuth(t)
 	testAccessEnableV2(t, testAccessPassword)
-	cookie := testAccessCookieFor(t, accessAuth)
+	cookie := testAccessCookieFor(t, Default)
 
 	var fence ws.AuthFence
 	var fenced bool
@@ -1524,18 +1525,18 @@ func TestAccessMiddlewareAttachesWSFence(t *testing.T) {
 	w := httptest.NewRecorder()
 	wsRequest := httptest.NewRequest(http.MethodGet, "/ws/pane/p1", nil)
 	wsRequest.AddCookie(cookie)
-	accessAuthMiddleware(next).ServeHTTP(w, wsRequest)
+	Middleware(next).ServeHTTP(w, wsRequest)
 	if w.Code != http.StatusOK || !fenced {
 		t.Fatalf("ws request: code=%d fenced=%v", w.Code, fenced)
 	}
-	if fence.Generation != accessAuth.accessGeneration() {
-		t.Fatalf("fence generation = %d want %d", fence.Generation, accessAuth.accessGeneration())
+	if fence.Generation != Default.AccessGeneration() {
+		t.Fatalf("fence generation = %d want %d", fence.Generation, Default.AccessGeneration())
 	}
 
 	fenced = true
 	apiRequest := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
 	apiRequest.AddCookie(cookie)
-	accessAuthMiddleware(next).ServeHTTP(httptest.NewRecorder(), apiRequest)
+	Middleware(next).ServeHTTP(httptest.NewRecorder(), apiRequest)
 	if fenced {
 		t.Fatal("api request carried a ws fence")
 	}
@@ -1560,7 +1561,7 @@ func TestAccessDisabledPreservesOpenRequests(t *testing.T) {
 // advertised for it.
 func testAccessV1Login(t *testing.T) (*httptest.ResponseRecorder, int) {
 	t.Helper()
-	enabled, saltB64, challenge, iterations, err := accessAuth.statusAndChallenge()
+	enabled, saltB64, challenge, iterations, err := Default.statusAndChallenge()
 	if err != nil || !enabled {
 		t.Fatalf("status challenge: enabled=%v err=%v", enabled, err)
 	}
@@ -1580,7 +1581,7 @@ func testAccessV1Login(t *testing.T) (*httptest.ResponseRecorder, int) {
 		t.Fatal(err)
 	}
 	request := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
-	return testAccessServe(handleAccessAuthLogin, request), iterations
+	return testAccessServe(HandleAccessAuthLogin, request), iterations
 }
 
 // A non-current record keeps working over v1 at its stored work factor; the
@@ -1716,7 +1717,7 @@ func testAccessV2RefreshRequest(t *testing.T, handle string) *httptest.ResponseR
 		r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: handle})
 	}
 	r.RemoteAddr = "192.0.2.60:1"
-	return testAccessServe(handleAccessV2Refresh, r)
+	return testAccessServe(HandleAccessV2Refresh, r)
 }
 
 // testAccessV2LogoutRequest sends {"all":<bool>} with an optional bearer.
@@ -1727,7 +1728,7 @@ func testAccessV2LogoutRequest(t *testing.T, body, bearer string) *httptest.Resp
 		r.Header.Set("Authorization", "Bearer "+bearer)
 	}
 	r.RemoteAddr = "192.0.2.61:1"
-	return testAccessServe(handleAccessV2Logout, r)
+	return testAccessServe(HandleAccessV2Logout, r)
 }
 
 // testAccessClock drives the manager clock, so a deadline can be tested at its
@@ -1738,7 +1739,7 @@ type testAccessClock struct {
 
 func (c *testAccessClock) advance(d time.Duration) { c.now = c.now.Add(d) }
 
-func testAccessUseClock(t *testing.T, auth *accessAuthManager, start time.Time) *testAccessClock {
+func testAccessUseClock(t *testing.T, auth *Manager, start time.Time) *testAccessClock {
 	t.Helper()
 	clock := &testAccessClock{now: start}
 	previous := auth.now
@@ -1774,7 +1775,7 @@ func TestAccessV2RouteShapes(t *testing.T) {
 
 	// Status: exactly the three documented booleans, with no credential or KDF
 	// field, including while authentication is disabled.
-	status := testAccessServe(handleAccessV2Status, httptest.NewRequest(http.MethodGet, "/api/auth/v2/status", nil))
+	status := testAccessServe(HandleAccessV2Status, httptest.NewRequest(http.MethodGet, "/api/auth/v2/status", nil))
 	if status.Code != http.StatusOK {
 		t.Fatalf("status: %d %s", status.Code, status.Body.String())
 	}
@@ -1891,7 +1892,7 @@ func TestAccessV2RouteErrors(t *testing.T) {
 	noHeader := func(method, path, body string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, path, strings.NewReader(body))
 		r.Header.Set("Content-Type", "application/json")
-		return testAccessServe(handleAccessV2Login, r)
+		return testAccessServe(HandleAccessV2Login, r)
 	}
 
 	for _, tc := range []struct {
@@ -1908,30 +1909,30 @@ func TestAccessV2RouteErrors(t *testing.T) {
 		{"refresh empty body", func() *httptest.ResponseRecorder {
 			r := testAccessV2Request(http.MethodPost, "/api/auth/v2/refresh", ``)
 			r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: handle})
-			return testAccessServe(handleAccessV2Refresh, r)
+			return testAccessServe(HandleAccessV2Refresh, r)
 		}(), http.StatusBadRequest, "Invalid refresh request\n"},
 		{"refresh non-empty body", func() *httptest.ResponseRecorder {
 			r := testAccessV2Request(http.MethodPost, "/api/auth/v2/refresh", `{"all":true}`)
 			r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: handle})
-			return testAccessServe(handleAccessV2Refresh, r)
+			return testAccessServe(HandleAccessV2Refresh, r)
 		}(), http.StatusBadRequest, "Invalid refresh request\n"},
 		{"refresh without cookie", testAccessV2RefreshRequest(t, ""), http.StatusUnauthorized, "access authentication required\n"},
 		{"refresh with duplicate cookies", func() *httptest.ResponseRecorder {
 			r := testAccessV2Request(http.MethodPost, "/api/auth/v2/refresh", `{}`)
 			r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: handle})
 			r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: handle})
-			return testAccessServe(handleAccessV2Refresh, r)
+			return testAccessServe(HandleAccessV2Refresh, r)
 		}(), http.StatusUnauthorized, "access authentication required\n"},
 		{"refresh with bearer", func() *httptest.ResponseRecorder {
 			r := testAccessV2Request(http.MethodPost, "/api/auth/v2/refresh", `{}`)
 			r.Header.Set("Authorization", "Bearer "+token)
 			r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: handle})
-			return testAccessServe(handleAccessV2Refresh, r)
+			return testAccessServe(HandleAccessV2Refresh, r)
 		}(), http.StatusUnauthorized, "access authentication required\n"},
 		{"refresh with token query", func() *httptest.ResponseRecorder {
 			r := testAccessV2Request(http.MethodPost, "/api/auth/v2/refresh?token="+token, `{}`)
 			r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: handle})
-			return testAccessServe(handleAccessV2Refresh, r)
+			return testAccessServe(HandleAccessV2Refresh, r)
 		}(), http.StatusUnauthorized, "access authentication required\n"},
 		{"refresh unknown handle", testAccessV2RefreshRequest(t, "bm90LWEtcmVmcmVzaC1oYW5kbGUtdmFsdWUtdGhhdC1pcy0zMmI"), http.StatusUnauthorized, "access authentication required\n"},
 		{"logout without bearer", testAccessV2LogoutRequest(t, `{"all":false}`, ""), http.StatusUnauthorized, "access authentication required\n"},
@@ -1950,7 +1951,7 @@ func TestAccessV2RouteErrors(t *testing.T) {
 	cookieOnly := testAccessV2Request(http.MethodPost, "/api/auth/v2/logout", `{"all":false}`)
 	cookieOnly.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: handle})
 	testAccessErrorResponse(t, "logout with refresh cookie only",
-		testAccessServe(handleAccessV2Logout, cookieOnly), http.StatusUnauthorized, "access authentication required\n")
+		testAccessServe(HandleAccessV2Logout, cookieOnly), http.StatusUnauthorized, "access authentication required\n")
 
 	// Wrong methods answer 405 with the Allow header the contract names.
 	for _, tc := range []struct {
@@ -1959,11 +1960,11 @@ func TestAccessV2RouteErrors(t *testing.T) {
 		path    string
 		allow   string
 	}{
-		{"status", handleAccessV2Status, "/api/auth/v2/status", http.MethodGet},
-		{"login", handleAccessV2Login, "/api/auth/v2/login", http.MethodPost},
-		{"password", handleAccessV2Password, "/api/auth/v2/password", http.MethodPost},
-		{"refresh", handleAccessV2Refresh, "/api/auth/v2/refresh", http.MethodPost},
-		{"logout", handleAccessV2Logout, "/api/auth/v2/logout", http.MethodPost},
+		{"status", HandleAccessV2Status, "/api/auth/v2/status", http.MethodGet},
+		{"login", HandleAccessV2Login, "/api/auth/v2/login", http.MethodPost},
+		{"password", HandleAccessV2Password, "/api/auth/v2/password", http.MethodPost},
+		{"refresh", HandleAccessV2Refresh, "/api/auth/v2/refresh", http.MethodPost},
+		{"logout", HandleAccessV2Logout, "/api/auth/v2/logout", http.MethodPost},
 	} {
 		t.Run(tc.name+" method", func(t *testing.T) {
 			method := http.MethodPost
@@ -2008,8 +2009,8 @@ func TestAccessV2BodyBounds(t *testing.T) {
 	// The refresh/logout limit counts whitespace, so padding alone is refused.
 	padded := strings.Repeat(" ", accessRefreshBodyLimit) + `{}`
 	for name, handler := range map[string]http.HandlerFunc{
-		"refresh": handleAccessV2Refresh,
-		"logout":  handleAccessV2Logout,
+		"refresh": HandleAccessV2Refresh,
+		"logout":  HandleAccessV2Logout,
 	} {
 		path := "/api/auth/v2/" + name
 		r := testAccessV2Request(http.MethodPost, path, padded)
@@ -2044,7 +2045,7 @@ func TestAccessV2BodyBounds(t *testing.T) {
 		} else {
 			r := testAccessV2Request(http.MethodPost, "/api/auth/v2/refresh", body)
 			r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: "handle"})
-			w = testAccessServe(handleAccessV2Refresh, r)
+			w = testAccessServe(HandleAccessV2Refresh, r)
 		}
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("%s: got %d want 400 (body %q)", name, w.Code, w.Body.String())
@@ -2080,7 +2081,7 @@ func testAccessV2LoginWith(t *testing.T, password string, remoteAddr string, mut
 	if mutate != nil {
 		mutate(r)
 	}
-	return testAccessServe(handleAccessV2Login, r)
+	return testAccessServe(HandleAccessV2Login, r)
 }
 
 func TestAccessV2CSRFHeaderAndContentType(t *testing.T) {
@@ -2153,10 +2154,10 @@ func TestAccessV2CSRFHeaderAndContentType(t *testing.T) {
 		body    string
 		cookie  bool
 	}{
-		{"login", handleAccessV2Login, "/api/auth/v2/login", `{"password":"` + testAccessPassword + `"}`, false},
-		{"password", handleAccessV2Password, "/api/auth/v2/password", `{"password":"test-pass-5678"}`, false},
-		{"refresh", handleAccessV2Refresh, "/api/auth/v2/refresh", `{}`, true},
-		{"logout", handleAccessV2Logout, "/api/auth/v2/logout", `{"all":false}`, false},
+		{"login", HandleAccessV2Login, "/api/auth/v2/login", `{"password":"` + testAccessPassword + `"}`, false},
+		{"password", HandleAccessV2Password, "/api/auth/v2/password", `{"password":"test-pass-5678"}`, false},
+		{"refresh", HandleAccessV2Refresh, "/api/auth/v2/refresh", `{}`, true},
+		{"logout", HandleAccessV2Logout, "/api/auth/v2/logout", `{"all":false}`, false},
 	} {
 		t.Run(tc.name+" without custom header", func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
@@ -2302,7 +2303,7 @@ func TestAccessV2MalformedConfiguredOrigin(t *testing.T) {
 	} {
 		t.Run(entry, func(t *testing.T) {
 			testAccessSetOrigins(t, entry)
-			if err := accessAuth.validateOrigins(); err == nil {
+			if err := Default.ValidateOrigins(); err == nil {
 				t.Fatalf("validateOrigins accepted %q", entry)
 			}
 			w := testAccessV2LoginWith(t, testAccessPassword, "198.18.1.1:1", func(r *http.Request) {
@@ -2316,7 +2317,7 @@ func TestAccessV2MalformedConfiguredOrigin(t *testing.T) {
 
 	// A well-formed list validates, and duplicate entries collapse.
 	testAccessSetOrigins(t, "https://phi.example", "https://phi.example:443", "http://127.0.0.1:7070")
-	if err := accessAuth.validateOrigins(); err != nil {
+	if err := Default.ValidateOrigins(); err != nil {
 		t.Fatalf("validateOrigins rejected a valid list: %v", err)
 	}
 	origins, err := accessConfiguredOrigins()
@@ -2494,7 +2495,7 @@ func TestAccessV2TransactionBeforeAnnouncement(t *testing.T) {
 			return testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.121:1")
 		}())
 
-	restoreCommit := failAccessDBCommitForTest(t, accessAuth)
+	restoreCommit := failAccessDBCommitForTest(t, Default)
 
 	refresh := testAccessV2RefreshRequest(t, handle)
 	testAccessErrorResponse(t, "refresh persistence failure", refresh, http.StatusInternalServerError, "Unable to refresh access session\n")
@@ -2641,13 +2642,13 @@ func TestAccessV2RefreshCookieAuthorizesNothing(t *testing.T) {
 	var payload struct {
 		Authenticated bool `json:"authenticated"`
 	}
-	testAccessJSONBody(t, testAccessServe(handleAccessV2Status, r), &payload)
+	testAccessJSONBody(t, testAccessServe(HandleAccessV2Status, r), &payload)
 	if payload.Authenticated {
 		t.Error("v2 status authenticated a refresh cookie")
 	}
 	password := testAccessV2Request(http.MethodPost, "/api/auth/v2/password", `{"password":"test-pass-5678"}`)
 	password.AddCookie(refresh)
-	if code := testAccessServe(handleAccessV2Password, password).Code; code != http.StatusUnauthorized {
+	if code := testAccessServe(HandleAccessV2Password, password).Code; code != http.StatusUnauthorized {
 		t.Errorf("password route accepted a refresh cookie: %d", code)
 	}
 }
@@ -2684,7 +2685,7 @@ func TestAccessRevokedJWTWithValidV1Cookie(t *testing.T) {
 // migration shape used by parser fixtures.
 func testAccessStateFile(t *testing.T) *accessV2StateFile {
 	t.Helper()
-	auth := accessAuth
+	auth := Default
 	auth.mu.Lock()
 	defer auth.mu.Unlock()
 	if auth.db == nil {
@@ -2848,7 +2849,7 @@ func TestAccessV2RefreshUnknownHandles(t *testing.T) {
 	} {
 		r := testAccessV2Request(http.MethodPost, "/api/auth/v2/refresh", `{}`)
 		r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: candidate})
-		testAccessErrorResponse(t, name, testAccessServe(handleAccessV2Refresh, r),
+		testAccessErrorResponse(t, name, testAccessServe(HandleAccessV2Refresh, r),
 			http.StatusUnauthorized, "access authentication required\n")
 	}
 
@@ -2983,7 +2984,7 @@ func TestAccessV2RefreshIdleAndAbsoluteDeadlines(t *testing.T) {
 	boundaryHandle = testAccessRefreshHandle(t, func() *httptest.ResponseRecorder {
 		r := testAccessV2Request(http.MethodPost, "/api/auth/v2/refresh", `{}`)
 		r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: boundaryHandle})
-		return testAccessServe(handleAccessV2Refresh, r)
+		return testAccessServe(HandleAccessV2Refresh, r)
 	}())
 	clock.advance(time.Unix(boundaryFamily.RefreshIdleExpiresAt, 0).Sub(clock.now))
 	testAccessErrorResponse(t, "rotation at the idle deadline",
@@ -3001,7 +3002,7 @@ func TestAccessV2RefreshConsumedPruning(t *testing.T) {
 	current := testAccessRefreshHandle(t, func() *httptest.ResponseRecorder {
 		r := testAccessV2Request(http.MethodPost, "/api/auth/v2/refresh", `{}`)
 		r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: handle})
-		return testAccessServe(handleAccessV2Refresh, r)
+		return testAccessServe(HandleAccessV2Refresh, r)
 	}())
 
 	for _, family := range testAccessStateFile(t).Active.Families {
@@ -3255,17 +3256,17 @@ func TestAccessV2RefreshRestartReconstruction(t *testing.T) {
 
 	// A restart must reproduce the same bytes from durable state alone.
 	testAccessReleaseStateOwnership(auth)
-	restarted := newAccessAuthManager()
+	restarted := NewManager(testConfigStore, testSocketHub)
 	testAccessUseClock(t, restarted, clock.now)
-	if err := restarted.configure(loadConfig().AccessPasswordHash); err != nil {
+	if err := restarted.Configure(loadConfig().AccessPasswordHash); err != nil {
 		restarted.close()
 		t.Fatal(err)
 	}
-	previous := accessAuth
-	accessAuth = restarted
+	previous := Default
+	Default = restarted
 	t.Cleanup(func() {
 		restarted.close()
-		accessAuth = previous
+		Default = previous
 	})
 
 	clock.advance(10 * time.Second)
@@ -3345,18 +3346,18 @@ func TestAccessV2RefreshRateLimitIsolated(t *testing.T) {
 // testAccessSwapManager installs manager as the global auth manager for the
 // duration of the test, so handler-level assertions can target a second
 // instance without disturbing the owner installed by useTestAccessAuth.
-func testAccessSwapManager(t *testing.T, manager *accessAuthManager) {
+func testAccessSwapManager(t *testing.T, manager *Manager) {
 	t.Helper()
-	previous := accessAuth
-	accessAuth = manager
-	t.Cleanup(func() { accessAuth = previous })
+	previous := Default
+	Default = manager
+	t.Cleanup(func() { Default = previous })
 }
 
 // testAccessV2Status asserts the documented status shape and returns it.
-func testAccessV2StatusBody(t *testing.T, manager *accessAuthManager) map[string]bool {
+func testAccessV2StatusBody(t *testing.T, manager *Manager) map[string]bool {
 	t.Helper()
 	testAccessSwapManager(t, manager)
-	w := testAccessServe(handleAccessV2Status, httptest.NewRequest(http.MethodGet, "/api/auth/v2/status", nil))
+	w := testAccessServe(HandleAccessV2Status, httptest.NewRequest(http.MethodGet, "/api/auth/v2/status", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("v2 status: %d %s", w.Code, w.Body.String())
 	}
@@ -3413,13 +3414,13 @@ func TestAccessStateOwnershipLockExcludesSecondInstance(t *testing.T) {
 		t.Error("lock file inode changed across a state write")
 	}
 
-	second := newAccessAuthManager()
+	second := NewManager(testConfigStore, testSocketHub)
 	t.Cleanup(func() { second.close() })
 	cfg := loadConfig()
-	if err := second.configure(cfg.AccessPasswordHash); err != nil {
+	if err := second.Configure(cfg.AccessPasswordHash); err != nil {
 		t.Fatalf("configure second instance: %v", err)
 	}
-	if second.ownedNow() || second.stateOwned() {
+	if second.ownedNow() || second.StateOwned() {
 		t.Fatal("second instance took ownership of a held lock")
 	}
 
@@ -3449,7 +3450,7 @@ func TestAccessStateOwnershipLockExcludesSecondInstance(t *testing.T) {
 	}
 
 	// Non-auth surfaces keep working: only /api and /ws are gated.
-	public := accessAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	public := Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	if w := testAccessServe(public.ServeHTTP, httptest.NewRequest(http.MethodGet, "/healthz", nil)); w.Code != http.StatusNoContent {
@@ -3484,7 +3485,7 @@ func TestAccessStateOwnershipLockExcludesSecondInstance(t *testing.T) {
 
 	// The owner exits and a browser-style status reload recovers ownership.
 	owner.close()
-	statusResponse := testAccessServe(handleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+	statusResponse := testAccessServe(HandleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
 	if statusResponse.Code != http.StatusOK {
 		t.Fatalf("v1 status after owner exit = %d: %s", statusResponse.Code, statusResponse.Body.String())
 	}
@@ -3555,9 +3556,9 @@ func TestAccessV2StatusFailedTakeoverIsConservative(t *testing.T) {
 				t.Fatalf("fixture is not a completed migration: %#v", cfg.AccessAuthMigration)
 			}
 
-			second := newAccessAuthManager()
+			second := NewManager(testConfigStore, testSocketHub)
 			t.Cleanup(func() { second.close() })
-			if err := second.configure(cfg.AccessPasswordHash); err != nil {
+			if err := second.Configure(cfg.AccessPasswordHash); err != nil {
 				t.Fatalf("configure non-owner: %v", err)
 			}
 			if second.ownedNow() {
@@ -3573,7 +3574,7 @@ func TestAccessV2StatusFailedTakeoverIsConservative(t *testing.T) {
 			if token != "" {
 				statusRequest.Header.Set("Authorization", "Bearer "+token)
 			}
-			statusResponse := testAccessServe(handleAccessV2Status, statusRequest)
+			statusResponse := testAccessServe(HandleAccessV2Status, statusRequest)
 			if statusResponse.Code != http.StatusOK {
 				t.Fatalf("v2 status after takeover attempt = %d: %s", statusResponse.Code, statusResponse.Body.String())
 			}
@@ -3945,7 +3946,7 @@ func TestAccessV1BackoffShiftsAndCap(t *testing.T) {
 	auth.mu.Lock()
 	auth.recordFailureLocked("192.0.2.241", time.Now())
 	auth.mu.Unlock()
-	status := testAccessServe(handleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+	status := testAccessServe(HandleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
 	if status.Code != http.StatusOK {
 		t.Fatalf("status: %d", status.Code)
 	}
@@ -3963,7 +3964,7 @@ func TestAccessV1BackoffShiftsAndCap(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.RemoteAddr = "192.0.2.241:1"
-	w := testAccessServe(handleAccessAuthLogin, request)
+	w := testAccessServe(HandleAccessAuthLogin, request)
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("login inside the capped backoff = %d want 429", w.Code)
 	}
@@ -3975,7 +3976,7 @@ func TestAccessV1BackoffShiftsAndCap(t *testing.T) {
 	attempt.RetryAt = time.Now().Add(-time.Second)
 	auth.attempts["192.0.2.241"] = attempt
 	auth.mu.Unlock()
-	status = testAccessServe(handleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+	status = testAccessServe(HandleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
 	testAccessJSONBody(t, status, &challenge)
 	body, err = json.Marshal(map[string]string{
 		"challenge": challenge.Challenge,
@@ -3987,7 +3988,7 @@ func TestAccessV1BackoffShiftsAndCap(t *testing.T) {
 	request = httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.RemoteAddr = "192.0.2.241:1"
-	if w := testAccessServe(handleAccessAuthLogin, request); w.Code != http.StatusOK {
+	if w := testAccessServe(HandleAccessAuthLogin, request); w.Code != http.StatusOK {
 		t.Fatalf("login after the backoff window = %d %s", w.Code, w.Body.String())
 	}
 }
@@ -4175,12 +4176,12 @@ func TestAccessFenceValidatorRefusesEveryRevokedAdmission(t *testing.T) {
 	auth.mu.Unlock()
 
 	live := ws.AuthFence{Generation: generation, FamilyID: familyID, ExpiresAt: expiresAt, Deadline: expiresAt}
-	if !auth.admitsFence(live) {
+	if !auth.AdmitsFence(live) {
 		t.Fatal("live v2 admission refused")
 	}
 
 	v1 := ws.AuthFence{Generation: generation}
-	if !auth.admitsFence(v1) {
+	if !auth.AdmitsFence(v1) {
 		t.Fatal("v1 admission refused")
 	}
 
@@ -4195,7 +4196,7 @@ func TestAccessFenceValidatorRefusesEveryRevokedAdmission(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if auth.admitsFence(tc.fence) {
+			if auth.AdmitsFence(tc.fence) {
 				t.Fatal("revoked admission accepted")
 			}
 		})
@@ -4205,7 +4206,7 @@ func TestAccessFenceValidatorRefusesEveryRevokedAdmission(t *testing.T) {
 	auth.mu.Lock()
 	auth.faulted = true
 	auth.mu.Unlock()
-	if auth.admitsFence(live) {
+	if auth.AdmitsFence(live) {
 		t.Fatal("faulted v2 admission accepted")
 	}
 	auth.mu.Lock()
@@ -4216,7 +4217,7 @@ func TestAccessFenceValidatorRefusesEveryRevokedAdmission(t *testing.T) {
 	auth.mu.Lock()
 	auth.owned = false
 	auth.mu.Unlock()
-	if auth.admitsFence(live) {
+	if auth.AdmitsFence(live) {
 		t.Fatal("non-owner admission accepted")
 	}
 	auth.mu.Lock()
@@ -4230,10 +4231,10 @@ func TestAccessFenceValidatorRefusesEveryRevokedAdmission(t *testing.T) {
 	auth.mu.Lock()
 	disabledGeneration := auth.generation
 	auth.mu.Unlock()
-	if !auth.admitsFence(ws.AuthFence{Generation: disabledGeneration}) {
+	if !auth.AdmitsFence(ws.AuthFence{Generation: disabledGeneration}) {
 		t.Fatal("disabled v1 admission refused")
 	}
-	if auth.admitsFence(ws.AuthFence{Generation: disabledGeneration, FamilyID: familyID, ExpiresAt: expiresAt}) {
+	if auth.AdmitsFence(ws.AuthFence{Generation: disabledGeneration, FamilyID: familyID, ExpiresAt: expiresAt}) {
 		t.Fatal("disabled v2 admission accepted")
 	}
 }
@@ -4253,7 +4254,7 @@ func TestAccessFenceValidatorHonoursFamilyDeadline(t *testing.T) {
 	auth.mu.Unlock()
 
 	fence := ws.AuthFence{Generation: generation, FamilyID: familyID, ExpiresAt: time.Now().Add(time.Hour)}
-	if auth.admitsFence(fence) {
+	if auth.AdmitsFence(fence) {
 		t.Fatal("admission past the family deadline accepted")
 	}
 }
@@ -4331,9 +4332,9 @@ func TestAccessV2OwnershipHandoffUsesCurrentRecordAndAdmitsSockets(t *testing.T)
 	handle := testAccessRefreshHandle(t, login)
 
 	// The waiter reads Config while the owner is still holding the lock.
-	second := newAccessAuthManager()
+	second := NewManager(testConfigStore, testSocketHub)
 	t.Cleanup(func() { second.close() })
-	if err := second.configure(loadConfig().AccessPasswordHash); err != nil {
+	if err := second.Configure(loadConfig().AccessPasswordHash); err != nil {
 		t.Fatalf("configure waiter: %v", err)
 	}
 	if second.ownedNow() {
@@ -4357,12 +4358,12 @@ func TestAccessV2OwnershipHandoffUsesCurrentRecordAndAdmitsSockets(t *testing.T)
 	// The waiter runs its own hub, exactly like a separate process, and starts
 	// with the fence at the generation it booted with.
 	waiterHub := testAccessUseHub(t)
-	waiterHub.RotateAuth(second.accessGeneration())
+	waiterHub.RotateAuth(second.AccessGeneration())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws/md-events", func(w http.ResponseWriter, r *http.Request) {
 		ws.HandleEventsWS(w, r, waiterHub)
 	})
-	server := httptest.NewServer(accessAuthMiddleware(mux))
+	server := httptest.NewServer(Middleware(mux))
 	t.Cleanup(server.Close)
 	socketURL := "ws" + strings.TrimPrefix(server.URL, "http")
 
@@ -4412,22 +4413,26 @@ func TestAccessV2OwnershipHandoffUsesCurrentRecordAndAdmitsSockets(t *testing.T)
 // exactly the fresh-install case a new user hits first.
 func TestAccessFreshInstallTakesOwnership(t *testing.T) {
 	parent := t.TempDir()
+	origPath, origStore, origState := testConfigPath, testStore, stateStore
 	testConfigPath = filepath.Join(parent, "not-created-yet", "config.json")
-	origAuth := accessAuth
-	manager := newAccessAuthManager()
-	accessAuth = manager
+	testStore = config.NewStore(config.Paths{Primary: testConfigPath}, nil)
+	stateStore = testConfigStore
+	origAuth := Default
+	manager := NewManager(testConfigStore, testSocketHub)
+	Default = manager
 	t.Cleanup(func() {
 		manager.close()
-		accessAuth = origAuth
+		Default = origAuth
+		testConfigPath, testStore, stateStore = origPath, origStore, origState
 	})
 
-	if err := accessAuth.configure(""); err != nil {
+	if err := Default.Configure(""); err != nil {
 		t.Fatalf("configure on a fresh install: %v", err)
 	}
-	if !accessAuth.stateOwned() {
+	if !Default.StateOwned() {
 		t.Fatal("fresh install did not take ownership of the auth state")
 	}
-	decision := accessAuth.authorizeRequest(
+	decision := Default.authorizeRequest(
 		httptest.NewRequest(http.MethodGet, "/api/version", nil),
 	)
 	if !decision.Authorized {

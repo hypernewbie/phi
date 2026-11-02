@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hypernewbie/phi/internal/access"
 	"github.com/hypernewbie/phi/pkg/pty"
 )
 
@@ -86,7 +88,7 @@ func TestPaneInput_RequiresAccessAuth(t *testing.T) {
 		t.Fatalf("configure: %v", err)
 	}
 
-	guarded := accessAuthMiddleware(http.HandlerFunc(handleFallback))
+	guarded := access.Middleware(http.HandlerFunc(handleFallback))
 
 	// No cookie: the gate rejects before the handler runs.
 	req := httptest.NewRequest(
@@ -104,21 +106,18 @@ func TestPaneInput_RequiresAccessAuth(t *testing.T) {
 	// request passes the gate and reaches the handler (404: pane doesn't
 	// exist, which proves it got past auth).
 	statusW := httptest.NewRecorder()
-	handleAccessAuthStatus(statusW, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+	access.HandleAccessAuthStatus(statusW, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
 	var status map[string]any
 	if err := json.Unmarshal(statusW.Body.Bytes(), &status); err != nil {
 		t.Fatal(err)
 	}
-	record, err := parseAccessPasswordHash(testAccessHash())
-	if err != nil {
-		t.Fatal(err)
-	}
+	verifier := bytes.Repeat([]byte{0x22}, 32)
 	challenge := status["challenge"].(string)
-	loginBody := `{"challenge":"` + challenge + `","proof":"` + testAccessProof(t, record.Verifier, challenge) + `"}`
+	loginBody := `{"challenge":"` + challenge + `","proof":"` + testAccessProof(verifier, challenge) + `"}`
 	loginReq := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(loginBody))
 	loginReq.RemoteAddr = "192.0.2.20:12345"
 	loginW := httptest.NewRecorder()
-	handleAccessAuthLogin(loginW, loginReq)
+	access.HandleAccessAuthLogin(loginW, loginReq)
 	if loginW.Code != http.StatusOK {
 		t.Fatalf("login: got %d body=%s", loginW.Code, loginW.Body.String())
 	}

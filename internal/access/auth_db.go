@@ -1,4 +1,4 @@
-package main
+package access
 
 import (
 	"context"
@@ -45,7 +45,7 @@ type accessDB struct {
 }
 
 func accessDBPath() string {
-	return filepath.Join(filepath.Dir(configFilePath()), accessDBFileName)
+	return filepath.Join(accessDir(), accessDBFileName)
 }
 
 func accessDBFileURI(path string) string {
@@ -723,27 +723,57 @@ func updateAccessDBFamilies(tx *sql.Tx, oldFamilies, nextFamilies []accessV2Fami
 	return nil
 }
 
+// Config aliases the stored configuration. Access reads and writes only its
+// verifier and migration marker; the type belongs to internal/config.
+type Config = config.Config
+
+// accessAuthMigrationMarker names the config migration marker inside the auth
+// flow. The type belongs to internal/config.
+type accessAuthMigrationMarker = config.MigrationMarker
+
+// migrationStore resolves the store that holds the migration marker. Tests
+// point it at their temp store; production uses the process manager's store.
+func migrationStore() (*config.Store, error) {
+	if stateStore != nil {
+		return stateStore(), nil
+	}
+	return Default.store()
+}
+
 // readAccessMigrationConfig reads the stored verifier and marker for the
 // rollback guard. A read error keeps rollback refused.
 func readAccessMigrationConfig() (Config, error) {
-	return configStore().ReadAuthoritative()
+	store, err := migrationStore()
+	if err != nil {
+		return Config{}, err
+	}
+	return store.ReadAuthoritative()
 }
 
 // writeAccessMigrationConfig is the access-side seam over the store's locked
-// compare-and-swap. It moves with the access manager into internal/access.
+// compare-and-swap.
 func writeAccessMigrationConfig(expected *accessAuthMigrationMarker, expectedVerifier string, next *accessAuthMigrationMarker, nextVerifier string) error {
-	return configStore().CompareAndSwapMigration(expected, expectedVerifier, next, nextVerifier)
+	store, err := migrationStore()
+	if err != nil {
+		return err
+	}
+	return store.CompareAndSwapMigration(expected, expectedVerifier, next, nextVerifier)
 }
 
-// acquireAccessRollbackGuard takes the access state lock and refuses a
-// rollback once the Config/SQLite import has started or left any state.
-func acquireAccessRollbackGuard() (func(), error) {
+// AcquireRollbackGuard takes the access state lock and refuses a rollback once
+// the Config/SQLite import has started or left any state. The caller holds the
+// returned release for the duration of the rollback.
+func AcquireRollbackGuard(store *config.Store) (func(), error) {
 	lock := &accessStateLock{}
 	if !lock.tryAcquire(accessV2LockPath()) {
 		return nil, errors.New("access state is owned by a running Phi instance")
 	}
 	release := lock.release
-	cfg, err := readAccessMigrationConfig()
+	if store == nil {
+		release()
+		return nil, errors.New("access config store is not installed")
+	}
+	cfg, err := store.ReadAuthoritative()
 	if err != nil {
 		release()
 		return nil, fmt.Errorf("cannot verify access migration state: %w", err)
@@ -798,7 +828,7 @@ func importAccessLegacyState(encoded string) (accessV2ActiveState, bool, error) 
 	return active, true, nil
 }
 
-func (m *accessAuthManager) openMigratedAccessDB() (accessDBState, *accessDB, error) {
+func (m *Manager) openMigratedAccessDB() (accessDBState, *accessDB, error) {
 	cfg, err := readAccessMigrationConfig()
 	if err != nil {
 		return accessDBState{}, nil, err

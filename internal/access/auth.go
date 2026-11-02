@@ -1,4 +1,4 @@
-package main
+package access
 
 import (
 	"bytes"
@@ -412,16 +412,32 @@ func validAccessDigest(digest string) bool {
 	return err == nil
 }
 
+// stateStore resolves the store that locates auth state files. Tests set it
+// to their temp store in withTempConfig; production leaves it nil and state
+// lives beside the process config.toml.
+var stateStore func() *config.Store
+
+// accessDir is the directory that holds access state, next to config.toml.
+func accessDir() string {
+	if stateStore != nil {
+		return filepath.Dir(stateStore().PrimaryPath())
+	}
+	if store, err := Default.store(); err == nil {
+		return filepath.Dir(store.PrimaryPath())
+	}
+	return filepath.Dir(config.NewStore(config.Paths{}, nil).PrimaryPath())
+}
+
 // accessV2StatePath locates the legacy JSON session snapshot used only during
 // the one-time SQLite migration.
 func accessV2StatePath() string {
-	return filepath.Join(filepath.Dir(configFilePath()), accessV2StateFileName)
+	return filepath.Join(accessDir(), accessV2StateFileName)
 }
 
 // accessV2LockPath is a stable inode: locking the state file itself would be
 // useless because every write replaces it atomically.
 func accessV2LockPath() string {
-	return filepath.Join(filepath.Dir(configFilePath()), accessV2LockFileName)
+	return filepath.Join(accessDir(), accessV2LockFileName)
 }
 
 // accessStateLock owns the on-disk auth state for this process.
@@ -630,7 +646,7 @@ func validAccessJWTHandle(encoded string) bool {
 
 // loadRuntimeLocked validates active state into the in-memory runtime and
 // rebuilds the digest indexes from it.
-func (m *accessAuthManager) loadRuntimeLocked(active *accessV2ActiveState) error {
+func (m *Manager) loadRuntimeLocked(active *accessV2ActiveState) error {
 	if err := validateAccessV2Active(active); err != nil {
 		return err
 	}
@@ -662,7 +678,7 @@ func (m *accessAuthManager) loadRuntimeLocked(active *accessV2ActiveState) error
 
 // snapshotLocked renders runtime state as the persisted form, with families
 // ordered by ID so an unchanged state marshals to the same bytes.
-func (m *accessAuthManager) snapshotLocked() *accessV2ActiveState {
+func (m *Manager) snapshotLocked() *accessV2ActiveState {
 	active := &accessV2ActiveState{
 		RecordBinding: m.v2.recordBinding,
 		RecordID:      m.v2.recordID,
@@ -1014,7 +1030,7 @@ type accessRefreshBucket struct {
 	last   time.Time
 }
 
-type accessAuthManager struct {
+type Manager struct {
 	mu                sync.Mutex
 	record            *accessPasswordRecord
 	jwtKey            []byte
@@ -1032,55 +1048,86 @@ type accessAuthManager struct {
 	attempts          map[string]accessLoginAttempt
 	refreshBuckets    map[string]accessRefreshBucket
 	now               func() time.Time
+
+	// configStore and socketHub are process-wide collaborators the manager
+	// needs but does not own. main installs them once; nil is tolerated by
+	// the paths that can run without them (tests, first-run activation).
+	configStore func() *config.Store
+	socketHub   func() *ws.Hub
 }
 
-func newAccessAuthManager() *accessAuthManager {
-	return &accessAuthManager{
+// NewManager returns an unconfigured manager. configStore resolves the config
+// file at call time so a repointed path (tests) is always current; socketHub
+// may be nil when no sockets exist yet.
+func NewManager(configStore func() *config.Store, socketHub func() *ws.Hub) *Manager {
+	return &Manager{
 		v2:             newAccessV2Runtime(),
 		challenges:     make(map[string]time.Time),
 		sessions:       make(map[string]time.Time),
 		attempts:       make(map[string]accessLoginAttempt),
 		refreshBuckets: make(map[string]accessRefreshBucket),
 		now:            time.Now,
+		configStore:    configStore,
+		socketHub:      socketHub,
 	}
 }
 
-var accessAuth = newAccessAuthManager()
+func (m *Manager) store() (*config.Store, error) {
+	if m.configStore == nil {
+		return nil, errors.New("access config store is not installed")
+	}
+	store := m.configStore()
+	if store == nil {
+		return nil, errors.New("access config store is not installed")
+	}
+	return store, nil
+}
+
+func (m *Manager) hub() *ws.Hub {
+	if m.socketHub == nil {
+		return nil
+	}
+	return m.socketHub()
+}
+
+// Default is the process access manager. main replaces it during startup and
+// tests replace it per test.
+var Default = NewManager(nil, nil)
 
 // revokeAccessSockets fences client-facing sockets to generation. The auth
 // layer owns the generation; the hub owns connection closure.
-func revokeAccessSockets(generation uint64) {
-	if wsHub != nil {
-		wsHub.RotateAuth(generation)
+func revokeAccessSockets(hub *ws.Hub, generation uint64) {
+	if hub != nil {
+		hub.RotateAuth(generation)
 	}
 }
 
 // retireAccessFamilySockets closes the sockets one v2 family admitted. A family
 // revocation must not touch v1 or disabled admissions: their credential is
 // unaffected and the contract keeps record fencing separate.
-func retireAccessFamilySockets(familyID string) {
-	if wsHub != nil && familyID != "" {
-		wsHub.RetireAuthFamily(familyID)
+func retireAccessFamilySockets(hub *ws.Hub, familyID string) {
+	if hub != nil && familyID != "" {
+		hub.RetireAuthFamily(familyID)
 	}
 }
 
 // retireAccessV2Sockets closes every socket a v2 family admitted, leaving v1
 // and disabled sockets open. Logout-all is the only caller.
-func retireAccessV2Sockets() {
-	if wsHub != nil {
-		wsHub.RetireAuthV2()
+func retireAccessV2Sockets(hub *ws.Hub) {
+	if hub != nil {
+		hub.RetireAuthV2()
 	}
 }
 
 // configure acquires ownership before it reads authoritative credentials or
 // migration state. The Config snapshot argument is display-only for a non-owner.
-func (m *accessAuthManager) configure(encoded string) error {
+func (m *Manager) Configure(encoded string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.activateLocked(encoded)
 }
 
-func (m *accessAuthManager) activateLocked(displayEncoded string) error {
+func (m *Manager) activateLocked(displayEncoded string) error {
 	if m.db != nil {
 		_ = m.db.close()
 		m.db = nil
@@ -1129,11 +1176,11 @@ func (m *accessAuthManager) activateLocked(displayEncoded string) error {
 		m.faulted = true
 		return err
 	}
-	revokeAccessSockets(m.generation)
+	revokeAccessSockets(m.hub(), m.generation)
 	return nil
 }
 
-func (m *accessAuthManager) installAccessDBStateLocked(state accessDBState) error {
+func (m *Manager) installAccessDBStateLocked(state accessDBState) error {
 	record, err := parseAccessPasswordHash(state.PasswordRecord)
 	if err != nil {
 		return err
@@ -1152,7 +1199,14 @@ func (m *accessAuthManager) installAccessDBStateLocked(state accessDBState) erro
 	return nil
 }
 
-func (m *accessAuthManager) close() {
+// Close releases the auth database and the ownership lock. The process exits
+// without it today; tests call it to release temp state, and server shutdown
+// will use it once the server package owns the lifecycle.
+func (m *Manager) Close() {
+	m.close()
+}
+
+func (m *Manager) close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.db != nil {
@@ -1165,7 +1219,7 @@ func (m *accessAuthManager) close() {
 
 // claimRestartAttempt serializes Windows child creation without closing auth
 // until the child exists.
-func (m *accessAuthManager) claimRestartAttempt() bool {
+func (m *Manager) ClaimRestartAttempt() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.restartStarted || m.restartInProgress {
@@ -1175,7 +1229,7 @@ func (m *accessAuthManager) claimRestartAttempt() bool {
 	return true
 }
 
-func (m *accessAuthManager) cancelRestartAttempt() {
+func (m *Manager) CancelRestartAttempt() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.restartInProgress {
@@ -1185,15 +1239,15 @@ func (m *accessAuthManager) cancelRestartAttempt() {
 
 // beginRestart fences admitted sockets before closing the database and releases
 // ownership only after ordinary requests are barred from reacquiring it.
-func (m *accessAuthManager) beginRestart() bool {
+func (m *Manager) BeginRestart() bool {
 	return m.startRestart(false)
 }
 
-func (m *accessAuthManager) beginClaimedRestart() bool {
+func (m *Manager) BeginClaimedRestart() bool {
 	return m.startRestart(true)
 }
 
-func (m *accessAuthManager) startRestart(claimed bool) bool {
+func (m *Manager) startRestart(claimed bool) bool {
 	m.mu.Lock()
 	if m.restartInProgress || (claimed && !m.restartStarted) || (!claimed && m.restartStarted) {
 		m.mu.Unlock()
@@ -1208,7 +1262,7 @@ func (m *accessAuthManager) startRestart(claimed bool) bool {
 
 	// The generation and gate are visible before closure; RotateAuth closes
 	// connections without holding the manager lock.
-	revokeAccessSockets(generation)
+	revokeAccessSockets(m.hub(), generation)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1223,7 +1277,7 @@ func (m *accessAuthManager) startRestart(claimed bool) bool {
 
 // recoverRestart reactivates auth after a failed exec. The restart gate stays
 // set unless the durable state reload succeeds and ownership is restored.
-func (m *accessAuthManager) recoverRestart() bool {
+func (m *Manager) RecoverRestart() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.restartInProgress {
@@ -1240,7 +1294,7 @@ func (m *accessAuthManager) recoverRestart() bool {
 
 // stateOwned reports whether this process owns the auth state file, so the
 // caller can log why authentication is unavailable instead of failing vaguely.
-func (m *accessAuthManager) stateOwned() bool {
+func (m *Manager) StateOwned() bool {
 	if m.owner.held() {
 		return true
 	}
@@ -1249,7 +1303,7 @@ func (m *accessAuthManager) stateOwned() bool {
 
 // ownedNow reports the last known ownership without touching the lock file, so a
 // protected request costs one mutex read rather than a filesystem call.
-func (m *accessAuthManager) ownedNow() bool {
+func (m *Manager) ownedNow() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.owned
@@ -1259,7 +1313,7 @@ func (m *accessAuthManager) ownedNow() bool {
 // true once this process may authorize anything, after taking the lock and
 // reconciling the authoritative record, so a recovered owner never admits from
 // cache and never activates a record the previous owner already replaced.
-func (m *accessAuthManager) ensureOwned() bool {
+func (m *Manager) ensureOwned() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.restartInProgress {
@@ -1356,17 +1410,17 @@ func familyDeadline(family *accessV2Family) time.Time {
 // be older than memory after a crash, so serving from either one is unsound
 // until reconciliation; the generation bump also fences the sockets the
 // retired credentials admitted.
-func (m *accessAuthManager) faultAccessClosedLocked(binding string, epoch uint64) {
+func (m *Manager) faultAccessClosedLocked(binding string, epoch uint64) {
 	m.faulted = true
 	m.v2Available = false
 	m.v2 = newAccessV2Runtime()
 	m.v2.recordBinding = binding
 	m.v2.epoch = epoch
 	m.generation++
-	revokeAccessSockets(m.generation)
+	revokeAccessSockets(m.hub(), m.generation)
 }
 
-func (m *accessAuthManager) saveDBStateLocked(next accessV2ActiveState, encoded string, v2Available, passwordTransition bool) error {
+func (m *Manager) saveDBStateLocked(next accessV2ActiveState, encoded string, v2Available, passwordTransition bool) error {
 	if !m.owned || m.faulted || m.db == nil || next.RecordBinding != accessRecordBinding(encoded) {
 		return errAccessPersistence
 	}
@@ -1387,7 +1441,7 @@ func (m *accessAuthManager) saveDBStateLocked(next accessV2ActiveState, encoded 
 	return nil
 }
 
-func (m *accessAuthManager) reloadDBLocked(passwordTransition bool) error {
+func (m *Manager) reloadDBLocked(passwordTransition bool) error {
 	if m.db == nil {
 		return errors.New("auth database is unavailable")
 	}
@@ -1409,12 +1463,12 @@ func (m *accessAuthManager) reloadDBLocked(passwordTransition bool) error {
 		m.challenges = make(map[string]time.Time)
 		m.sessions = make(map[string]time.Time)
 		m.attempts = make(map[string]accessLoginAttempt)
-		revokeAccessSockets(m.generation)
+		revokeAccessSockets(m.hub(), m.generation)
 	} else if previousEpoch != state.Active.Epoch {
-		retireAccessV2Sockets()
+		retireAccessV2Sockets(m.hub())
 	}
 	for _, familyID := range retired {
-		retireAccessFamilySockets(familyID)
+		retireAccessFamilySockets(m.hub(), familyID)
 	}
 	return nil
 }
@@ -1422,7 +1476,7 @@ func (m *accessAuthManager) reloadDBLocked(passwordTransition bool) error {
 // commitActiveLocked commits next before installing it. A Commit error is
 // uncertain, so saveDBStateLocked reloads once and the caller still returns no
 // credentials for that operation.
-func (m *accessAuthManager) commitActiveLocked(next *accessV2ActiveState) error {
+func (m *Manager) commitActiveLocked(next *accessV2ActiveState) error {
 	if !m.owned || m.faulted || !m.v2Available || m.db == nil {
 		return errAccessPersistence
 	}
@@ -1440,14 +1494,14 @@ func (m *accessAuthManager) commitActiveLocked(next *accessV2ActiveState) error 
 		return err
 	}
 	for _, familyID := range retired {
-		retireAccessFamilySockets(familyID)
+		retireAccessFamilySockets(m.hub(), familyID)
 	}
 	return nil
 }
 
 // retiredFamiliesLocked lists the families the live runtime had and next does
 // not. The caller holds the manager lock and has already installed next.
-func (m *accessAuthManager) retiredFamiliesLocked(next *accessV2ActiveState) []string {
+func (m *Manager) retiredFamiliesLocked(next *accessV2ActiveState) []string {
 	kept := make(map[string]struct{}, len(next.Families))
 	for i := range next.Families {
 		kept[next.Families[i].ID] = struct{}{}
@@ -1590,7 +1644,7 @@ type accessV2Bundle struct {
 // mintAccessJWTLocked mints a token for the current record in a new persisted
 // family. The v2 routes build a full bundle instead; this is the narrow helper
 // the v1 login path and tests use.
-func (m *accessAuthManager) mintAccessJWTLocked(now time.Time) (string, error) {
+func (m *Manager) mintAccessJWTLocked(now time.Time) (string, error) {
 	if m.record == nil || m.v2.recordID == "" || len(m.jwtKey) != accessJWTKeyBytes || len(m.v2.refreshKey) != accessRefreshKeyBytes {
 		return "", nil
 	}
@@ -1608,7 +1662,7 @@ func (m *accessAuthManager) mintAccessJWTLocked(now time.Time) (string, error) {
 // issueAccessFamilyLocked places a family in memory without persisting it.
 // Production paths add families to a candidate state so the write comes first;
 // this exists for tests that need a live family before minting a fixed token.
-func (m *accessAuthManager) issueAccessFamilyLocked(now time.Time) (string, time.Time, error) {
+func (m *Manager) issueAccessFamilyLocked(now time.Time) (string, time.Time, error) {
 	familyID, err := randomAccessToken()
 	if err != nil {
 		return "", time.Time{}, err
@@ -1626,13 +1680,13 @@ func (m *accessAuthManager) issueAccessFamilyLocked(now time.Time) (string, time
 }
 
 // accessGeneration fences WebSocket upgrades against record changes.
-func (m *accessAuthManager) accessGeneration() uint64 {
+func (m *Manager) AccessGeneration() uint64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.generation
 }
 
-func (m *accessAuthManager) enabled() bool {
+func (m *Manager) enabled() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.record != nil
@@ -1641,7 +1695,7 @@ func (m *accessAuthManager) enabled() bool {
 // statusAndChallenge returns public KDF parameters and a single-use login
 // challenge from one locked snapshot, so a concurrent password change cannot
 // pair an old salt with a challenge for the new verifier.
-func (m *accessAuthManager) statusAndChallenge() (enabled bool, salt, challenge string, iterations int, err error) {
+func (m *Manager) statusAndChallenge() (enabled bool, salt, challenge string, iterations int, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.owned || m.faulted {
@@ -1663,7 +1717,7 @@ func (m *accessAuthManager) statusAndChallenge() (enabled bool, salt, challenge 
 	return true, base64.RawURLEncoding.EncodeToString(m.record.Salt), challenge, m.record.Iterations, nil
 }
 
-func (m *accessAuthManager) authenticated(r *http.Request) bool {
+func (m *Manager) authenticated(r *http.Request) bool {
 	cookie, err := r.Cookie(accessSessionCookie)
 	if err != nil || cookie.Value == "" {
 		return false
@@ -1675,7 +1729,7 @@ func (m *accessAuthManager) authenticated(r *http.Request) bool {
 
 // cookieValidLocked verifies a v1 session token against the current verifier.
 // Callers hold the mutex.
-func (m *accessAuthManager) cookieValidLocked(token string, now time.Time) bool {
+func (m *Manager) cookieValidLocked(token string, now time.Time) bool {
 	if !m.owned || m.faulted || m.record == nil || token == "" {
 		return false
 	}
@@ -1720,14 +1774,14 @@ func (m *accessAuthManager) cookieValidLocked(token string, now time.Time) bool 
 // against the current record identity, epoch, and live family. expiryAllowance
 // widens only the expiry comparison: browsers tolerate clock drift, sockets
 // close at exp. Callers hold the mutex.
-func (m *accessAuthManager) jwtValidLocked(token string, now time.Time, expiryAllowance time.Duration) bool {
+func (m *Manager) jwtValidLocked(token string, now time.Time, expiryAllowance time.Duration) bool {
 	_, ok := m.jwtClaimsLocked(token, now, expiryAllowance)
 	return ok
 }
 
 // jwtClaimsLocked is jwtValidLocked plus the verified claims, so logout can act
 // on the family the bearer names. Callers hold the mutex.
-func (m *accessAuthManager) jwtClaimsLocked(token string, now time.Time, expiryAllowance time.Duration) (*accessJWTClaims, bool) {
+func (m *Manager) jwtClaimsLocked(token string, now time.Time, expiryAllowance time.Duration) (*accessJWTClaims, bool) {
 	if m.faulted || !m.v2Available || len(m.jwtKey) != accessJWTKeyBytes || token == "" || m.record == nil || m.v2.recordID == "" {
 		return nil, false
 	}
@@ -1760,7 +1814,7 @@ type accessDecision struct {
 
 // authorizeRequest applies the explicit-credential priority table. An explicit
 // v2 credential decides the result on its own and never falls back to a cookie.
-func (m *accessAuthManager) authorizeRequest(r *http.Request) accessDecision {
+func (m *Manager) authorizeRequest(r *http.Request) accessDecision {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	decision := accessDecision{Generation: m.generation}
@@ -1800,7 +1854,7 @@ func (m *accessAuthManager) authorizeRequest(r *http.Request) accessDecision {
 // describeSocketLocked records the admission a v2 socket inherits: its family,
 // the admitted exp, and the earliest deadline that must close it. The caller
 // holds the manager lock.
-func (m *accessAuthManager) describeSocketLocked(decision *accessDecision, claims *accessJWTClaims) {
+func (m *Manager) describeSocketLocked(decision *accessDecision, claims *accessJWTClaims) {
 	decision.FamilyID = claims.FamilyID
 	decision.ExpiresAt = claims.ExpiresAt
 	decision.SocketDeadline = claims.ExpiresAt
@@ -1816,7 +1870,7 @@ func (m *accessAuthManager) describeSocketLocked(decision *accessDecision, claim
 // landed in between still refuses the socket. The manager lock is never held
 // while closing sockets in the reverse direction, which keeps the lock order
 // one-way: auth state first, connection closure second.
-func (m *accessAuthManager) admitsFence(fence ws.AuthFence) bool {
+func (m *Manager) AdmitsFence(fence ws.AuthFence) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.owned || m.restartInProgress || fence.Generation != m.generation {
@@ -1855,7 +1909,7 @@ func accessExpiryAllowance(path string) time.Duration {
 	return accessJWTClockAllowance
 }
 
-func (m *accessAuthManager) login(challenge, proof, remoteAddr string) (string, error) {
+func (m *Manager) login(challenge, proof, remoteAddr string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.owned || m.faulted {
@@ -1899,7 +1953,7 @@ func (m *accessAuthManager) login(challenge, proof, remoteAddr string) (string, 
 // re-evaluated under the lock, so a record change between middleware evaluation
 // and this call still rejects an unauthorized caller. The v1 route never
 // returns v2 credentials, so no family is issued for it.
-func (m *accessAuthManager) setEncodedPassword(encoded string, credential accessCredential) (accessPasswordOutcome, error) {
+func (m *Manager) setEncodedPassword(encoded string, credential accessCredential) (accessPasswordOutcome, error) {
 	record, err := parseAccessPasswordHash(encoded)
 	if err != nil {
 		return accessPasswordOutcome{}, err
@@ -1914,7 +1968,7 @@ func (m *accessAuthManager) setEncodedPassword(encoded string, credential access
 }
 
 // setRawPassword applies a v2 set or change. Clearing uses clearPassword.
-func (m *accessAuthManager) setRawPassword(password string, credential accessCredential) (accessPasswordOutcome, error) {
+func (m *Manager) setRawPassword(password string, credential accessCredential) (accessPasswordOutcome, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := m.now()
@@ -1934,7 +1988,7 @@ func (m *accessAuthManager) setRawPassword(password string, credential accessCre
 
 // clearPassword disables authentication. Callers pass only the explicit v2
 // bearer, so a cookie alone cannot disable a v2 password.
-func (m *accessAuthManager) clearPassword(credential accessCredential) (accessPasswordOutcome, error) {
+func (m *Manager) clearPassword(credential accessCredential) (accessPasswordOutcome, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := m.now()
@@ -1950,7 +2004,7 @@ func (m *accessAuthManager) clearPassword(credential accessCredential) (accessPa
 // loginPassword verifies a raw password and returns a fresh credential bundle.
 // A stale work factor is rehashed: the replacement is persisted before
 // activation, so a failed write leaves the old record and key valid.
-func (m *accessAuthManager) loginPassword(password, remoteAddr string) (accessV2Bundle, error) {
+func (m *Manager) loginPassword(password, remoteAddr string) (accessV2Bundle, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := m.now()
@@ -2034,7 +2088,7 @@ type accessPasswordOutcome struct {
 
 // authorizedForPasswordLocked re-checks the caller against the current record.
 // A disabled record accepts anyone: that is the initial enable.
-func (m *accessAuthManager) authorizedForPasswordLocked(credential accessCredential, now time.Time) bool {
+func (m *Manager) authorizedForPasswordLocked(credential accessCredential, now time.Time) bool {
 	if m.record == nil {
 		return true
 	}
@@ -2061,7 +2115,7 @@ type accessRecordPlan struct {
 
 // prepareRecordPlanLocked builds the replacement record identity, its refresh
 // key, and (when asked) its first family, before anything is written.
-func (m *accessAuthManager) prepareRecordPlanLocked(record *accessPasswordRecord, now time.Time, withFamily bool) (*accessRecordPlan, error) {
+func (m *Manager) prepareRecordPlanLocked(record *accessPasswordRecord, now time.Time, withFamily bool) (*accessRecordPlan, error) {
 	plan := &accessRecordPlan{record: record}
 	if record != nil {
 		plan.encoded = record.encoded()
@@ -2106,7 +2160,21 @@ func (m *accessAuthManager) prepareRecordPlanLocked(record *accessPasswordRecord
 
 // commitPasswordLocked stores the new record and its session state in one
 // SQLite transaction before activating it.
-func (m *accessAuthManager) commitPasswordLocked(record *accessPasswordRecord, now time.Time, withFamily bool) (accessPasswordOutcome, error) {
+// ImportVerifier installs an already-encoded verifier without a credential
+// check. Only state import and tests call it; request handlers must go through
+// SetEncodedPassword so the caller proves possession first.
+func (m *Manager) ImportVerifier(encoded string) error {
+	record, err := parseAccessPasswordHash(encoded)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, err = m.commitPasswordLocked(record, m.now(), false)
+	return err
+}
+
+func (m *Manager) commitPasswordLocked(record *accessPasswordRecord, now time.Time, withFamily bool) (accessPasswordOutcome, error) {
 	if !m.owned || m.faulted || m.db == nil {
 		return accessPasswordOutcome{}, fmt.Errorf("%w: %v", errAccessPersistence, errAccessForbidden)
 	}
@@ -2133,9 +2201,9 @@ func (m *accessAuthManager) commitPasswordLocked(record *accessPasswordRecord, n
 	if plan.cookie != "" {
 		m.sessions[plan.cookie] = now.Add(accessSessionTTL)
 	}
-	revokeAccessSockets(m.generation)
+	revokeAccessSockets(m.hub(), m.generation)
 	for _, familyID := range retired {
-		retireAccessFamilySockets(familyID)
+		retireAccessFamilySockets(m.hub(), familyID)
 	}
 	outcome := accessPasswordOutcome{CookieToken: plan.cookie}
 	if plan.bundle.Token != "" {
@@ -2151,7 +2219,7 @@ func (m *accessAuthManager) commitPasswordLocked(record *accessPasswordRecord, n
 // by the caller because rotation reads and writes every shared index, and two
 // concurrent retries of one handle must serialize into a rotation plus a grace
 // replay instead of racing.
-func (m *accessAuthManager) refresh(handle, client string, now time.Time) (accessV2Bundle, error) {
+func (m *Manager) refresh(handle, client string, now time.Time) (accessV2Bundle, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.record == nil {
@@ -2178,7 +2246,7 @@ func (m *accessAuthManager) refresh(handle, client string, now time.Time) (acces
 
 // rotateRefreshLocked consumes the presented handle, derives the next one, and
 // mints a new access token. The old digest stays as replay evidence.
-func (m *accessAuthManager) rotateRefreshLocked(familyID, digest string, now time.Time) (accessV2Bundle, error) {
+func (m *Manager) rotateRefreshLocked(familyID, digest string, now time.Time) (accessV2Bundle, error) {
 	current := m.v2.families[familyID]
 	if current == nil {
 		return accessV2Bundle{}, errAccessUnauthorized
@@ -2250,7 +2318,7 @@ func (m *accessAuthManager) rotateRefreshLocked(familyID, digest string, now tim
 // replayRefreshLocked answers a retry inside the grace window with the current
 // family credentials, unchanged and unextended. Outside the window the handle
 // is a reuse signal: the family is revoked durably and the caller starts over.
-func (m *accessAuthManager) replayRefreshLocked(consumed accessV2ConsumedRef, now time.Time) (accessV2Bundle, error) {
+func (m *Manager) replayRefreshLocked(consumed accessV2ConsumedRef, now time.Time) (accessV2Bundle, error) {
 	family := m.v2.families[consumed.FamilyID]
 	if family == nil || !familyDeadline(family).After(now) {
 		return accessV2Bundle{}, errAccessUnauthorized
@@ -2285,7 +2353,7 @@ func (m *accessAuthManager) replayRefreshLocked(consumed accessV2ConsumedRef, no
 
 // revokeFamilyLocked durably retires one family, closes its sockets, and
 // reports the fixed 401 so the caller learns nothing about why.
-func (m *accessAuthManager) revokeFamilyLocked(familyID string, now time.Time) (accessV2Bundle, error) {
+func (m *Manager) revokeFamilyLocked(familyID string, now time.Time) (accessV2Bundle, error) {
 	active := m.snapshotLocked()
 	if !evictAccessFamily(active, familyID) {
 		return accessV2Bundle{}, errAccessUnauthorized
@@ -2293,14 +2361,14 @@ func (m *accessAuthManager) revokeFamilyLocked(familyID string, now time.Time) (
 	if err := m.commitActiveLocked(active); err != nil {
 		return accessV2Bundle{}, fmt.Errorf("%w: %v", errAccessPersistence, err)
 	}
-	retireAccessFamilySockets(familyID)
+	retireAccessFamilySockets(m.hub(), familyID)
 	return accessV2Bundle{}, errAccessUnauthorized
 }
 
 // logoutLocked revokes the bearer's family, or every family through an epoch
 // advance. The v2-only closure is deliberate: v1 cookies and v1 sockets are
 // not part of a v2 session, so they survive both forms.
-func (m *accessAuthManager) logoutLocked(claims *accessJWTClaims, all bool, now time.Time) error {
+func (m *Manager) logoutLocked(claims *accessJWTClaims, all bool, now time.Time) error {
 	if m.faulted {
 		return errAccessPersistence
 	}
@@ -2323,16 +2391,16 @@ func (m *accessAuthManager) logoutLocked(claims *accessJWTClaims, all bool, now 
 		return fmt.Errorf("%w: %v", errAccessPersistence, err)
 	}
 	if all {
-		retireAccessV2Sockets()
+		retireAccessV2Sockets(m.hub())
 	} else {
-		retireAccessFamilySockets(claims.FamilyID)
+		retireAccessFamilySockets(m.hub(), claims.FamilyID)
 	}
 	return nil
 }
 
 // takeRefreshToken applies the per-client refresh budget. A refresh storm must
 // not touch, clear, or lock out the shared password-login backoff.
-func (m *accessAuthManager) takeRefreshToken(client string, now time.Time) bool {
+func (m *Manager) takeRefreshToken(client string, now time.Time) bool {
 	bucket, ok := m.refreshBuckets[client]
 	if !ok {
 		if len(m.refreshBuckets) >= maxAccessRefreshBuckets {
@@ -2360,7 +2428,7 @@ func (m *accessAuthManager) takeRefreshToken(client string, now time.Time) bool 
 	return true
 }
 
-func (m *accessAuthManager) reclaimRefreshBuckets(now time.Time) {
+func (m *Manager) reclaimRefreshBuckets(now time.Time) {
 	for client, bucket := range m.refreshBuckets {
 		if !bucket.last.Add(accessRefreshBucketIdle).After(now) {
 			delete(m.refreshBuckets, client)
@@ -2368,7 +2436,7 @@ func (m *accessAuthManager) reclaimRefreshBuckets(now time.Time) {
 	}
 }
 
-func (m *accessAuthManager) newSessionLocked(now time.Time) (string, error) {
+func (m *Manager) newSessionLocked(now time.Time) (string, error) {
 	m.cleanExpiredLocked(now)
 	if m.record == nil {
 		return "", nil
@@ -2397,7 +2465,7 @@ func signAccessSession(verifier []byte, now time.Time) (string, error) {
 	return payload + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
 }
 
-func (m *accessAuthManager) recordFailureLocked(client string, now time.Time) {
+func (m *Manager) recordFailureLocked(client string, now time.Time) {
 	attempt := m.attempts[client]
 	attempt.Failures++
 	// 1, 2, 4, ... seconds, capped at a minute. This is deliberately
@@ -2408,7 +2476,7 @@ func (m *accessAuthManager) recordFailureLocked(client string, now time.Time) {
 	m.attempts[client] = attempt
 }
 
-func (m *accessAuthManager) cleanExpiredLocked(now time.Time) {
+func (m *Manager) cleanExpiredLocked(now time.Time) {
 	for challenge, expiresAt := range m.challenges {
 		if !expiresAt.After(now) {
 			delete(m.challenges, challenge)
@@ -2442,19 +2510,19 @@ func accessClientIP(remoteAddr string) string {
 	return remoteAddr
 }
 
-func accessAuthMiddleware(next http.Handler) http.Handler {
+func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if accessAuthPublicPath(r.URL.Path) || isSyncBoardPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !accessAuth.ownedNow() {
+		if !Default.ownedNow() {
 			// A second instance serves the UI but authorizes nothing: it cannot
 			// tell whether the owner enabled or revoked since it read Config.
 			http.Error(w, "access authentication required", http.StatusUnauthorized)
 			return
 		}
-		decision := accessAuth.authorizeRequest(r)
+		decision := Default.authorizeRequest(r)
 		if !decision.Authorized {
 			http.Error(w, "access authentication required", http.StatusUnauthorized)
 			return
@@ -2506,20 +2574,20 @@ func accessAuthPublicPath(path string) bool {
 	return !strings.HasPrefix(path, "/api/") && !strings.HasPrefix(path, "/ws/")
 }
 
-func handleAccessAuthStatus(w http.ResponseWriter, r *http.Request) {
+func HandleAccessAuthStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	accessAuth.ensureOwned()
-	enabled, salt, challenge, iterations, err := accessAuth.statusAndChallenge()
+	Default.ensureOwned()
+	enabled, salt, challenge, iterations, err := Default.statusAndChallenge()
 	if err != nil {
 		http.Error(w, "Unable to start login: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	payload := map[string]interface{}{
 		"enabled":       enabled,
-		"authenticated": enabled && accessAuth.authenticated(r),
+		"authenticated": enabled && Default.authenticated(r),
 		"protocols":     []string{accessPasswordHashVersion, accessJWTProtocol},
 	}
 	if enabled {
@@ -2533,7 +2601,7 @@ func handleAccessAuthStatus(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
-func handleAccessAuthLogin(w http.ResponseWriter, r *http.Request) {
+func HandleAccessAuthLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -2546,11 +2614,11 @@ func handleAccessAuthLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid login request", http.StatusBadRequest)
 		return
 	}
-	if !accessAuth.ensureOwned() {
+	if !Default.ensureOwned() {
 		http.Error(w, "Unable to login", http.StatusInternalServerError)
 		return
 	}
-	token, err := accessAuth.login(req.Challenge, req.Proof, r.RemoteAddr)
+	token, err := Default.login(req.Challenge, req.Proof, r.RemoteAddr)
 	if err != nil {
 		if errors.Is(err, errAccessRateLimited) {
 			http.Error(w, err.Error(), http.StatusTooManyRequests)
@@ -2570,7 +2638,7 @@ func handleAccessAuthLogin(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
-func handleAccessPassword(w http.ResponseWriter, r *http.Request) {
+func HandleAccessPassword(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -2586,11 +2654,11 @@ func handleAccessPassword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid password configuration", http.StatusBadRequest)
 		return
 	}
-	if !accessAuth.ensureOwned() {
+	if !Default.ensureOwned() {
 		http.Error(w, "Unable to save access password", http.StatusInternalServerError)
 		return
 	}
-	outcome, err := accessAuth.setEncodedPassword(req.PasswordHash, accessCredentialFromRequest(r))
+	outcome, err := Default.setEncodedPassword(req.PasswordHash, accessCredentialFromRequest(r))
 	if err != nil {
 		switch {
 		case errors.Is(err, errAccessUnauthorized):
@@ -2615,12 +2683,12 @@ func handleAccessPassword(w http.ResponseWriter, r *http.Request) {
 // handleAccessV2Status reports enforcement, whether the request carries a valid
 // explicit bearer, and whether this process owns the auth state. A cookie never
 // authenticates this endpoint.
-func handleAccessV2Status(w http.ResponseWriter, r *http.Request) {
+func HandleAccessV2Status(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		accessMethodNotAllowed(w, http.MethodGet)
 		return
 	}
-	enabled, authenticated, owned := accessAuth.v2Status(r)
+	enabled, authenticated, owned := Default.v2Status(r)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]bool{
@@ -2630,7 +2698,7 @@ func handleAccessV2Status(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (m *accessAuthManager) v2Status(r *http.Request) (enabled, authenticated, owned bool) {
+func (m *Manager) v2Status(r *http.Request) (enabled, authenticated, owned bool) {
 	// A second instance recovers ownership here once the first exits, instead
 	// of requiring a restart.
 	m.ensureOwned()
@@ -2647,7 +2715,7 @@ func (m *accessAuthManager) v2Status(r *http.Request) (enabled, authenticated, o
 	return enabled, m.jwtValidLocked(credential.Token, now, accessJWTClockAllowance), owned
 }
 
-func handleAccessV2Login(w http.ResponseWriter, r *http.Request) {
+func HandleAccessV2Login(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		accessMethodNotAllowed(w, http.MethodPost)
 		return
@@ -2665,11 +2733,11 @@ func handleAccessV2Login(w http.ResponseWriter, r *http.Request) {
 		accessError(w, "Invalid login request", http.StatusBadRequest)
 		return
 	}
-	if !accessAuth.ensureOwned() {
+	if !Default.ensureOwned() {
 		accessError(w, "Unable to login", http.StatusInternalServerError)
 		return
 	}
-	bundle, err := accessAuth.loginPassword(password, r.RemoteAddr)
+	bundle, err := Default.loginPassword(password, r.RemoteAddr)
 	if err != nil {
 		switch {
 		case errors.Is(err, errAccessRateLimited):
@@ -2685,7 +2753,7 @@ func handleAccessV2Login(w http.ResponseWriter, r *http.Request) {
 	writeAccessV2Bundle(w, bundle)
 }
 
-func handleAccessV2Password(w http.ResponseWriter, r *http.Request) {
+func HandleAccessV2Password(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		accessMethodNotAllowed(w, http.MethodPost)
 		return
@@ -2703,7 +2771,7 @@ func handleAccessV2Password(w http.ResponseWriter, r *http.Request) {
 		accessError(w, "Invalid password configuration", http.StatusBadRequest)
 		return
 	}
-	if !accessAuth.ensureOwned() {
+	if !Default.ensureOwned() {
 		accessError(w, "Unable to save access password", http.StatusInternalServerError)
 		return
 	}
@@ -2717,12 +2785,12 @@ func handleAccessV2Password(w http.ResponseWriter, r *http.Request) {
 	var outcome accessPasswordOutcome
 	var err error
 	if password == "" {
-		outcome, err = accessAuth.clearPassword(credential)
+		outcome, err = Default.clearPassword(credential)
 	} else if len(password) < accessPasswordMinBytes || len(password) > accessPasswordMaxBytes {
 		accessError(w, "Invalid password configuration", http.StatusBadRequest)
 		return
 	} else {
-		outcome, err = accessAuth.setRawPassword(password, credential)
+		outcome, err = Default.setRawPassword(password, credential)
 	}
 	if err != nil {
 		switch {
@@ -2751,7 +2819,7 @@ func handleAccessV2Password(w http.ResponseWriter, r *http.Request) {
 	writeEnabledAccessV2Bundle(w, bundle)
 }
 
-func handleAccessV2Refresh(w http.ResponseWriter, r *http.Request) {
+func HandleAccessV2Refresh(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		accessMethodNotAllowed(w, http.MethodPost)
 		return
@@ -2777,7 +2845,7 @@ func handleAccessV2Refresh(w http.ResponseWriter, r *http.Request) {
 		accessError(w, errAccessUnauthorized.Error(), http.StatusUnauthorized)
 		return
 	}
-	if !accessAuth.ensureOwned() {
+	if !Default.ensureOwned() {
 		accessError(w, "Unable to refresh access session", http.StatusInternalServerError)
 		return
 	}
@@ -2786,7 +2854,7 @@ func handleAccessV2Refresh(w http.ResponseWriter, r *http.Request) {
 		accessError(w, errAccessUnauthorized.Error(), http.StatusUnauthorized)
 		return
 	}
-	bundle, err := accessAuth.refresh(handle, accessClientIP(r.RemoteAddr), accessAuth.now())
+	bundle, err := Default.refresh(handle, accessClientIP(r.RemoteAddr), Default.now())
 	if err != nil {
 		switch {
 		case errors.Is(err, errAccessRefreshLimit):
@@ -2803,7 +2871,7 @@ func handleAccessV2Refresh(w http.ResponseWriter, r *http.Request) {
 	writeAccessV2Bundle(w, bundle)
 }
 
-func handleAccessV2Logout(w http.ResponseWriter, r *http.Request) {
+func HandleAccessV2Logout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		accessMethodNotAllowed(w, http.MethodPost)
 		return
@@ -2827,11 +2895,11 @@ func handleAccessV2Logout(w http.ResponseWriter, r *http.Request) {
 		accessError(w, errAccessUnauthorized.Error(), http.StatusUnauthorized)
 		return
 	}
-	if !accessAuth.ensureOwned() {
+	if !Default.ensureOwned() {
 		accessError(w, "Unable to logout", http.StatusInternalServerError)
 		return
 	}
-	if err := accessAuth.logoutBearer(credential.Token, all, accessAuth.now()); err != nil {
+	if err := Default.logoutBearer(credential.Token, all, Default.now()); err != nil {
 		if errors.Is(err, errAccessUnauthorized) {
 			accessError(w, errAccessUnauthorized.Error(), http.StatusUnauthorized)
 			return
@@ -2847,7 +2915,7 @@ func handleAccessV2Logout(w http.ResponseWriter, r *http.Request) {
 
 // logoutBearer re-validates the bearer under the same lock that revokes its
 // family, so a concurrent rotation cannot revoke something else.
-func (m *accessAuthManager) logoutBearer(token string, all bool, now time.Time) error {
+func (m *Manager) logoutBearer(token string, all bool, now time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.owned {
@@ -3196,7 +3264,11 @@ var accessOriginsCache struct {
 }
 
 func accessConfiguredOrigins() ([]string, error) {
-	configured := loadConfig().AuthOrigins
+	store, err := Default.store()
+	if err != nil {
+		return nil, err
+	}
+	configured := store.Load().AuthOrigins
 	raw := strings.Join(configured, "\n")
 	accessOriginsCache.mu.Lock()
 	defer accessOriginsCache.mu.Unlock()
@@ -3232,7 +3304,7 @@ func canonicalizeAccessOrigins(configured []string) ([]string, error) {
 
 // validateOrigins reports a malformed auth_origins list so startup can refuse to
 // run with a configuration that would silently 403 every browser.
-func (m *accessAuthManager) validateOrigins() error {
+func (m *Manager) ValidateOrigins() error {
 	_, err := accessConfiguredOrigins()
 	return err
 }

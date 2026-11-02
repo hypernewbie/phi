@@ -1,4 +1,4 @@
-package main
+package access
 
 import (
 	"net/http"
@@ -16,7 +16,7 @@ import (
 // is the *scope* of that exemption: it must not become a general hole.
 
 func authedHandler() http.Handler {
-	return accessAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("reached"))
 	}))

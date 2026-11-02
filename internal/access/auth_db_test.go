@@ -1,4 +1,4 @@
-package main
+package access
 
 import (
 	"database/sql"
@@ -19,10 +19,9 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/hypernewbie/phi/internal/config"
-	"github.com/hypernewbie/phi/pkg/system"
 )
 
-func failAccessDBCommitForTest(t *testing.T, auth *accessAuthManager) func() {
+func failAccessDBCommitForTest(t *testing.T, auth *Manager) func() {
 	t.Helper()
 	auth.mu.Lock()
 	if auth.db == nil {
@@ -52,7 +51,7 @@ func TestAccessRollbackGuard(t *testing.T) {
 	t.Run("permits only an unmigrated home and retains the lock", func(t *testing.T) {
 		withTempConfig(t)
 		seedTestLegacyConfig(t, testAccessHash())
-		release, err := acquireAccessRollbackGuard()
+		release, err := AcquireRollbackGuard(testStore)
 		if err != nil {
 			t.Fatalf("pre-migration rollback guard: %v", err)
 		}
@@ -71,7 +70,7 @@ func TestAccessRollbackGuard(t *testing.T) {
 			t.Fatal("test owner failed to acquire auth lock")
 		}
 		defer owner.release()
-		if release, err := acquireAccessRollbackGuard(); err == nil {
+		if release, err := AcquireRollbackGuard(testStore); err == nil {
 			release()
 			t.Fatal("rollback guard accepted a running owner")
 		}
@@ -89,7 +88,7 @@ func TestAccessRollbackGuard(t *testing.T) {
 			if err := os.WriteFile(statePath.path(), []byte("synthetic"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if release, err := acquireAccessRollbackGuard(); err == nil {
+			if release, err := AcquireRollbackGuard(testStore); err == nil {
 				release()
 				t.Fatalf("rollback guard accepted existing %s", statePath.name)
 			}
@@ -110,7 +109,7 @@ func TestAccessRollbackGuard(t *testing.T) {
 			if err := os.WriteFile(configFilePath(), raw, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if release, err := acquireAccessRollbackGuard(); err == nil {
+			if release, err := AcquireRollbackGuard(testStore); err == nil {
 				release()
 				t.Fatalf("rollback guard accepted %s migration marker", markerState)
 			}
@@ -122,7 +121,7 @@ func TestAccessRollbackGuard(t *testing.T) {
 		if err := os.WriteFile(configFilePath(), []byte("[access_auth_migration]\nstate = \"complete\"\nid = \"bad\"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if release, err := acquireAccessRollbackGuard(); err == nil {
+		if release, err := AcquireRollbackGuard(testStore); err == nil {
 			release()
 			t.Fatal("rollback guard accepted malformed migration metadata")
 		}
@@ -133,7 +132,7 @@ func TestAccessRollbackGuard(t *testing.T) {
 		if err := os.WriteFile(configFilePath(), []byte("broken = [\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if release, err := acquireAccessRollbackGuard(); err == nil {
+		if release, err := AcquireRollbackGuard(testStore); err == nil {
 			release()
 			t.Fatal("rollback guard accepted malformed Config")
 		}
@@ -250,9 +249,9 @@ func TestAccessMigrationCompletedLegacyJSONConvertsAfterDatabaseVerification(t *
 		t.Fatal(err)
 	}
 	primary, legacyPath, legacyBytes, want := seedCompletedJSONAccessHome(t, databaseID, databaseID)
-	manager := newAccessAuthManager()
+	manager := NewManager(testConfigStore, testSocketHub)
 	t.Cleanup(func() { manager.close() })
-	if err := manager.configure(""); err != nil {
+	if err := manager.Configure(""); err != nil {
 		t.Fatal(err)
 	}
 	if got := mustRead(t, legacyPath); !reflect.DeepEqual(got, legacyBytes) {
@@ -287,8 +286,8 @@ func TestAccessMigrationCompletedLegacyJSONDoesNotConvertOnDatabaseMismatch(t *t
 	}
 	var mismatchedID [16]byte
 	primary, legacyPath, legacyBytes, _ := seedCompletedJSONAccessHome(t, mismatchedID, databaseID)
-	manager := newAccessAuthManager()
-	if err := manager.configure(""); err == nil {
+	manager := NewManager(testConfigStore, testSocketHub)
+	if err := manager.Configure(""); err == nil {
 		manager.close()
 		t.Fatal("completed JSON with a mismatched database was accepted")
 	}
@@ -445,7 +444,7 @@ func TestAccessMigrationSemanticallyCorruptLegacyStateKeepsV1(t *testing.T) {
 		t.Fatalf("corrupt legacy recovery input was not retired after safe migration: %v", err)
 	}
 
-	status := testAccessServe(handleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+	status := testAccessServe(HandleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
 	if status.Code != http.StatusOK {
 		t.Fatalf("v1 status after semantic corruption = %d: %s", status.Code, status.Body.String())
 	}
@@ -464,7 +463,7 @@ func TestAccessMigrationSemanticallyCorruptLegacyStateKeepsV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	login := testAccessServe(handleAccessAuthLogin, httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(string(loginBody))))
+	login := testAccessServe(HandleAccessAuthLogin, httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(string(loginBody))))
 	if login.Code != http.StatusOK || len(login.Result().Cookies()) != 1 {
 		t.Fatalf("v1 login after semantic corruption = %d cookies=%d: %s", login.Code, len(login.Result().Cookies()), login.Body.String())
 	}
@@ -513,7 +512,7 @@ func TestAccessMigrationRejectsLegacyRecordIDRefreshKeyMismatch(t *testing.T) {
 			if active.RecordBinding != accessRecordBinding(encoded) || active.RecordID != "" || active.RefreshKey != nil || len(active.Families) != 0 {
 				t.Fatalf("mismatched legacy state was not reduced to a safe base: %+v", active)
 			}
-			if status := testAccessServe(handleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil)); status.Code != http.StatusOK {
+			if status := testAccessServe(HandleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil)); status.Code != http.StatusOK {
 				t.Fatalf("v1 status after corrupt legacy state = %d: %s", status.Code, status.Body.String())
 			}
 			cookie := testAccessCookieFor(t, auth)
@@ -600,8 +599,8 @@ func TestAccessMigrationConfigWriteFailuresRecoverIdempotently(t *testing.T) {
 		})
 		t.Cleanup(func() { setConfigWriter(nil) })
 
-		manager := newAccessAuthManager()
-		if err := manager.configure(encoded); err == nil {
+		manager := NewManager(testConfigStore, testSocketHub)
+		if err := manager.Configure(encoded); err == nil {
 			manager.close()
 			t.Fatal("initial pending marker write failure started auth")
 		}
@@ -618,8 +617,8 @@ func TestAccessMigrationConfigWriteFailuresRecoverIdempotently(t *testing.T) {
 			t.Fatalf("initial marker failure created auth database: %v", err)
 		}
 		setConfigWriter(nil)
-		retry := newAccessAuthManager()
-		if err := retry.configure(encoded); err != nil {
+		retry := NewManager(testConfigStore, testSocketHub)
+		if err := retry.Configure(encoded); err != nil {
 			retry.close()
 			t.Fatalf("retry after initial marker write failure: %v", err)
 		}
@@ -640,10 +639,7 @@ func TestAccessMigrationConfigWriteFailuresRecoverIdempotently(t *testing.T) {
 			encoded := testAccessHash()
 			seedTestLegacyConfig(t, encoded)
 			writeLegacyAccessStateForTest(t, legacyAccessStateForTest(t, encoded))
-			previousWriter := configWriter
-			if previousWriter == nil {
-				previousWriter = system.WriteFileAtomicPreserveExisting
-			}
+			previousWriter := currentConfigWriter()
 			completeWriteAttempted := false
 			setConfigWriter(func(path string, contents []byte, mode os.FileMode) error {
 				var cfg Config
@@ -662,8 +658,8 @@ func TestAccessMigrationConfigWriteFailuresRecoverIdempotently(t *testing.T) {
 				return previousWriter(path, contents, mode)
 			})
 
-			first := newAccessAuthManager()
-			if err := first.configure(encoded); err == nil {
+			first := NewManager(testConfigStore, testSocketHub)
+			if err := first.Configure(encoded); err == nil {
 				first.close()
 				setConfigWriter(previousWriter)
 				t.Fatal("finalization write failure started auth")
@@ -691,8 +687,8 @@ func TestAccessMigrationConfigWriteFailuresRecoverIdempotently(t *testing.T) {
 				t.Fatalf("failed finalization removed legacy state before recovery: %v", err)
 			}
 
-			recovered := newAccessAuthManager()
-			if err := recovered.configure(encoded); err != nil {
+			recovered := NewManager(testConfigStore, testSocketHub)
+			if err := recovered.Configure(encoded); err != nil {
 				recovered.close()
 				t.Fatalf("recover after finalization failure: %v", err)
 			}
@@ -718,8 +714,8 @@ func TestAccessMigrationCompletedMarkerRejectsUntrustedDatabaseState(t *testing.
 			withTempConfig(t)
 			encoded := testAccessHash()
 			seedTestLegacyConfig(t, encoded)
-			initial := newAccessAuthManager()
-			if err := initial.configure(encoded); err != nil {
+			initial := NewManager(testConfigStore, testSocketHub)
+			if err := initial.Configure(encoded); err != nil {
 				initial.close()
 				t.Fatalf("prepare completed home: %v", err)
 			}
@@ -767,8 +763,8 @@ func TestAccessMigrationCompletedMarkerRejectsUntrustedDatabaseState(t *testing.
 				}
 			}
 
-			manager := newAccessAuthManager()
-			if err := manager.configure(encoded); err == nil {
+			manager := NewManager(testConfigStore, testSocketHub)
+			if err := manager.Configure(encoded); err == nil {
 				manager.close()
 				t.Fatal("completed migration accepted inconsistent Config/database state")
 			}
@@ -808,8 +804,8 @@ func TestAccessMigrationPendingRetriesAbsentOrPristineDatabase(t *testing.T) {
 				store.close()
 			}
 
-			manager := newAccessAuthManager()
-			if err := manager.configure(encoded); err != nil {
+			manager := NewManager(testConfigStore, testSocketHub)
+			if err := manager.Configure(encoded); err != nil {
 				manager.close()
 				t.Fatalf("pending migration retry: %v", err)
 			}
@@ -901,8 +897,8 @@ func TestAccessMigrationPendingRejectsMismatchedOrUnsupportedDatabase(t *testing
 				store.close()
 			}
 
-			manager := newAccessAuthManager()
-			if err := manager.configure(encoded); err == nil {
+			manager := NewManager(testConfigStore, testSocketHub)
+			if err := manager.Configure(encoded); err == nil {
 				manager.close()
 				t.Fatal("pending migration accepted an untrusted database")
 			}
@@ -978,8 +974,8 @@ func TestAccessMigrationJSONFallbackRejectsMalformedMetadata(t *testing.T) {
 func TestAccessMigrationRejectsUnmarkedDatabaseAndMalformedMarker(t *testing.T) {
 	t.Run("unmarked existing database", func(t *testing.T) {
 		withTempConfig(t)
-		manager := newAccessAuthManager()
-		if err := manager.configure(testAccessHash()); err != nil {
+		manager := NewManager(testConfigStore, testSocketHub)
+		if err := manager.Configure(testAccessHash()); err != nil {
 			manager.close()
 			t.Fatal(err)
 		}
@@ -996,8 +992,8 @@ func TestAccessMigrationRejectsUnmarkedDatabaseAndMalformedMarker(t *testing.T) 
 		if err := os.WriteFile(configFilePath(), raw, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		restarted := newAccessAuthManager()
-		if err := restarted.configure(""); err == nil {
+		restarted := NewManager(testConfigStore, testSocketHub)
+		if err := restarted.Configure(""); err == nil {
 			restarted.close()
 			t.Fatal("unmarked database started")
 		}
@@ -1009,8 +1005,8 @@ func TestAccessMigrationRejectsUnmarkedDatabaseAndMalformedMarker(t *testing.T) 
 		if err := os.WriteFile(configFilePath(), []byte("[access_auth_migration]\nstate = \"complete\"\nid = \"bad\"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		manager := newAccessAuthManager()
-		if err := manager.configure(""); err == nil {
+		manager := NewManager(testConfigStore, testSocketHub)
+		if err := manager.Configure(""); err == nil {
 			manager.close()
 			t.Fatal("malformed migration marker started")
 		}
@@ -1076,38 +1072,6 @@ func TestAccessMigrationStalePreMigrationConfigCannotRestoreVerifierOrMarker(t *
 	}
 }
 
-func TestAccessMigrationMetadataIsNotExported(t *testing.T) {
-	withTempConfig(t)
-	seedTestLegacyConfig(t, testAccessHash())
-	useTestAccessAuth(t)
-	marker := loadConfig().AccessAuthMigration
-	if marker == nil || marker.State != "complete" {
-		t.Fatalf("missing completed migration marker: %#v", marker)
-	}
-
-	configResponse := httptest.NewRecorder()
-	handleConfig(configResponse, httptest.NewRequest(http.MethodGet, "/api/config", nil))
-	if strings.Contains(configResponse.Body.String(), "access_auth_migration") || strings.Contains(configResponse.Body.String(), marker.ID) {
-		t.Fatalf("/api/config exposed internal migration metadata: %s", configResponse.Body.String())
-	}
-
-	exportResponse := httptest.NewRecorder()
-	handleConfigExport(exportResponse, httptest.NewRequest(http.MethodGet, "/api/config/export", nil))
-	var exported struct {
-		Config string `json:"config"`
-	}
-	if err := json.Unmarshal(exportResponse.Body.Bytes(), &exported); err != nil {
-		t.Fatal(err)
-	}
-	payload, err := decodeConfigData(exported.Config, "PHICONFIG")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(payload), "access_auth_migration") || strings.Contains(string(payload), marker.ID) {
-		t.Fatalf("Config export exposed internal migration metadata: %s", payload)
-	}
-}
-
 func TestAccessMigrationPendingMarkerRecoversInitializedDatabase(t *testing.T) {
 	withTempConfig(t)
 	encoded := testAccessHash()
@@ -1159,8 +1123,8 @@ func TestAccessMigrationRejectsCompletedMarkerWithoutDatabase(t *testing.T) {
 	if err := writeAccessMigrationConfig(nil, testAccessHash(), marker, ""); err != nil {
 		t.Fatal(err)
 	}
-	manager := newAccessAuthManager()
-	if err := manager.configure(""); err == nil {
+	manager := NewManager(testConfigStore, testSocketHub)
+	if err := manager.Configure(""); err == nil {
 		manager.close()
 		t.Fatal("completed marker without its database started successfully")
 	}
@@ -1175,8 +1139,8 @@ func TestAccessMigrationRejectsCorruptDatabaseWithoutConfigFallback(t *testing.T
 	if err := os.WriteFile(accessDBPath(), []byte("not sqlite"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	manager := newAccessAuthManager()
-	if err := manager.configure(testAccessHash()); err == nil {
+	manager := NewManager(testConfigStore, testSocketHub)
+	if err := manager.Configure(testAccessHash()); err == nil {
 		manager.close()
 		t.Fatal("corrupt completed database fell back to the display verifier")
 	}
@@ -1194,7 +1158,7 @@ func TestAccessFaultedOwnerCannotIssueOrAcceptV1Credentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookie := testAccessCookieFor(t, auth)
-	status := testAccessServe(handleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+	status := testAccessServe(HandleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
 	if status.Code != http.StatusOK {
 		t.Fatalf("initial v1 status = %d: %s", status.Code, status.Body.String())
 	}
@@ -1231,7 +1195,7 @@ func TestAccessFaultedOwnerCannotIssueOrAcceptV1Credentials(t *testing.T) {
 	auth.mu.Unlock()
 	changeRequest := httptest.NewRequest(http.MethodPost, "/api/auth/password", strings.NewReader(`{"password_hash":"`+testAccessHash()+`"}`))
 	changeRequest.AddCookie(cookie)
-	change := testAccessServe(handleAccessPassword, changeRequest)
+	change := testAccessServe(HandleAccessPassword, changeRequest)
 	auth.mu.Lock()
 	auth.db.commit = previousCommit
 	faulted, retainedRecord := auth.faulted, auth.record != nil
@@ -1243,11 +1207,11 @@ func TestAccessFaultedOwnerCannotIssueOrAcceptV1Credentials(t *testing.T) {
 		t.Fatalf("failed reload did not retain a faulted owner: faulted=%v record=%v", faulted, retainedRecord)
 	}
 
-	status = testAccessServe(handleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+	status = testAccessServe(HandleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
 	if status.Code != http.StatusServiceUnavailable || status.Body.String() != "Unable to start login: unable to persist access password\n" {
 		t.Fatalf("faulted v1 status = %d %q", status.Code, status.Body.String())
 	}
-	login := testAccessServe(handleAccessAuthLogin, httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(string(loginBody))))
+	login := testAccessServe(HandleAccessAuthLogin, httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(string(loginBody))))
 	if login.Code != http.StatusInternalServerError || login.Body.String() != "Unable to login\n" || len(login.Result().Cookies()) != 0 {
 		t.Fatalf("faulted v1 login = %d cookies=%d body=%q", login.Code, len(login.Result().Cookies()), login.Body.String())
 	}
@@ -1327,8 +1291,8 @@ func TestAccessDBRejectsInconsistentActiveState(t *testing.T) {
 			}
 			store.close()
 
-			manager := newAccessAuthManager()
-			if err := manager.configure(""); err == nil {
+			manager := NewManager(testConfigStore, testSocketHub)
+			if err := manager.Configure(""); err == nil {
 				manager.close()
 				t.Fatal("configured from semantically inconsistent auth database")
 			}
@@ -1336,11 +1300,11 @@ func TestAccessDBRejectsInconsistentActiveState(t *testing.T) {
 				manager.close()
 				t.Fatalf("invalid database left auth state usable: faulted=%v record=%v", manager.faulted, manager.record)
 			}
-			previous := accessAuth
-			accessAuth = manager
+			previous := Default
+			Default = manager
 			t.Cleanup(func() {
 				manager.close()
-				accessAuth = previous
+				Default = previous
 			})
 			request := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
 			if got := testAccessServe(testAccessProtected().ServeHTTP, request); got.Code != http.StatusUnauthorized {
@@ -1426,9 +1390,9 @@ func TestAccessDBM1RealServerAcceptance(t *testing.T) {
 
 	newServer := func() *httptest.Server {
 		mux := http.NewServeMux()
-		mux.HandleFunc("/api/auth/v2/login", handleAccessV2Login)
-		mux.HandleFunc("/api/auth/v2/password", handleAccessV2Password)
-		mux.Handle("/api/coders", accessAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mux.HandleFunc("/api/auth/v2/login", HandleAccessV2Login)
+		mux.HandleFunc("/api/auth/v2/password", HandleAccessV2Password)
+		mux.Handle("/api/coders", Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 		})))
 		return httptest.NewServer(mux)
@@ -1513,16 +1477,16 @@ func TestAccessDBM1RealServerAcceptance(t *testing.T) {
 
 	server.Close()
 	auth.close()
-	restarted := newAccessAuthManager()
-	if err := restarted.configure(loadConfig().AccessPasswordHash); err != nil {
+	restarted := NewManager(testConfigStore, testSocketHub)
+	if err := restarted.Configure(loadConfig().AccessPasswordHash); err != nil {
 		restarted.close()
 		t.Fatalf("real-server restart configure: %v", err)
 	}
-	previous := accessAuth
-	accessAuth = restarted
+	previous := Default
+	Default = restarted
 	t.Cleanup(func() {
 		restarted.close()
-		accessAuth = previous
+		Default = previous
 	})
 	server = newServer()
 	defer server.Close()
