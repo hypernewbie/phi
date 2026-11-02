@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -29,7 +28,6 @@ import (
 	"github.com/hypernewbie/phi/pkg/coders"
 	"github.com/hypernewbie/phi/pkg/fswatch"
 	"github.com/hypernewbie/phi/pkg/obs"
-	"github.com/hypernewbie/phi/pkg/prompt_history"
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/restart"
 	"github.com/hypernewbie/phi/pkg/rpc"
@@ -151,7 +149,7 @@ func main() {
 	log.Printf("[main] Starting Phi in CWD: %s", server.ActiveCWD)
 
 	// Ensure config directory exists and contains CWD as a workspace
-	cfg, err := loadConfigWithError()
+	cfg, err := configStore().LoadWithError()
 	if err != nil {
 		slog.Error("config read failed", "path", configFilePath(), "err", err)
 		os.Exit(1)
@@ -203,6 +201,7 @@ func main() {
 		log.Printf("[backends] failed to load custom backends: %v", err)
 	}
 	rpcMgr := rpc.NewManager()
+	server.RPC = rpcMgr
 	// Saved tabs are restored as new live processes after the hub exists.
 	// Never deserialize OS process handles or publish nil-PTY ghosts.
 	if err := server.LoadSyncStore(); err != nil {
@@ -269,7 +268,7 @@ func main() {
 	server.BridgeOf = func() *piapp.Bridge { return piBridge }
 	if piBridge != nil {
 		piBridge.Syncboard = http.HandlerFunc(server.HandleSyncMessages)
-		piBridge.LoadConfig = loadConfigWithError
+		piBridge.LoadConfig = configStore().LoadWithError
 	}
 	server.RestoreSavedTabs()
 	// Expiry starts only after restoration completes so saved panes
@@ -310,147 +309,8 @@ func main() {
 		server.Static = webassets.New(root, precompressed, cfg.CompressionEnabled)
 	}
 
-	// API Routing
-	http.HandleFunc("/api/auth/status", access.HandleAccessAuthStatus)
-	http.HandleFunc("/api/auth/login", access.HandleAccessAuthLogin)
-	http.HandleFunc("/api/auth/password", access.HandleAccessPassword)
-	http.HandleFunc("/api/auth/v2/status", access.HandleAccessV2Status)
-	http.HandleFunc("/api/auth/v2/login", access.HandleAccessV2Login)
-	http.HandleFunc("/api/auth/v2/password", access.HandleAccessV2Password)
-	http.HandleFunc("/api/auth/v2/refresh", access.HandleAccessV2Refresh)
-	http.HandleFunc("/api/auth/v2/logout", access.HandleAccessV2Logout)
-	http.HandleFunc("/api/coders", server.HandleGetCoders)
-	http.HandleFunc("/api/sessions", server.HandleGetSessions)
-	http.HandleFunc("/api/terminals", server.HandleSpawnTerminal)
-	http.HandleFunc("/api/session-meta", server.HandleSessionMeta)
-	http.HandleFunc("/api/diff", gitAPI.HandleGetDiff)
-	http.HandleFunc("/api/git/raw-diff", gitAPI.HandleRawDiff)
-	http.HandleFunc("/api/git/raw-status", gitAPI.HandleRawStatus)
-	http.HandleFunc("/api/git/raw-log", gitAPI.HandleRawLog)
-	http.HandleFunc("/api/git/commits", gitAPI.HandleGetCommits)
-	http.HandleFunc("/api/git/info", gitAPI.HandleGitInfo)
-	http.HandleFunc("/api/git/status-files", gitAPI.HandleGitStatusFiles)
-	http.HandleFunc("/api/git/action", gitAPI.HandleGitAction)
-	http.HandleFunc("/api/config", server.HandleConfig)
-	http.HandleFunc("/api/config/pushover", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet {
-			server.HandleGetPushoverConfig(w, r)
-		} else if r.Method == http.MethodPost {
-			server.HandlePostPushoverConfig(w, r)
-		} else {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		}
-	})
-	http.HandleFunc("/api/config/pushover/test", server.HandleTestPushover)
-	http.HandleFunc("/api/config/webhook", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet {
-			server.HandleGetWebhookConfig(w, r)
-		} else if r.Method == http.MethodPost {
-			server.HandlePostWebhookConfig(w, r)
-		} else {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		}
-	})
-	http.HandleFunc("/api/config/webhook/test", server.HandleTestWebhook)
-	http.HandleFunc("/api/config/simplepush", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet {
-			server.HandleGetSimplepushConfig(w, r)
-		} else if r.Method == http.MethodPost {
-			server.HandlePostSimplepushConfig(w, r)
-		} else {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		}
-	})
-	http.HandleFunc("/api/config/simplepush/test", server.HandleTestSimplepush)
-	http.HandleFunc("/api/config/kanban-vault", server.HandleKanbanVault)
-	http.HandleFunc("/api/config/export", server.HandleConfigExport)
-	http.HandleFunc("/api/config/import", server.HandleConfigImport)
-	http.HandleFunc("/api/config/export-models", server.HandleConfigExportModels)
-	http.HandleFunc("/api/config/import-models", server.HandleConfigImportModels)
-	// Cmds export was split in v0.7.16: quick_commands (sent to active PTY)
-	// and terminal_commands (spawn new shell tabs) are now separate concepts
-	// with their own endpoints. The legacy /api/config/export-cmds route is
-	// gone; /api/config/import-cmds stays for paste backwards-compat.
-	http.HandleFunc("/api/config/export-quick-commands", server.HandleConfigExportQuickCommands)
-	http.HandleFunc("/api/config/export-terminal-commands", server.HandleConfigExportTerminalCommands)
-	http.HandleFunc("/api/config/import-cmds", server.HandleConfigImportCmds)
-	http.HandleFunc("/api/config/workspaces", server.HandleWorkspaceToggle)
-	http.HandleFunc("/api/config/models", server.HandleModelPresets)
-	http.HandleFunc("/api/config/thinking-presets", server.HandleThinkingPresets)
-	http.HandleFunc("/api/fs/autocomplete", server.HandleFSAutocomplete)
-	http.HandleFunc("/api/fs/list", server.HandleFSList)
-	http.HandleFunc("/api/fs/browse", server.HandleFSBrowse)
-	http.HandleFunc("/api/config/theme", server.HandleThemeUpdate)
-	http.HandleFunc("/api/config/appearance", server.HandleAppearanceUpdate)
-	http.HandleFunc("/api/config/mobile-appearance", server.HandleMobileAppearance)
-	http.HandleFunc("/api/config/mobile-appearance/fence", server.HandleMobileAppearanceFence)
-	http.HandleFunc("/api/git/worktrees", server.HandleGetWorktrees)
-	http.HandleFunc("/api/git/worktree-dirty", server.HandleGetWorktreeDirtyStates)
-	http.HandleFunc("/api/config/worktree-state", server.HandleWorktreeStateUpdate)
-	http.HandleFunc("/api/config/quick-commands", server.HandleQuickCommands)
-	http.HandleFunc("/api/config/terminal-commands", server.HandleTerminalCommands)
-	http.HandleFunc("/api/config/markdown-dirs", server.HandleMarkdownDirs)
-	http.HandleFunc("/api/config/use-existing-terminal-tab", server.HandleUseExistingTerminalTab)
-	http.HandleFunc("/api/config/use-hidden-terminal", server.HandleUseHiddenTerminal)
-	http.HandleFunc("/api/cmd/run", server.HandleRunCommand)
-	http.HandleFunc("/api/cmd/batch-run", server.HandleRunCommand)
-	http.HandleFunc("/api/config/fast-mode", server.HandleFastMode)
-	http.HandleFunc("/api/config/pi-offline", server.HandlePiOffline)
-	http.HandleFunc("/api/config/pi-bridge-no-inject", server.HandlePiBridgeNoInject)
-	http.HandleFunc("/api/config/claude-dangerously-skip-permissions", server.HandleClaudeDangerouslySkipPermissions)
-	http.HandleFunc("/api/config/agy-theme-ansi", server.HandleAgyThemeAnsi)
-	http.HandleFunc("/api/config/auto-reconnect", server.HandleAutoReconnect)
-	http.HandleFunc("/api/opencode/service", server.HandleOpenCodeService)
-	http.HandleFunc("/api/opencode/service/stop", server.HandleOpenCodeServiceStop)
-	http.HandleFunc("/api/config/opencode-idle-stop", server.HandleOpenCodeIdleStop)
-	http.HandleFunc("/api/markdown/files", server.HandleMarkdownFiles)
-	http.HandleFunc("/api/markdown/file", server.HandleMarkdownFile)
-	http.HandleFunc("/api/markdown/asset", server.HandleMarkdownAsset)
-	http.HandleFunc("/api/file/asset", server.HandleFileAsset)
-	http.HandleFunc("/api/markdown/paste", server.HandleMarkdownPaste)
-	http.HandleFunc("/api/markdown/delete", server.HandleMarkdownDelete)
-	http.HandleFunc("/api/markdown/copy-all-worktrees", server.HandleMarkdownCopyAllWorktrees)
-	http.HandleFunc("/api/markdown/export-bundle", server.HandleMarkdownExportBundle)
-	http.HandleFunc("/api/markdown/import-bundle", server.HandleMarkdownImportBundle)
-	http.HandleFunc("/ws/md-events", func(w http.ResponseWriter, r *http.Request) {
-		ws.HandleEventsWS(w, r, server.Hub)
-	})
-	http.HandleFunc("/api/prompt-history/append", handlePromptHistoryAppend)
-	http.HandleFunc("/api/prompt-history/recent", handlePromptHistoryRecent)
-	http.HandleFunc("/api/pi-history", piAPI.HandlePiBridgeHistory)
-	http.HandleFunc("/api/pi-bridge/models", piAPI.HandlePiBridgeModels)
-	http.HandleFunc("/api/pi-bridge/model", piAPI.HandlePiBridgeSetModel)
-	http.HandleFunc("/api/pi-bridge/thinking-levels", piAPI.HandlePiBridgeThinkingLevels)
-	http.HandleFunc("/api/pi-bridge/thinking", piAPI.HandlePiBridgeSetThinking)
-	http.HandleFunc("/api/pi-bridge/compact", piAPI.HandlePiBridgeCompact)
-	http.HandleFunc("/api/pi-bridge/reload", piAPI.HandlePiBridgeReload)
-	http.HandleFunc("/api/pi-bridge/skills", piAPI.HandlePiBridgeSkills)
-	http.HandleFunc("/api/pi-bridge/skill", piAPI.HandlePiBridgeInvokeSkill)
-	http.HandleFunc("/api/pi-bridge/attachments/context", piAPI.HandlePiBridgeAttachmentContext)
-	http.HandleFunc("/api/pi-bridge/attachments", piAPI.HandlePiBridgeAttachments)
-	http.HandleFunc("/api/attachments/v2/browse", attachments.HandleV2Browse)
-	http.HandleFunc("/api/attachments/v2/server-items", attachments.HandleV2ServerItem)
-	http.HandleFunc("/api/attachments/v2/items/", attachments.HandleV2Item)
-	http.HandleFunc("/api/pi-bridge/transcript-search", piAPI.HandlePiBridgeTranscriptSearch)
-	http.HandleFunc("/api/attachments", attachments.HandleClipboard)
-	http.HandleFunc("/api/clipboard", server.HandleGetClipboard)
-	http.HandleFunc("/api/system/cpu", server.HandleSystemCPU)
-	http.HandleFunc("/api/session-transcript", server.HandleGetSessionTranscript)
-	http.HandleFunc("/api/proxy", server.HandleProxy)
-	http.HandleFunc("/api/sync/messages/", server.HandleSyncMessages)
-	http.HandleFunc("/api/sync/messages", server.HandleSyncMessages)
-	http.HandleFunc("/api/config/sync-coordinator", server.HandleSyncCoordinator)
-
-	http.HandleFunc("/api/version", server.HandleGetVersion)
-	http.HandleFunc("/api/peers/status", server.HandleGetPeersStatus)
-	http.HandleFunc("/api/config/peers", server.HandleConfigPeers)
-
-	http.HandleFunc("/api/update/status", server.HandleUpdateStatus)
-	http.HandleFunc("/api/update/check", server.HandleUpdateCheck)
-	http.HandleFunc("/api/update/apply", server.HandleUpdateApply)
-	http.HandleFunc("/api/update/progress", server.HandleUpdateProgress)
-	http.HandleFunc("/api/restart", server.HandleRestart)
-	http.HandleFunc("/api/diag", server.HandleDiag)
+	// API routing lives with the handlers.
+	server.RegisterRoutes()
 
 	// Start fleet poller with current peer config
 	server.StartFleetPoller()
@@ -487,11 +347,6 @@ func main() {
 	}
 
 	// Custom route for DELETE /api/terminals/:id and WS /ws/pane/:id
-	http.HandleFunc("/livez", server.HandleLivez)
-	http.HandleFunc("/healthz", server.HandleLivez) // alias
-	http.HandleFunc("/readyz", server.HandleReadyz)
-	http.HandleFunc("/", server.HandleFallback)
-	http.HandleFunc("/ws/control", ws.HandleControl(server.Hub, rpcMgr, func() string { return server.ActiveCWD }))
 
 	closeDiagnostics := server.StartPrivateDiagnostics(*diagnosticsDirFlag)
 
@@ -872,89 +727,4 @@ func gracefulShutdown(servers []*http.Server, drainDelay, ptyGrace, grace time.D
 		}(srv)
 	}
 	wg.Wait()
-}
-
-// ---------- prompt_history handlers ----------
-
-// promptHistoryStoreMu serializes lazyInit against concurrent first-call
-// initialization. After init succeeds, the *Store itself is goroutine-safe
-// (Store.mu protects every mutator). On corrupt-file init we cache a
-// sentinel empty store with no path — writes fail with "no path
-// configured", reads return []. That surfaces the persistence failure
-// (500 on append, [] on recent) without panicking.
-var (
-	promptHistoryStoreMu sync.Mutex
-	promptHistoryStore   *prompt_history.Store
-	promptHistoryLoadErr error
-)
-
-func promptHistoryPath() string {
-	return filepath.Join(system.PhiDataDir(), "prompt_history.json")
-}
-
-func promptHistoryLazyStore() (*prompt_history.Store, error) {
-	promptHistoryStoreMu.Lock()
-	defer promptHistoryStoreMu.Unlock()
-	if promptHistoryStore != nil || promptHistoryLoadErr != nil {
-		// Already initialized (success or recorded failure). Reuse.
-		if promptHistoryStore == nil {
-			// Empty sentinel store, plus the recorded error so the
-			// handlers can surface it.
-			return &prompt_history.Store{}, promptHistoryLoadErr
-		}
-		return promptHistoryStore, nil
-	}
-	s, err := prompt_history.Load(promptHistoryPath())
-	if err != nil {
-		log.Printf("[prompt_history] failed to load %s: %v", promptHistoryPath(), err)
-		promptHistoryLoadErr = err
-		// Cache a path-less empty store. Appends to this will fail at
-		// persist time, signalling the corrupt state to the caller.
-		return &prompt_history.Store{}, err
-	}
-	promptHistoryStore = s
-	return s, nil
-}
-
-func handlePromptHistoryAppend(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req struct {
-		Text string `json:"text"`
-		Cwd  string `json:"cwd"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	s, err := promptHistoryLazyStore()
-	if err != nil {
-		http.Error(w, "history load: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if _, err := s.Append(req.Text, req.Cwd); err != nil {
-		http.Error(w, "history persist: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "count": s.Len()})
-}
-
-func handlePromptHistoryRecent(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	cwd := r.URL.Query().Get("cwd")
-	n := 20
-	if v := r.URL.Query().Get("n"); v != "" {
-		if parsed, perr := strconv.Atoi(v); perr == nil && parsed > 0 && parsed <= 200 {
-			n = parsed
-		}
-	}
-	s, _ := promptHistoryLazyStore() // error ignored here; Recent on empty store returns []
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(s.Recent(cwd, n))
 }

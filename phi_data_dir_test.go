@@ -20,7 +20,7 @@ func TestPhiDataDirRoutesStateWithoutMovingHome(t *testing.T) {
 	for name, got := range map[string]string{
 		"clipboard":           attachments.ClipboardDir(),
 		"syncboard.json":      server.SyncFilePath(),
-		"prompt_history.json": promptHistoryPath(),
+		"prompt_history.json": server.PromptHistoryPath(),
 	} {
 		if want := filepath.Join(data, name); got != want {
 			t.Errorf("%s: got %q, want %q", name, got, want)

@@ -17,6 +17,7 @@ import (
 	"github.com/hypernewbie/phi/pkg/fleet"
 	"github.com/hypernewbie/phi/pkg/fswatch"
 	"github.com/hypernewbie/phi/pkg/pty"
+	"github.com/hypernewbie/phi/pkg/rpc"
 	"github.com/hypernewbie/phi/pkg/system"
 	"github.com/hypernewbie/phi/pkg/ws"
 )
@@ -40,6 +41,8 @@ var (
 	Access      func() *access.Manager
 	// BridgeOf returns the Pi bridge owner; nil when integration is off.
 	BridgeOf func() *piapp.Bridge
+	// RPC backs the control WebSocket.
+	RPC *rpc.Manager
 	// Titles is the Pi title service; nil when title sync is off.
 	Titles *PiTerminalTitleService
 )

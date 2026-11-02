@@ -41,13 +41,13 @@ jobs:
       - name: Run Go Tests
         run: go test -race -v ./...
 
-      # The tag swaps root's diagnostics_disabled.go for diagnostics_profiling.go,
-      # but no root test exercises the diagnostics API — the only tag-gated root
-      # test file is api_timing_test.go. Run the packages whose source actually
-      # changes under the tag, plus those two tests.
+      # The tag swaps internal/server's diagnostics_disabled.go for
+      # diagnostics_profiling.go, but no test there is tag-gated — the only
+      # tag-gated root test file is api_timing_test.go. Run the packages whose
+      # source actually changes under the tag, plus that test.
       - name: Run Go Tests (profiling)
         run: |
-          go test -tags=profiling ./internal/diagnostics/... ./internal/termstate/... ./internal/termemu/... ./pkg/obs/...
+          go test -tags=profiling ./internal/diagnostics/... ./internal/server/... ./internal/termstate/... ./internal/termemu/... ./pkg/obs/...
           go test -tags=profiling -run '^TestTiming' .
 
       # Only auth_observability_otel_test.go is gated on the otel tag; main.go
@@ -57,9 +57,10 @@ jobs:
       - name: Run Go Tests (otel tags)
         run: |
           go test -race -tags=otel ./pkg/obs
-          go test -race -tags=otel -run '^TestAccessObservabilitySpansCarryNoCredentials$' .
+          go test -race -tags=otel -run '^TestAccessObservabilitySpansCarryNoCredentials$' ./internal/access
           go test -race -tags=profiling,otel ./pkg/obs ./internal/diagnostics
-          go test -race -tags=profiling,otel -run '^(TestTiming|TestAccessObservabilitySpansCarryNoCredentials)' .
+          go test -race -tags=profiling,otel -run '^TestTiming' .
+          go test -race -tags=profiling,otel -run '^TestAccessObservabilitySpansCarryNoCredentials$' ./internal/access
 
       # A real native terminal, not the headless screen oracle. No provider
       # credentials, model access, desktop profile, or tmux state is inherited.
