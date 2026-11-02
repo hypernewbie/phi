@@ -52,7 +52,7 @@ var (
 		func() *pty.Manager { return server.PTY },
 		func() []string { return server.WorkspaceRoots(loadConfig()) },
 	)
-	piTitleService *piTerminalTitleService
+	piTitleService *server.PiTerminalTitleService
 	updateChecker  *update.Checker
 	updateApplier  *update.Applier
 	_              = atomic.Bool{}
@@ -74,7 +74,7 @@ func rollbackPreviousBinary() (string, error) {
 }
 
 func main() {
-	enableVirtualTerminalProcessing()
+	server.EnableVirtualTerminalProcessing()
 	portFlag := flag.Int("port", 7070, "Port to run Go web server on")
 	diagnosticsDirFlag := flag.String("diagnostics-dir", "", "Enable private loopback diagnostics and write connection files under this absolute directory. Only takes effect in a binary built with -tags=profiling.")
 	ipFlag := flag.String("ip", "lan", `IP to bind. "lan" (default) binds loopback + every LAN (RFC 1918) + Tailscale (100.64/10) interface on the host. Use 0.0.0.0 to expose on every interface (public internet reachable), or an explicit IP to bind just one address.`)
@@ -102,7 +102,7 @@ func main() {
 		system.SetPhiDataDir(filepath.Clean(*dataDirFlag))
 	}
 
-	initLogging(*logLevelFlag)
+	server.InitLogging(*logLevelFlag)
 
 	otelEndpoint := *otelEndpointFlag
 	if otelEndpoint == "" {
@@ -199,13 +199,13 @@ func main() {
 	// are already seeded by NewManager; custom profiles patch / add.
 	// Per-file failures are logged inside LoadFromDir and skipped so a
 	// single malformed file never breaks startup (R3).
-	if err := server.Coders.LoadFromDir(customBackendsDir(), func(s string) { log.Print(s) }); err != nil {
+	if err := server.Coders.LoadFromDir(server.CustomBackendsDir(), func(s string) { log.Print(s) }); err != nil {
 		log.Printf("[backends] failed to load custom backends: %v", err)
 	}
 	rpcMgr := rpc.NewManager()
 	// Saved tabs are restored as new live processes after the hub exists.
 	// Never deserialize OS process handles or publish nil-PTY ghosts.
-	if err := LoadSyncStore(); err != nil {
+	if err := server.LoadSyncStore(); err != nil {
 		log.Printf("[sync] Failed to load sync store state: %v", err)
 	}
 	server.PTY.StartIdleWatcher(func(info pty.IdleNotification) {
@@ -221,7 +221,7 @@ func main() {
 			}
 		}
 
-		colorEmoji := themeEmoji(cfg.ThemeColor)
+		colorEmoji := server.ThemeEmoji(cfg.ThemeColor)
 		durationStr := info.Duration.Truncate(time.Second).String()
 
 		notifTitle := fmt.Sprintf("[%s] %s @ %s %s", info.Coder, projName, host, colorEmoji)
@@ -229,16 +229,16 @@ func main() {
 			durationStr, info.Title, projName, host)
 
 		if cfg.PushoverEnabled && cfg.PushoverUserKey != "" && cfg.PushoverAppToken != "" {
-			_ = sendPushoverNotification(cfg.PushoverUserKey, cfg.PushoverAppToken, notifTitle, notifMsg)
+			_ = server.SendPushoverNotification(cfg.PushoverUserKey, cfg.PushoverAppToken, notifTitle, notifMsg)
 		}
 		if cfg.WebhookEnabled && cfg.WebhookURL != "" {
-			_ = sendWebhookNotification(cfg.WebhookURL, notifTitle, notifMsg)
+			_ = server.SendWebhookNotification(cfg.WebhookURL, notifTitle, notifMsg)
 		}
 		if cfg.SimplepushEnabled && cfg.SimplepushKey != "" {
-			_ = sendSimplepushNotification(cfg.SimplepushKey, notifTitle, notifMsg, "phi_idle")
+			_ = server.SendSimplepushNotification(cfg.SimplepushKey, notifTitle, notifMsg, "phi_idle")
 		}
 	})
-	startOpenCodeIdleWatcher()
+	server.StartOpenCodeIdleWatcher()
 	server.Hub = ws.NewHub(*cfg.ReplayBufferBytes)
 	gitAPI.StartReadLoop = func(inst *pty.PTYInstance) { ws.StartPTYReadLoop(inst, server.Hub) }
 	// Adopt the generation loaded from config so the first upgrade is admitted
@@ -266,15 +266,17 @@ func main() {
 	// panes provision against a live listener. A nil bridge (listener
 	// failure) leaves every launch on the unmanaged path.
 	piBridge = piapp.StartBridge(server.Hub, piPhiRuntime, strings.TrimSpace(piPhiVersionAsset))
+	server.BridgeOf = func() *piapp.Bridge { return piBridge }
 	if piBridge != nil {
-		piBridge.Syncboard = http.HandlerFunc(handleSyncMessages)
+		piBridge.Syncboard = http.HandlerFunc(server.HandleSyncMessages)
 		piBridge.LoadConfig = loadConfigWithError
 	}
-	restoreSavedTabs()
+	server.RestoreSavedTabs()
 	// Expiry starts only after restoration completes so saved panes
 	// are live (and protected) before the first sweep runs.
 	server.Hub.StartRetentionSweeps()
-	piTitleService = newPiTerminalTitleService(server.PTY, server.Hub)
+	piTitleService = server.NewPiTerminalTitleService(server.PTY, server.Hub)
+	server.Titles = piTitleService
 	piTitleService.Start()
 
 	// Markdown watcher: fswatch over the resolved markdownDirs of every
@@ -317,10 +319,10 @@ func main() {
 	http.HandleFunc("/api/auth/v2/password", access.HandleAccessV2Password)
 	http.HandleFunc("/api/auth/v2/refresh", access.HandleAccessV2Refresh)
 	http.HandleFunc("/api/auth/v2/logout", access.HandleAccessV2Logout)
-	http.HandleFunc("/api/coders", handleGetCoders)
-	http.HandleFunc("/api/sessions", handleGetSessions)
-	http.HandleFunc("/api/terminals", handleSpawnTerminal)
-	http.HandleFunc("/api/session-meta", handleSessionMeta)
+	http.HandleFunc("/api/coders", server.HandleGetCoders)
+	http.HandleFunc("/api/sessions", server.HandleGetSessions)
+	http.HandleFunc("/api/terminals", server.HandleSpawnTerminal)
+	http.HandleFunc("/api/session-meta", server.HandleSessionMeta)
 	http.HandleFunc("/api/diff", gitAPI.HandleGetDiff)
 	http.HandleFunc("/api/git/raw-diff", gitAPI.HandleRawDiff)
 	http.HandleFunc("/api/git/raw-status", gitAPI.HandleRawStatus)
@@ -375,16 +377,16 @@ func main() {
 	http.HandleFunc("/api/config/workspaces", server.HandleWorkspaceToggle)
 	http.HandleFunc("/api/config/models", server.HandleModelPresets)
 	http.HandleFunc("/api/config/thinking-presets", server.HandleThinkingPresets)
-	http.HandleFunc("/api/fs/autocomplete", handleFSAutocomplete)
+	http.HandleFunc("/api/fs/autocomplete", server.HandleFSAutocomplete)
 	http.HandleFunc("/api/fs/list", server.HandleFSList)
 	http.HandleFunc("/api/fs/browse", server.HandleFSBrowse)
 	http.HandleFunc("/api/config/theme", server.HandleThemeUpdate)
 	http.HandleFunc("/api/config/appearance", server.HandleAppearanceUpdate)
 	http.HandleFunc("/api/config/mobile-appearance", server.HandleMobileAppearance)
 	http.HandleFunc("/api/config/mobile-appearance/fence", server.HandleMobileAppearanceFence)
-	http.HandleFunc("/api/git/worktrees", handleGetWorktrees)
-	http.HandleFunc("/api/git/worktree-dirty", handleGetWorktreeDirtyStates)
-	http.HandleFunc("/api/config/worktree-state", handleWorktreeStateUpdate)
+	http.HandleFunc("/api/git/worktrees", server.HandleGetWorktrees)
+	http.HandleFunc("/api/git/worktree-dirty", server.HandleGetWorktreeDirtyStates)
+	http.HandleFunc("/api/config/worktree-state", server.HandleWorktreeStateUpdate)
 	http.HandleFunc("/api/config/quick-commands", server.HandleQuickCommands)
 	http.HandleFunc("/api/config/terminal-commands", server.HandleTerminalCommands)
 	http.HandleFunc("/api/config/markdown-dirs", server.HandleMarkdownDirs)
@@ -398,8 +400,8 @@ func main() {
 	http.HandleFunc("/api/config/claude-dangerously-skip-permissions", server.HandleClaudeDangerouslySkipPermissions)
 	http.HandleFunc("/api/config/agy-theme-ansi", server.HandleAgyThemeAnsi)
 	http.HandleFunc("/api/config/auto-reconnect", server.HandleAutoReconnect)
-	http.HandleFunc("/api/opencode/service", handleOpenCodeService)
-	http.HandleFunc("/api/opencode/service/stop", handleOpenCodeServiceStop)
+	http.HandleFunc("/api/opencode/service", server.HandleOpenCodeService)
+	http.HandleFunc("/api/opencode/service/stop", server.HandleOpenCodeServiceStop)
 	http.HandleFunc("/api/config/opencode-idle-stop", server.HandleOpenCodeIdleStop)
 	http.HandleFunc("/api/markdown/files", server.HandleMarkdownFiles)
 	http.HandleFunc("/api/markdown/file", server.HandleMarkdownFile)
@@ -431,15 +433,15 @@ func main() {
 	http.HandleFunc("/api/attachments/v2/items/", attachments.HandleV2Item)
 	http.HandleFunc("/api/pi-bridge/transcript-search", piAPI.HandlePiBridgeTranscriptSearch)
 	http.HandleFunc("/api/attachments", attachments.HandleClipboard)
-	http.HandleFunc("/api/clipboard", handleGetClipboard)
-	http.HandleFunc("/api/system/cpu", handleSystemCPU)
-	http.HandleFunc("/api/session-transcript", handleGetSessionTranscript)
-	http.HandleFunc("/api/proxy", handleProxy)
-	http.HandleFunc("/api/sync/messages/", handleSyncMessages)
-	http.HandleFunc("/api/sync/messages", handleSyncMessages)
-	http.HandleFunc("/api/config/sync-coordinator", handleSyncCoordinator)
+	http.HandleFunc("/api/clipboard", server.HandleGetClipboard)
+	http.HandleFunc("/api/system/cpu", server.HandleSystemCPU)
+	http.HandleFunc("/api/session-transcript", server.HandleGetSessionTranscript)
+	http.HandleFunc("/api/proxy", server.HandleProxy)
+	http.HandleFunc("/api/sync/messages/", server.HandleSyncMessages)
+	http.HandleFunc("/api/sync/messages", server.HandleSyncMessages)
+	http.HandleFunc("/api/config/sync-coordinator", server.HandleSyncCoordinator)
 
-	http.HandleFunc("/api/version", handleGetVersion)
+	http.HandleFunc("/api/version", server.HandleGetVersion)
 	http.HandleFunc("/api/peers/status", server.HandleGetPeersStatus)
 	http.HandleFunc("/api/config/peers", server.HandleConfigPeers)
 
@@ -447,7 +449,7 @@ func main() {
 	http.HandleFunc("/api/update/check", server.HandleUpdateCheck)
 	http.HandleFunc("/api/update/apply", server.HandleUpdateApply)
 	http.HandleFunc("/api/update/progress", server.HandleUpdateProgress)
-	http.HandleFunc("/api/restart", handleRestart)
+	http.HandleFunc("/api/restart", server.HandleRestart)
 	http.HandleFunc("/api/diag", server.HandleDiag)
 
 	// Start fleet poller with current peer config
@@ -488,10 +490,10 @@ func main() {
 	http.HandleFunc("/livez", server.HandleLivez)
 	http.HandleFunc("/healthz", server.HandleLivez) // alias
 	http.HandleFunc("/readyz", server.HandleReadyz)
-	http.HandleFunc("/", handleFallback)
+	http.HandleFunc("/", server.HandleFallback)
 	http.HandleFunc("/ws/control", ws.HandleControl(server.Hub, rpcMgr, func() string { return server.ActiveCWD }))
 
-	closeDiagnostics := startPrivateDiagnostics(*diagnosticsDirFlag)
+	closeDiagnostics := server.StartPrivateDiagnostics(*diagnosticsDirFlag)
 
 	// Graceful shutdown listener. The signal handler drains via
 	// gracefulShutdown (PHI_SHUTDOWN_* env tunables) instead of the old
@@ -827,7 +829,7 @@ func isInteractiveTTY() bool {
 
 func gracefulShutdown(servers []*http.Server, drainDelay, ptyGrace, grace time.Duration) {
 	server.ShuttingDown.Store(true) // /readyz -> 503
-	stopOpenCodeIdleWatcher()
+	server.StopOpenCodeIdleWatcher()
 	if server.MDWatcher != nil {
 		server.MDWatcher.Close()
 	}
@@ -840,7 +842,7 @@ func gracefulShutdown(servers []*http.Server, drainDelay, ptyGrace, grace time.D
 	if drainDelay > 0 {
 		time.Sleep(drainDelay)
 	}
-	if err := flushStateForRestart(); err != nil {
+	if err := server.FlushStateForRestart(); err != nil {
 		slog.Error("shutdown flush failed", "err", err)
 	}
 	if server.Hub != nil {

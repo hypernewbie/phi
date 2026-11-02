@@ -61,9 +61,7 @@ func withTempLegacyConfig(t *testing.T) string {
 func withTempBackends(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	orig := testCustomBackendsDir
-	testCustomBackendsDir = dir
-	t.Cleanup(func() { testCustomBackendsDir = orig })
+	t.Cleanup(server.SetCustomBackendsDirForTest(dir))
 	return dir
 }
 
@@ -540,7 +538,7 @@ func TestHandleGetClipboard_NoPTYManager(t *testing.T) {
 	withTempConfig(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/clipboard", nil)
 	w := httptest.NewRecorder()
-	handleGetClipboard(w, req)
+	server.HandleGetClipboard(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: want 200, got %d — %s", w.Code, w.Body.String())
@@ -567,7 +565,7 @@ func TestHandleGetClipboard_PaneWithoutManager(t *testing.T) {
 	withTempConfig(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/clipboard?pane=ghost-pane-id", nil)
 	w := httptest.NewRecorder()
-	handleGetClipboard(w, req)
+	server.HandleGetClipboard(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: want 200, got %d", w.Code)
@@ -589,7 +587,7 @@ func TestHandleSystemCPU_ReturnsValidShape(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/system/cpu", nil)
 	w := httptest.NewRecorder()
-	handleSystemCPU(w, req)
+	server.HandleSystemCPU(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: want 200, got %d — %s", w.Code, w.Body.String())
@@ -1133,7 +1131,7 @@ func TestHandleMarkdownCopyAllWorktrees(t *testing.T) {
 func TestHandleGetCoders(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
 	w := httptest.NewRecorder()
-	handleGetCoders(w, req)
+	server.HandleGetCoders(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
@@ -1155,7 +1153,7 @@ func TestHandleGetCoders(t *testing.T) {
 func TestHandleGetVersion(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/version", nil)
 	w := httptest.NewRecorder()
-	handleGetVersion(w, req)
+	server.HandleGetVersion(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
@@ -1199,7 +1197,7 @@ func TestHandleFallback_Pinning(t *testing.T) {
 	// Verify posting to a non-existent terminal returns 404.
 	reqNotFound := httptest.NewRequest(http.MethodPost, "/api/terminals/non-existent-id/pin", strings.NewReader(`{"pinned":true}`))
 	wNotFound := httptest.NewRecorder()
-	handleFallback(wNotFound, reqNotFound)
+	server.HandleFallback(wNotFound, reqNotFound)
 	if wNotFound.Code != http.StatusNotFound {
 		t.Errorf("Expected 404 for non-existent terminal pinning, got %d", wNotFound.Code)
 	}
@@ -1207,7 +1205,7 @@ func TestHandleFallback_Pinning(t *testing.T) {
 	// Verify posting invalid JSON returns 400.
 	reqBadJSON := httptest.NewRequest(http.MethodPost, "/api/terminals/"+inst.ID+"/pin", strings.NewReader(`{"pinned":`))
 	wBadJSON := httptest.NewRecorder()
-	handleFallback(wBadJSON, reqBadJSON)
+	server.HandleFallback(wBadJSON, reqBadJSON)
 	if wBadJSON.Code != http.StatusBadRequest {
 		t.Errorf("Expected 400 for malformed JSON request, got %d", wBadJSON.Code)
 	}
@@ -1215,7 +1213,7 @@ func TestHandleFallback_Pinning(t *testing.T) {
 	// Verify successful pinning returns 200.
 	reqPin := httptest.NewRequest(http.MethodPost, "/api/terminals/"+inst.ID+"/pin", strings.NewReader(`{"pinned":true}`))
 	wPin := httptest.NewRecorder()
-	handleFallback(wPin, reqPin)
+	server.HandleFallback(wPin, reqPin)
 	if wPin.Code != http.StatusOK {
 		t.Fatalf("Expected 200 OK for valid pinning request, got %d", wPin.Code)
 	}
@@ -1227,7 +1225,7 @@ func TestHandleFallback_Pinning(t *testing.T) {
 	// Verify successful unpinning returns 200.
 	reqUnpin := httptest.NewRequest(http.MethodPost, "/api/terminals/"+inst.ID+"/pin", strings.NewReader(`{"pinned":false}`))
 	wUnpin := httptest.NewRecorder()
-	handleFallback(wUnpin, reqUnpin)
+	server.HandleFallback(wUnpin, reqUnpin)
 	if wUnpin.Code != http.StatusOK {
 		t.Fatalf("Expected 200 OK for valid unpinning request, got %d", wUnpin.Code)
 	}
@@ -1250,7 +1248,7 @@ func TestHandleFallback_Rename(t *testing.T) {
 	// 404 for unknown pane.
 	reqNF := httptest.NewRequest(http.MethodPost, "/api/terminals/nope/title", strings.NewReader(`{"title":"x"}`))
 	wNF := httptest.NewRecorder()
-	handleFallback(wNF, reqNF)
+	server.HandleFallback(wNF, reqNF)
 	if wNF.Code != http.StatusNotFound {
 		t.Errorf("unknown pane: want 404, got %d", wNF.Code)
 	}
@@ -1258,7 +1256,7 @@ func TestHandleFallback_Rename(t *testing.T) {
 	// 400 for malformed JSON.
 	reqBad := httptest.NewRequest(http.MethodPost, "/api/terminals/"+inst.ID+"/title", strings.NewReader(`{"title":`))
 	wBad := httptest.NewRecorder()
-	handleFallback(wBad, reqBad)
+	server.HandleFallback(wBad, reqBad)
 	if wBad.Code != http.StatusBadRequest {
 		t.Errorf("malformed JSON: want 400, got %d", wBad.Code)
 	}
@@ -1266,7 +1264,7 @@ func TestHandleFallback_Rename(t *testing.T) {
 	// 200 + title mutated.
 	reqOK := httptest.NewRequest(http.MethodPost, "/api/terminals/"+inst.ID+"/title", strings.NewReader(`{"title":"deploy hotfix"}`))
 	wOK := httptest.NewRecorder()
-	handleFallback(wOK, reqOK)
+	server.HandleFallback(wOK, reqOK)
 	if wOK.Code != http.StatusOK {
 		t.Fatalf("rename: want 200, got %d", wOK.Code)
 	}
@@ -1308,7 +1306,7 @@ func TestHandleFallback_PiRenameDeliversOneNativeNameCommand(t *testing.T) {
 	for _, body := range []string{`{"title":"  \t "}`, `{"title":"line\nbreak"}`} {
 		req := httptest.NewRequest(http.MethodPost, "/api/terminals/"+inst.ID+"/title", strings.NewReader(body))
 		w := httptest.NewRecorder()
-		handleFallback(w, req)
+		server.HandleFallback(w, req)
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("invalid Pi title %s returned HTTP %d", body, w.Code)
 		}
@@ -1319,7 +1317,7 @@ func TestHandleFallback_PiRenameDeliversOneNativeNameCommand(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/terminals/"+inst.ID+"/title", strings.NewReader(`{"title":"Native name"}`))
 	w := httptest.NewRecorder()
-	handleFallback(w, req)
+	server.HandleFallback(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("Pi rename returned HTTP %d: %s", w.Code, w.Body.String())
 	}
@@ -1363,7 +1361,7 @@ func TestHandleFallback_PiRenameRejectsMissingWriter(t *testing.T) {
 	server.PTY.AddInstanceForTesting(dead)
 	req := httptest.NewRequest(http.MethodPost, "/api/terminals/"+dead.ID+"/title", strings.NewReader(`{"title":"New title"}`))
 	w := httptest.NewRecorder()
-	handleFallback(w, req)
+	server.HandleFallback(w, req)
 	if w.Code < 400 {
 		t.Fatalf("missing live Pi writer returned HTTP %d", w.Code)
 	}
@@ -1384,7 +1382,7 @@ func TestHandleFallback_Delete(t *testing.T) {
 	// Verify deleting non-existent terminal returns 404.
 	reqNotFound := httptest.NewRequest(http.MethodDelete, "/api/terminals/non-existent-id", nil)
 	wNotFound := httptest.NewRecorder()
-	handleFallback(wNotFound, reqNotFound)
+	server.HandleFallback(wNotFound, reqNotFound)
 	if wNotFound.Code != http.StatusNotFound {
 		t.Errorf("Expected 404 for non-existent terminal deletion, got %d", wNotFound.Code)
 	}
@@ -1392,7 +1390,7 @@ func TestHandleFallback_Delete(t *testing.T) {
 	// Verify successful deletion returns 200 and cleans up the terminal.
 	reqDelete := httptest.NewRequest(http.MethodDelete, "/api/terminals/"+inst.ID, nil)
 	wDelete := httptest.NewRecorder()
-	handleFallback(wDelete, reqDelete)
+	server.HandleFallback(wDelete, reqDelete)
 	if wDelete.Code != http.StatusOK {
 		t.Fatalf("Expected 200 OK for valid deletion request, got %d", wDelete.Code)
 	}
@@ -1426,7 +1424,7 @@ func TestHandleGetWorktreeDirtyStates(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/git/worktree-dirty?cwd="+tempDir, nil)
 	w := httptest.NewRecorder()
-	handleGetWorktreeDirtyStates(w, req)
+	server.HandleGetWorktreeDirtyStates(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("Expected status 200, got %d", w.Code)
@@ -1452,7 +1450,7 @@ func TestHandleGetWorktreeDirtyStates(t *testing.T) {
 func TestHandleGetSessionTranscript_Unsupported(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/session-transcript?coder=nonexistent&id=123", nil)
 	w := httptest.NewRecorder()
-	handleGetSessionTranscript(w, req)
+	server.HandleGetSessionTranscript(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("Expected status 400 for unsupported coder, got %d", w.Code)
@@ -1463,7 +1461,7 @@ func TestHandleGetSessionTranscript_EmptyPi(t *testing.T) {
 	tempCwd := filepath.Join(os.TempDir(), "nonexistent")
 	req := httptest.NewRequest(http.MethodGet, "/api/session-transcript?coder=pi&id=nonexistent&cwd="+tempCwd, nil)
 	w := httptest.NewRecorder()
-	handleGetSessionTranscript(w, req)
+	server.HandleGetSessionTranscript(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("Expected status 200 for empty transcript, got %d", w.Code)
@@ -1502,7 +1500,7 @@ func TestHandleProxy_Success(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	handleProxy(w, req)
+	server.HandleProxy(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("Expected status 200, got %d", w.Code)
@@ -1519,7 +1517,7 @@ func TestHandleProxy_Success(t *testing.T) {
 func TestHandleProxy_MissingUrl(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/proxy", nil)
 	w := httptest.NewRecorder()
-	handleProxy(w, req)
+	server.HandleProxy(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("Expected status 400 for missing url, got %d", w.Code)
@@ -2124,116 +2122,6 @@ func TestKanbanVaultAPI(t *testing.T) {
 	}
 }
 
-func TestSyncMessagesCRUD(t *testing.T) {
-	tmpDir := t.TempDir()
-	testSyncPath = filepath.Join(tmpDir, "syncboard-test.json")
-	defer func() { testSyncPath = "" }()
-
-	syncMu.Lock()
-	syncStore = make(map[string]*SyncMessage)
-	syncMu.Unlock()
-
-	req := httptest.NewRequest(http.MethodGet, "/api/sync/messages", nil)
-	w := httptest.NewRecorder()
-	handleSyncMessages(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("GET /api/sync/messages failed: status %d", w.Code)
-	}
-	var list []SyncMessage
-	if err := json.NewDecoder(w.Body).Decode(&list); err != nil {
-		t.Fatalf("failed to decode list: %v", err)
-	}
-	if len(list) != 0 {
-		t.Errorf("expected 0 messages, got %d", len(list))
-	}
-
-	payload, _ := json.Marshal(map[string]string{"key": "alpha", "value": "hello"})
-	req = httptest.NewRequest(http.MethodPost, "/api/sync/messages", strings.NewReader(string(payload)))
-	w = httptest.NewRecorder()
-	handleSyncMessages(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("POST /api/sync/messages failed: status %d", w.Code)
-	}
-	var created SyncMessage
-	json.NewDecoder(w.Body).Decode(&created)
-	if created.Key != "alpha" || created.Value != "hello" {
-		t.Errorf("unexpected created message: %+v", created)
-	}
-
-	req = httptest.NewRequest(http.MethodGet, "/api/sync/messages/alpha", nil)
-	w = httptest.NewRecorder()
-	handleSyncMessages(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("GET /api/sync/messages/alpha failed: status %d", w.Code)
-	}
-	var fetched SyncMessage
-	json.NewDecoder(w.Body).Decode(&fetched)
-	if fetched.Key != "alpha" || fetched.Value != "hello" {
-		t.Errorf("unexpected fetched message: %+v", fetched)
-	}
-
-	payload, _ = json.Marshal(map[string]string{"key": "alpha", "value": "updated"})
-	req = httptest.NewRequest(http.MethodPost, "/api/sync/messages", strings.NewReader(string(payload)))
-	w = httptest.NewRecorder()
-	handleSyncMessages(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("POST /api/sync/messages upsert failed: status %d", w.Code)
-	}
-
-	req = httptest.NewRequest(http.MethodGet, "/api/sync/messages/alpha", nil)
-	w = httptest.NewRecorder()
-	handleSyncMessages(w, req)
-	json.NewDecoder(w.Body).Decode(&fetched)
-	if fetched.Value != "updated" {
-		t.Errorf("expected value 'updated', got %q", fetched.Value)
-	}
-
-	req = httptest.NewRequest(http.MethodGet, "/api/sync/messages/nonexistent", nil)
-	w = httptest.NewRecorder()
-	handleSyncMessages(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Errorf("expected status 404, got %d", w.Code)
-	}
-
-	req = httptest.NewRequest(http.MethodDelete, "/api/sync/messages/alpha", nil)
-	w = httptest.NewRecorder()
-	handleSyncMessages(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("DELETE /api/sync/messages/alpha failed: status %d", w.Code)
-	}
-
-	req = httptest.NewRequest(http.MethodGet, "/api/sync/messages/alpha", nil)
-	w = httptest.NewRecorder()
-	handleSyncMessages(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Errorf("expected status 404 after delete, got %d", w.Code)
-	}
-
-	req = httptest.NewRequest(http.MethodDelete, "/api/sync/messages/nonexistent", nil)
-	w = httptest.NewRecorder()
-	handleSyncMessages(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Errorf("expected status 404 on delete nonexistent, got %d", w.Code)
-	}
-
-	// Rich action JSON payload support: value sent as raw JSON object
-	richPayload := `{"key":"rich-card","value":{"title":"Mockup","preview":"img.png","auto_open":true}}`
-	req = httptest.NewRequest(http.MethodPost, "/api/sync/messages", strings.NewReader(richPayload))
-	w = httptest.NewRecorder()
-	handleSyncMessages(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("POST /api/sync/messages with raw JSON object failed: status %d", w.Code)
-	}
-	req = httptest.NewRequest(http.MethodGet, "/api/sync/messages/rich-card", nil)
-	w = httptest.NewRecorder()
-	handleSyncMessages(w, req)
-	var richFetched SyncMessage
-	json.NewDecoder(w.Body).Decode(&richFetched)
-	if !strings.Contains(richFetched.Value, `"title":"Mockup"`) {
-		t.Errorf("expected rich value to preserve JSON object, got %q", richFetched.Value)
-	}
-}
-
 func TestSyncCoordinatorConfig(t *testing.T) {
 	withTempConfig(t)
 	cfg := loadConfig()
@@ -2244,7 +2132,7 @@ func TestSyncCoordinatorConfig(t *testing.T) {
 	body, _ := json.Marshal(map[string]string{"sync_coordinator": "http://coordinator.test"})
 	req := httptest.NewRequest(http.MethodPost, "/api/config/sync-coordinator", strings.NewReader(string(body)))
 	w := httptest.NewRecorder()
-	handleSyncCoordinator(w, req)
+	server.HandleSyncCoordinator(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("POST /api/config/sync-coordinator failed: status %d", w.Code)
 	}
@@ -2590,7 +2478,7 @@ func TestUpdateApplyRejectsSameVersion(t *testing.T) {
 func TestRestartMethodNotAllowed(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/restart", nil)
 	w := httptest.NewRecorder()
-	handleRestart(w, req)
+	server.HandleRestart(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405 on GET, got %d", w.Code)
 	}

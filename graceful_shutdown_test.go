@@ -25,9 +25,8 @@ func TestGracefulShutdown_DrainsInFlightRequest(t *testing.T) {
 	server.PTY, server.Hub = nil, nil
 	t.Cleanup(func() { server.PTY, server.Hub = origPtyManager, origWsHub })
 
-	origSyncPath := testSyncPath
-	testSyncPath = filepath.Join(t.TempDir(), "syncboard-test.json")
-	t.Cleanup(func() { testSyncPath = origSyncPath })
+	restoreSyncPath := server.SetSyncPathForTest(filepath.Join(t.TempDir(), "syncboard-test.json"))
+	t.Cleanup(restoreSyncPath)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

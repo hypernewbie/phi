@@ -2,13 +2,10 @@ package main
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
-	"testing"
 
 	"github.com/hypernewbie/phi/internal/config"
-	"github.com/hypernewbie/phi/pkg/system"
 )
 
 // Type aliases keep the pre-split names in the main package while the
@@ -108,36 +105,6 @@ func reportedHostname(cfg Config) string {
 		return h
 	}
 	return "localhost"
-}
-
-// testCustomBackendsDir points customBackendsDir() at a temp dir
-// during tests. Same isolation contract as the config store: an unset
-// value under `go test` panics so a test that forgets withTempBackends
-// cannot silently scan the user's real ~/.phi/backends directory
-// (R3). Production code always goes through customBackendsDir.
-var testCustomBackendsDir string
-
-// customBackendsDir returns the directory phi scans for custom
-// backend JSON files at startup. Each `*.json` file is parsed as a
-// sparse CoderPatch and merged onto the matching built-in (or
-// inserted as a new coder if the ID is novel). Production path is
-// `~/.phi/backends/`; tests override via testCustomBackendsDir.
-//
-// The panic-under-`go test` guard mirrors the config store's. A test
-// that reads the live backends dir without isolating itself would
-// either pick up the developer's local profiles (surprising) or
-// silently shadow them (worse).
-func customBackendsDir() string {
-	if testCustomBackendsDir != "" {
-		return testCustomBackendsDir
-	}
-	if testing.Testing() {
-		panic("customBackendsDir() called under `go test` without testCustomBackendsDir set. " +
-			"Use withTempBackends(t) (or set testCustomBackendsDir directly) to " +
-			"isolate this test from ~/.phi/backends/ — see the doc comment on " +
-			"testCustomBackendsDir.")
-	}
-	return filepath.Join(system.PhiDataDir(), "backends")
 }
 
 // expandHome resolves a leading ~ against the current user's home

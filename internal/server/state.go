@@ -38,6 +38,10 @@ var (
 	Port        = 7070
 	AttachRoot  func() *attachments.AttachmentStore
 	Access      func() *access.Manager
+	// BridgeOf returns the Pi bridge owner; nil when integration is off.
+	BridgeOf func() *piapp.Bridge
+	// Titles is the Pi title service; nil when title sync is off.
+	Titles *PiTerminalTitleService
 )
 
 // Build identity, stamped by the linker in main.
@@ -54,6 +58,14 @@ var StartedAt = time.Now().Unix()
 
 // ShuttingDown flips true once the drain starts, so /readyz reports 503.
 var ShuttingDown atomic.Bool
+
+// bridgeOrNil resolves the installed bridge, if any.
+func bridgeOrNil() *piapp.Bridge {
+	if BridgeOf == nil {
+		return nil
+	}
+	return BridgeOf()
+}
 
 // configStore resolves the installed config store.
 func configStore() *config.Store {
