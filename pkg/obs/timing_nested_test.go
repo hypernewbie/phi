@@ -67,6 +67,11 @@ func TestTimingNestedExactIntervals(t *testing.T) {
 	if got := root.End.Sub(root.Start).Nanoseconds(); got != 900 {
 		t.Fatalf("root duration = %d, want 900", got)
 	}
+	// Root totals are inclusive root durations: child spans add detail,
+	// not weight. Summing every node would report 1150, not 900.
+	if snapshot.RootCounts["http GET /api/thing"] != 1 || snapshot.RootTotalNS["http GET /api/thing"] != 900 || snapshot.RootMaxNS["http GET /api/thing"] != 900 {
+		t.Fatalf("aggregates = %v/%v/%v", snapshot.RootCounts, snapshot.RootMaxNS, snapshot.RootTotalNS)
+	}
 }
 
 func TestTimingAdjacentSiblingsAndZeroChild(t *testing.T) {

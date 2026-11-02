@@ -55,6 +55,7 @@ type Server struct {
 	closeError error
 
 	ownershipStats func() any
+	runtimeStats   func() any
 
 	// Test seams. Production leaves these unset.
 	onCPUStarted          func()
@@ -66,6 +67,7 @@ type Server struct {
 type snapshotResponse struct {
 	snapshot
 	Ownership any `json:"ownership"`
+	Runtime   any `json:"runtime"`
 }
 
 // Start creates an authenticated diagnostics server on IPv4 loopback. It
@@ -183,6 +185,13 @@ func (s *Server) SetOwnershipStats(collect func() any) {
 	s.mu.Unlock()
 }
 
+// SetRuntimeStats adds optional process-wide runtime counters to /debug/phi.
+func (s *Server) SetRuntimeStats(collect func() any) {
+	s.mu.Lock()
+	s.runtimeStats = collect
+	s.mu.Unlock()
+}
+
 func writePrivateFile(path, content string) error {
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
@@ -251,13 +260,17 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	result := collectSnapshot(ctx, s.startedAt, s.commit, s.readers)
 	s.mu.Lock()
 	collectOwnership := s.ownershipStats
+	collectRuntime := s.runtimeStats
 	s.mu.Unlock()
-	var ownership any
+	var ownership, runtimeStats any
 	if collectOwnership != nil {
 		ownership = collectOwnership()
 	}
+	if collectRuntime != nil {
+		runtimeStats = collectRuntime()
+	}
 	w.Header().Set("Content-Type", "application/json")
-	if err := jsonEncode(w, snapshotResponse{snapshot: result, Ownership: ownership}); err != nil {
+	if err := jsonEncode(w, snapshotResponse{snapshot: result, Ownership: ownership, Runtime: runtimeStats}); err != nil {
 		slog.Debug("write private diagnostics snapshot", "err", err)
 	}
 }

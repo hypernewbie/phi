@@ -66,7 +66,8 @@ type TimingNode struct {
 }
 
 // TimingSnapshot is an immutable finished capture. Roots holds exported
-// valid trees only. Callers must not mutate it.
+// valid trees only. RootCounts/RootMaxNS/RootTotalNS aggregate exported
+// roots by name with inclusive durations. Callers must not mutate it.
 type TimingSnapshot struct {
 	CaptureID         uint64
 	Canceled          bool
@@ -80,6 +81,9 @@ type TimingSnapshot struct {
 	NodesRecorded     uint64
 	NodesDropped      uint64
 	Roots             []*TimingNode
+	RootCounts        map[string]uint32
+	RootMaxNS         map[string]int64
+	RootTotalNS       map[string]int64
 }
 
 // TimingCapture owns one capture's terminal transition. Finish and Cancel
@@ -184,6 +188,9 @@ func freezeTiming(state *timingCaptureState) TimingSnapshot {
 		RootsDropped:  state.dropped,
 		NodesRecorded: uint64(len(state.nodes)),
 		NodesDropped:  state.nodesDropped,
+		RootCounts:    map[string]uint32{},
+		RootMaxNS:     map[string]int64{},
+		RootTotalNS:   map[string]int64{},
 	}
 	for _, idx := range state.roots {
 		node := &state.nodes[idx]
@@ -195,8 +202,15 @@ func freezeTiming(state *timingCaptureState) TimingSnapshot {
 		case !validTimingTree(state.nodes, idx):
 			snap.DiscardedInvalid++
 		default:
-			snap.Roots = append(snap.Roots, exportTimingTree(state.nodes, idx))
+			tree := exportTimingTree(state.nodes, idx)
+			snap.Roots = append(snap.Roots, tree)
 			snap.RootsExported++
+			duration := tree.End.Sub(tree.Start).Nanoseconds()
+			snap.RootCounts[tree.Name]++
+			snap.RootTotalNS[tree.Name] += duration
+			if prev, ok := snap.RootMaxNS[tree.Name]; !ok || duration > prev {
+				snap.RootMaxNS[tree.Name] = duration
+			}
 		}
 	}
 	return snap

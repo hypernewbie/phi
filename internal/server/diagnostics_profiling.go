@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/hypernewbie/phi/internal/diagnostics"
+	"github.com/hypernewbie/phi/pkg/ws"
 )
 
 // startPrivateDiagnostics starts the private loopback diagnostics server
@@ -27,6 +28,7 @@ func (app *Server) startPrivateDiagnostics(dir string) func() {
 		}
 		return app.hub.MemoryStats()
 	})
+	srv.SetRuntimeStats(func() any { return ws.RuntimeStats() })
 	slog.Info("private diagnostics ready", "dir", srv.Dir())
 	return func() {
 		if err := srv.Close(); err != nil {

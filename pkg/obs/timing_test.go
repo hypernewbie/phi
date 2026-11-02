@@ -109,6 +109,15 @@ func TestTimingZeroIntervalStaysZero(t *testing.T) {
 	if got := snapshot.Roots[0].End.Sub(snapshot.Roots[0].Start).Nanoseconds(); got != 0 {
 		t.Fatalf("duration = %d ns, want 0", got)
 	}
+	// A zero-duration root keeps its aggregate keys with zero values.
+	if snapshot.RootCounts["http GET /api/a"] != 1 {
+		t.Fatalf("counts = %v", snapshot.RootCounts)
+	}
+	max, maxOK := snapshot.RootMaxNS["http GET /api/a"]
+	total, totalOK := snapshot.RootTotalNS["http GET /api/a"]
+	if !maxOK || !totalOK || max != 0 || total != 0 {
+		t.Fatalf("max/total = %v/%v", snapshot.RootMaxNS, snapshot.RootTotalNS)
+	}
 }
 
 func TestTimingConcurrentRootsKeepIdentity(t *testing.T) {
@@ -382,5 +391,69 @@ func TestTimingDynamicURLNeverBecomesName(t *testing.T) {
 		if strings.Contains(name, leaked) {
 			t.Fatalf("name leaks request detail: %q", name)
 		}
+	}
+}
+
+func TestTimingRootAggregatesByName(t *testing.T) {
+	epoch := time.Unix(0, 0)
+	t1 := epoch.Add(time.Second)
+	t2 := epoch.Add(2 * time.Second)
+	t3 := epoch.Add(3 * time.Second)
+	t4 := epoch.Add(4 * time.Second)
+	t5 := epoch.Add(5 * time.Second)
+	t6 := epoch.Add(6 * time.Second)
+	setTimingClock(t,
+		epoch, epoch, // a1: zero duration
+		t1, t1.Add(100*time.Nanosecond), // a2
+		t2, t2.Add(200*time.Nanosecond), // a3
+		t3, t3.Add(400*time.Nanosecond), // a4
+		t4, t4.Add(50*time.Nanosecond), // b
+		t5, t5.Add(-time.Nanosecond), // invalid: end before start
+		t6, // open root start, never ended
+	)
+	capture, ok := BeginTimingCapture()
+	if !ok {
+		t.Fatal("begin capture")
+	}
+	defer capture.Cancel()
+	wrapped := WrapTimingHTTP(timingMux())
+	for i := 0; i < 4; i++ {
+		wrapped.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/a", nil))
+	}
+	wrapped.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/b", nil))
+	wrapped.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/a", nil))
+	if _, _, ok := admitTimingRoot(http.MethodGet); !ok {
+		t.Fatal("admit open root")
+	}
+	snapshot := capture.Finish()
+	if snapshot.Canceled {
+		t.Fatal("capture was canceled")
+	}
+	if snapshot.RootsSeen != 7 || snapshot.RootsAdmitted != 7 || snapshot.RootsExported != 5 {
+		t.Fatalf("counts = %+v", snapshot)
+	}
+	if snapshot.DiscardedInvalid != 1 || snapshot.DiscardedOpen != 1 {
+		t.Fatalf("discards = %+v", snapshot)
+	}
+	if len(snapshot.RootCounts) != 2 {
+		t.Fatalf("aggregate keys = %v", snapshot.RootCounts)
+	}
+	if snapshot.RootCounts["http GET /api/a"] != 4 {
+		t.Fatalf("a count = %d", snapshot.RootCounts["http GET /api/a"])
+	}
+	if snapshot.RootMaxNS["http GET /api/a"] != 400 || snapshot.RootTotalNS["http GET /api/a"] != 700 {
+		t.Fatalf("a max/total = %d/%d", snapshot.RootMaxNS["http GET /api/a"], snapshot.RootTotalNS["http GET /api/a"])
+	}
+	if snapshot.RootCounts["http GET /api/b"] != 1 || snapshot.RootMaxNS["http GET /api/b"] != 50 || snapshot.RootTotalNS["http GET /api/b"] != 50 {
+		t.Fatalf("b aggregates = %d/%d/%d", snapshot.RootCounts["http GET /api/b"], snapshot.RootMaxNS["http GET /api/b"], snapshot.RootTotalNS["http GET /api/b"])
+	}
+	var countSum uint32
+	var totalSum int64
+	for name, count := range snapshot.RootCounts {
+		countSum += count
+		totalSum += snapshot.RootTotalNS[name]
+	}
+	if countSum != snapshot.RootsExported || totalSum != 750 {
+		t.Fatalf("aggregate sums = %d/%d", countSum, totalSum)
 	}
 }

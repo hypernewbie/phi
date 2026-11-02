@@ -34,9 +34,9 @@ lack() {
   fi
 }
 
-PROFILING_GO='timing.go feature.go memory_stats.go memory_stats_profiling.go diagnostics_profiling.go'
-DISABLED_GO='profiling_disabled.go diagnostics_disabled.go'
-PROFILING_TEST='timing_test.go timing_nested_test.go timing_bench_test.go feature_profiling_test.go memory_stats_test.go memory_stats_profiling_test.go api_timing_test.go'
+PROFILING_GO='timing.go feature.go memory_stats.go memory_stats_profiling.go diagnostics_profiling.go counters.go'
+DISABLED_GO='profiling_disabled.go diagnostics_disabled.go counters_disabled.go'
+PROFILING_TEST='timing_test.go timing_nested_test.go timing_bench_test.go feature_profiling_test.go memory_stats_test.go memory_stats_profiling_test.go api_timing_test.go counters_test.go'
 
 # check_variant LABEL WANT [GO LIST ARGS]: file/test/dep selection.
 check_variant() {
@@ -114,6 +114,7 @@ check_binary() {
       grep -Ev 'phi/pkg/obs\.timingSpan(Start|End)$' "$OUT/$label.nm" > "$OUT/$label-recorder.nm"
       lack "$OUT/$label-recorder.nm" 'phi/pkg/obs\.timing'
       lack "$OUT/$label.nm" 'phi/pkg/obs\.BeginTimingCapture'
+      lack "$OUT/$label.nm" 'phi/pkg/ws\.journalCounters$'
       lack "$OUT/$label.nm" 'pprof/profile\.'
       go tool objdump -s 'github.com/hypernewbie/phi/pkg/obs.Span' "$OUT/phi-$label" > "$OUT/$label-span.asm"
       test -s "$OUT/$label-span.asm" || fail "$label Span disassembly empty"
@@ -121,6 +122,7 @@ check_binary() {
       ;;
     profiling|both)
       need "$OUT/$label.nm" 'phi/pkg/obs\.timingActive$'
+      need "$OUT/$label.nm" 'phi/pkg/ws\.journalCounters$'
       need "$OUT/$label.nm" 'pprof/profile\.'
       ;;
   esac
