@@ -136,3 +136,28 @@ final class CatalogRulesTests: XCTestCase {
     XCTAssertEqual(attached, 0)
   }
 }
+
+extension CatalogRulesTests {
+  @MainActor
+  func testListingDropsDraftsForPanesTheServerNoLongerHas() async {
+    let catalog = makeCatalog(onAttach: { _, _, _ in nil })
+    catalog.paneLoader = { _, _ in
+      [self.pane("kept1"), self.pane("kept2")]
+    }
+    let keptKey = PhiComposerView.draftKey(paneID: "kept1")
+    let goneKey = PhiComposerView.draftKey(paneID: "gone9")
+    UserDefaults.standard.set("still here", forKey: keptKey)
+    UserDefaults.standard.set("abandoned", forKey: goneKey)
+    defer {
+      UserDefaults.standard.removeObject(forKey: keptKey)
+      UserDefaults.standard.removeObject(forKey: goneKey)
+    }
+
+    await catalog.loadPanes(origin: origin)
+
+    XCTAssertEqual(UserDefaults.standard.string(forKey: keptKey), "still here")
+    XCTAssertNil(
+      UserDefaults.standard.string(forKey: goneKey),
+      "a draft for a pane the server dropped must not stay on disk")
+  }
+}

@@ -44,6 +44,14 @@ final class PhiComposerView: NSView, NSTextFieldDelegate {
     didSet { restoreDraft() }
   }
 
+  /// The preferences key for one pane's draft. The catalog uses the same
+  /// prefix to drop drafts for panes the server no longer has.
+  static func draftKey(paneID: String) -> String {
+    "\(draftKeyPrefix)\(paneID)"
+  }
+
+  static let draftKeyPrefix = "phi.spike.draft."
+
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
     wantsLayer = true
@@ -87,7 +95,7 @@ final class PhiComposerView: NSView, NSTextFieldDelegate {
   override func layout() {
     super.layout()
     let sendWidth = max(84, sendButton.intrinsicContentSize.width + 24)
-    let fieldWidth = max(80, bounds.width - Self.sideInset * 2 - sendWidth - 8)
+    let fieldWidth = bounds.width - Self.sideInset * 2 - sendWidth - 8
     field.frame = NSRect(
       x: Self.sideInset, y: Self.sideInset, width: fieldWidth, height: Self.fieldHeight)
     sendButton.frame = NSRect(

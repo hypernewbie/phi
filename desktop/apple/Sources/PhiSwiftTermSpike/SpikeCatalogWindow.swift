@@ -236,6 +236,7 @@ final class SpikeCatalogWindow: NSWindowController, NSWindowDelegate,
       panes = listed
       listedOrigin = origin
       remember(origin)
+      pruneDrafts(keeping: listed)
       tableView.reloadData()
       setStatus(
         listed.isEmpty
@@ -253,6 +254,17 @@ final class SpikeCatalogWindow: NSWindowController, NSWindowDelegate,
     }
     loading = false
     updateControls()
+  }
+
+  /// Drops saved drafts for panes this server no longer has, so an abandoned
+  /// prompt does not sit in the preferences file forever.
+  private func pruneDrafts(keeping panes: [PaneCatalog.Pane]) {
+    let live = Set(panes.map { PhiComposerView.draftKey(paneID: $0.id) })
+    let defaults = UserDefaults.standard
+    for key in defaults.dictionaryRepresentation().keys
+    where key.hasPrefix(PhiComposerView.draftKeyPrefix) && !live.contains(key) {
+      defaults.removeObject(forKey: key)
+    }
   }
 
   /// Attaches one catalog row. Returns false for a row that holds no pane.

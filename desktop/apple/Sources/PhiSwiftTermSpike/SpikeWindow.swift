@@ -16,7 +16,7 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
   /// The pane this window shows, used to focus an already open window and to
   /// key its saved draft.
   var paneID = "" {
-    didSet { composer.draftKey = "phi.spike.draft.\(paneID)" }
+    didSet { composer.draftKey = PhiComposerView.draftKey(paneID: paneID) }
   }
   private(set) var terminalView: SpikeTerminalView!
   private var session: PaneSession?
