@@ -538,4 +538,14 @@ describe('sidebar session page size config', () => {
         applyConfig.call(ctx, {});
         expect(ctx.sessionListPageSize).toBe(10);
     });
+
+    it('records the workspace list without a select and drops non-string entries', async () => {
+        // Settings -> About counts this list, so it must not depend on the
+        // workspace select existing, and a stray entry must not reach the
+        // option labels.
+        const { ctx } = makeCtx();
+        const applyConfig = SessionsManager.prototype.applyConfigData;
+        applyConfig.call(ctx, { workspaces: ['/work/a', 7, null, '/work/b'] });
+        expect(ctx.workspaces).toEqual(['/work/a', '/work/b']);
+    });
 });

@@ -649,13 +649,17 @@ export class SessionsManager {
         if (this.app) {
             this.app.config = data;
         }
+        if (Array.isArray(data.workspaces)) {
+            // Settings → About reads this list even when no workspace select
+            // exists, and a non-string entry would throw in the labels below.
+            this.workspaces = data.workspaces.filter((ws) => typeof ws === 'string');
+        }
         if (this.workspaceSelect && Array.isArray(data.workspaces)) {
-            this.workspaces = data.workspaces;
             this.workspaceSelect.innerHTML = '';
-            data.workspaces.forEach((ws) => {
+            this.workspaces.forEach((ws) => {
                 const opt = document.createElement('option');
                 opt.value = ws;
-                opt.innerText = this.formatWorkspaceLabel(ws, data.workspaces);
+                opt.innerText = this.formatWorkspaceLabel(ws, this.workspaces);
                 opt.title = ws;
                 this.workspaceSelect.appendChild(opt);
             });
