@@ -4,11 +4,8 @@ import { expect, test, type Page } from '@playwright/test';
 import { startPhi } from './_server.js';
 
 // Workspace manager: one dialog for registered projects plus live root
-// folders. These specs cover the two behaviors that can silently corrupt the
-// workspace list: the two-section add/remove flow against a real server, and a
-// change made while the browser is offline (never sent, flushed once).
+// folders. Cover real persistence, offline recovery, and lost acknowledgements.
 
-const FILTER = '#ws-manager-filter';
 const STATUS = '#ws-manager-status';
 
 async function openManager(page: Page): Promise<void> {
@@ -134,6 +131,70 @@ test('flushes a change queued in an earlier session when the app loads online', 
             )
             .toBeNull();
     } finally {
+        await server.stop();
+    }
+});
+
+test('never resends an accepted write after its reply is lost and the page reloads', async ({
+    page,
+    context,
+}) => {
+    const server = await startPhi({
+        setup: (dir) => {
+            mkdirSync(join(dir, 'code', 'alpha'), { recursive: true });
+        },
+    });
+    try {
+        const root = join(server.dir, 'code');
+        await page.request.post(`${server.url}/api/config/workspace-roots`, {
+            data: { path: root },
+        });
+        await page.goto(server.url);
+        await openManager(page);
+        await expect(restRow(page, 'alpha')).toHaveCount(1);
+
+        let writes = 0;
+        await page.route('**/api/config/workspaces', async (route) => {
+            writes++;
+            const response = await route.fetch();
+            expect(response.ok()).toBe(true); // the real server saved the change
+            await context.setOffline(true);
+            await route.abort('connectionclosed'); // only its acknowledgement is lost
+        });
+        await restRow(page, 'alpha').locator('input').check();
+        await rootSection(page).locator('.ws-manager-add-btn').click();
+        await expect(page.locator(STATUS)).toContainText('not confirmed');
+        await expect(projectRow(page, 'alpha')).toHaveCount(1);
+        await expect
+            .poll(() =>
+                page.evaluate(
+                    () =>
+                        JSON.parse(
+                            localStorage.getItem(
+                                'phi_workspace_manager_outbox',
+                            ) || '{}',
+                        ).state,
+                ),
+            )
+            .toBe('unconfirmed');
+
+        await context.setOffline(false);
+        await page.reload();
+        await openManager(page);
+        await expect(projectRow(page, 'alpha')).toHaveCount(1);
+        await page.getByRole('button', { name: 'Check status' }).click();
+        await expect(page.locator(STATUS)).toContainText('Saved.');
+        expect(writes).toBe(1);
+        const config = await (
+            await page.request.get(`${server.url}/api/config`)
+        ).json();
+        expect(
+            config.workspaces.filter(
+                (path: string) => path === join(root, 'alpha'),
+            ),
+        ).toHaveLength(1);
+    } finally {
+        await context.setOffline(false);
         await server.stop();
     }
 });

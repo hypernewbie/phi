@@ -9,13 +9,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mockFetch, setupDomHarness } from './_dom.js';
 import { SessionsManager } from '../web/sessions.js';
 import { BackendStore } from '../web/backend-store.js';
+import { BackendScope } from '../web/backend-scope.js';
+import { setEmbeddedBackend } from '../web/util.js';
 
 setupDomHarness();
 
 const managers = new Set();
+let serverConfig;
 afterEach(() => {
-    for (const manager of managers) manager.workspaceManager.close();
+    for (const manager of managers) manager.workspaceManager.dispose();
     managers.clear();
+    setEmbeddedBackend(null);
     Object.defineProperty(window.navigator, 'onLine', {
         configurable: true,
         get: () => true,
@@ -72,16 +76,22 @@ function makeSessions(options = {}) {
     `;
     const store = options.store ?? null;
     const sessions = new SessionsManager({
-        scope: null,
+        scope: options.scope ?? null,
         getActiveStore: store ? () => store : undefined,
     });
     managers.add(sessions);
-    sessions.applyConfigData({
+    serverConfig = {
         workspaces: options.workspaces ?? [],
         workspace_roots: options.roots ?? [],
         active_cwd: options.activeCwd ?? options.workspaces?.[0] ?? '',
-    });
-    sessions.loadConfig = options.loadConfig ?? (async () => true);
+    };
+    sessions.loadConfig =
+        options.loadConfig ??
+        (async () => {
+            sessions.applyConfigData(structuredClone(serverConfig));
+            return true;
+        });
+    sessions.applyConfigData(structuredClone(serverConfig));
     sessions.loadSessions = async () => {};
     sessions.loadWorktrees = async () => {};
     return sessions;
@@ -108,13 +118,24 @@ function installFetch(handlers = {}) {
                 method: options.method,
                 body: JSON.parse(options.body),
             });
-            if (handlers.write) {
-                const result = handlers.write(request.pathname, options);
-                if (result instanceof Error) throw result;
-                if (result instanceof Promise) return result;
-                return result;
+            const result = handlers.write
+                ? await handlers.write(request.pathname, options)
+                : { ok: true, status: 200, json: {} };
+            if (result instanceof Error) throw result;
+            if (result?.ok !== false) {
+                const body = JSON.parse(options.body);
+                const key = request.pathname.endsWith('workspace-roots')
+                    ? 'workspace_roots'
+                    : 'workspaces';
+                const paths = body.paths ?? [body.path];
+                serverConfig[key] =
+                    options.method === 'POST'
+                        ? [...new Set([...serverConfig[key], ...paths])]
+                        : serverConfig[key].filter(
+                              (path) => !paths.includes(path),
+                          );
             }
-            return { ok: true, status: 200, json: {} };
+            return result;
         }
         if (handlers.other) return handlers.other(request, options);
         return { ok: true, status: 200, json: {} };
@@ -714,7 +735,7 @@ describe('workspace manager', () => {
         );
     });
 
-    it('says the change was not applied when the reload proves it never landed', async () => {
+    it('reports the current server state without claiming a lost response proves non-delivery', async () => {
         const { fetchMock } = installFetch({
             browse: () => browseEntries('psi'),
             write: () => new TypeError('network down'),
@@ -734,10 +755,9 @@ describe('workspace manager', () => {
         toggle('/code/psi', true);
         document.querySelector('#ws-manager-roots .ws-manager-add-btn').click();
 
-        // The follow-up read succeeds and shows the old list: the change never
-        // reached the server, and the message must not claim it was saved.
+        // A read shows current state, not whether a delayed write will land.
         await vi.waitFor(() =>
-            expect(statusText()).toContain('did not apply this change'),
+            expect(statusText()).toContain('not in the current server state'),
         );
         expect(projects()).toEqual([]);
         expect(
@@ -745,6 +765,253 @@ describe('workspace manager', () => {
                 String(url).includes('/api/config/workspace'),
             ).length,
         ).toBe(1);
+    });
+
+    it('persists an in-flight write as unconfirmed and never resends it on reopen', async () => {
+        let finish;
+        const { calls } = installFetch({
+            browse: () => browseEntries('psi'),
+            write: () =>
+                new Promise((resolve) => {
+                    finish = resolve;
+                }),
+        });
+        const sessions = makeSessions({ roots: [BROWSE_ROOT] });
+        await openManager(sessions);
+        setOnline(false);
+        toggle('/code/psi', true);
+        document.querySelector('.ws-manager-add-btn').click();
+        setOnline(true);
+        window.dispatchEvent(new Event('online'));
+        await vi.waitFor(() => expect(calls).toHaveLength(1));
+        expect(
+            JSON.parse(localStorage.getItem('phi_workspace_manager_outbox'))
+                .state,
+        ).toBe('unconfirmed');
+
+        sessions.workspaceManager.close();
+        await openManager(sessions);
+        window.dispatchEvent(new Event('online'));
+        expect(calls).toHaveLength(1);
+        finish({ ok: true, status: 200 });
+    });
+
+    it('does not retry a started write when connectivity drops before its response', async () => {
+        let fail;
+        const { calls } = installFetch({
+            browse: () => browseEntries('psi'),
+            write: () =>
+                new Promise((_, reject) => {
+                    fail = reject;
+                }),
+        });
+        const sessions = makeSessions({
+            roots: [BROWSE_ROOT],
+            loadConfig: async () => false,
+        });
+        await openManager(sessions);
+        setOnline(false);
+        toggle('/code/psi', true);
+        document.querySelector('.ws-manager-add-btn').click();
+        setOnline(true);
+        window.dispatchEvent(new Event('online'));
+        await vi.waitFor(() => expect(calls).toHaveLength(1));
+        setOnline(false);
+        fail(new TypeError('response lost after server accepted the write'));
+        await vi.waitFor(() => expect(statusText()).toContain('not confirmed'));
+        setOnline(true);
+        window.dispatchEvent(new Event('online'));
+        expect(calls).toHaveLength(1);
+    });
+
+    it('keeps queued projects and roots visible across authoritative background reads', async () => {
+        setOnline(false);
+        installFetch({ browse: () => browseEntries('psi') });
+        const sessions = makeSessions({ roots: [BROWSE_ROOT] });
+        await openManager(sessions);
+        toggle('/code/psi', true);
+        document.querySelector('.ws-manager-add-btn').click();
+        sessions.applyConfigData({
+            workspaces: ['/other'],
+            workspace_roots: [BROWSE_ROOT],
+        });
+        expect(sessions.workspaces).toEqual(['/other', '/code/psi']);
+        expect(projects().map((row) => row.path)).toEqual([
+            '/other',
+            '/code/psi',
+        ]);
+        expect(rootRows()).toEqual([]);
+    });
+
+    it('paints cached roots while both config and browse refreshes are still waiting', async () => {
+        const store = new BackendStore('ws-test');
+        store.responses.set(
+            `/api/fs/browse?path=${encodeURIComponent(BROWSE_ROOT)}`,
+            JSON.stringify(browseEntries('cached').json),
+        );
+        let finishBrowse;
+        let finishConfig;
+        installFetch({
+            browse: () =>
+                new Promise((resolve) => {
+                    finishBrowse = resolve;
+                }),
+        });
+        const sessions = makeSessions({
+            roots: [BROWSE_ROOT],
+            store,
+            loadConfig: () =>
+                new Promise((resolve) => {
+                    finishConfig = resolve;
+                }),
+        });
+        sessions.workspaceManager.open();
+        await vi.waitFor(() =>
+            expect(rootRows().map((row) => row.path)).toEqual(['/code/cached']),
+        );
+        finishConfig(false);
+        finishBrowse(browseEntries('fresh'));
+        await vi.waitFor(() =>
+            expect(rootRows().map((row) => row.path)).toEqual(['/code/fresh']),
+        );
+    });
+
+    it('preserves removal selection and root input when a queued write is rejected offline', async () => {
+        let rejectWrite = false;
+        installFetch({
+            browse: () => browseEntries('psi'),
+            write: () => ({
+                ok: !rejectWrite,
+                status: rejectWrite ? 400 : 200,
+                text: 'Rejected',
+            }),
+        });
+        const sessions = makeSessions({
+            workspaces: ['/code/keep'],
+            roots: [BROWSE_ROOT],
+        });
+        await openManager(sessions);
+        setOnline(false);
+        toggle('/code/keep');
+        document.getElementById('ws-manager-remove').click();
+        rejectWrite = true;
+        setOnline(true);
+        window.dispatchEvent(new Event('online'));
+        await vi.waitFor(() => expect(statusText()).toContain('Rejected'));
+        expect(projects()).toEqual([{ path: '/code/keep', checked: true }]);
+
+        document.getElementById('ws-manager-root-input').value = '/bad-root';
+        document.getElementById('ws-manager-root-add').click();
+        await vi.waitFor(() =>
+            expect(
+                document.getElementById('ws-manager-root-add').disabled,
+            ).toBe(false),
+        );
+        expect(document.getElementById('ws-manager-root-input').value).toBe(
+            '/bad-root',
+        );
+        expect(sessions.workspaces).toEqual(['/code/keep']);
+    });
+
+    it('keeps hidden selections when Select visible is checked and unchecked in either section', async () => {
+        installFetch({ browse: () => browseEntries('hidden', 'visible') });
+        const sessions = makeSessions({
+            workspaces: ['/keep/hidden', '/keep/visible'],
+            roots: [BROWSE_ROOT],
+        });
+        await openManager(sessions);
+        toggle('/keep/hidden');
+        toggle('/code/hidden', true);
+        setFilter('visible');
+        document.getElementById('ws-manager-projects-all').click();
+        document
+            .querySelector('#ws-manager-roots .ws-manager-all input')
+            .click();
+        document.getElementById('ws-manager-projects-all').click();
+        document
+            .querySelector('#ws-manager-roots .ws-manager-all input')
+            .click();
+        setFilter('');
+        expect(projects().map((row) => row.checked)).toEqual([true, false]);
+        expect(rootRows().map((row) => row.checked)).toEqual([true, false]);
+    });
+
+    it('isolates a late write response and its outbox from a newly selected backend', async () => {
+        setEmbeddedBackend('A');
+        let finish;
+        const { calls } = installFetch({
+            browse: () => browseEntries('psi'),
+            write: () =>
+                new Promise((resolve) => {
+                    finish = resolve;
+                }),
+        });
+        const sessions = makeSessions({
+            roots: [BROWSE_ROOT],
+            scope: new BackendScope('A'),
+        });
+        await openManager(sessions);
+        toggle('/code/psi', true);
+        document.querySelector('.ws-manager-add-btn').click();
+        await vi.waitFor(() => expect(calls).toHaveLength(1));
+        expect(
+            JSON.parse(localStorage.getItem('phi_workspace_manager_outbox:A'))
+                .state,
+        ).toBe('unconfirmed');
+
+        sessions.app.scope.abort();
+        setEmbeddedBackend('B');
+        sessions.app.scope = new BackendScope('B');
+        localStorage.setItem(
+            'phi_workspace_manager_outbox:B',
+            JSON.stringify({
+                kind: 'add',
+                paths: ['/B/queued'],
+                state: 'unconfirmed',
+            }),
+        );
+        sessions.applyConfigData({
+            workspaces: ['/B/project'],
+            workspace_roots: [],
+        });
+        expect(sessions.workspaceManager.isOpen()).toBe(false);
+        const outboxB = localStorage.getItem('phi_workspace_manager_outbox:B');
+        finish({ ok: false, status: 500, text: 'A failed' });
+        await vi.waitFor(() =>
+            expect(sessions.workspaces).toEqual(['/B/project', '/B/queued']),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(localStorage.getItem('phi_workspace_manager_outbox:B')).toBe(
+            outboxB,
+        );
+        expect(
+            localStorage.getItem('phi_workspace_manager_outbox:A'),
+        ).not.toBeNull();
+        expect(calls).toHaveLength(1);
+    });
+
+    it('drops older config responses instead of overwriting a newer read', async () => {
+        const replies = [];
+        installFetch({
+            other: (request) =>
+                request.pathname === '/api/config'
+                    ? new Promise((resolve) => replies.push(resolve))
+                    : {},
+        });
+        const sessions = makeSessions();
+        const read = () =>
+            SessionsManager.prototype.loadConfig.call(sessions, {
+                refreshPanels: false,
+            });
+        const older = read();
+        await vi.waitFor(() => expect(replies).toHaveLength(1));
+        const newer = read();
+        await vi.waitFor(() => expect(replies).toHaveLength(2));
+        replies[1]({ json: { workspaces: ['/new'], workspace_roots: [] } });
+        expect(await newer).toBe(true);
+        replies[0]({ json: { workspaces: ['/old'], workspace_roots: [] } });
+        expect(await older).toBe(false);
+        expect(sessions.workspaces).toEqual(['/new']);
     });
 
     it('keeps keyboard focus inside the dialog when a retry re-renders it', async () => {
@@ -795,15 +1062,6 @@ describe('workspace manager', () => {
                     : browseEntries(),
         });
         const sessions = makeSessions({ workspaces: ['/code/keep'] });
-        // A real server answers the follow-up config read with the saved root.
-        sessions.loadConfig = async () => {
-            sessions.applyConfigData({
-                workspaces: ['/code/keep'],
-                workspace_roots: ['/new-root'],
-                active_cwd: '/code/keep',
-            });
-            return true;
-        };
         await openManager(sessions, 0);
 
         document.getElementById('ws-manager-root-input').value = '/new-root';

@@ -98,6 +98,24 @@ func TestWorkspaceToggleSinglePathStillWorks(t *testing.T) {
 	}
 }
 
+func TestWorkspaceTogglePreservesDirectoryWhitespace(t *testing.T) {
+	for _, body := range []string{`{"path":"/code/project "}`, `{"paths":["/code/project "]}`} {
+		seedConfig(t, "workspaces = []\n")
+		if rec := workspaceRequest(t, http.MethodPost, "/api/config/workspaces", body); rec.Code != http.StatusOK {
+			t.Fatalf("POST: %d %s", rec.Code, rec.Body.String())
+		}
+		if got := testServer.loadConfig().Workspaces; !equalStrings(got, []string{"/code/project "}) {
+			t.Fatalf("directory name changed: %q", got)
+		}
+		if rec := workspaceRequest(t, http.MethodDelete, "/api/config/workspaces", body); rec.Code != http.StatusOK {
+			t.Fatalf("DELETE: %d %s", rec.Code, rec.Body.String())
+		}
+		if got := testServer.loadConfig().Workspaces; len(got) != 0 {
+			t.Fatalf("directory could not be removed: %q", got)
+		}
+	}
+}
+
 func TestWorkspaceToggleRejectsInvalidBodies(t *testing.T) {
 	path := seedConfig(t, "workspaces = [\"/keep\"]\n")
 
@@ -109,6 +127,9 @@ func TestWorkspaceToggleRejectsInvalidBodies(t *testing.T) {
 		{"empty batch", `{"paths":[]}`},
 		{"blank element", `{"paths":["/new",""]}`},
 		{"both forms", `{"path":"/a","paths":["/b"]}`},
+		{"empty batch mixed with path", `{"path":"/a","paths":[]}`},
+		{"blank path mixed with batch", `{"path":"","paths":["/b"]}`},
+		{"whitespace element", `{"paths":["/new","   "]}`},
 		{"malformed json", `{"paths":`},
 	}
 	for _, tc := range cases {

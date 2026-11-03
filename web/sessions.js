@@ -303,6 +303,7 @@ export class SessionsManager {
     wsModalOpener;
     wsModalTrap;
     workspaceManager;
+    configRequestId = 0;
     worktreeDirtyRequestId;
     worktreeLoadRequestId;
     worktreeRootGeneration;
@@ -675,7 +676,7 @@ export class SessionsManager {
         if (lastChosen && this.workspaces.includes(lastChosen)) {
             this.activeWorkspace = lastChosen;
         }
-        else {
+        else if (!this.workspaces.includes(this.activeWorkspace)) {
             this.activeWorkspace = activeCwd || this.workspaces[0] || '';
         }
         this.workspaceSelect.value = this.activeWorkspace;
@@ -696,6 +697,7 @@ export class SessionsManager {
         if (Array.isArray(data.workspaces)) {
             this.applyWorkspaceList(data.workspaces, data.active_cwd);
         }
+        this.workspaceManager?.onConfigApplied();
         if (!this.activeCWD ||
             (Array.isArray(data.workspaces) && this.workspaces?.length === 0)) {
             this.activeCWD = this.activeWorkspace || '';
@@ -752,11 +754,19 @@ export class SessionsManager {
     }
     /** Reloads /api/config. Returns false when the config could not be read, so
      *  callers can tell a confirmed write from a failed reconcile. */
-    async loadConfig() {
+    async loadConfig({ refreshPanels = true } = {}) {
+        const scope = this.app?.scope;
+        this.configRequestId = (this.configRequestId || 0) + 1;
+        const requestId = this.configRequestId;
+        const current = () => this.app?.scope === scope &&
+            !scope?.aborted &&
+            requestId === this.configRequestId;
         try {
             await loadCoderRegistry();
-            const fetchFn = this.app?.scope && typeof this.app.scope.fetch === 'function'
-                ? (url, opts) => this.app.scope.fetch(url, opts)
+            if (!current())
+                return false;
+            const fetchFn = scope && typeof scope.fetch === 'function'
+                ? (url, opts) => scope.fetch(url, opts)
                 : fetch;
             const res = await fetchFn('/api/config');
             if (res && res.ok === false) {
@@ -765,7 +775,7 @@ export class SessionsManager {
             if (this.app?.scope?.aborted)
                 return false;
             const data = await res.json();
-            if (this.app?.scope?.aborted)
+            if (!current())
                 return false;
             if (!data ||
                 typeof data !== 'object' ||
@@ -782,10 +792,16 @@ export class SessionsManager {
                 ? this.applyConfigData
                 : SessionsManager.prototype.applyConfigData;
             applyConfig.call(this, data, { stale: false });
-            await this.app?.loadCustomFont?.();
-            await this.app?.loadCustomBg?.();
-            await this.loadSessions();
-            return true;
+            if (refreshPanels) {
+                await this.app?.loadCustomFont?.();
+                if (!current())
+                    return false;
+                await this.app?.loadCustomBg?.();
+                if (!current())
+                    return false;
+                await this.loadSessions();
+            }
+            return current();
         }
         catch (e) {
             if (e?.name === 'AbortError' || this.app?.scope?.aborted)
@@ -841,6 +857,7 @@ export class SessionsManager {
         button?.removeAttribute('aria-busy');
     }
     resetSessionRootForBackendSwitch() {
+        this.workspaceManager?.resetForBackend();
         this.onSessionContextChange();
         this.worktreeLoadRequestId++;
         this.worktreeDirtyRequestId++;

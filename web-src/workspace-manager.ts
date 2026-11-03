@@ -11,6 +11,7 @@
 
 import type { SessionsManager } from './sessions.js';
 import type { AppLike } from './types.js';
+import type { BackendScope } from './backend-scope.js';
 import { trapModalFocus, type ModalFocusTrap } from './modal-focus.js';
 import { formatWorkspaceLabel, serverKey } from './util.js';
 
@@ -101,6 +102,9 @@ export class WorkspaceManager {
     private projectSelection = new Set<string>();
     private pending: Mutation | null = null;
     private pendingState: PendingState = 'idle';
+    private scope: BackendScope | null | undefined;
+    private storageKey = serverKey(OUTBOX_KEY);
+    private checking = false;
     private status = '';
     private statusTone: 'info' | 'error' = 'info';
     /** Lower-cased local filter. Never touches server state or selection. */
@@ -116,6 +120,7 @@ export class WorkspaceManager {
     constructor(app: AppLike, sessions: SessionsManager) {
         this.app = app;
         this.sessions = sessions;
+        this.scope = app?.scope;
         this.overlay = byId('ws-manager-modal');
         this.closeBtn = byId('ws-manager-close');
         this.doneBtn = byId('ws-manager-done');
@@ -136,10 +141,9 @@ export class WorkspaceManager {
             () => void this.removeSelected(),
         );
         this.projectsAll?.addEventListener('change', () => {
-            this.projectSelection.clear();
-            const rows = this.sessions.workspaces;
-            if (this.projectsAll?.checked) {
-                for (const row of rows) this.projectSelection.add(row);
+            for (const row of this.visibleProjects()) {
+                if (this.projectsAll?.checked) this.projectSelection.add(row);
+                else this.projectSelection.delete(row);
             }
             this.applyProjectControls();
         });
@@ -177,8 +181,8 @@ export class WorkspaceManager {
         this.filter = '';
         if (this.filterInput) this.filterInput.value = '';
         this.projectSelection.clear();
-        this.syncFromConfig();
         this.restoreOutbox();
+        this.syncFromConfig();
         this.overlay.classList.remove('hidden');
         this.render();
         this.trap = trapModalFocus(this.overlay, {
@@ -217,26 +221,97 @@ export class WorkspaceManager {
         if (opener?.isConnected) opener.focus({ preventScroll: true });
     }
 
-    /** Re-reads the config payload and every root listing behind the dialog. */
-    async refresh(): Promise<void> {
-        const generation = this.generation;
-        this.syncFromConfig();
-        this.render();
-        const loadConfig = this.sessions.loadConfig;
-        if (typeof loadConfig === 'function') {
-            const ok = await this.sessions.loadConfig();
-            if (generation !== this.generation) return;
-            if (ok) this.syncFromConfig();
+    /** The same manager survives an in-page backend switch. Old writes stay
+     *  in their own outbox, and old responses may not touch the new backend. */
+    resetForBackend(): void {
+        this.close();
+        this.generation++;
+        this.scope = this.app?.scope;
+        this.storageKey = serverKey(OUTBOX_KEY);
+        this.pending = null;
+        this.pendingState = 'idle';
+        this.checking = false;
+        this.rootPaths = [];
+        this.sections.clear();
+        this.projectSelection.clear();
+        this.status = '';
+        if (this.rootInput) this.rootInput.value = '';
+    }
+
+    dispose(): void {
+        this.close();
+        window.removeEventListener('online', this.onOnline);
+    }
+
+    /** Apply the local intent over every config read, not just dialog refreshes. */
+    onConfigApplied(): void {
+        if (
+            this.scope !== this.app?.scope ||
+            this.storageKey !== serverKey(OUTBOX_KEY)
+        ) {
+            this.resetForBackend();
         }
-        if (generation !== this.generation) return;
+        this.restoreOutbox();
+        this.syncFromConfig();
+        if (this.isOpen()) this.render();
+        if (this.pendingState === 'unsent' && this.isOnline())
+            void this.flushPending();
+    }
+
+    private isCurrent(scope = this.scope): boolean {
+        return (
+            this.scope === scope && this.app?.scope === scope && !scope?.aborted
+        );
+    }
+
+    /** Root caches paint independently of the config request. */
+    async refresh(): Promise<void> {
+        const generation = ++this.generation;
+        const scope = this.scope;
+        this.syncFromConfig();
+        const listed = this.rootPaths.slice();
+        const roots = this.loadRoots(generation);
+        const ok = await this.sessions.loadConfig({ refreshPanels: false });
+        if (generation !== this.generation || !this.isCurrent(scope)) return;
+        if (ok) this.syncFromConfig();
         this.render();
-        await this.loadRoots(generation);
+        await Promise.allSettled([
+            roots,
+            ...this.rootPaths
+                .filter((path) => !listed.includes(path))
+                .map((path) => this.loadRoot(path, generation)),
+        ]);
     }
 
     private syncFromConfig(): void {
-        const raw = (this.sessions.config as any)?.workspace_roots;
-        const roots = Array.isArray(raw) ? raw.filter(isString) : [];
-        this.rootPaths = roots.slice();
+        const config = this.sessions.config as any;
+        let workspaces = Array.isArray(config?.workspaces)
+            ? config.workspaces.filter(isString)
+            : this.sessions.workspaces.slice();
+        const raw = config?.workspace_roots;
+        let roots: string[] = Array.isArray(raw)
+            ? [...new Set(raw.filter(isString))]
+            : [];
+        const mutation = this.pending;
+        if (mutation) {
+            const isRoot =
+                mutation.kind === 'addRoot' || mutation.kind === 'removeRoot';
+            let paths = isRoot ? roots : workspaces;
+            if (mutation.kind === 'add' || mutation.kind === 'addRoot') {
+                paths = [...new Set([...paths, ...mutation.paths])];
+            } else {
+                paths = paths.filter(
+                    (path: string) => !mutation.paths.includes(path),
+                );
+            }
+            if (isRoot) roots = paths;
+            else workspaces = paths;
+        }
+        this.sessions.applyWorkspaceList(
+            workspaces,
+            mutation ? undefined : config?.active_cwd,
+        );
+        this.rootPaths = roots;
         for (const path of roots) {
             if (!this.sections.has(path)) {
                 this.sections.set(path, {
@@ -251,12 +326,16 @@ export class WorkspaceManager {
             }
         }
         for (const path of Array.from(this.sections.keys())) {
-            if (!this.rootPaths.includes(path)) this.sections.delete(path);
+            if (!this.rootPaths.includes(path) && !this.pending)
+                this.sections.delete(path);
         }
-        for (const section of this.sections.values()) this.partition(section);
-        const registered = new Set(this.sessions.workspaces);
-        for (const path of Array.from(this.projectSelection)) {
-            if (!registered.has(path)) this.projectSelection.delete(path);
+        for (const section of this.sections.values())
+            this.partition(section, !this.pending);
+        if (!this.pending) {
+            const registered = new Set(this.sessions.workspaces);
+            for (const path of Array.from(this.projectSelection)) {
+                if (!registered.has(path)) this.projectSelection.delete(path);
+            }
         }
     }
 
@@ -296,12 +375,25 @@ export class WorkspaceManager {
         if (paint) this.render();
 
         const url = `/api/fs/browse?path=${encodeURIComponent(path)}`;
-        const scope = (this.app as any)?.scope;
+        const scope = this.scope;
         const store = (this.app as any)?.getActiveStore?.();
+        const cacheKey = serverKey(`phi_workspace_manager_browse:${path}`);
+        const current = () =>
+            generation === this.generation &&
+            this.isCurrent(scope) &&
+            this.sections.get(path) === section;
         const render = (data: BrowseResponse): void => {
-            if (generation !== this.generation) return;
+            if (!current()) return;
             this.applyBrowse(section, data);
+            section.loading = false;
+            this.render();
         };
+        try {
+            const cached = localStorage.getItem(cacheKey);
+            if (cached) render(JSON.parse(cached));
+        } catch {
+            /* cached data is optional */
+        }
 
         try {
             let data: BrowseResponse | undefined;
@@ -315,16 +407,24 @@ export class WorkspaceManager {
                         ? (input: string) => scope.fetch(input)
                         : (input: string) => fetch(input);
                 const res = await fetchFn(url);
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                if (!res.ok) {
+                    throw Object.assign(new Error(`HTTP ${res.status}`), {
+                        status: res.status,
+                    });
+                }
                 data = (await res.json()) as BrowseResponse;
             }
-            if (generation !== this.generation) return;
-            if (!data) return;
+            if (!current() || !data) return;
             this.applyBrowse(section, data);
             section.loading = false;
             section.error = '';
+            try {
+                localStorage.setItem(cacheKey, JSON.stringify(data));
+            } catch {
+                /* memory still applies */
+            }
         } catch (error: any) {
-            if (generation !== this.generation) return;
+            if (!current()) return;
             section.loading = false;
             section.error =
                 error?.status === 404
@@ -342,7 +442,7 @@ export class WorkspaceManager {
         }
         section.allRows = allRows;
         section.truncated = data.truncated === true;
-        this.partition(section);
+        this.partition(section, !this.pending);
     }
 
     private render(): void {
@@ -352,6 +452,7 @@ export class WorkspaceManager {
             new Set([...this.sessions.workspaces, ...this.rootPaths]),
         );
         this.labels.clear();
+        if (this.rootAddBtn) this.rootAddBtn.disabled = this.isPending();
         this.renderStatus();
         this.renderProjects();
         this.renderRoots();
@@ -375,7 +476,8 @@ export class WorkspaceManager {
         if (this.pendingState === 'unconfirmed') {
             const check = document.createElement('button');
             check.type = 'button';
-            check.className = 'btn ws-manager-check-btn';
+            check.className = 'btn btn-primary ws-manager-check-btn';
+            check.disabled = this.checking;
             check.textContent = 'Check status';
             check.addEventListener('click', () => void this.checkStatus());
             this.statusEl.appendChild(check);
@@ -400,8 +502,11 @@ export class WorkspaceManager {
         if (this.projectsCount) {
             this.projectsCount.textContent = `(${visible.length})`;
         }
-        for (const path of Array.from(this.projectSelection)) {
-            if (!workspaces.includes(path)) this.projectSelection.delete(path);
+        if (!this.pending) {
+            for (const path of Array.from(this.projectSelection)) {
+                if (!workspaces.includes(path))
+                    this.projectSelection.delete(path);
+            }
         }
         if (workspaces.length === 0) {
             this.projectsList.appendChild(this.emptyNote('No workspaces yet.'));
@@ -507,11 +612,9 @@ export class WorkspaceManager {
             allText.textContent = 'All';
             allLabel.append(allBox, allText);
             allBox.addEventListener('change', () => {
-                section.selection.clear();
-                if (allBox.checked) {
-                    for (const row of this.visibleRows(section)) {
-                        section.selection.add(row);
-                    }
+                for (const row of this.visibleRows(section)) {
+                    if (allBox.checked) section.selection.add(row);
+                    else section.selection.delete(row);
                 }
                 this.applySectionControls(section, element);
             });
@@ -560,7 +663,7 @@ export class WorkspaceManager {
                 note.textContent = section.error;
                 const retry = document.createElement('button');
                 retry.type = 'button';
-                retry.className = 'btn ws-manager-retry-btn';
+                retry.className = 'btn btn-primary ws-manager-retry-btn';
                 retry.textContent = 'Retry';
                 retry.addEventListener(
                     'click',
@@ -583,7 +686,7 @@ export class WorkspaceManager {
             // in the heading where it competes with the title and All.
             const removeRoot = document.createElement('button');
             removeRoot.type = 'button';
-            removeRoot.className = 'btn ws-manager-root-remove';
+            removeRoot.className = 'btn btn-primary ws-manager-root-remove';
             removeRoot.textContent = 'Remove root';
             removeRoot.disabled = this.isPending();
             removeRoot.addEventListener(
@@ -749,107 +852,17 @@ export class WorkspaceManager {
         await this.mutate({ kind: 'removeRoot', paths: [path] });
     }
 
-    /** Applies a mutation locally, then sends it under the offline rules. */
+    /** Queue before sending; config reads always project this intent locally. */
     private async mutate(mutation: Mutation): Promise<void> {
-        if (this.isPending()) return;
-        const before = this.sessions.workspaces.slice();
+        if (this.isPending() || !this.isCurrent()) return;
         this.pending = mutation;
-        this.status = '';
-        this.applyLocal(mutation);
-
-        if (!this.isOnline()) {
-            this.pendingState = 'unsent';
-            this.writeOutbox(mutation, 'unsent');
-            this.setStatus(
-                'Saved in this browser. It is sent when the server is reachable.',
-                'error',
-            );
-            return;
-        }
-
-        this.pendingState = 'sending';
-        this.render();
-        let response: Response;
-        try {
-            response = await this.send(mutation);
-        } catch {
-            await this.markUnconfirmed(mutation);
-            return;
-        }
-        if (!response.ok) {
-            const message = await response.text().catch(() => '');
-            this.sessions.applyWorkspaceList(before);
-            this.pending = null;
-            this.pendingState = 'idle';
-            this.writeOutbox(null);
-            this.syncFromConfig();
-            // A rejected root POST must give the typed path back, not eat it.
-            if (mutation.kind === 'addRoot' && this.rootInput) {
-                this.rootInput.value = mutation.paths[0] ?? '';
-            }
-            this.setStatus(
-                message.trim() || 'The server rejected the change.',
-                'error',
-            );
-            return;
-        }
-
-        this.writeOutbox(null);
-        this.pending = null;
-        this.pendingState = 'idle';
-        await this.confirm();
-    }
-
-    private applyLocal(mutation: Mutation): void {
-        switch (mutation.kind) {
-            case 'add': {
-                const next = this.sessions.workspaces.slice();
-                for (const path of mutation.paths) {
-                    if (!next.includes(path)) next.push(path);
-                }
-                this.sessions.applyWorkspaceList(next);
-                break;
-            }
-            case 'remove':
-                this.sessions.applyWorkspaceList(
-                    this.sessions.workspaces.filter(
-                        (path) => !mutation.paths.includes(path),
-                    ),
-                );
-                break;
-            case 'addRoot': {
-                const path = mutation.paths[0];
-                if (path && !this.rootPaths.includes(path)) {
-                    this.rootPaths.push(path);
-                    this.sections.set(path, {
-                        path,
-                        allRows: [],
-                        rows: [],
-                        selection: new Set(),
-                        loading: true,
-                        error: '',
-                        truncated: false,
-                    });
-                }
-                break;
-            }
-            case 'removeRoot':
-                this.rootPaths = this.rootPaths.filter(
-                    (path) => !mutation.paths.includes(path),
-                );
-                for (const path of mutation.paths) this.sections.delete(path);
-                break;
-        }
-        if (this.rootInput && mutation.kind === 'addRoot') {
-            this.rootInput.value = '';
-        }
-        // Registered children leave their root section at once, not one
-        // round-trip later. The selection survives: a rejected write restores
-        // it, and a confirmed one prunes it during reconcile.
-        for (const section of this.sections.values()) {
-            this.partition(section, false);
-        }
-        this.render();
+        this.pendingState = 'unsent';
+        this.writeOutbox(mutation, 'unsent');
+        this.syncFromConfig();
+        this.setStatus(
+            'Saved in this browser. It is sent when the server is reachable.',
+        );
+        await this.flushPending();
     }
 
     private async send(mutation: Mutation): Promise<Response> {
@@ -877,62 +890,33 @@ export class WorkspaceManager {
         });
     }
 
-    /** Reconciles after a confirmed write and refreshes the root listings. */
-    private async confirm(): Promise<void> {
-        const generation = this.generation;
-        const ok = await this.sessions.loadConfig();
-        if (generation === this.generation) {
-            if (ok) {
-                // The write landed, so config is authoritative: a root the user
-                // typed as "~/code" now appears under its expanded path.
-                this.syncFromConfig();
-            } else {
-                this.status =
-                    'Saved on the server. The reload failed, so this view may be behind.';
-                this.statusTone = 'error';
-            }
-            this.render();
-            await this.loadRoots(generation);
-        }
-    }
-
-    /** The request started and never answered: it may have arrived. */
-    private async markUnconfirmed(mutation: Mutation): Promise<void> {
-        this.pending = mutation;
-        this.pendingState = 'unconfirmed';
-        this.writeOutbox(mutation, 'unconfirmed');
-        this.setStatus(
-            'Change not confirmed. It may or may not have been saved.',
-            'error',
-        );
-        const ok = await this.sessions.loadConfig();
-        if (ok) {
-            this.syncFromConfig();
-            this.pending = null;
-            this.pendingState = 'idle';
-            this.writeOutbox(null);
-            this.setReconcileStatus(mutation);
-        }
-    }
-
-    /** "Check status": a read-only reconciliation, never a resend. */
-    private async checkStatus(): Promise<void> {
+    /** A read can reconcile a write, but must never trigger another send. */
+    private async checkStatus(confirmed = false): Promise<void> {
+        if (this.checking || !this.pending || !this.isCurrent()) return;
+        const mutation = this.pending;
+        const scope = this.scope;
+        this.checking = true;
         this.setStatus('Checking the server…');
-        const ok = await this.sessions.loadConfig();
+        const ok = await this.sessions.loadConfig({ refreshPanels: false });
+        if (!this.isCurrent(scope) || this.pending !== mutation) return;
+        this.checking = false;
         if (!ok) {
+            this.pendingState = 'unconfirmed';
             this.setStatus(
-                'The server is still unreachable. Nothing was resent.',
+                confirmed
+                    ? 'Saved on the server. The reload failed; check status when connected.'
+                    : 'Change not confirmed. Nothing was resent. Check status when connected.',
                 'error',
             );
             return;
         }
-        const pending = this.pending;
-        this.syncFromConfig();
         this.pending = null;
         this.pendingState = 'idle';
         this.writeOutbox(null);
-        this.setReconcileStatus(pending);
-        await this.loadRoots(this.generation);
+        this.syncFromConfig();
+        if (confirmed) this.setStatus('Saved.');
+        else this.setReconcileStatus(mutation);
+        if (this.isOpen()) void this.loadRoots(this.generation);
     }
 
     /**
@@ -966,7 +950,7 @@ export class WorkspaceManager {
         const landed = this.mutationLanded(mutation);
         if (landed === false) {
             this.setStatus(
-                'The server did not apply this change. Nothing was saved.',
+                'This change is not in the current server state. Nothing was resent.',
                 'error',
             );
             return;
@@ -978,66 +962,69 @@ export class WorkspaceManager {
         );
     }
 
-    /** Flushes the one write that never reached the server. */
+    /** Only never-started work may be sent. Persist ambiguity BEFORE fetch. */
     private async flushPending(): Promise<void> {
         const mutation = this.pending;
-        if (!mutation || this.pendingState !== 'unsent') return;
+        const scope = this.scope;
+        if (
+            !mutation ||
+            this.pendingState !== 'unsent' ||
+            !this.isOnline() ||
+            !this.isCurrent(scope)
+        )
+            return;
         this.pendingState = 'sending';
+        this.writeOutbox(mutation, 'unconfirmed');
         this.status = '';
+        this.statusTone = 'info';
         this.render();
         let response: Response;
         try {
             response = await this.send(mutation);
         } catch {
-            if (!this.isOnline()) {
-                // Still no connection: nothing reached the server, so the write
-                // stays queued instead of becoming ambiguous.
-                this.pendingState = 'unsent';
-                this.writeOutbox(mutation, 'unsent');
-                this.setStatus(
-                    'Saved in this browser. It is sent when the server is reachable.',
-                    'error',
-                );
-                return;
-            }
+            if (!this.isCurrent(scope) || this.pending !== mutation) return;
             this.pendingState = 'unconfirmed';
-            this.writeOutbox(mutation, 'unconfirmed');
             this.setStatus(
                 'Change not confirmed. It may or may not have been saved.',
                 'error',
             );
+            await this.checkStatus();
             return;
         }
+        if (!this.isCurrent(scope) || this.pending !== mutation) return;
         if (!response.ok) {
-            // The server refused the queued change: drop the local result and
-            // take its state as the truth.
+            const message = await response.text().catch(() => '');
+            if (!this.isCurrent(scope) || this.pending !== mutation) return;
             this.pending = null;
             this.pendingState = 'idle';
             this.writeOutbox(null);
-            const ok = await this.sessions.loadConfig();
-            if (ok) this.syncFromConfig();
-            this.render();
-            this.setStatus('The server rejected the queued change.', 'error');
+            this.syncFromConfig();
+            this.setStatus(
+                message.trim() || 'The server rejected the change.',
+                'error',
+            );
             return;
         }
-        this.pending = null;
-        this.pendingState = 'idle';
-        this.writeOutbox(null);
-        await this.confirm();
+        if (
+            mutation.kind === 'addRoot' &&
+            this.rootInput?.value.trim() === mutation.paths[0]
+        ) {
+            this.rootInput.value = '';
+        }
+        await this.checkStatus(true);
     }
 
     private restoreOutbox(): void {
+        if (this.pending) return;
         const stored = this.readOutbox();
         if (!stored) return;
         this.pending = stored.mutation;
         this.pendingState = stored.state;
-        this.applyLocal(stored.mutation);
-        if (stored.state === 'unconfirmed') {
-            // A write from a previous page may have arrived. Never resend it.
-            this.status =
-                'Change not confirmed. It may or may not have been saved.';
-            this.statusTone = 'error';
-        }
+        this.status =
+            stored.state === 'unsent'
+                ? 'Saved in this browser. It is sent when the server is reachable.'
+                : 'Change not confirmed. It may or may not have been saved.';
+        this.statusTone = stored.state === 'unsent' ? 'info' : 'error';
     }
 
     private readOutbox(): { mutation: Mutation; state: PendingState } | null {
@@ -1058,7 +1045,7 @@ export class WorkspaceManager {
                 : [];
             if (paths.length === 0) return null;
             const state: PendingState =
-                parsed.state === 'unconfirmed' ? 'unconfirmed' : 'unsent';
+                parsed.state === 'unsent' ? 'unsent' : 'unconfirmed';
             return { mutation: { kind: parsed.kind, paths }, state };
         } catch {
             return null;
@@ -1085,6 +1072,6 @@ export class WorkspaceManager {
     }
 
     private outboxKey(): string {
-        return serverKey(OUTBOX_KEY);
+        return this.storageKey;
     }
 }
