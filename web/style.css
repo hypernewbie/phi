@@ -11037,7 +11037,8 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 }
 
 .sync-card-btn.sync-del-btn:hover {
-    color: var(--text-danger);
+    /* --text-danger is never defined by a theme; --red is. */
+    color: var(--red);
 }
 
 .sync-card-value {

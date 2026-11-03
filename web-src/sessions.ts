@@ -864,11 +864,11 @@ export class SessionsManager {
             } catch {
                 lastChosen = this.activeWorkspace;
             }
-            if (lastChosen && data.workspaces.includes(lastChosen)) {
+            if (lastChosen && this.workspaces.includes(lastChosen)) {
                 this.activeWorkspace = lastChosen;
             } else {
                 this.activeWorkspace =
-                    data.active_cwd || data.workspaces[0] || '';
+                    data.active_cwd || this.workspaces[0] || '';
             }
             this.workspaceSelect.value = this.activeWorkspace;
             this.updateWorkspaceSelectWidth();
