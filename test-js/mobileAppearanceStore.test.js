@@ -110,6 +110,16 @@ const settleEdit = () => vi.advanceTimersByTimeAsync(301);
 const posts = (fetch) =>
     fetch.mock.calls.filter(([, init]) => init?.method === 'POST');
 
+it('accepts a server payload that carries a field this client does not know', async () => {
+    // A newer server may add a setting. Rejecting the whole payload used to
+    // reset every saved value and pause saving on that client.
+    const f = fixture();
+    f.server = { ...EMPTY_MOBILE, revision: 3, some_future_field: 'x' };
+    await f.store.sync();
+    expect(f.store.error).toBe('');
+    expect(f.store.values.ui_font_size).toBe(EMPTY_MOBILE.ui_font_size);
+});
+
 it('keeps durable edits usable when BroadcastChannel notifications fail', async () => {
     vi.stubGlobal(
         'BroadcastChannel',

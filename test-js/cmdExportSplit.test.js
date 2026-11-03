@@ -50,12 +50,12 @@ describe('App.exportTerminalCommandsConfig', () => {
 // dropup to the terminal endpoint (or vice versa).
 describe('call sites use the right method (static source check)', () => {
     it('the quick-commands dropup in web/terminal.js calls exportQuickCommandsConfig', () => {
-        const src = readFileSync('web/terminal.js', 'utf8');
+        const src = readFileSync('web-src/terminal.ts', 'utf8');
         // Match the if-block body: `mode === 'cmds')` followed by any
         // (non-greedy) chars then `this.app.<method>(copyBtn)`. Tolerates
         // nested braces by limiting the lookahead to the relevant line.
         const match = src.match(
-            /mode === 'cmds'\)[\s\S]*?this\.app\.(\w+)\(copyBtn\)/,
+            /mode === 'cmds'\)[\s\S]*?this\.app\.(\w+)\??\.?\(copyBtn\)/,
         );
         expect(
             match,

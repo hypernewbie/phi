@@ -91,6 +91,40 @@ describe('parseActionPayload helper', () => {
         expect(parseActionPayload(null)).toBeNull();
     });
 
+    it('drops mistyped fields instead of handing them to the renderer', () => {
+        // Another machine on the tailnet writes board values. A field with
+        // the wrong type must not reach the card builders: a null checklist
+        // entry used to throw inside the render loop for the whole board.
+        const parsed = parseActionPayload({
+            title: 42,
+            url: { href: 'http://example.com' },
+            checklist: [null, 'real item', { label: 'keep' }],
+            actions: [null, 'not an action', { label: 'Run', command: 'ls' }],
+        });
+        expect(parsed?.title).toBeUndefined();
+        expect(parsed?.url).toBeUndefined();
+        expect(parsed?.checklist).toEqual(['real item', { label: 'keep' }]);
+        expect(parsed?.actions).toEqual([{ label: 'Run', command: 'ls' }]);
+    });
+
+    it('keeps an empty done string a completion card, not a fallback to raw JSON', () => {
+        const parsed = parseActionPayload({ done: '', machine: 'JUPITER' });
+        expect(parsed?.done).toBe('');
+        expect(parsed?.machine).toBe('JUPITER');
+    });
+
+    it('keeps a diff target the viewer may still resolve', () => {
+        // The card asks getSyncDiffCommit() for a commit; an object without
+        // recognized keys still renders the plain Review Diff chip.
+        expect(parseActionPayload({ diff: {} })?.diff).toEqual({});
+        expect(parseActionPayload({ diff: ['a'] })?.diff).toBeUndefined();
+    });
+
+    it('keeps a payload whose only rich field is unusable out of the card path', () => {
+        expect(parseActionPayload({ actions: 'nope' })).toBeNull();
+        expect(parseActionPayload({ checklist: [] })).toBeNull();
+    });
+
     it('returns null for generic JSON objects without rich action keys', () => {
         expect(parseActionPayload('{"status": "ok", "code": 200}')).toBeNull();
         expect(parseActionPayload('["item1", "item2"]')).toBeNull();

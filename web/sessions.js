@@ -268,6 +268,8 @@ export class SessionsManager {
     quickLaunchReady;
     activeWorkspace;
     activeCWD;
+    /** The configured workspace roots, as the config payload lists them. */
+    workspaces;
     config;
     sessionList;
     newSessionBtn;
@@ -320,6 +322,7 @@ export class SessionsManager {
         this.quickLaunchReady = false;
         this.activeWorkspace = '';
         this.activeCWD = '';
+        this.workspaces = [];
         this.sessionList = document.getElementById('session-list');
         this.newSessionBtn = document.getElementById('new-session-btn');
         this.openCodeServiceRow = document.getElementById('opencode-service-row');
@@ -646,12 +649,17 @@ export class SessionsManager {
         if (this.app) {
             this.app.config = data;
         }
+        if (Array.isArray(data.workspaces)) {
+            // Settings → About reads this list even when no workspace select
+            // exists, and a non-string entry would throw in the labels below.
+            this.workspaces = data.workspaces.filter((ws) => typeof ws === 'string');
+        }
         if (this.workspaceSelect && Array.isArray(data.workspaces)) {
             this.workspaceSelect.innerHTML = '';
-            data.workspaces.forEach((ws) => {
+            this.workspaces.forEach((ws) => {
                 const opt = document.createElement('option');
                 opt.value = ws;
-                opt.innerText = this.formatWorkspaceLabel(ws, data.workspaces);
+                opt.innerText = this.formatWorkspaceLabel(ws, this.workspaces);
                 opt.title = ws;
                 this.workspaceSelect.appendChild(opt);
             });
@@ -662,12 +670,12 @@ export class SessionsManager {
             catch {
                 lastChosen = this.activeWorkspace;
             }
-            if (lastChosen && data.workspaces.includes(lastChosen)) {
+            if (lastChosen && this.workspaces.includes(lastChosen)) {
                 this.activeWorkspace = lastChosen;
             }
             else {
                 this.activeWorkspace =
-                    data.active_cwd || data.workspaces[0] || '';
+                    data.active_cwd || this.workspaces[0] || '';
             }
             this.workspaceSelect.value = this.activeWorkspace;
             this.updateWorkspaceSelectWidth();

@@ -1,4 +1,5 @@
 import { BackendScope } from './backend-scope.js';
+import type { AuthContext, FetchLike } from './auth.js';
 
 export type AppearanceProfile = 'desktop' | 'mobile';
 export type ProfileOverride = 'auto' | AppearanceProfile;
@@ -155,7 +156,8 @@ export function validMobileAppearance(value: any): value is MobileAppearance {
         value &&
         typeof value === 'object' &&
         !Array.isArray(value) &&
-        Object.keys(value).length === 5 &&
+        // Extra fields are ignored, not fatal: a newer server may add one,
+        // and rejecting the whole payload would reset every saved setting.
         Number.isSafeInteger(value.revision) &&
         value.revision >= 0 &&
         KEYS.every((key) => {
@@ -208,10 +210,11 @@ export function effectiveAppearance(
     };
 }
 
-export function appearanceRequestContext(scope: BackendScope) {
+export function appearanceRequestContext(
+    scope: BackendScope,
+): AuthContext & { fetch: FetchLike } {
     return {
-        fetch: (url: string, init?: RequestInit) =>
-            ownerFetch(scope, url, init),
+        fetch: (url, init) => ownerFetch(scope, String(url), init),
         credentialKey: scope.profileId
             ? `phi_access_credential_v1:${scope.profileId}`
             : 'phi_access_credential_v1',

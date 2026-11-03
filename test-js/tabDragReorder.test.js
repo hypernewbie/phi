@@ -687,7 +687,7 @@ describe('tabs are draggable regardless of pin status', () => {
         // server-side PTY but doesn't lock strip position. This is a
         // static source check that locks in the convention.
         const fs = require('node:fs');
-        const src = fs.readFileSync('web/terminal.js', 'utf8');
+        const src = fs.readFileSync('web-src/terminal.ts', 'utf8');
         expect(src).toMatch(/tabEl\.draggable\s*=\s*true/);
         expect(src).toMatch(/dragstart[\s\S]*handleTabDragStart/);
         // Drag listeners must be set unconditionally now (no `if (!pinned)` gate).

@@ -56,10 +56,46 @@ export interface SyncActionPayload {
     checklist?: Array<string | SyncChecklistItem>;
     actions?: SyncActionItem[];
     toast?: string;
+    /** Sent by older senders; accepted and ignored — nothing auto-opens. */
+    auto_open?: boolean;
 }
 
+function asString(value: unknown): string | undefined {
+    return typeof value === 'string' ? value : undefined;
+}
+
+function asObject<T extends object>(value: unknown): T | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return undefined;
+    }
+    return value as T;
+}
+
+/** Scalar card fields whose only requirement is that they are strings. */
+const STRING_FIELDS = [
+    'done',
+    'machine',
+    'title',
+    'description',
+    'desc',
+    'text',
+    'toast',
+    'preview',
+    'image',
+    'file',
+    'url',
+    'link',
+] as const satisfies readonly (keyof SyncActionPayload)[];
+
+/**
+ * Reads one Sync Board value into the shape the cards render. Another
+ * machine on the tailnet writes these values, so every field is checked
+ * here instead of being cast: an entry with the wrong type is dropped and
+ * the rest of the card still renders. A value with no recognizable field
+ * returns null and displays as plain text.
+ */
 export function parseActionPayload(val: unknown): SyncActionPayload | null {
-    let obj: any = null;
+    let obj: unknown = null;
     if (typeof val === 'object' && val !== null) {
         obj = val;
     } else if (typeof val === 'string') {
@@ -73,26 +109,41 @@ export function parseActionPayload(val: unknown): SyncActionPayload | null {
         }
     }
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+    const raw = obj as Record<string, unknown>;
 
-    const hasRichKeys =
-        'preview' in obj ||
-        'image' in obj ||
-        'file' in obj ||
-        'url' in obj ||
-        'link' in obj ||
-        'diff' in obj ||
-        'checklist' in obj ||
-        'actions' in obj ||
-        typeof obj.done === 'string' ||
-        'title' in obj ||
-        'description' in obj ||
-        'desc' in obj ||
-        'toast' in obj;
-
-    if (hasRichKeys) {
-        return obj as SyncActionPayload;
+    const payload: SyncActionPayload = {};
+    for (const key of STRING_FIELDS) {
+        const text = asString(raw[key]);
+        if (text !== undefined) payload[key] = text;
     }
-    return null;
+    if (typeof raw.auto_open === 'boolean') payload.auto_open = raw.auto_open;
+    if (typeof raw.diff === 'boolean' || typeof raw.diff === 'string') {
+        payload.diff = raw.diff;
+    } else {
+        const diffTarget = asObject<SyncDiffTarget>(raw.diff);
+        if (diffTarget) payload.diff = diffTarget;
+    }
+    if (Array.isArray(raw.checklist)) {
+        // A null entry used to throw inside the card renderer, which took
+        // the whole board down; drop the unusable rows instead.
+        const items = raw.checklist.filter(
+            (item): item is string | SyncChecklistItem =>
+                typeof item === 'string' ||
+                (typeof item === 'object' &&
+                    item !== null &&
+                    !Array.isArray(item)),
+        );
+        if (items.length > 0) payload.checklist = items;
+    }
+    if (Array.isArray(raw.actions)) {
+        const actions = raw.actions.filter(
+            (act): act is SyncActionItem =>
+                typeof act === 'object' && act !== null && !Array.isArray(act),
+        );
+        if (actions.length > 0) payload.actions = actions;
+    }
+
+    return Object.keys(payload).length > 0 ? payload : null;
 }
 
 export function formatDoneSummary(value: string): string {
@@ -303,7 +354,10 @@ export class SyncManager {
             }
 
             const res = await this.fetchWithProxy('/api/sync/messages');
-            const messages = await res.json();
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const messages: unknown = await res.json();
+            if (!Array.isArray(messages))
+                throw new Error('Unexpected board response.');
             const store = (this.app as any)?.getActiveStore?.();
             if (store) {
                 store.responses.set(
@@ -314,12 +368,34 @@ export class SyncManager {
 
             this.renderMessages(messages);
             this.signalDesktopAlert(messages);
+            this._setRefreshError(null);
         } catch (e: any) {
             if (e?.name === 'AbortError' || (this.app as any)?.scope?.aborted)
                 return;
             console.error('[sync] Failed to refresh:', e);
-            this.messagesList.innerHTML = `<div class="sync-error-state">Error: ${this.escapeHtml((e as Error).message)}</div>`;
+            // A slow or broken link must not erase the board that is already
+            // on screen, so the failure becomes one inline line.
+            this._setRefreshError((e as Error)?.message || 'Request failed');
         }
+    }
+
+    /** Shows or clears the inline note above the board without touching it. */
+    _setRefreshError(message: string | null): void {
+        const existing = this.messagesList.querySelector('.sync-error-state');
+        if (message === null) {
+            existing?.remove();
+            return;
+        }
+        const note =
+            existing ??
+            this.messagesList.insertBefore(
+                document.createElement('div'),
+                this.messagesList.firstChild,
+            );
+        note.className = 'sync-error-state sync-refresh-note';
+        note.textContent = `Sync failed: ${message}. Showing the last board.`;
+        if (!this.messagesList.querySelector('.sync-card, .sync-empty-state'))
+            note.textContent = `Sync failed: ${message}.`;
     }
 
     onSyncChanged(_control?: any): void {

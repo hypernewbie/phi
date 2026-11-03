@@ -8,11 +8,13 @@ import path from 'node:path';
 // Older recorded books load only through the manual history button.
 // Open-path speed comes from bounded state attach. Preserve the resident
 // budget so xterm's 1000-line default cannot truncate the visible buffer.
+// Reads the TypeScript source, not the emitted copy: these assertions pin
+// declarations, and the emitter re-wraps them.
 const terminalJsPath = path.join(
     path.dirname(fileURLToPath(import.meta.url)),
     '..',
-    'web',
-    'terminal.js',
+    'web-src',
+    'terminal.ts',
 );
 
 describe('xterm scrollback configuration', () => {
@@ -46,11 +48,11 @@ describe('xterm scrollback configuration', () => {
         // Screen restore on attach (pre-open write) and quiet-tab uploads
         // are what keep attach fast without a 1 MiB replay.
         expect(src).toContain('_onAttachHead');
-        expect(src).toContain(
-            'let scrollback = isCoarseViewport() ? PHONE_CHECKPOINT_ROWS : LIVE_SCROLLBACK_ROWS',
+        expect(src).toMatch(
+            /let scrollback = isCoarseViewport\(\)\s*\?\s*PHONE_CHECKPOINT_ROWS\s*:\s*LIVE_SCROLLBACK_ROWS/,
         );
-        expect(src).toContain(
-            'terminalSnapshot(tabInfo.term, tabInfo.serializeAddon, { scrollback })',
+        expect(src).toMatch(
+            /terminalSnapshot\(\s*tabInfo\.term,\s*tabInfo\.serializeAddon,\s*\{\s*scrollback,?\s*\}\s*,?\s*\)/,
         );
         expect(src).toContain('/checkpoint');
     });

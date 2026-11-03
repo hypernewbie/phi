@@ -1,100 +1,20 @@
 /* Φ phi — Terminal & Tab Manager */
-
 import { PTYWebSocket } from './ws.js';
 import { modelRequestJson } from './model-request.js';
 import { terminalSnapshot, resetTerminalState } from './terminal-state.js';
 import { normalizePath } from './sessions.js';
-import {
-    projectWorktreeLabel,
-    formatWorkspaceLabel,
-    cpuLevel,
-    worktreeGlyph,
-    getTerminalActivityState,
-    formatTerminalActivityTitle,
-    buildSelfHud,
-    formatHudLine,
-    formatHudCpu,
-    formatDurationMin,
-    escapeHtml,
-    isMacPlatform,
-    tabShortcutDigit,
-    isCoarseViewport,
-    isCompactViewport,
-    prefersInputBarFocus,
-    terminalPreferredFontSize,
-    responsiveTerminalFontSize,
-    TERMINAL_TARGET_COLUMNS,
-    openExternalLink,
-    installTerminalLinkProvider,
-    serverKey,
-    getEmbeddedProfileId,
-    getEmbeddedBackendOrigin,
-} from './util.js';
+import { projectWorktreeLabel, formatWorkspaceLabel, cpuLevel, worktreeGlyph, getTerminalActivityState, formatTerminalActivityTitle, buildSelfHud, formatHudLine, formatHudCpu, formatDurationMin, escapeHtml, isMacPlatform, tabShortcutDigit, isCoarseViewport, isCompactViewport, prefersInputBarFocus, terminalPreferredFontSize, responsiveTerminalFontSize, TERMINAL_TARGET_COLUMNS, openExternalLink, installTerminalLinkProvider, serverKey, getEmbeddedProfileId, getEmbeddedBackendOrigin, } from './util.js';
 import { SNAPSHOT_SCROLLBACK_ROWS } from './backend-store.js';
-import {
-    ThinkingPresetStore,
-    thinkingPresetTokens,
-    THINKING_PRESET_LEVELS,
-} from './thinking-presets.js';
-import { AttachmentStore, attachmentOwnerKey } from './attachment-store.js';
-import {
-    applyBrandCpuTier,
-    applyTerminalActivityIndicator,
-} from './header-state.js';
-import {
-    formatAttachment,
-    extractImageItems,
-    extractImageFiles,
-    uploadClipboardImage,
-    uploadAttachmentItem,
-    getAttachmentItemStatus,
-    getAttachmentPiContext,
-    sendAttachmentPrompt,
-    getAttachmentSendStatus,
-    browseServerFiles,
-    snapshotServerFile,
-    newAttachmentID,
-    AttachmentRequestError,
-    formatChipName,
-    attachmentRefusalNotice,
-} from './attachments.js';
-import { mountDirectoryTree } from './path-picker.js';
-import {
-    executeRecipe,
-    recipeFor,
-    isOpenCodeMini,
-    openCodePaneMode,
-    opencodeMiniRecipe,
-    logoFor,
-    inputMode,
-    hasModelSwitch,
-    getCoder,
-    isShell,
-} from './coders.js';
-import { createSessionSearchBar } from './session-search.js';
-import {
-    mountRpcChat,
-    rpcChatSend,
-    rpcChatSearch,
-    rpcChatReveal,
-    destroyRpcChat,
-    getPiRpcStatus,
-    getPiRpcControls,
-    rpcChatModels,
-    rpcChatThinkingLevels,
-    rpcChatSetModel,
-    rpcChatSetThinking,
-    rpcChatReset,
-    rpcChatCompact,
-    rpcChatInterrupt,
-    closePiSubagentViewer,
-    rpcChatSetName,
-    subscribePiRpcStatus,
-    syncPiSubagentStrip,
-} from './chat-pi/controller.js';
+import { ThinkingPresetStore, thinkingPresetTokens, THINKING_PRESET_LEVELS, } from './thinking-presets.js';
+import { AttachmentStore, } from './attachment-store.js';
+import { applyBrandCpuTier, applyTerminalActivityIndicator, } from './header-state.js';
+import { formatAttachment, extractImageItems, extractImageFiles, uploadClipboardImage, uploadAttachmentItem, getAttachmentItemStatus, getAttachmentPiContext, sendAttachmentPrompt, getAttachmentSendStatus, browseServerFiles, snapshotServerFile, newAttachmentID, AttachmentRequestError, formatChipName, attachmentRefusalNotice, } from './attachments.js';
+import { mountDirectoryTree, } from './path-picker.js';
+import { executeRecipe, recipeFor, isOpenCodeMini, openCodePaneMode, opencodeMiniRecipe, logoFor, inputMode, hasModelSwitch, getCoder, isShell, } from './coders.js';
+import { createSessionSearchBar, } from './session-search.js';
+import { mountRpcChat, rpcChatSend, rpcChatSearch, rpcChatReveal, destroyRpcChat, getPiRpcStatus, getPiRpcControls, rpcChatModels, rpcChatThinkingLevels, rpcChatSetModel, rpcChatSetThinking, rpcChatReset, rpcChatCompact, rpcChatInterrupt, closePiSubagentViewer, rpcChatSetName, subscribePiRpcStatus, syncPiSubagentStrip, } from './chat-pi/controller.js';
 import { formatPiRpcStatus } from './chat-pi/render.js';
 import { ACCENT_COLORS } from './theme.js';
-
 export const DEFAULT_ANSI_THEME = {
     background: '#08080a',
     foreground: '#e4e3e9',
@@ -117,47 +37,35 @@ export const DEFAULT_ANSI_THEME = {
     brightCyan: '#22d3ee',
     brightWhite: '#ffffff',
 };
-
 // getTerminalTheme derives the xterm theme object for a tab.
 // Normal tabs and tabs for unselected coders receive the standard
 // ANSI palette with only cursor colour updated. When agy_theme_ansi
 // is enabled and the coder is agy, ANSI accent slots (blue, cyan,
 // magenta) harmonise with Phi's active accent theme while preserving
 // semantic red/green/yellow indicators.
-export function getTerminalTheme(
-    coder,
-    accentColorKeyOrHex,
-    config,
-    activeThemeKey,
-    hasCustomBg,
-) {
+export function getTerminalTheme(coder, accentColorKeyOrHex, config, activeThemeKey, hasCustomBg) {
     const isAgyThemed = coder === 'agy' && !!config?.agy_theme_ansi;
-    const themeKey =
-        activeThemeKey ||
+    const themeKey = activeThemeKey ||
         (typeof document !== 'undefined' &&
             document.documentElement?.getAttribute('data-theme-color')) ||
         'purple';
     const tokens = ACCENT_COLORS?.[themeKey] ||
         ACCENT_COLORS?.purple || {
-            accent: '#7c6af7',
-            accentDim: '#5b4ec2',
-            accentBright: '#9a8dfa',
-        };
-    const cursorColor =
-        accentColorKeyOrHex ||
+        accent: '#7c6af7',
+        accentDim: '#5b4ec2',
+        accentBright: '#9a8dfa',
+    };
+    const cursorColor = accentColorKeyOrHex ||
         (typeof document !== 'undefined' &&
             document.documentElement?.style?.getPropertyValue('--accent')) ||
         tokens.accent;
-
-    const bgActive =
-        hasCustomBg !== undefined
-            ? !!hasCustomBg
-            : typeof document !== 'undefined' &&
-              !!document.body?.classList?.contains('has-terminal-bg');
+    const bgActive = hasCustomBg !== undefined
+        ? !!hasCustomBg
+        : typeof document !== 'undefined' &&
+            !!document.body?.classList?.contains('has-terminal-bg');
     const background = bgActive
         ? 'rgba(0, 0, 0, 0)'
         : DEFAULT_ANSI_THEME.background;
-
     if (!isAgyThemed) {
         return {
             ...DEFAULT_ANSI_THEME,
@@ -165,7 +73,6 @@ export function getTerminalTheme(
             cursor: cursorColor,
         };
     }
-
     return {
         ...DEFAULT_ANSI_THEME,
         background,
@@ -179,7 +86,6 @@ export function getTerminalTheme(
         selectionBackground: `${tokens.accent}40`,
     };
 }
-
 // Control-key presets render as icons instead of their key name.
 const PRESET_ICONS = {
     // ctrl+c — interrupt
@@ -193,7 +99,6 @@ const PRESET_ICONS = {
     // ctrl+l — clear screen
     '\x0c': '<path d="M3 6h18"></path><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path>',
 };
-
 const MOVED_PRESET_VALUES = new Set([
     '/quit\r',
     '/exit\r',
@@ -205,28 +110,63 @@ const MOVED_PRESET_VALUES = new Set([
     // paste stays as the bridge-free fallback only.
     '/reload\r',
 ]);
-
 // Identity of a preset-row control across a full rebuild. Class plus title,
 // not text: compact viewports rewrite the visible label. Both the capture and
 // the restore must agree on this, so it lives in one place.
-function presetFocusSignature(el) {
-    return `${el.className}\u0000${el.title || ''}`;
+/** Resolve an element that `web/index.html` always ships. The cast states the
+ *  layout contract; it does not create the element, so a partial DOM still
+ *  yields null at runtime and fails on first use, as it always did. */
+/** Map a chip's upload state onto the store's vocabulary. Chips staged
+ *  before the store existed used `uploading`; the store only knows
+ *  `attempted`. */
+function storedUploadState(state) {
+    if (state === 'uploading')
+        return 'attempted';
+    if (state === 'waiting' ||
+        state === 'attempted' ||
+        state === 'ready' ||
+        state === 'error' ||
+        state === 'unknown')
+        return state;
+    return 'waiting';
 }
-
+/** Read a parsed body as a record. A non-object body reads as empty, so a
+ *  malformed reply takes the same path as a missing one. */
+function jsonBody(value) {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? value
+        : {};
+}
+/** A permanent history failure is never retried: the range is gone. */
+function isPermanentHistoryError(error) {
+    return Boolean(error?.historyPermanent);
+}
+function chrome(id) {
+    return document.getElementById(id);
+}
+function presetFocusSignature(el) {
+    const element = el;
+    return `${element.className}\u0000${element.title || ''}`;
+}
 // Pi thinking vocabulary, in display order. `max` is a distinct level
 // from `xhigh` in the bridge protocol; keep both.
-const PI_BRIDGE_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
-
+const PI_BRIDGE_THINKING_LEVELS = [
+    'off',
+    'minimal',
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+    'max',
+];
 // Native Compact waits at most 125s in the browser against the
 // server's 120s bound. Expiry reports unknown; it never cancels
 // native provider work and never permits a replay.
 const PI_BRIDGE_COMPACT_TIMEOUT_MS = 125_000;
-
 // Native Reload waits at most 45s in the browser against the
 // server's 30s bound. Expiry reports unconfirmed; it never cancels
 // native work and never permits a replay.
 const PI_BRIDGE_RELOAD_TIMEOUT_MS = 45_000;
-
 // Fixed Reload reason vocabulary shared with the Go/wire contract.
 // Only these words may reach the toast; anything else (including
 // word-shaped provider text) is dropped, never rendered.
@@ -239,11 +179,9 @@ const PI_BRIDGE_RELOAD_REASONS = new Set([
     'pending',
     'unavailable',
 ]);
-
 // Versioned localStorage key prefix for one pane's Reload intent.
 // Memory is authoritative; storage only restores uncertainty.
 const PI_BRIDGE_RELOAD_STORE_PREFIX = 'phi.piBridge.reload.v1.';
-
 // Fixed Compact reason vocabulary shared with the Go/wire contract.
 // Only these words may reach the toast; anything else (including
 // word-shaped provider text) is dropped, never rendered.
@@ -260,56 +198,49 @@ const PI_BRIDGE_COMPACT_REASONS = new Set([
     'error',
     'uncertain',
 ]);
-
 // piBridgeContextNumber parses one context telemetry field: HTTP
 // numbers and WS decimal strings land here. Missing, empty, null,
 // boolean, or unparsable input is unknown (null), never zero.
 function piBridgeContextNumber(raw) {
     if (typeof raw === 'number')
         return Number.isFinite(raw) ? raw : null;
-    if (
-        typeof raw === 'string' &&
-        raw !== '' &&
-        /^\d+(\.\d+)?$/.test(raw)
-    ) {
+    if (typeof raw === 'string' && raw !== '' && /^\d+(\.\d+)?$/.test(raw)) {
         const value = Number(raw);
         return Number.isFinite(value) ? value : null;
     }
     return null;
 }
-
 // piBridgeReadinessBool parses one readiness field: HTTP booleans
 // and WS true/false strings land here. Anything else is unknown.
 function piBridgeReadinessBool(raw) {
-    if (raw === true || raw === 'true') return true;
-    if (raw === false || raw === 'false') return false;
+    if (raw === true || raw === 'true')
+        return true;
+    if (raw === false || raw === 'false')
+        return false;
     return null;
 }
-
 // piBridgeCapable feature-detects one bridge capability at the
 // point of use: Pi PTY, live tab, current socket confirmed fresh,
 // managed lease, connected peer, negotiated capability. Never
 // sticky, never cached across reconnects. Module-level so the
 // ordered-view key can use it without new prototype surface.
 function piBridgeCapable(tab, capability) {
-    return (
-        tab?.coder === 'pi' && !tab.isDead &&
-        !!tab.ws && tab._piBridgeFresh === tab.ws &&
+    return (tab?.coder === 'pi' &&
+        !tab.isDead &&
+        !!tab.ws &&
+        tab._piBridgeFresh === tab.ws &&
         tab.piBridge?.state === 'managed' &&
         tab.piBridge.connected === true &&
         Array.isArray(tab.piBridge.capabilities) &&
-        tab.piBridge.capabilities.includes(capability)
-    );
+        tab.piBridge.capabilities.includes(capability));
 }
-
 // piBridgeCompactReady is the one readiness predicate behind both the
 // Compact control and the dispatch guard. The control never greys out
 // a merely-busy action: it queues a press for the active turn or shows
 // the reason, so only an already-running compaction is disabled. The
 // reason is the control's title when it cannot act immediately.
 function piBridgeCompactReady(view) {
-    const known =
-        typeof view?.generation === 'string' &&
+    const known = typeof view?.generation === 'string' &&
         view.generation !== '' &&
         typeof view?.telemetry_revision === 'string' &&
         view.telemetry_revision !== '' &&
@@ -343,7 +274,6 @@ function piBridgeCompactReady(view) {
         };
     return { ready: true, reason: 'Compact via bridge' };
 }
-
 // piBridgeCompactReasonText turns the readiness predicate's stable
 // diagnostic into a toast sentence; titles keep the precise form.
 function piBridgeCompactReasonText(reason) {
@@ -362,14 +292,12 @@ function piBridgeCompactReasonText(reason) {
             return reason.replace('Compact unavailable: ', '');
     }
 }
-
 // piBridgeReloadReady is the one readiness predicate behind the
 // Reload dispatch guard. Only a complete sample with identity,
 // run/context fences, and idle/no-pending state dispatches; every
 // other shape reports its reason instead of guessing.
 function piBridgeReloadReady(view) {
-    const known =
-        typeof view?.generation === 'string' &&
+    const known = typeof view?.generation === 'string' &&
         view.generation !== '' &&
         typeof view?.telemetry_revision === 'string' &&
         view.telemetry_revision !== '' &&
@@ -403,17 +331,13 @@ function piBridgeReloadReady(view) {
             ready: false,
             reason: 'Reload unavailable: compaction active',
         };
-    if (
-        view.reload_compact_pending === true ||
-        view.reload_pending === true
-    )
+    if (view.reload_compact_pending === true || view.reload_pending === true)
         return {
             ready: false,
             reason: 'Reload unavailable: operation pending',
         };
     return { ready: true, reason: 'Reload via bridge' };
 }
-
 // piBridgeReloadReasonText turns the readiness predicate's stable
 // diagnostic into a toast sentence; statuses keep the precise form.
 function piBridgeReloadReasonText(reason) {
@@ -432,7 +356,6 @@ function piBridgeReloadReasonText(reason) {
             return reason.replace('Reload unavailable: ', '');
     }
 }
-
 // piBridgeEqualRevAgrees compares the retained publication fields:
 // an equal revision must agree on identity and telemetry, while
 // connected alone may flip to propagate peer-down. Lifecycle fields
@@ -441,35 +364,24 @@ function piBridgeReloadReasonText(reason) {
 // revision, so a same-revision peer-down carrying newer settlement
 // metadata must still adopt availability.
 function piBridgeEqualRevAgrees(current, view) {
-    const text = (record, key) =>
-        typeof record?.[key] === 'string' ? record[key] : '';
-    const count = (record, key) =>
-        typeof record?.[key] === 'number' ? record[key] : null;
-    const flag = (record, key) =>
-        typeof record?.[key] === 'boolean' ? record[key] : null;
+    const text = (record, key) => typeof record?.[key] === 'string' ? record[key] : '';
+    const count = (record, key) => typeof record?.[key] === 'number' ? record[key] : null;
+    const flag = (record, key) => typeof record?.[key] === 'boolean' ? record[key] : null;
     const caps = (record) => (record?.capabilities || []).join(',');
-    return (
-        text(current, 'generation') === text(view, 'generation') &&
+    return (text(current, 'generation') === text(view, 'generation') &&
         text(current, 'model') === text(view, 'model') &&
         text(current, 'thinking_level') === text(view, 'thinking_level') &&
         caps(current) === caps(view) &&
-        count(current, 'context_tokens') ===
-            count(view, 'context_tokens') &&
-        count(current, 'context_window') ===
-            count(view, 'context_window') &&
-        count(current, 'context_percent') ===
-            count(view, 'context_percent') &&
+        count(current, 'context_tokens') === count(view, 'context_tokens') &&
+        count(current, 'context_window') === count(view, 'context_window') &&
+        count(current, 'context_percent') === count(view, 'context_percent') &&
         flag(current, 'compact_idle') === flag(view, 'compact_idle') &&
-        flag(current, 'compact_queued') ===
-            flag(view, 'compact_queued') &&
-        flag(current, 'compact_active') ===
-            flag(view, 'compact_active') &&
-        flag(current, 'compact_pending') ===
-            flag(view, 'compact_pending') &&
+        flag(current, 'compact_queued') === flag(view, 'compact_queued') &&
+        flag(current, 'compact_active') === flag(view, 'compact_active') &&
+        flag(current, 'compact_pending') === flag(view, 'compact_pending') &&
         text(current, 'process_id') === text(view, 'process_id') &&
         text(current, 'run_id') === text(view, 'run_id') &&
-        text(current, 'context_revision') ===
-            text(view, 'context_revision') &&
+        text(current, 'context_revision') === text(view, 'context_revision') &&
         text(current, 'reload_high_water') ===
             text(view, 'reload_high_water') &&
         flag(current, 'reload_idle') === flag(view, 'reload_idle') &&
@@ -477,14 +389,11 @@ function piBridgeEqualRevAgrees(current, view) {
         flag(current, 'reload_active') === flag(view, 'reload_active') &&
         flag(current, 'reload_compact_pending') ===
             flag(view, 'reload_compact_pending') &&
-        flag(current, 'reload_pending') === flag(view, 'reload_pending')
-    );
+        flag(current, 'reload_pending') === flag(view, 'reload_pending'));
 }
-
 // Shared "session done" chime. Constructing a new Audio per chime
 // re-fetches bell.wav; one object per page is enough.
 let doneChimeAudio = null;
-
 // CODER_FAVICONS is a *fallback-only* map for UI pseudo-tabs
 // (review, kanban, pi-rpc) that the registry does not advertise.
 // Built-in coder favicons (opencode, claude, agy, pi, bash, pwsh)
@@ -495,7 +404,6 @@ const CODER_FAVICONS = {
     review: 'vendor/logos/review.png',
     kanban: 'vendor/logos/kanban.png',
 };
-
 // Automatic-reconnect retry policy: full-jitter exponential backoff.
 // Attempt n (1-based) waits random(0, min(CAP, 1s * 2^(n-1))). Referenced by
 // maybeAutoReconnect and the reconnect overlay's attempt counter.
@@ -517,7 +425,6 @@ const AUTO_RECONNECT_STABLE_MS = 5000;
 // while the tab is hidden or low power mode is on (see _cpuPollAllowed).
 // Sampling costs the server ~1us; the request is the expense.
 const CPU_POLL_INTERVAL_MS = 10000;
-
 // Configuration for performance marks and the bounded screen-checkpoint
 // pipeline: hot live stream plus cold recording fetch.
 const PERF_SLOW_MS = 16;
@@ -547,27 +454,20 @@ const CHECKPOINT_QUIET_MS = 2000;
 // restore. The upload is bounded by COARSE_CHECKPOINT_BYTES, so this costs at
 // most one beacon of that size per window.
 const CHECKPOINT_MAX_WAIT_MS = 5000;
-
 function isTerminalFindShortcut(e) {
-    return (
-        e.type === 'keydown' &&
+    return (e.type === 'keydown' &&
         !e.altKey &&
         !e.isComposing &&
         e.key?.toLowerCase() === 'f' &&
         ((e.ctrlKey && !e.metaKey && !e.shiftKey) ||
             (e.metaKey && !e.ctrlKey && !e.shiftKey) ||
-            (e.ctrlKey && e.shiftKey && !e.metaKey))
-    );
+            (e.ctrlKey && e.shiftKey && !e.metaKey)));
 }
-
 function isFindBarTarget(target) {
-    return (
-        typeof Element !== 'undefined' &&
+    return (typeof Element !== 'undefined' &&
         target instanceof Element &&
-        target.closest('.find-bar') !== null
-    );
+        target.closest('.find-bar') !== null);
 }
-
 // Each name written through these two helpers keeps at most one entry, so
 // repeated tab selections and overlapping switches cannot grow the User
 // Timing buffer without limit. termPerfMeasureSince below still appends
@@ -578,15 +478,14 @@ export function termPerfMark(name) {
             performance.clearMarks(`phi:${name}`);
             performance.mark(`phi:${name}`);
         }
-    } catch (_e) {}
+    }
+    catch (_e) { }
 }
-export function termPerfMeasureBetween(name, startTs, endTs) {
+export function termPerfMeasureBetween(name, startTs, endTs = undefined) {
     try {
-        if (
-            typeof performance !== 'undefined' &&
+        if (typeof performance !== 'undefined' &&
             performance.measure &&
-            typeof startTs === 'number'
-        ) {
+            typeof startTs === 'number') {
             const dur = (endTs ?? performance.now()) - startTs;
             performance.clearMeasures(`phi:${name}`);
             performance.measure(`phi:${name}`, {
@@ -595,7 +494,8 @@ export function termPerfMeasureBetween(name, startTs, endTs) {
             });
             return dur;
         }
-    } catch (_e) {}
+    }
+    catch (_e) { }
     return 0;
 }
 // Tablet-gate readout without devtools: one greppable console line per
@@ -605,28 +505,24 @@ export function termPerfMeasureBetween(name, startTs, endTs) {
 // is unaffected.
 export function termPerfLogSlowFit(ms, cols, rows, bufLen) {
     if (ms >= 50)
-        console.warn(
-            `[phi-perf] slow fit: ${ms.toFixed(0)}ms grid=${cols}x${rows} buf=${bufLen}`,
-        );
+        console.warn(`[phi-perf] slow fit: ${ms.toFixed(0)}ms grid=${cols}x${rows} buf=${bufLen}`);
 }
 function termPerfMeasureSince(name, startTime) {
     try {
         const dur = performance.now() - startTime;
-        if (
-            dur >= PERF_SLOW_MS &&
+        if (dur >= PERF_SLOW_MS &&
             typeof performance !== 'undefined' &&
-            performance.measure
-        )
+            performance.measure)
             performance.measure(`phi:${name}`, {
                 start: startTime,
                 duration: dur,
             });
         return dur;
-    } catch (_e) {
+    }
+    catch (_e) {
         return 0;
     }
 }
-
 /**
  * Inspects the terminal buffer around the cursor line to distinguish
  * between an actively running process (e.g. spinning animated spinners,
@@ -639,105 +535,221 @@ export function detectTerminalBufferState(term) {
     if (!term?.buffer?.active) {
         return { hasSpinner: false, hasPrompt: false, promptLine: '' };
     }
-
     const buffer = term.buffer.active;
     const cursorY = buffer.cursorY ?? 0;
     const baseY = buffer.baseY ?? 0;
     const currentLineIdx = baseY + cursorY;
-
     // Scan lines in the vicinity of the cursor (where spinners and prompts live)
     const startLine = Math.max(0, currentLineIdx - 4);
     const endLine = Math.min((buffer.length || 1) - 1, currentLineIdx + 2);
-
     let hasSpinner = false;
     let hasPrompt = false;
     let promptLine = '';
-
     // Braille patterns: universal CLI spinners (⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏, ⣾⣽⣻⢿⡿⣟⣯⣷, ⠁⠂⠄⡀⢀⠠⠐⠈)
     // Geometric / circle / arrow spinners: ◐◓◑◒◜◝◞◟←↖↑↗→↘↓↙▖▘▝▗
     // Progress blocks: ▓▒░
     const SPINNER_CHARS_RE = /[\u2800-\u28FF◐◓◑◒◜◝◞◟▖▘▝▗←↖↑↗→↘↓↙▓▒░]/;
-
     // Active status keywords indicating work in flight
-    const ACTIVE_STATUS_RE =
-        /\b(?:thinking|running|executing|working|generating|searching|compiling|building|fetching|loading|installing|waiting|processing)\b/i;
-
+    const ACTIVE_STATUS_RE = /\b(?:thinking|running|executing|working|generating|searching|compiling|building|fetching|loading|installing|waiting|processing)\b/i;
     // Trailing word with ellipsis indicating continuous action: e.g. "Thinking…", "Running bash…"
     const ELLIPSIS_ACTION_RE = /\b[a-zA-Z]{3,}(?:…|\.{3})\b/;
-
     // Interrupt / cancel hints indicating the process is currently running
-    const RUNNING_HINT_RE =
-        /(?:esc to (?:interrupt|cancel)|ctrl\+c to (?:interrupt|cancel)|\([0-9.]+s\b)/i;
-
+    const RUNNING_HINT_RE = /(?:esc to (?:interrupt|cancel)|ctrl\+c to (?:interrupt|cancel)|\([0-9.]+s\b)/i;
     // Interactive prompt regex (matches prompts waiting for user input):
     // e.g. ">", "> ", "│ > │", "$ ", "user@host:~$ ", "repo (main) ❯ ", "pi> ", "agy> ", "opencode> "
-    const PROMPT_RE =
-        /^\s*(?:[│|]\s*)?(?:[\w\s().@:~/-]+?[$#%❯>]|agy>|opencode>|pi>|claude>|[>❯$#%])\s*[│|]?\s*$/;
-
+    const PROMPT_RE = /^\s*(?:[│|]\s*)?(?:[\w\s().@:~/-]+?[$#%❯>]|agy>|opencode>|pi>|claude>|[>❯$#%])\s*[│|]?\s*$/;
     // First, scan lines in the window for any active spinner or in-progress indicators
     for (let idx = startLine; idx <= endLine; idx++) {
         const lineObj = buffer.getLine?.(idx);
-        if (!lineObj) continue;
-        const lineText =
-            typeof lineObj.translateToString === 'function'
-                ? lineObj.translateToString(true)
-                : String(lineObj);
-        if (!lineText) continue;
-
-        if (
-            SPINNER_CHARS_RE.test(lineText) ||
+        if (!lineObj)
+            continue;
+        const lineText = typeof lineObj.translateToString === 'function'
+            ? lineObj.translateToString(true)
+            : String(lineObj);
+        if (!lineText)
+            continue;
+        if (SPINNER_CHARS_RE.test(lineText) ||
             ACTIVE_STATUS_RE.test(lineText) ||
             ELLIPSIS_ACTION_RE.test(lineText) ||
-            RUNNING_HINT_RE.test(lineText)
-        ) {
+            RUNNING_HINT_RE.test(lineText)) {
             hasSpinner = true;
             break;
         }
     }
-
     // If an active spinner or in-progress indicator is found, the process is definitively spinning/running!
     if (hasSpinner) {
         return { hasSpinner: true, hasPrompt: false, promptLine: '' };
     }
-
     // Otherwise, check if the cursor line or the immediately preceding non-empty line is a prompt
     const candidateIndices = [currentLineIdx, currentLineIdx - 1];
     for (const idx of candidateIndices) {
-        if (idx < 0 || idx >= (buffer.length || 0)) continue;
+        if (idx < 0 || idx >= (buffer.length || 0))
+            continue;
         const lineObj = buffer.getLine?.(idx);
-        if (!lineObj) continue;
-        const lineText =
-            typeof lineObj.translateToString === 'function'
-                ? lineObj.translateToString(true)
-                : String(lineObj);
-        if (!lineText) continue;
-
+        if (!lineObj)
+            continue;
+        const lineText = typeof lineObj.translateToString === 'function'
+            ? lineObj.translateToString(true)
+            : String(lineObj);
+        if (!lineText)
+            continue;
         if (PROMPT_RE.test(lineText)) {
             hasPrompt = true;
             promptLine = lineText;
             break;
         }
     }
-
     return { hasSpinner: false, hasPrompt, promptLine };
 }
-
+/** True when a rejected fetch was cancelled rather than failed. */
+function isAbortError(error) {
+    return error?.name === 'AbortError';
+}
+/** xterm's public typings stop above the parser/viewport internals this
+ *  module reads. `internals()` is the single cast that reaches them. */
+function internals(term) {
+    return (term ?? {});
+}
 export class TabManager {
+    // Declared explicitly: TypeScript does not infer instance fields from
+    // constructor assignments, and every member below is part of the shape
+    // the mixins, the settings view, and app.ts read.
+    app;
+    /** paneId -> TabInfo. */
+    tabs;
+    activePaneId;
+    tabsContainer;
+    terminalsWrapper;
+    inputBarContainer;
+    inputTextArea;
+    attachmentStrip;
+    attachmentStatus;
+    attachInputBtn;
+    attachmentFileInput;
+    attachmentPhotoInput;
+    attachmentCameraInput;
+    attachmentSourceDropup;
+    attachmentServerModal;
+    attachmentServerTree;
+    attachmentServerStatus;
+    /** One server-browser session: a listing belongs to the modal that
+     *  opened it, so a generation bump drops every pending answer. */
+    _attachmentServerGeneration;
+    _attachmentServerSelection;
+    _attachmentServerEntries;
+    /** The mounted directory tree for one modal session. */
+    _attachmentServerTree;
+    /** Last good listing per owner+path, alive across modal sessions. */
+    _attachmentServerMemory;
+    selfHudEl;
+    sendInputBtn;
+    cancelInputBtn;
+    sessionSearchBtn;
+    copyInputBtn;
+    thinkingVisibilityBtn;
+    directModeToggle;
+    presetsContainer;
+    piRpcStatusBar;
+    ctrlTBtn;
+    brandEl;
+    attachmentStore;
+    _attachmentStorageWarning;
+    _attachmentPickerOwner;
+    _attachmentServerDialog;
+    _attachmentServerCache;
+    _attachmentRequestScopes;
+    stagedAttachments;
+    lastCpuPercent;
+    lastCpuSampleAt;
+    cpuPollTimer;
+    idlePollTimer;
+    _lastWindowW;
+    _lastWindowH;
+    _windowResizeTimeout;
+    _presetsCompact;
+    isResizing;
+    restoringTabs;
+    /** Newest-first prompt history, as /api/n/recent returns it. */
+    _historyCache;
+    _historyCursor;
+    _historyCwd;
+    _historyLoaded;
+    _historyPreCycleValue;
+    _piRecall;
+    selfHudOpen;
+    selfHudCloseTimer;
+    _closeSelfHudNow;
+    _bannerDismissed;
+    _dismissedCount;
+    _contentBannerEl;
+    _hieroPreview;
+    _hieroPreviewSourceEl;
+    _hieroPreviewGlyph;
+    _hieroPreviewTitle;
+    _hieroPreviewLabel;
+    _hieroPreviewPath;
+    _hieroPreviewCount;
+    _hieroPreviewStatus;
+    _restoringReaderAnchor;
+    _dragScrollDir;
+    _dragScrollVel;
+    _dragScrollRaf;
+    dragSourceId;
+    thinkingPresetStore;
+    _thinkingAllVisible;
+    _piRpcThinkingPending;
+    _piRpcResetPending;
+    _piRpcCompactPending;
+    _piRpcMenuRequest;
+    _piBridgeThinkingMenuRequest;
+    _piRpcModels;
+    _piRpcModelsNote;
+    _piRpcModelMemory;
+    _piRpcModelNextByPane;
+    _piRpcModelInflight;
+    /** The pick this tab is waiting on; cleared by its settle path. */
+    _reloadArmed;
+    _piRpcModelPending;
+    _piRpcModelQuery;
+    _piRpcModelExpandedGroup;
+    _piRpcModelAutoOpened;
+    _piRpcFavorites;
+    _piRpcFavoritesLoaded;
+    _piRpcStatusUnsubscribe;
+    _piBridgeSkills;
+    _piBridgeSkillQuery;
+    _piBridgeSkillsTruncated;
+    _piBridgeSkillsUnavailable;
+    _piBridgeSkillsStale;
+    _piBridgeSkillsRequest;
+    _piBridgeSkillsContext;
+    _piBridgeSkillPending;
+    _piBridgeModelsTruncated;
+    _piBridgeModelsUnavailable;
+    /** The Pi RPC skills search box's current filter (lowercased). */
+    _piRpcSkillQuery = '';
+    /** Panes whose socket protocol is older than this client needs. */
+    _protocolBlockedTabs;
+    /** A queue-recovery listener is installed for the page lifetime. */
+    _queueRecoveryListening = false;
+    _piBridgeCompactPending;
+    _piReloadPending;
+    _piReloadSeq;
+    lastInputValue;
     constructor(app) {
         this.app = app;
         this.tabs = new Map(); // paneId -> TabInfo
         this.activePaneId = null;
-
-        this.tabsContainer = document.getElementById('tabs-container');
-        this.terminalsWrapper = document.getElementById('terminals-wrapper');
-        this.inputBarContainer = document.getElementById('input-bar-container');
-        this.inputTextArea = document.getElementById('input-textarea');
+        this.tabsContainer = chrome('tabs-container');
+        this.terminalsWrapper = chrome('terminals-wrapper');
+        this.inputBarContainer = chrome('input-bar-container');
+        this.inputTextArea = chrome('input-textarea');
         this.attachmentStrip = document.getElementById('attachment-strip');
         this.attachmentStatus = document.getElementById('attachment-status');
         this.attachInputBtn = document.getElementById('attach-input-btn');
-        this.attachmentFileInput = document.getElementById('attachment-file-input');
-        this.attachmentPhotoInput = document.getElementById('attachment-photo-input');
-        this.attachmentCameraInput = document.getElementById('attachment-camera-input');
+        this.attachmentFileInput = chrome('attachment-file-input');
+        this.attachmentPhotoInput = chrome('attachment-photo-input');
+        this.attachmentCameraInput = chrome('attachment-camera-input');
         this.attachmentSourceDropup = document.getElementById('attachment-source-dropup');
         this.attachmentServerModal = document.getElementById('attach-server-modal');
         this.attachmentServerTree = document.getElementById('attach-server-modal-tree');
@@ -782,14 +794,9 @@ export class TabManager {
         this.selfHudCloseTimer = null;
         this.sendInputBtn = document.getElementById('send-input-btn');
         this.cancelInputBtn = document.getElementById('cancel-input-btn');
-        this.sessionSearchBtn = document.getElementById(
-            'session-search-btn',
-        );
+        this.sessionSearchBtn = document.getElementById('session-search-btn');
         this.copyInputBtn = document.getElementById('copy-input-btn');
-        this.thinkingVisibilityBtn = document.getElementById(
-            'thinking-visibility-btn',
-        );
-
+        this.thinkingVisibilityBtn = document.getElementById('thinking-visibility-btn');
         // Leave a fresh screen checkpoint behind so the next client restores
         // instantly instead of falling back to the bounded delta. A hidden
         // page counts as leaving: iOS can kill a backgrounded page without
@@ -805,18 +812,21 @@ export class TabManager {
             };
             window.addEventListener('pagehide', leaveCheckpoint);
             document.addEventListener('visibilitychange', () => {
-                if (document.visibilityState === 'hidden') leaveCheckpoint();
+                if (document.visibilityState === 'hidden')
+                    leaveCheckpoint();
             });
         }
-        this.directModeToggle = document.getElementById('direct-mode-toggle');
-        this.presetsContainer = document.getElementById('presets-container');
+        this.directModeToggle = chrome('direct-mode-toggle');
+        this.presetsContainer = chrome('presets-container');
         this.piRpcStatusBar = document.getElementById('pi-rpc-status-bar');
         this.thinkingPresetStore = new ThinkingPresetStore();
         this.thinkingPresetStore.bind(this.app?.scope);
         this.thinkingPresetStore.subscribe(() => {
-            if (this.getActiveTab()?.coder !== 'pi') return;
+            if (this.getActiveTab()?.coder !== 'pi')
+                return;
             const dropup = document.getElementById('pi-rpc-thinking-dropup');
-            if (!dropup || dropup.classList.contains('hidden')) return;
+            if (!dropup || dropup.classList.contains('hidden'))
+                return;
             this._renderPiRpcThinkingDropup();
         });
         this._thinkingAllVisible = new Map(); // paneId -> bool (global thinking visibility)
@@ -830,7 +840,6 @@ export class TabManager {
         this._piRpcModelNextByPane = new Map();
         this._piRpcModelInflight = new Map();
         this._piRpcModelQuery = '';
-        this._piRpcSkillQuery = '';
         this._piRpcModelExpandedGroup = null;
         this._piBridgeSkills = null;
         this._piBridgeSkillQuery = '';
@@ -844,56 +853,44 @@ export class TabManager {
         // Pending invocations are per pane: one pane's dispatch never
         // hides another pane's outcome.
         this._piBridgeSkillPending = new Map();
-        this._piRpcFavorites = null;
+        this._piRpcFavorites = new Set();
         this._piRpcFavoritesLoaded = false;
         this._piRpcModelAutoOpened = false;
-        this._piRpcStatusUnsubscribe = subscribePiRpcStatus(
-            (paneId, status) => {
-                this._promotePiRpcSessionPath(paneId, status);
-                // The backend resolves the native Pi session name, the request
-                // fallback, and the generic label into one title. Apply it to
-                // the tab and persist only on an actual change.
-                const nextTitle = status?.title;
-                if (typeof nextTitle === 'string' && nextTitle.trim()) {
-                    const tab = this.tabs.get(paneId);
-                    if (
-                        tab &&
-                        tab.coder === 'pi-rpc' &&
-                        this._setTabTitle(tab, nextTitle)
-                    ) {
-                        this.savePiRpcTabs();
-                    }
-                }
+        this._piRpcStatusUnsubscribe = subscribePiRpcStatus((paneId, status) => {
+            this._promotePiRpcSessionPath(paneId, status);
+            // The backend resolves the native Pi session name, the request
+            // fallback, and the generic label into one title. Apply it to
+            // the tab and persist only on an actual change.
+            const nextTitle = status?.title;
+            if (typeof nextTitle === 'string' && nextTitle.trim()) {
                 const tab = this.tabs.get(paneId);
-                if (tab?.coder === 'pi-rpc')
-                    this._flushPiRpcCompactQueue(tab);
-                this.renderPiRpcStatusBar();
-                const activeTab = this.getActiveTab();
-                if (
-                    activeTab?.paneId === paneId &&
-                    activeTab.coder === 'pi-rpc'
-                ) {
-                    this.renderPresets('pi-rpc');
+                if (tab &&
+                    tab.coder === 'pi-rpc' &&
+                    this._setTabTitle(tab, nextTitle)) {
+                    this.savePiRpcTabs();
                 }
-            },
-        );
+            }
+            const tab = this.tabs.get(paneId);
+            if (tab?.coder === 'pi-rpc')
+                this._flushPiRpcCompactQueue(tab);
+            this.renderPiRpcStatusBar();
+            const activeTab = this.getActiveTab();
+            if (activeTab?.paneId === paneId &&
+                activeTab.coder === 'pi-rpc') {
+                this.renderPresets('pi-rpc');
+            }
+        });
         this.ctrlTBtn = document.getElementById('ctrl-t-btn');
         this.lastInputValue = '';
-
         if (isCompactViewport() && this.inputTextArea) {
             this.inputTextArea.placeholder = 'Type a prompt...';
         }
-
         this.setupEventListeners();
-
         // Prompt for OS-level notification permissions on page load if not configured.
-        if (
-            typeof Notification !== 'undefined' &&
-            Notification.permission === 'default'
-        ) {
+        if (typeof Notification !== 'undefined' &&
+            Notification.permission === 'default') {
             Notification.requestPermission();
         }
-
         // Listen for visibility state changes to clear indicators dynamically.
         // Returning to the page (laptop wake, phone unlock, tab switch-back)
         // is also the moment to revive a dead active tab: the PTY survives
@@ -911,19 +908,24 @@ export class TabManager {
                 // A hidden tab samples nothing, so coming back is the moment to
                 // restart the chain (and refresh the reading the HUD shows).
                 this.resumeCpuPolling();
-            } else {
+            }
+            else {
                 this._stopCpuPolling();
             }
         });
         // Network restore, bfcache restore and window focus are the "we may have
         // silently lost the socket" signals. The helper is idempotent (config
         // gate + reconnectInFlight guard), so overlapping firings are harmless.
-        const resumeViewport = () => { this._reviveActiveTabIfDead(); this._queueActiveRefresh(); this._wakeAttachmentRecovery(); };
-        for (const event of ['online', 'pageshow', 'focus', 'phi:desktop-wake']) window.addEventListener(event, resumeViewport);
+        const resumeViewport = () => {
+            this._reviveActiveTabIfDead();
+            this._queueActiveRefresh();
+            this._wakeAttachmentRecovery();
+        };
+        for (const event of ['online', 'pageshow', 'focus', 'phi:desktop-wake'])
+            window.addEventListener(event, resumeViewport);
         document.addEventListener('resume', resumeViewport);
         document.fonts?.ready?.then(() => this._queueActiveRefresh());
         document.fonts?.addEventListener?.('loadingdone', () => this._queueActiveRefresh());
-
         // Initialise the 1-second background visual idle and prompt detection loop.
         // Also poll CPU stats independently so a stats fetch failure cannot
         // break the idle/notification path (CPU is decorative, never load-bearing).
@@ -936,7 +938,6 @@ export class TabManager {
         // revives it from the visibility, wake and low-power paths.
         this.resumeCpuPolling();
     }
-
     /**
      * Stop the background polls armed by the constructor. The page creates one
      * TabManager for its whole lifetime, so production never calls this; test
@@ -944,14 +945,13 @@ export class TabManager {
      * is torn down fires against a missing `document` and fails the next spec.
      */
     dispose() {
-        clearInterval(this.idlePollTimer);
+        clearInterval(this.idlePollTimer ?? undefined);
         // A pending CPU turn is a timeout, not an interval: the chain re-arms
         // itself after each sample, so the handle is whichever turn is waiting.
-        clearTimeout(this.cpuPollTimer);
+        clearTimeout(this.cpuPollTimer ?? undefined);
         this.idlePollTimer = null;
         this.cpuPollTimer = null;
     }
-
     /**
      * Fetch current system CPU% from /api/system/cpu and update the phi
      * logo's CPU state class (.cpu-idle / .cpu-moderate / .cpu-high).
@@ -967,15 +967,16 @@ export class TabManager {
                 ? AbortSignal.timeout(CPU_POLL_INTERVAL_MS)
                 : undefined;
             const res = await fetch('/api/system/cpu', { signal: timeout });
-            if (!res.ok) return;
+            if (!res.ok)
+                return;
             const data = await res.json();
             const cpu = typeof data.cpu === 'number' ? data.cpu : 0;
             this.applyCPUIndicator(cpu);
-        } catch (_e) {
+        }
+        catch (_e) {
             // Silent: decorative feature, never break anything.
         }
     }
-
     // _cpuPollAllowed reports whether an ambient CPU sample is worth taking:
     // the tab is visible and the effects profile ("low power mode" in the
     // settings dialog and the desktop tray) is off. App.applyFastMode is the
@@ -984,20 +985,20 @@ export class TabManager {
     // ambient samples at all. Read on every turn, so hiding the tab, waking it,
     // and flipping the switch all take effect without restarting the chain.
     _cpuPollAllowed() {
-        if (typeof document === 'undefined' || document.hidden) return false;
+        if (typeof document === 'undefined' || document.hidden)
+            return false;
         return !document?.body?.classList?.contains('fast-mode');
     }
-
     // _hudCpuPercent is the CPU line the hover HUD shows. A reading is only
     // current for a few poll turns: once the chain stops (hidden tab, low power
     // mode) the last sample must decay to "unknown" rather than present an
     // hours-old number as the machine's current load.
     _hudCpuPercent() {
-        if (typeof this.lastCpuPercent !== 'number') return null;
+        if (typeof this.lastCpuPercent !== 'number')
+            return null;
         const age = Date.now() - (this.lastCpuSampleAt || 0);
         return age < CPU_POLL_INTERVAL_MS * 3 ? this.lastCpuPercent : null;
     }
-
     // _scheduleCpuPoll arms exactly one turn of the CPU chain. A turn that
     // lands with a gate closed rearms nothing, so the chain stays stopped until
     // something calls resumeCpuPolling(). The timer id is held for the whole
@@ -1005,7 +1006,8 @@ export class TabManager {
     // second one.
     _scheduleCpuPoll(delay = CPU_POLL_INTERVAL_MS) {
         this._stopCpuPolling();
-        if (!this._cpuPollAllowed()) return;
+        if (!this._cpuPollAllowed())
+            return;
         this.cpuPollTimer = setTimeout(async () => {
             // A gate closed while this turn was waiting (hidden tab, low power
             // switched on) drops the sample instead of taking it late.
@@ -1018,19 +1020,18 @@ export class TabManager {
             this._scheduleCpuPoll();
         }, delay);
     }
-
     _stopCpuPolling() {
-        if (this.cpuPollTimer) clearTimeout(this.cpuPollTimer);
+        if (this.cpuPollTimer)
+            clearTimeout(this.cpuPollTimer);
         this.cpuPollTimer = null;
     }
-
     // resumeCpuPolling starts the chain (now, then every CPU_POLL_INTERVAL_MS)
     // unless it is already running or both gates say no.
     resumeCpuPolling() {
-        if (this.cpuPollTimer) return;
+        if (this.cpuPollTimer)
+            return;
         this._scheduleCpuPoll(0);
     }
-
     // syncCpuPolling reconciles the chain with the effects profile and is what
     // App.applyFastMode calls after it flips the body class. Low power on: stop
     // sampling and drop the reading, so neither the brand tint nor the HUD
@@ -1038,7 +1039,8 @@ export class TabManager {
     // The hidden path never comes through here — a hidden tab keeps its last
     // reading for the desktop host to mirror.
     syncCpuPolling() {
-        if (typeof document === 'undefined') return;
+        if (typeof document === 'undefined')
+            return;
         if (!document?.body?.classList?.contains('fast-mode')) {
             this.resumeCpuPolling();
             return;
@@ -1048,7 +1050,6 @@ export class TabManager {
         this.lastCpuSampleAt = 0;
         applyBrandCpuTier(0);
     }
-
     applyCPUIndicator(cpuPercent) {
         // Cache for the self-state HUD so hovering doesn't trigger a fetch.
         // The HUD reads this on every render — polling keeps it fresh, and
@@ -1065,19 +1066,22 @@ export class TabManager {
         if (status === 'changed') {
             const logo = document.querySelector('.brand .logo');
             const brandName = document.querySelector('.brand .brand-name');
-            if (logo && brandName) this._flourishBrand([logo, brandName]);
+            if (logo && brandName)
+                this._flourishBrand([logo, brandName]);
         }
     }
-
     // Play the one-shot tier-change animation and clean up after itself, so
     // nothing is left animating at rest.
     _flourishBrand(els) {
         for (const el of els) {
-            if (!el) continue;
+            if (!el)
+                continue;
+            // offsetWidth forces a reflow; it only exists on HTMLElement.
+            const element = el;
             el.classList.remove('cpu-flourish');
             // Force a reflow so re-adding the class restarts the animation;
             // without it a rapid second tier change would not replay.
-            void el.offsetWidth;
+            void element.offsetWidth;
             el.classList.add('cpu-flourish');
             const done = () => {
                 el.classList.remove('cpu-flourish');
@@ -1088,27 +1092,41 @@ export class TabManager {
             el.addEventListener('animationcancel', done);
         }
     }
-
     loadTabDraft(paneId) {
         try {
             const raw = localStorage.getItem(serverKey(`phi_tab_draft_${paneId}`));
-            if (!raw || raw.length > 1024 * 1024) return {};
+            if (!raw || raw.length > 1024 * 1024)
+                return {};
             const draft = JSON.parse(raw);
             const out = {
                 draft: typeof draft.text === 'string' ? draft.text : '',
                 draftAttachments: Array.isArray(draft.attachments)
-                    ? draft.attachments.filter(a => a && typeof a.id === 'string' && typeof a.name === 'string' && typeof a.path === 'string' && typeof a.type === 'string' && Number.isFinite(a.sizeBytes) && (a.source === 'drop' || a.source === 'paste')).slice(0, 100)
+                    ? draft.attachments
+                        .filter((a) => a &&
+                        typeof a.id === 'string' &&
+                        typeof a.name === 'string' &&
+                        typeof a.path === 'string' &&
+                        typeof a.type === 'string' &&
+                        Number.isFinite(a.sizeBytes) &&
+                        (a.source === 'drop' || a.source === 'paste'))
+                        .slice(0, 100)
                     : [],
             };
-            if (draft.pasteRecovery === 'not_sent' || draft.pasteRecovery === 'unconfirmed') out.pasteRecovery = draft.pasteRecovery;
+            if (draft.pasteRecovery === 'not_sent' ||
+                draft.pasteRecovery === 'unconfirmed')
+                out.pasteRecovery = draft.pasteRecovery;
             return out;
-        } catch { return {}; }
+        }
+        catch {
+            return {};
+        }
     }
-
     _writeLegacyTabDraft(tab) {
-        if (!tab || tab.coder === 'review' || tab.coder === 'kanban') return true;
+        if (!tab || tab.coder === 'review' || tab.coder === 'kanban')
+            return true;
         const hadRecovery = !!tab.pasteRecovery;
-        if (!tab.draft) tab.pasteRecovery = undefined;
+        if (!tab.draft)
+            tab.pasteRecovery = undefined;
         const legacy = (tab.draftAttachments || []).filter((item) => !item.phiAttachment);
         let saved = false;
         try {
@@ -1116,16 +1134,21 @@ export class TabManager {
             if (!tab.draft && !legacy.length) {
                 localStorage.removeItem(key);
                 saved = true;
-            } else {
-                const record = {text: tab.draft || '', attachments: legacy};
-                if (tab.pasteRecovery) record.pasteRecovery = tab.pasteRecovery;
+            }
+            else {
+                const record = { text: tab.draft || '', attachments: legacy };
+                if (tab.pasteRecovery)
+                    record.pasteRecovery = tab.pasteRecovery;
                 const serialized = JSON.stringify(record);
                 if (serialized.length <= 1024 * 1024) {
                     localStorage.setItem(key, serialized);
                     saved = true;
                 }
             }
-        } catch { /* Keep the full draft in memory if storage is unavailable. */ }
+        }
+        catch {
+            /* Keep the full draft in memory if storage is unavailable. */
+        }
         if (hadRecovery) {
             tab._pasteRecoveryUnsaved = !!tab.pasteRecovery && !saved;
             tab._inputRestriction = this._pasteRecoveryStatusText(tab);
@@ -1133,22 +1156,28 @@ export class TabManager {
         }
         return saved;
     }
-
     saveTabDraft(tab) {
-        if (!tab || tab.coder === 'review' || tab.coder === 'kanban') return true;
+        if (!tab || tab.coder === 'review' || tab.coder === 'kanban')
+            return true;
         tab._attachmentEditVersion = (tab._attachmentEditVersion || 0) + 1;
         const saved = this._writeLegacyTabDraft(tab);
-        if (tab.coder !== 'pi' || (!tab._attachmentDraftOwner && !tab.draftAttachments?.some((item) => item.phiAttachment))) return saved;
+        if (tab.coder !== 'pi' ||
+            (!tab._attachmentDraftOwner &&
+                !tab.draftAttachments?.some((item) => item.phiAttachment)))
+            return saved;
         return this._persistAttachmentDraft(tab);
     }
-
     async _persistAttachmentDraft(tab) {
         const items = (tab?.draftAttachments || []).filter((item) => item.phiAttachment);
         const owner = tab?._attachmentDraftOwner || items[0]?.owner;
-        if (!tab || tab.coder !== 'pi' || !owner) return null;
+        if (!tab || tab.coder !== 'pi' || !owner)
+            return null;
         tab._attachmentDraftOwner = owner;
         const ownerKey = this._attachmentOwnerKey(owner);
-        const pendingPersists = tab._attachmentPendingPersists || (tab._attachmentPendingPersists = new Map());
+        if (!tab._attachmentPendingPersists) {
+            tab._attachmentPendingPersists = new Map();
+        }
+        const pendingPersists = tab._attachmentPendingPersists;
         pendingPersists.set(ownerKey, (pendingPersists.get(ownerKey) || 0) + 1);
         // Same-tab saves run one at a time. Overlapping persists would
         // present stale expected revisions to the store and report a false
@@ -1160,22 +1189,29 @@ export class TabManager {
         const draft = { text: tab.draft || '', items: items.slice() };
         const previous = tab._attachmentPersistChain;
         const run = previous
-            ? previous.catch(() => {}).then(() => this._runAttachmentDraftPersist(tab, owner, draft))
+            ? previous
+                .catch(() => { })
+                .then(() => this._runAttachmentDraftPersist(tab, owner, draft))
             : this._runAttachmentDraftPersist(tab, owner, draft);
         tab._attachmentPersistChain = run;
         try {
             return await run;
-        } finally {
+        }
+        finally {
             const remaining = (pendingPersists.get(ownerKey) || 1) - 1;
-            if (remaining > 0) pendingPersists.set(ownerKey, remaining);
-            else pendingPersists.delete(ownerKey);
-            if (tab._attachmentPersistChain === run) tab._attachmentPersistChain = null;
+            if (remaining > 0)
+                pendingPersists.set(ownerKey, remaining);
+            else
+                pendingPersists.delete(ownerKey);
+            if (tab._attachmentPersistChain === run)
+                tab._attachmentPersistChain = null;
         }
     }
-
     async _runAttachmentDraftPersist(tab, owner, draft) {
         const items = draft.items;
-        const expectedRevision = Number.isSafeInteger(tab._attachmentRevision) ? tab._attachmentRevision : 0;
+        const expectedRevision = Number.isSafeInteger(tab._attachmentRevision)
+            ? tab._attachmentRevision
+            : 0;
         const revision = expectedRevision + 1;
         tab._attachmentRevision = revision;
         const storedItems = items.map((item) => ({
@@ -1186,49 +1222,63 @@ export class TabManager {
             kind: item.kind || 'file',
             sha256: item.sha256 || '',
             path: item.path || '',
-            uploadState: item.uploadState === 'uploading' ? 'attempted' : item.uploadState || 'waiting',
+            uploadState: storedUploadState(item.uploadState),
             errorReason: item.errorReason || '',
-            source: item.source,
+            source: item.source === 'drop' || item.source === 'paste'
+                ? undefined
+                : item.source,
             serverPath: item.serverPath,
             serverFingerprint: item.serverFingerprint,
         }));
         const blobs = items.flatMap((item) => {
-            const blob = item.file || item.blob;
-            if (!blob || typeof blob.size !== 'number' || typeof blob.slice !== 'function' || blob.size > 25 * 1024 * 1024) return [];
-            return [{ id: item.id, name: item.name, type: item.type || '', sizeBytes: item.sizeBytes, blob }];
+            const blob = item.file;
+            if (!blob ||
+                typeof blob.size !== 'number' ||
+                typeof blob.slice !== 'function' ||
+                blob.size > 25 * 1024 * 1024)
+                return [];
+            return [
+                {
+                    id: item.id,
+                    name: item.name,
+                    type: item.type || '',
+                    sizeBytes: item.sizeBytes,
+                    blob,
+                },
+            ];
         });
-        const result = await this.attachmentStore.saveDraft(
-            owner,
-            expectedRevision,
-            draft.text,
-            storedItems,
-            blobs,
-        );
-        if (tab._attachmentRevision !== revision) return result;
+        const result = await this.attachmentStore.saveDraft(owner, expectedRevision, draft.text, storedItems, blobs);
+        if (tab._attachmentRevision !== revision)
+            return result;
         if (result.conflict) {
             tab._attachmentConflict = true;
-            tab._attachmentNotice = result.warning || 'Draft changed in another tab. Keep this copy open; it was not overwritten.';
-        } else {
+            tab._attachmentNotice =
+                result.warning ||
+                    'Draft changed in another tab. Keep this copy open; it was not overwritten.';
+        }
+        else {
             tab._attachmentConflict = false;
             tab._attachmentDurable = result.durable;
-            if (result.warning) tab._attachmentNotice = result.warning;
-            else if (
-                tab._attachmentNotice === result.warning ||
-                tab._attachmentNotice === 'Saving attachment to this device…'
-            ) tab._attachmentNotice = '';
+            if (result.warning)
+                tab._attachmentNotice = result.warning;
+            else if (tab._attachmentNotice === result.warning ||
+                tab._attachmentNotice === 'Saving attachment to this device…')
+                tab._attachmentNotice = '';
         }
         this._renderAttachmentStatus(tab);
         return result;
     }
-
     saveActiveDraft() {
         const tab = this.getActiveTab();
-        if (!tab || !this.inputTextArea || tab.coder === 'review' || tab.coder === 'kanban') return;
+        if (!tab ||
+            !this.inputTextArea ||
+            tab.coder === 'review' ||
+            tab.coder === 'kanban')
+            return;
         tab.draft = this.inputTextArea.value;
         tab.draftAttachments = this.stagedAttachments || [];
         this.saveTabDraft(tab);
     }
-
     saveTabsState() {
         localStorage.setItem(serverKey('phi_active_pane'), this.activePaneId || '');
         // Tab order is localStorage-only (no backend sync). Drag-reorder
@@ -1236,133 +1286,107 @@ export class TabManager {
         // ordering across page reloads in the same browser.
         this.saveTabOrder();
     }
-
     // The persisted order is a JSON array of paneIds. Stale entries
     // (closed tabs, or paneIds that were renamed during a session restart)
     // are filtered out at restore time - see restoreTabsState.
     saveTabOrder() {
-        if (this.restoringTabs) return;
+        if (this.restoringTabs)
+            return;
         try {
-            localStorage.setItem(
-                serverKey('phi_tab_order'),
-                JSON.stringify(Array.from(this.tabs.keys())),
-            );
-        } catch (e) {
+            localStorage.setItem(serverKey('phi_tab_order'), JSON.stringify(Array.from(this.tabs.keys())));
+        }
+        catch (e) {
             // localStorage can throw in private-mode / quota-exceeded. Failing
             // to persist order shouldn't break tab switching - just log.
             console.warn('phi: failed to save tab order', e);
         }
     }
-
     savePiRpcTabs() {
         try {
             const piTabs = Array.from(this.tabs.values())
                 .filter((t) => t.coder === 'pi-rpc')
                 .map((t) => ({
-                    paneId: t.paneId,
-                    cwd: t.cwd || '',
-                    title: t.title || '',
-                    workspace: t.workspace || '',
-                    sessionPath: this._piRpcStoredSessionPath(t),
-                }));
+                paneId: t.paneId,
+                cwd: t.cwd || '',
+                title: t.title || '',
+                workspace: t.workspace || '',
+                sessionPath: this._piRpcStoredSessionPath(t),
+            }));
             localStorage.setItem(serverKey('phi_pi_rpc_tabs'), JSON.stringify(piTabs));
-        } catch {}
+        }
+        catch { }
     }
-
     // Serialize a pi-rpc tab's resume path. An explicit nonempty string is
     // exact; explicit null means Clear removed the path and must NOT fall
     // back to the pane ID. Only legacy in-memory tabs that predate the
     // sessionPath property still decode from pi-rpc:session:<path> panes.
     _piRpcStoredSessionPath(tab) {
-        if (tab.sessionPath) return tab.sessionPath;
-        if (tab.sessionPath === null) return null;
+        if (tab.sessionPath)
+            return tab.sessionPath;
+        if (tab.sessionPath === null)
+            return null;
         return tab.paneId.startsWith('pi-rpc:session:')
             ? decodeURIComponent(tab.paneId.slice('pi-rpc:session:'.length))
             : null;
     }
-
     // A backend-published sessionPath is file-backed by the manager
     // contract: promote it onto the matching tab and persist, saving only
     // when the stored path actually changes.
     _promotePiRpcSessionPath(paneId, status) {
         const path = status?.sessionPath;
-        if (!path) return;
+        if (!path)
+            return;
         const tab = this.tabs?.get(paneId);
-        if (tab?.coder !== 'pi-rpc' || tab.sessionPath === path) return;
+        if (tab?.coder !== 'pi-rpc' || tab.sessionPath === path)
+            return;
         tab.sessionPath = path;
         this.savePiRpcTabs();
     }
-
     restorePiRpcTabs() {
         let raw;
         try {
             raw = localStorage.getItem(serverKey('phi_pi_rpc_tabs'));
-            if (!raw) return;
+            if (!raw)
+                return;
             const tabs = JSON.parse(raw);
-            if (!Array.isArray(tabs) || tabs.length === 0) return;
+            if (!Array.isArray(tabs) || tabs.length === 0)
+                return;
             for (const t of tabs) {
-                if (!t.paneId || this.tabs.has(t.paneId)) continue;
-                const title =
-                    t.title ||
+                if (!t.paneId || this.tabs.has(t.paneId))
+                    continue;
+                const title = t.title ||
                     `Pi RPC · ${t.cwd ? t.cwd.split('/').pop() : t.paneId}`;
                 // Only a stored nonempty path resumes; null (Clear) or a
                 // legacy missing field mounts a fresh chat. The path is
                 // passed into createTab before its first savePiRpcTabs call.
-                const sessionPath =
-                    typeof t.sessionPath === 'string' && t.sessionPath
-                        ? t.sessionPath
-                        : null;
-                this.createTab(
-                    t.paneId,
-                    '',
-                    title,
-                    'pi-rpc',
-                    t.workspace || '',
-                    t.cwd || '',
-                    true,
-                    false,
-                    '',
-                    sessionPath,
-                );
+                const sessionPath = typeof t.sessionPath === 'string' && t.sessionPath
+                    ? t.sessionPath
+                    : null;
+                this.createTab(t.paneId, '', title, 'pi-rpc', t.workspace || '', t.cwd || '', true, false, '', sessionPath);
                 const tab = this.tabs.get(t.paneId);
-                if (!tab) continue;
+                if (!tab)
+                    continue;
                 // Mirror openPiRpcChatTab font wiring so F5 text matches live
-                const fontSize = terminalPreferredFontSize(
-                    this.app?.terminalFontSize,
-                );
+                const fontSize = terminalPreferredFontSize(this.app?.terminalFontSize);
                 tab.termContainer.style.fontFamily =
                     this.app?.terminalFontFamily || 'JetBrains Mono, monospace';
                 tab.termContainer.style.fontSize = `${fontSize}px`;
                 try {
                     if (sessionPath)
-                        mountRpcChat(
-                            t.paneId,
-                            tab.termContainer,
-                            t.cwd || '',
-                            sessionPath,
-                        );
-                    else mountRpcChat(t.paneId, tab.termContainer, t.cwd || '');
-                } catch (e) {
-                    console.warn(
-                        'phi: failed to restore pi-rpc tab',
-                        t.paneId,
-                        e,
-                    );
+                        mountRpcChat(t.paneId, tab.termContainer, t.cwd || '', sessionPath);
+                    else
+                        mountRpcChat(t.paneId, tab.termContainer, t.cwd || '');
+                }
+                catch (e) {
+                    console.warn('phi: failed to restore pi-rpc tab', t.paneId, e);
                 }
             }
-        } catch {}
+        }
+        catch { }
     }
-
     // ---- Drag-to-reorder (localStorage-only, v0.8.x polish) ----
-
     _workspaceTabGroups(entries) {
-        const workspaces = Array.from(
-            new Set(
-                entries
-                    .map(([, tab]) => tab.workspace || '')
-                    .filter(Boolean),
-            ),
-        );
+        const workspaces = Array.from(new Set(entries.map(([, tab]) => tab.workspace || '').filter(Boolean)));
         const groups = workspaces.map((workspace) => ({
             workspace,
             label: formatWorkspaceLabel(workspace, workspaces),
@@ -1373,25 +1397,27 @@ export class TabManager {
                 sensitivity: 'base',
                 numeric: true,
             });
-            if (nameOrder !== 0) return nameOrder;
+            if (nameOrder !== 0)
+                return nameOrder;
             const pathOrder = a.workspace.localeCompare(b.workspace, undefined, {
                 sensitivity: 'case',
             });
-            if (pathOrder !== 0) return pathOrder;
-            if (a.workspace < b.workspace) return -1;
-            if (a.workspace > b.workspace) return 1;
+            if (pathOrder !== 0)
+                return pathOrder;
+            if (a.workspace < b.workspace)
+                return -1;
+            if (a.workspace > b.workspace)
+                return 1;
             return 0;
         });
         groups.push({ workspace: '', label: 'No workspace', entries: [] });
-
-        const groupsByWorkspace = new Map(
-            groups.map((group) => [group.workspace, group]),
-        );
+        const groupsByWorkspace = new Map(groups.map((group) => [group.workspace, group]));
         for (const entry of entries) {
             const workspace = entry[1].workspace || '';
-            groupsByWorkspace.get(workspace).entries.push(entry);
+            // Every workspace had a group built above, including the
+            // empty one appended for tabs with none.
+            groupsByWorkspace.get(workspace)?.entries.push(entry);
         }
-
         const labelCounts = new Map();
         for (const { label } of groups) {
             labelCounts.set(label, (labelCounts.get(label) || 0) + 1);
@@ -1403,12 +1429,10 @@ export class TabManager {
         }
         return groups;
     }
-
     sortTabsByWorkspace() {
-        if (this.tabs.size < 2) return;
-        const groups = this._workspaceTabGroups(
-            Array.from(this.tabs.entries()),
-        );
+        if (this.tabs.size < 2)
+            return;
+        const groups = this._workspaceTabGroups(Array.from(this.tabs.entries()));
         // Unread (needing attention) first; workspace grouping stays
         // secondary and each partition keeps its existing order (stable).
         // Closing tabs keep their IDs in the read partition: no unread
@@ -1417,38 +1441,35 @@ export class TabManager {
         const read = [];
         for (const group of groups) {
             for (const [paneId, tab] of group.entries) {
-                (!tab.softClosing && tab.isAttention ? unread : read).push(
-                    paneId,
-                );
+                (!tab.softClosing && tab.isAttention ? unread : read).push(paneId);
             }
         }
         this.applyTabOrder([...unread, ...read]);
     }
-
     applySavedTabOrder() {
         let saved = [];
         try {
             const raw = localStorage.getItem(serverKey('phi_tab_order'));
-            if (raw) saved = JSON.parse(raw);
-        } catch (_e) {
+            if (raw)
+                saved = JSON.parse(raw);
+        }
+        catch (_e) {
             // Corrupted entry: just ignore and fall back to API order.
             return;
         }
-        if (!Array.isArray(saved) || saved.length === 0) return;
-
+        if (!Array.isArray(saved) || saved.length === 0)
+            return;
         const present = new Set(this.tabs.keys());
         const filtered = saved.filter((id) => present.has(id));
         // Any tabs not in the saved order get appended at the end in the
         // order they currently sit (preserves API order for newly-spawned
         // tabs that the user hasn't touched yet).
-        const missing = Array.from(present).filter(
-            (id) => !filtered.includes(id),
-        );
+        const missing = Array.from(present).filter((id) => !filtered.includes(id));
         const final = [...filtered, ...missing];
-        if (final.length !== this.tabs.size) return; // safety
+        if (final.length !== this.tabs.size)
+            return; // safety
         this.applyTabOrder(final, { persist: false });
     }
-
     // Reorders both the tabs Map (which drives `this.tabs.keys()` iteration)
     // and the DOM (via appendChild, which moves existing nodes). When
     // `persist` is true, also writes the new order to localStorage.
@@ -1458,39 +1479,41 @@ export class TabManager {
         const newMap = new Map();
         for (const id of order) {
             const tab = this.tabs.get(id);
-            if (tab) newMap.set(id, tab);
+            if (tab)
+                newMap.set(id, tab);
         }
         // Defensive: any tab not in `order` (shouldn't happen) gets appended.
         for (const [id, tab] of this.tabs) {
-            if (!newMap.has(id)) newMap.set(id, tab);
+            if (!newMap.has(id))
+                newMap.set(id, tab);
         }
         this.tabs = newMap;
         // Reorder DOM children - appendChild on an existing node moves it,
         // doesn't clone it. The terminal-content side (`terminalsWrapper`)
         // is untouched; only the tab strip is reordered.
         for (const id of order) {
-            const tabEl = this.tabsContainer.querySelector(
-                `[data-pane-id="${id}"]`,
-            );
-            if (tabEl) this.tabsContainer.appendChild(tabEl);
+            const tabEl = this.tabsContainer.querySelector(`[data-pane-id="${id}"]`);
+            if (tabEl)
+                this.tabsContainer.appendChild(tabEl);
         }
-        if (persist) this.saveTabOrder();
+        if (persist)
+            this.saveTabOrder();
         if (document.body.classList.contains('show-tab-shortcuts')) {
             this.updateTabShortcutHints(true);
         }
         this.updateTabOverflow?.();
         this._refreshOverflowDropdown?.();
     }
-
     // Splice `sourceId` into the order immediately before or after
     // `targetId`. Returns true if the order actually changed.
     moveTabTo(sourceId, targetId, before) {
-        if (sourceId === targetId) return false;
+        if (sourceId === targetId)
+            return false;
         const order = Array.from(this.tabs.keys());
         const sourceIdx = order.indexOf(sourceId);
         const targetIdx = order.indexOf(targetId);
-        if (sourceIdx < 0 || targetIdx < 0) return false;
-
+        if (sourceIdx < 0 || targetIdx < 0)
+            return false;
         order.splice(sourceIdx, 1);
         // After removing source, if source was BEFORE target originally,
         // every later index shifted left by 1. Adjust the target's effective
@@ -1501,29 +1524,31 @@ export class TabManager {
         this.applyTabOrder(order);
         return true;
     }
-
     // Place a newly created tab after the rightmost strip peer with the
     // same nonempty workspace. Visible DOM order is the source of truth:
     // restart reinserts Map keys without moving nodes, so Map order can
     // differ from the strip. Existing tabs never move relative to each other.
     _placeNewTabByWorkspace(paneId) {
-        if (this.restoringTabs) return;
+        if (this.restoringTabs)
+            return;
         const tab = this.tabs.get(paneId);
-        if (!tab) return;
+        if (!tab)
+            return;
         const desired = [];
-        for (const el of this.tabsContainer.children) {
+        for (const el of this.tabsContainer
+            .children) {
             const id = el.dataset.paneId;
-            if (id && this.tabs.has(id)) desired.push(id);
+            if (id && this.tabs.has(id))
+                desired.push(id);
         }
-        if (!desired.includes(paneId)) desired.push(paneId);
+        if (!desired.includes(paneId))
+            desired.push(paneId);
         const workspace = tab.workspace || '';
         if (workspace !== '') {
             let anchor = null;
             for (const id of desired) {
-                if (
-                    id !== paneId &&
-                    (this.tabs.get(id)?.workspace || '') === workspace
-                )
+                if (id !== paneId &&
+                    (this.tabs.get(id)?.workspace || '') === workspace)
                     anchor = id;
             }
             if (anchor !== null) {
@@ -1532,18 +1557,14 @@ export class TabManager {
             }
         }
         const mapOrder = Array.from(this.tabs.keys());
-        const matchesDom =
-            desired.length === this.tabsContainer.children.length &&
-            desired.every(
-                (id, i) =>
-                    this.tabsContainer.children[i].dataset.paneId === id,
-            );
-        const matchesMap =
-            desired.length === mapOrder.length &&
+        const matchesDom = desired.length === this.tabsContainer.children.length &&
+            desired.every((id, i) => this.tabsContainer.children[i].dataset
+                .paneId === id);
+        const matchesMap = desired.length === mapOrder.length &&
             desired.every((id, i) => mapOrder[i] === id);
-        if (!matchesDom || !matchesMap) this.applyTabOrder(desired);
+        if (!matchesDom || !matchesMap)
+            this.applyTabOrder(desired);
     }
-
     handleTabDragStart(e, paneId) {
         // Only honor left-button drags. Touch and right-click shouldn't
         // initiate a reorder - the latter opens the context menu (if any).
@@ -1553,28 +1574,30 @@ export class TabManager {
         }
         this.dragSourceId = paneId;
         try {
-            e.dataTransfer.effectAllowed = 'move';
-            e.dataTransfer.setData('text/plain', paneId);
-        } catch (_) {
+            const transfer = e.dataTransfer;
+            if (transfer) {
+                transfer.effectAllowed = 'move';
+                transfer.setData('text/plain', paneId);
+            }
+        }
+        catch (_) {
             /* some browsers throw if dataTransfer is accessed oddly */
         }
         // Use rAF so the drag image captures the un-faded tab.
         requestAnimationFrame(() => {
-            const tabEl = this.tabsContainer.querySelector(
-                `[data-pane-id="${paneId}"]`,
-            );
-            if (tabEl) tabEl.classList.add('dragging');
+            const tabEl = this.tabsContainer.querySelector(`[data-pane-id="${paneId}"]`);
+            if (tabEl)
+                tabEl.classList.add('dragging');
         });
     }
-
     handleTabDragEnd(e) {
         const tabEl = e.currentTarget;
-        if (tabEl) tabEl.classList.remove('dragging');
+        if (tabEl)
+            tabEl.classList.remove('dragging');
         this.clearDropIndicators();
         this.dragSourceId = null;
         this._stopDragAutoScroll();
     }
-
     // ---- Edge auto-scroll during drag --------------------------------
     //
     // Per-tab dragover only fires when the cursor is OVER a tab. The
@@ -1593,23 +1616,25 @@ export class TabManager {
     // test harnesses that skip the constructor.
     static _EDGE_ZONE_PX = 48;
     static _EDGE_MAX_VEL = 15; // px per animation frame
-
     _setupContainerDragHandlers() {
+        // The flag lives on the element: one set of container listeners per
+        // strip, however many managers attach to it.
         const strip = this.tabsContainer;
-        if (!strip || strip._dragHandlersWired) return;
+        if (!strip || strip._dragHandlersWired)
+            return;
         strip._dragHandlersWired = true;
         // Initialize drag-scroll state so callers reading from outside
         // (and tests) get 0 rather than undefined on a fresh instance.
         this._dragScrollDir = 0;
         this._dragScrollVel = 0;
         this._dragScrollRaf = null;
-
         const onDragOver = (e) => {
             // Only act if a tab is being dragged inside phi. If a file
             // from outside is dragged in we still want drop targets to
             // work via the per-tab handlers, but auto-scroll would be
             // a weird experience.
-            if (!this.dragSourceId) return;
+            if (!this.dragSourceId)
+                return;
             const EDGE_ZONE_PX = TabManager._EDGE_ZONE_PX;
             const EDGE_MAX_VEL = TabManager._EDGE_MAX_VEL;
             const rect = strip.getBoundingClientRect();
@@ -1619,39 +1644,39 @@ export class TabManager {
             if (x < rect.left + EDGE_ZONE_PX) {
                 dir = -1;
                 prox = (rect.left + EDGE_ZONE_PX - x) / EDGE_ZONE_PX;
-            } else if (x > rect.right - EDGE_ZONE_PX) {
+            }
+            else if (x > rect.right - EDGE_ZONE_PX) {
                 dir = 1;
                 prox = (x - (rect.right - EDGE_ZONE_PX)) / EDGE_ZONE_PX;
             }
             this._dragScrollDir = dir;
             this._dragScrollVel = Math.min(Math.max(prox, 0), 1) * EDGE_MAX_VEL;
             if (dir !== 0 && !this._dragScrollRaf) {
-                this._dragScrollRaf = requestAnimationFrame(() =>
-                    this._stepDragAutoScroll(),
-                );
+                this._dragScrollRaf = requestAnimationFrame(() => this._stepDragAutoScroll());
             }
             // The whitespace case: we still need to preventDefault so
             // that dragover keeps firing and the drop event is allowed.
             // The per-tab handler does this too, but only over tabs.
-            if (!e.defaultPrevented) e.preventDefault();
+            if (!e.defaultPrevented)
+                e.preventDefault();
             try {
-                e.dataTransfer.dropEffect = 'move';
-            } catch (_) {}
+                if (e.dataTransfer)
+                    e.dataTransfer.dropEffect = 'move';
+            }
+            catch (_) { }
         };
-
         const onDragLeave = (e) => {
             // Only when the cursor leaves the strip's bounding box
             // entirely (not when sliding between tabs/whitespace inside).
             const to = e.relatedTarget;
-            if (to && strip.contains(to)) return;
+            if (to && strip.contains(to))
+                return;
             // Hit a tab and re-entered its dragover? per-tab keeps things
             // alive. We're only clearing edge-scroll when truly gone.
             // The dragend/drop on a tab will also clear via _stopDragAutoScroll.
         };
-
         strip.addEventListener('dragover', onDragOver);
         strip.addEventListener('dragleave', onDragLeave);
-
         // Container-level drop: fires when the user releases over
         // whitespace past the last tab (or before the first). Without
         // this the auto-scroll gets you there but the drop has no
@@ -1659,11 +1684,13 @@ export class TabManager {
         strip.addEventListener('drop', (e) => {
             // Only handle drops in the whitespace area. Per-tab drop
             // handlers have already eaten drops that fell on a tab.
-            const targetTab = e.target.closest?.('.tab');
-            if (targetTab) return; // per-tab already handled
+            const targetTab = e.target?.closest?.('.tab');
+            if (targetTab)
+                return; // per-tab already handled
             e.preventDefault();
             this._stopDragAutoScroll();
-            if (!this.dragSourceId) return;
+            if (!this.dragSourceId)
+                return;
             const order = Array.from(this.tabs.keys());
             const sourceIdx = order.indexOf(this.dragSourceId);
             if (sourceIdx < 0) {
@@ -1675,12 +1702,13 @@ export class TabManager {
             // Cursor before the left edge -> prepend to start.
             const atEnd = e.clientX > rect.right - 4;
             order.splice(sourceIdx, 1);
-            if (atEnd) order.push(this.dragSourceId);
-            else order.unshift(this.dragSourceId);
+            if (atEnd)
+                order.push(this.dragSourceId);
+            else
+                order.unshift(this.dragSourceId);
             this.applyTabOrder(order);
             this.dragSourceId = null;
         });
-
         // Mouse wheel: when the strip is overflowing, map vertical wheel
         // to horizontal scroll. Trackpads handle this natively via deltaX
         // but most mice don't, so without this you can scroll horizontally
@@ -1689,23 +1717,18 @@ export class TabManager {
         // normally.
         const onWheel = (e) => {
             const overflowX = strip.scrollWidth - strip.clientWidth;
-            if (overflowX <= 4) return;
+            if (overflowX <= 4)
+                return;
             // Trackpad horizontal gestures come through as deltaX. Mouse
             // vertical wheels come through as deltaY. We accept both.
-            const dx =
-                Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-            if (dx === 0) return;
+            const dx = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+            if (dx === 0)
+                return;
             // Only consume the event when there's actually room to scroll
             // in the requested direction (so we don't trap a wheel that
             // overshoots).
             const before = strip.scrollLeft;
-            strip.scrollLeft = Math.max(
-                0,
-                Math.min(
-                    strip.scrollWidth - strip.clientWidth,
-                    strip.scrollLeft + dx,
-                ),
-            );
+            strip.scrollLeft = Math.max(0, Math.min(strip.scrollWidth - strip.clientWidth, strip.scrollLeft + dx));
             if (strip.scrollLeft !== before) {
                 e.preventDefault();
                 this.updateTabOverflow();
@@ -1713,30 +1736,22 @@ export class TabManager {
         };
         strip.addEventListener('wheel', onWheel, { passive: false });
     }
-
     _stepDragAutoScroll() {
         this._dragScrollRaf = null;
-        if (!this._dragScrollDir) return;
+        if (!this._dragScrollDir)
+            return;
         const strip = this.tabsContainer;
-        if (!strip) return;
+        if (!strip)
+            return;
         // Velocity may have been set to 0 if cursor moved to mid-strip;
         // keep the rAF idling so it can pick back up on edge re-entry.
         if (this._dragScrollVel > 0) {
-            strip.scrollLeft = Math.max(
-                0,
-                Math.min(
-                    strip.scrollWidth - strip.clientWidth,
-                    strip.scrollLeft +
-                        this._dragScrollDir * this._dragScrollVel,
-                ),
-            );
+            strip.scrollLeft = Math.max(0, Math.min(strip.scrollWidth - strip.clientWidth, strip.scrollLeft +
+                this._dragScrollDir * this._dragScrollVel));
             this.updateTabOverflow();
         }
-        this._dragScrollRaf = requestAnimationFrame(() =>
-            this._stepDragAutoScroll(),
-        );
+        this._dragScrollRaf = requestAnimationFrame(() => this._stepDragAutoScroll());
     }
-
     _stopDragAutoScroll() {
         this._dragScrollDir = 0;
         this._dragScrollVel = 0;
@@ -1745,37 +1760,39 @@ export class TabManager {
             this._dragScrollRaf = null;
         }
     }
-
     handleTabDragOver(e, targetPaneId) {
-        if (!this.dragSourceId || this.dragSourceId === targetPaneId) return;
+        if (!this.dragSourceId || this.dragSourceId === targetPaneId)
+            return;
         // Pin status no longer blocks drag targets - tabs default to
         // pinned so we can't gate on the class. Order is purely visual
         // and handled by moveTabTo's insert-before/after logic.
         const tabEl = e.currentTarget;
-        if (!tabEl) return;
+        if (!tabEl)
+            return;
         e.preventDefault(); // required so the `drop` event fires
         try {
-            e.dataTransfer.dropEffect = 'move';
-        } catch (_) {}
-
+            if (e.dataTransfer)
+                e.dataTransfer.dropEffect = 'move';
+        }
+        catch (_) { }
         const rect = tabEl.getBoundingClientRect();
         const insertBefore = e.clientX < rect.left + rect.width / 2;
         this.showDropIndicator(tabEl, insertBefore);
     }
-
     handleTabDragLeave(e) {
         // Only clear when we leave the tab entirely (not when moving between
         // child elements within it - relatedTarget tells us where we went).
         const to = e.relatedTarget;
-        if (to && e.currentTarget.contains(to)) return;
+        const current = e.currentTarget;
+        if (to && current?.contains(to))
+            return;
         const tabEl = e.currentTarget;
-        tabEl.classList.remove('drop-before', 'drop-after');
+        tabEl?.classList.remove('drop-before', 'drop-after');
     }
-
     handleTabDrop(e, targetPaneId) {
         e.preventDefault();
         const tabEl = e.currentTarget;
-        const insertBefore = tabEl.classList.contains('drop-before');
+        const insertBefore = tabEl?.classList.contains('drop-before') === true;
         this.clearDropIndicators();
         if (!this.dragSourceId || this.dragSourceId === targetPaneId) {
             this.dragSourceId = null;
@@ -1784,7 +1801,6 @@ export class TabManager {
         this.moveTabTo(this.dragSourceId, targetPaneId, insertBefore);
         this.dragSourceId = null;
     }
-
     showDropIndicator(tabEl, insertBefore) {
         // Drop indicators are box-shadow classes on the target tab itself
         // (so we never need to measure absolute positions in the scroll
@@ -1792,32 +1808,33 @@ export class TabManager {
         this.clearDropIndicators();
         tabEl.classList.add(insertBefore ? 'drop-before' : 'drop-after');
     }
-
     clearDropIndicators() {
-        for (const el of this.tabsContainer.querySelectorAll(
-            '.drop-before, .drop-after',
-        )) {
+        for (const el of this.tabsContainer.querySelectorAll('.drop-before, .drop-after')) {
             el.classList.remove('drop-before', 'drop-after');
         }
     }
-
-    async syncTabs(instances = [], { live = true, screens = null } = {}) {
+    async syncTabs(instances = [], { live = true, screens = null, } = {}) {
         this.restoringTabs = true;
         const savedActive = localStorage.getItem(serverKey('phi_active_pane')) || '';
         try {
             const serverIds = new Set(instances.map((t) => t.id ?? t.paneId));
             for (const [paneId, tab] of Array.from(this.tabs.entries())) {
-                if (!tab.isKanban && !tab.isReview && tab.coder !== 'pi-rpc' && !tab.softClosing) {
+                if (!tab.isKanban &&
+                    !tab.isReview &&
+                    tab.coder !== 'pi-rpc' &&
+                    !tab.softClosing) {
                     if (!serverIds.has(paneId)) {
-                        this.disposeTabClient(paneId, { preserveStorage: false });
+                        this.disposeTabClient(paneId, {
+                            preserveStorage: false,
+                        });
                     }
                 }
             }
-
             for (const t of instances) {
                 const paneId = t.id ?? t.paneId;
-                if (this.tabs.has(paneId)) {
-                    const tab = this.tabs.get(paneId);
+                const existing = this.tabs.get(paneId);
+                if (existing) {
+                    const tab = existing;
                     tab.sessionId = t.session_id ?? tab.sessionId;
                     tab.workspace = t.workspace ?? tab.workspace;
                     tab.cwd = t.cwd ?? tab.cwd;
@@ -1828,91 +1845,114 @@ export class TabManager {
                     if (t.pi_bridge != null) {
                         this._seedHttpPiBridge(tab, t.pi_bridge);
                     }
-                    if (live && (tab._detachedCache || !tab.ws) && tab.coder !== 'review' && tab.coder !== 'kanban' && tab.coder !== 'pi-rpc') {
+                    if (live &&
+                        (tab._detachedCache || !tab.ws) &&
+                        tab.coder !== 'review' &&
+                        tab.coder !== 'kanban' &&
+                        tab.coder !== 'pi-rpc') {
                         tab._detachedCache = false;
                         this._connectTabSocket(tab);
                     }
-                } else {
-                    const cachedScreen = screens instanceof Map ? screens.get(paneId) : screens?.[paneId] ?? null;
-                    const createOpts = (!live || cachedScreen || t.pi_mode) ? [{ live, cachedScreen, ...(t.pi_mode ? { piMode: t.pi_mode } : {}) }] : [];
-                    this.createTab(
-                        paneId,
-                        t.session_id,
-                        t.title || t.coder,
-                        t.coder,
-                        t.workspace || '',
-                        t.cwd || '',
-                        !!t.pinned,
-                        !!t.marked,
-                        '',
-                        null,
-                        t.coder === 'opencode' ? openCodePaneMode(t.opencode_mode) : null,
-                        t.pi_bridge,
-                        ...createOpts,
-                    );
+                }
+                else {
+                    const cachedScreen = screens instanceof Map
+                        ? screens.get(paneId)
+                        : (screens?.[paneId] ?? null);
+                    const createOpts = !live || cachedScreen || t.pi_mode
+                        ? [
+                            {
+                                live,
+                                cachedScreen,
+                                ...(t.pi_mode
+                                    ? { piMode: t.pi_mode }
+                                    : {}),
+                            },
+                        ]
+                        : [];
+                    this.createTab(paneId, t.session_id, t.title || t.coder, t.coder, t.workspace || '', t.cwd || '', !!t.pinned, !!t.marked, '', null, t.coder === 'opencode'
+                        ? openCodePaneMode(t.opencode_mode)
+                        : null, t.pi_bridge, ...createOpts);
                 }
             }
-
-            if (localStorage.getItem(serverKey('phi_kanban_open')) === '1' && !this.tabs.has('kanban') && this.app?.kanbanManager) {
+            if (localStorage.getItem(serverKey('phi_kanban_open')) === '1' &&
+                !this.tabs.has('kanban') &&
+                this.app?.kanbanManager) {
                 await this.app.kanbanManager.openBoard();
             }
             this.restorePiRpcTabs();
             this.applySavedTabOrder();
             if (savedActive && this.tabs.has(savedActive)) {
                 this.switchTab(savedActive);
-            } else if (instances.length > 0) {
+            }
+            else if (instances.length > 0) {
                 this.switchTab(instances[0].id ?? instances[0].paneId);
                 if (!live && savedActive) {
-                    try { localStorage.setItem(serverKey('phi_active_pane'), savedActive); } catch {}
+                    try {
+                        localStorage.setItem(serverKey('phi_active_pane'), savedActive);
+                    }
+                    catch { }
                 }
-            } else if (this.tabs.size > 0) {
+            }
+            else if (this.tabs.size > 0) {
                 this.switchTab(Array.from(this.tabs.keys())[0]);
                 if (!live && savedActive) {
-                    try { localStorage.setItem(serverKey('phi_active_pane'), savedActive); } catch {}
+                    try {
+                        localStorage.setItem(serverKey('phi_active_pane'), savedActive);
+                    }
+                    catch { }
                 }
-            } else {
+            }
+            else {
                 this.showEmptyState();
             }
-        } finally {
+        }
+        finally {
             this.restoringTabs = false;
             this.saveTabOrder();
         }
     }
-
     async restoreTabsState(scope = this.app?.scope) {
         localStorage.removeItem('phi_tabs'); // Clear legacy browser storage tabs
         try {
-            const fetchFn = (scope && typeof scope.fetch === 'function')
+            const fetchFn = scope && typeof scope.fetch === 'function'
                 ? (url, opts) => scope.fetch(url, opts)
                 : fetch;
             const res = await fetchFn('/api/terminals');
-            if (scope?.aborted) return;
-            if (!res.ok) throw new Error('Failed to load server terminal list');
+            if (scope?.aborted)
+                return;
+            if (!res.ok)
+                throw new Error('Failed to load server terminal list');
             const instances = await res.json();
-            if (scope?.aborted) return;
+            if (scope?.aborted)
+                return;
             const store = this.app?.getActiveStore?.();
-            if (store) store.tabs = instances;
-            await this.syncTabs(instances, { live: true, screens: store?.screens || null });
-        } catch (e) {
-            if (e?.name === 'AbortError' || scope?.aborted) return;
+            if (store)
+                store.tabs = instances;
+            await this.syncTabs(instances, {
+                live: true,
+                screens: store?.screens || null,
+            });
+        }
+        catch (e) {
+            if (e?.name === 'AbortError' ||
+                scope?.aborted)
+                return;
             console.error('Failed to restore tabs from server-side state:', e);
         }
     }
-
     captureBackendState(store) {
-        if (!store) return;
+        if (!store)
+            return;
         const tabList = [];
         const nextScreens = new Map();
         for (const tab of this.tabs.values()) {
-            if (
-                tab.softClosing ||
+            if (tab.softClosing ||
                 tab.finalizing ||
                 tab.isKanban ||
                 tab.isReview ||
                 tab.coder === 'kanban' ||
                 tab.coder === 'review' ||
-                tab.coder === 'pi-rpc'
-            ) {
+                tab.coder === 'pi-rpc') {
                 continue;
             }
             tabList.push({
@@ -1929,21 +1969,19 @@ export class TabManager {
                 pi_mode: tab.piMode || null,
                 pi_bridge: tab._piBridgeState || undefined,
             });
-
             let captured = null;
             if (tab.term && tab.serializeAddon) {
                 try {
-                    const encoding = tab.term._core?.mouseStateService?.activeEncoding;
-                    const mouseMode =
-                        encoding === 'SGR'
-                            ? '\x1b[?1006h'
-                            : encoding === 'SGR_PIXELS'
-                              ? '\x1b[?1016h'
-                              : '';
-                    const snap =
-                        terminalSnapshot(tab.term, tab.serializeAddon, {
-                            scrollback: SNAPSHOT_SCROLLBACK_ROWS,
-                        }) || '';
+                    const encoding = internals(tab.term)._core
+                        ?.mouseStateService?.activeEncoding;
+                    const mouseMode = encoding === 'SGR'
+                        ? '\x1b[?1006h'
+                        : encoding === 'SGR_PIXELS'
+                            ? '\x1b[?1016h'
+                            : '';
+                    const snap = terminalSnapshot(tab.term, tab.serializeAddon, {
+                        scrollback: SNAPSHOT_SCROLLBACK_ROWS,
+                    }) || '';
                     const ansi = mouseMode + snap;
                     if (ansi) {
                         captured = {
@@ -1952,13 +1990,15 @@ export class TabManager {
                             rows: tab.term.rows || 24,
                         };
                     }
-                } catch (e) {
+                }
+                catch (e) {
                     console.warn('[term] snapshot on leave failed:', e);
                 }
             }
             if (!captured && tab._cachedScreen) {
                 captured = tab._cachedScreen;
-            } else if (!captured && store.screens?.has(tab.paneId)) {
+            }
+            else if (!captured && store.screens?.has(tab.paneId)) {
                 captured = store.screens.get(tab.paneId);
             }
             if (captured) {
@@ -1968,17 +2008,14 @@ export class TabManager {
         store.tabs = tabList;
         store.screens = nextScreens;
     }
-
     paintFromStore(store) {
-        if (!store || !Array.isArray(store.tabs)) return false;
+        if (!store || !Array.isArray(store.tabs))
+            return false;
         void this.syncTabs(store.tabs, { live: false, screens: store.screens });
         return true;
     }
-
     setupEventListeners() {
-        document.addEventListener('keydown', (e) =>
-            this.handleGlobalTabShortcuts(e),
-        );
+        document.addEventListener('keydown', (e) => this.handleGlobalTabShortcuts(e));
         this._listenQueueRecovery();
         window.addEventListener('keydown', (e) => {
             if (e.key === 'Alt') {
@@ -1998,17 +2035,14 @@ export class TabManager {
                 this.updateTabShortcutHints(false);
             }
         });
-
         // Hover preview card (glassmorphism, big hieroglyph). Shows on
         // mouseover of a tab so users can identify the worktree at a
         // glance without reading the path. Hides on mouseout or scroll.
         this._initHieroPreview();
-
         // Container-level drag-and-drop wiring: edge auto-scroll + drop-into-
         // whitespace. Per-tab drag handlers already handle dragover/drop on
         // tabs themselves; this covers the gaps.
         this._setupContainerDragHandlers();
-
         // Click/focus input bar → exit direct mode
         this.inputTextArea.addEventListener('focus', () => {
             const activeTab = this.getActiveTab();
@@ -2028,7 +2062,6 @@ export class TabManager {
                 this.app.updateLayoutPosition?.(false, true);
             }
         });
-
         this.inputTextArea.addEventListener('blur', () => {
             if (isCoarseViewport()) {
                 // Keyboard hiding: refresh the var only. No fit, no PTY
@@ -2038,7 +2071,6 @@ export class TabManager {
                 }, 150);
             }
         });
-
         // Trigger spam scroll on transition from empty to typed content
         this.inputTextArea.addEventListener('input', () => {
             const currentVal = this.inputTextArea.value;
@@ -2051,21 +2083,18 @@ export class TabManager {
             // _initPromptHistoryKeydown's own 'input' listener (kept
             // separate so it's independently unit-testable).
         });
-
         // Staged input send on Enter
         this.inputTextArea.addEventListener('keydown', (e) => {
-            if (this.handleInputToggleShortcut?.(e)) return;
-
+            if (this.handleInputToggleShortcut?.(e))
+                return;
             // When input is empty, capture arrows, enter, escape and ctrl key
             // shortcuts to control PTY directly. The map lives in
             // _forwardKeyToPty, shared with the terminal-focused and mobile
             // paths; the emptiness gate is this caller's concern.
             const inputTab = this.getActiveTab();
-
             // Recall must run before empty-input PTY forwarding. During
             // a cycle, recalled multiline entries remain browsable.
-            if (
-                (e.key === 'ArrowUp' || e.key === 'ArrowDown') &&
+            if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') &&
                 inputTab?.coder === 'pi' &&
                 !inputTab.isDead &&
                 !e.altKey &&
@@ -2079,45 +2108,42 @@ export class TabManager {
                     (e.key === 'ArrowUp'
                         ? this._caretOnFirstLine()
                         : this._caretOnLastLine())) &&
-                this._piRecallEligible(inputTab)
-            ) {
+                this._piRecallEligible(inputTab)) {
                 const recallDir = e.key === 'ArrowUp' ? 'older' : 'newer';
                 if (this._piRecall?.pending) {
                     // Repeated keys keep their old order on a slow read.
                     this._resetPiRecall({ flush: true });
-                } else if (this._piRecallCycleValid(inputTab)) {
+                }
+                else if (this._piRecallCycleValid(inputTab)) {
                     if (this._cyclePiRecallCached(recallDir)) {
                         e.preventDefault();
                         return;
                     }
                     // Cache walk declined ('newer' at -1): fall through.
-                } else if (
-                    recallDir === 'older' && this.inputTextArea.value === ''
-                ) {
+                }
+                else if (recallDir === 'older' &&
+                    this.inputTextArea.value === '') {
                     // Empty input can defer the PTY arrow until the read.
                     e.preventDefault();
                     this._fetchPiRecall(recallDir, inputTab, e.key);
                     return;
-                } else if (recallDir === 'older') {
+                }
+                else if (recallDir === 'older') {
                     // Do not suppress a native caret move we cannot replay.
                     this._fetchPiRecall(recallDir, inputTab, null);
                 }
             }
-            if (
-                this.inputTextArea.value === '' &&
+            if (this.inputTextArea.value === '' &&
                 inputTab?.coder !== 'pi-rpc' &&
-                this._forwardKeyToPty(e, inputTab)
-            ) {
+                this._forwardKeyToPty(e, inputTab)) {
                 return;
             }
-
             // Plain Up/Down on a Pi RPC chat tab cycles the per-chat prompt
             // history (see _cycleChatHistory). Modifiers stay reserved
             // (Alt+Up/Down owns the global cross-cwd history); multiline
             // editing keeps the arrows — Up cycles only from the first line,
             // Down only from the last, and only with a collapsed selection.
-            if (
-                (e.key === 'ArrowUp' || e.key === 'ArrowDown') &&
+            if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') &&
                 inputTab?.coder === 'pi-rpc' &&
                 !e.altKey &&
                 !e.ctrlKey &&
@@ -2128,38 +2154,31 @@ export class TabManager {
                     this.inputTextArea.selectionEnd &&
                 (e.key === 'ArrowUp'
                     ? this._caretOnFirstLine()
-                    : this._caretOnLastLine())
-            ) {
-                if (
-                    this._cycleChatHistory(
-                        e.key === 'ArrowUp' ? 'older' : 'newer',
-                        inputTab,
-                    )
-                ) {
+                    : this._caretOnLastLine())) {
+                if (this._cycleChatHistory(e.key === 'ArrowUp' ? 'older' : 'newer', inputTab)) {
                     e.preventDefault();
                     return;
                 }
             }
-
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 // Alt+Enter queues a follow-up behind the running turn on
                 // pi-rpc panes, matching Pi's TUI. Other coders keep the
                 // plain submit path.
                 this.sendStagedInput(e.altKey ? { followUp: true } : undefined);
-            } else if (e.key === 'Escape') {
-                if (this._handlePiRpcEscape(e)) return;
+            }
+            else if (e.key === 'Escape') {
+                if (this._handlePiRpcEscape(e))
+                    return;
                 // Return focus to terminal in Hybrid mode
                 e.preventDefault();
                 this.inputTextArea.blur();
                 this.focusActiveTerminal();
             }
         });
-
-        this.sendInputBtn.addEventListener('click', () => {
+        this.sendInputBtn?.addEventListener('click', () => {
             this.sendStagedInput();
         });
-
         // Drag-and-drop and clipboard-paste attachments. Drop handler is on
         // .input-bar-container (not document) so tab-reorder drags on the
         // tabs strip don't conflict. Paste handler is on #input-textarea
@@ -2169,18 +2188,15 @@ export class TabManager {
         this._initAttachmentPasteHandler();
         this._initPromptHistoryKeydown();
         this._initBrandHud();
-
         // Global Ctrl+Shift+X -> send staged input. Fires regardless of
         // which element is focused (textarea, terminal, anywhere). The
         // row has no chip for it, so the shortcut is keyboard-only.
         document.addEventListener('keydown', (e) => {
-            if (
-                e.ctrlKey &&
+            if (e.ctrlKey &&
                 e.shiftKey &&
                 !e.altKey &&
                 !e.metaKey &&
-                (e.key === 'X' || e.key === 'x')
-            ) {
+                (e.key === 'X' || e.key === 'x')) {
                 e.preventDefault();
                 this.sendStagedInput();
                 return;
@@ -2193,19 +2209,18 @@ export class TabManager {
             // original textarea-bound path; document-level capture would
             // steal arrow keys from terminal-internal tools (fzf, less,
             // etc.) on a real keyboard.
-            if (!isCoarseViewport()) return;
-            if (this.inputTextArea?.value !== '') return;
-            if (this.inputBarContainer?.classList.contains('hidden')) return;
-            const activeTab = this.getActiveTab();
-            if (!activeTab || activeTab.isDead) return;
-            // Skip if a modal is open - let the modal handler have the key.
-            if (
-                document.querySelector(
-                    '.modal-overlay:not(.hidden), .md-modal-overlay:not(.hidden)',
-                )
-            )
+            if (!isCoarseViewport())
                 return;
-
+            if (this.inputTextArea?.value !== '')
+                return;
+            if (this.inputBarContainer?.classList.contains('hidden'))
+                return;
+            const activeTab = this.getActiveTab();
+            if (!activeTab || activeTab.isDead)
+                return;
+            // Skip if a modal is open - let the modal handler have the key.
+            if (document.querySelector('.modal-overlay:not(.hidden), .md-modal-overlay:not(.hidden)'))
+                return;
             // Shared map (see _forwardKeyToPty). Two guards the old private
             // map made unnecessary: skip keys another handler already
             // consumed (the staged textarea's own listener — else Enter
@@ -2213,10 +2228,10 @@ export class TabManager {
             // elements (find bar, tab renamer) now that Backspace/Tab are
             // in the map. Modifier combos stay excluded on mobile so
             // hardware keyboards on tablets keep their browser shortcuts.
-            if (e.defaultPrevented) return;
+            if (e.defaultPrevented)
+                return;
             const t = e.target;
-            if (
-                t instanceof Element &&
+            if (t instanceof Element &&
                 (isFindBarTarget(t) ||
                     t.closest('#tab-overflow-dropdown') ||
                     t.closest('#tab-overflow-btn') ||
@@ -2239,69 +2254,63 @@ export class TabManager {
                     // Thinking is UI-only: its Enter/Tab must not reach the
                     // PTY as raw keys on coarse pointers.
                     t.closest('.pi-rpc-thinking-trigger') ||
-                    t.closest('#pi-rpc-thinking-dropup'))
-            )
+                    t.closest('#pi-rpc-thinking-dropup')))
                 return;
-            if (
-                t instanceof HTMLElement &&
+            if (t instanceof HTMLElement &&
                 t !== this.inputTextArea &&
                 (t.tagName === 'INPUT' ||
                     t.tagName === 'TEXTAREA' ||
-                    t.isContentEditable)
-            )
+                    t.isContentEditable))
                 return;
-            if (e.ctrlKey || e.metaKey || e.altKey) return;
+            if (e.ctrlKey || e.metaKey || e.altKey)
+                return;
             this._forwardKeyToPty(e, activeTab);
         });
-
         if (this.cancelInputBtn) {
             this.cancelInputBtn.addEventListener('click', () => {
                 const activeTab = this.getActiveTab();
                 if (activeTab?.coder === 'pi-rpc') {
                     this._interruptActivePiRpc();
-                } else {
-                    const cancelKey =
-                        activeTab &&
+                }
+                else {
+                    const cancelKey = activeTab &&
                         ['pi', 'claude', 'opencode'].includes(activeTab.coder)
-                            ? '\x1b'
-                            : '\x03';
+                        ? '\x1b'
+                        : '\x03';
                     this.sendRawInput(cancelKey);
                 }
                 if (activeTab?.directMode) {
                     this.focusActiveTerminal();
-                } else {
+                }
+                else {
                     this.inputTextArea.focus({ preventScroll: true });
                 }
             });
         }
-
         if (this.copyInputBtn) {
             this.copyInputBtn.addEventListener('click', () => {
                 this.sendRawInput('/copy\r', { submit: true });
                 this.inputTextArea.focus({ preventScroll: true });
             });
         }
-
         if (this.sessionSearchBtn) {
             this.sessionSearchBtn.addEventListener('click', () => {
                 const activeTab = this.getActiveTab();
-                if (!this._sessionSearchEligible(activeTab)) return;
+                if (!activeTab)
+                    return;
+                if (!this._sessionSearchEligible(activeTab))
+                    return;
                 // Direct-mode search returns to the terminal, staged search
                 // to the composer that owned the focus before the tap.
-                this.toggleFindBar(
-                    activeTab,
-                    activeTab.directMode ? null : this.inputTextArea,
-                );
+                this.toggleFindBar(activeTab, activeTab.directMode ? null : this.inputTextArea);
             });
         }
-
         if (this.thinkingVisibilityBtn) {
             this.thinkingVisibilityBtn.addEventListener('click', (event) => {
                 event.stopPropagation();
                 this._togglePiRpcThinkingVisibility(this.getActiveTab());
             });
         }
-
         if (this.ctrlTBtn) {
             this.ctrlTBtn.addEventListener('click', () => {
                 const activeTab = this.getActiveTab();
@@ -2311,18 +2320,12 @@ export class TabManager {
                 }
             });
         }
-
         const closeAllBtn = document.getElementById('close-all-tabs-btn');
-        const mobileCloseAllBtn = document.getElementById(
-            'mobile-close-all-tabs-btn',
-        );
+        const mobileCloseAllBtn = document.getElementById('mobile-close-all-tabs-btn');
         const handleCloseAll = () => {
-            if (this.tabs.size === 0) return;
-            if (
-                confirm(
-                    `Are you sure you want to close all ${this.tabs.size} active sessions?`,
-                )
-            ) {
+            if (this.tabs.size === 0)
+                return;
+            if (confirm(`Are you sure you want to close all ${this.tabs.size} active sessions?`)) {
                 const keys = Array.from(this.tabs.keys());
                 keys.forEach((paneId) => {
                     this.closeTab(paneId);
@@ -2332,42 +2335,31 @@ export class TabManager {
         };
         closeAllBtn?.addEventListener('click', handleCloseAll);
         mobileCloseAllBtn?.addEventListener('click', handleCloseAll);
-
-        const refreshConsoleBtn = document.getElementById(
-            'refresh-console-btn',
-        );
-        const mobileRefreshConsoleBtn = document.getElementById(
-            'mobile-refresh-console-btn',
-        );
+        const refreshConsoleBtn = document.getElementById('refresh-console-btn');
+        const mobileRefreshConsoleBtn = document.getElementById('mobile-refresh-console-btn');
         const handleRefreshConsole = () => this.refreshConsole();
         refreshConsoleBtn?.addEventListener('click', handleRefreshConsole);
-        mobileRefreshConsoleBtn?.addEventListener(
-            'click',
-            handleRefreshConsole,
-        );
-
+        mobileRefreshConsoleBtn?.addEventListener('click', handleRefreshConsole);
         // Direct Mode toggle
         this.directModeToggle.addEventListener('click', () => {
             const activeTab = this.getActiveTab();
-            if (!activeTab || activeTab.coder === 'pi-rpc') return;
-
+            if (!activeTab || activeTab.coder === 'pi-rpc')
+                return;
             activeTab.directMode = !activeTab.directMode;
             this.updateDirectModeUI(activeTab);
-
             if (activeTab.directMode) {
                 this.focusActiveTerminal();
-            } else {
+            }
+            else {
                 this.inputTextArea.focus({ preventScroll: true });
             }
         });
-
         // Window resize: on touch shells a height-only change is the
         // software keyboard, which must NEVER refit, resend, or touch
         // scroll (frozen rows — the keyboard overlays, the grid stays).
         // Width changes (rotation, drawer) and every fine-pointer
         // resize (including docked devtools) keep the immediate path.
         window.addEventListener('resize', () => this.handleWindowResize());
-
         const hostEl = document.getElementById('hostname-display');
         if (hostEl) {
             hostEl.addEventListener('click', (e) => {
@@ -2385,26 +2377,25 @@ export class TabManager {
                     const sidebar = document.getElementById('sidebar-panel');
                     if (sidebar?.classList.contains('drawer-open')) {
                         sidebar.classList.remove('drawer-open');
-                    } else {
+                    }
+                    else {
                         this.app?.openTabsDrawer?.();
                     }
                     return;
                 }
-                const dropdown = document.getElementById(
-                    'hostname-tabs-dropdown',
-                );
+                const dropdown = document.getElementById('hostname-tabs-dropdown');
                 if (dropdown) {
                     const isHidden = dropdown.classList.contains('hidden');
                     if (isHidden) {
                         this.renderHostnameTabsDropdown();
                         dropdown.classList.remove('hidden');
-                    } else {
+                    }
+                    else {
                         dropdown.classList.add('hidden');
                     }
                 }
             });
         }
-
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
                 if (this._closeAttachmentOverlays()) {
@@ -2412,151 +2403,98 @@ export class TabManager {
                     e.stopPropagation();
                     return;
                 }
-                const quickCommands = document.getElementById(
-                    'quick-commands-dropup',
-                );
-                if (
-                    quickCommands &&
-                    !quickCommands.classList.contains('hidden')
-                ) {
+                const quickCommands = document.getElementById('quick-commands-dropup');
+                if (quickCommands &&
+                    !quickCommands.classList.contains('hidden')) {
                     quickCommands.classList.add('hidden');
                     document
-                        .querySelector(
-                            '#presets-container .preset-btn[title="Open quick commands"]',
-                        )
+                        .querySelector('#presets-container .preset-btn[title="Open quick commands"]')
                         ?.focus({ preventScroll: true });
-
                     e.preventDefault();
                     e.stopPropagation();
                     return;
                 }
                 this._handlePiRpcEscape(e);
-            } else this._handlePiRpcKeydown(e);
+            }
+            else
+                this._handlePiRpcKeydown(e);
         });
-
         // Close dropups and dropdowns on clicking outside
         document.addEventListener('click', (e) => {
+            const target = e.target;
             const modelDropup = document.getElementById('model-presets-dropup');
             if (modelDropup && !modelDropup.classList.contains('hidden')) {
-                if (
-                    !e.target.closest('#model-presets-dropup') &&
-                    !e.target.closest('.model-trigger-btn')
-                ) {
+                if (!target?.closest('#model-presets-dropup') &&
+                    !target?.closest('.model-trigger-btn')) {
                     modelDropup.classList.add('hidden');
                 }
             }
-
             const qcDropup = document.getElementById('quick-commands-dropup');
             if (qcDropup && !qcDropup.classList.contains('hidden')) {
-                if (
-                    !e.target.closest('#quick-commands-dropup') &&
-                    !e.target.closest('.model-trigger-btn')
-                ) {
+                if (!target?.closest('#quick-commands-dropup') &&
+                    !target?.closest('.model-trigger-btn')) {
                     qcDropup.classList.add('hidden');
                 }
             }
-
             const keysDropup = document.getElementById('keys-presets-dropup');
             if (keysDropup && !keysDropup.classList.contains('hidden')) {
-                if (
-                    !e.target.closest('#keys-presets-dropup') &&
-                    !e.target.closest('.keys-trigger-btn')
-                ) {
+                if (!target?.closest('#keys-presets-dropup') &&
+                    !target?.closest('.keys-trigger-btn')) {
                     keysDropup.classList.add('hidden');
                 }
             }
-
             const slashDropup = document.getElementById('slash-presets-dropup');
             if (slashDropup && !slashDropup.classList.contains('hidden')) {
-                if (
-                    !e.target.closest('#slash-presets-dropup') &&
-                    !e.target.closest('.slash-trigger-btn')
-                ) {
+                if (!target?.closest('#slash-presets-dropup') &&
+                    !target?.closest('.slash-trigger-btn')) {
                     slashDropup.classList.add('hidden');
                 }
             }
-
-            const piModelDropup = document.getElementById(
-                'pi-rpc-model-dropup',
-            );
+            const piModelDropup = document.getElementById('pi-rpc-model-dropup');
             if (piModelDropup && !piModelDropup.classList.contains('hidden')) {
-                if (
-                    !e.target.closest('#pi-rpc-model-dropup') &&
-                    !e.target.closest('.pi-rpc-model-trigger')
-                ) {
+                if (!target?.closest('#pi-rpc-model-dropup') &&
+                    !target?.closest('.pi-rpc-model-trigger')) {
                     piModelDropup.classList.add('hidden');
                 }
             }
-
-            const piThinkingDropup = document.getElementById(
-                'pi-rpc-thinking-dropup',
-            );
-            if (
-                piThinkingDropup &&
-                !piThinkingDropup.classList.contains('hidden')
-            ) {
-                if (
-                    !e.target.closest('#pi-rpc-thinking-dropup') &&
-                    !e.target.closest('.pi-rpc-thinking-trigger')
-                ) {
+            const piThinkingDropup = document.getElementById('pi-rpc-thinking-dropup');
+            if (piThinkingDropup &&
+                !piThinkingDropup.classList.contains('hidden')) {
+                if (!target?.closest('#pi-rpc-thinking-dropup') &&
+                    !target?.closest('.pi-rpc-thinking-trigger')) {
                     piThinkingDropup.classList.add('hidden');
                 }
             }
-
-            const piSkillsDropup = document.getElementById(
-                'pi-rpc-skills-dropup',
-            );
-            if (
-                piSkillsDropup &&
-                !piSkillsDropup.classList.contains('hidden')
-            ) {
-                if (
-                    !e.target.closest('#pi-rpc-skills-dropup') &&
-                    !e.target.closest('.pi-rpc-skills-trigger')
-                ) {
+            const piSkillsDropup = document.getElementById('pi-rpc-skills-dropup');
+            if (piSkillsDropup &&
+                !piSkillsDropup.classList.contains('hidden')) {
+                if (!target?.closest('#pi-rpc-skills-dropup') &&
+                    !target?.closest('.pi-rpc-skills-trigger')) {
                     piSkillsDropup.classList.add('hidden');
                 }
             }
-
-            const attachmentSourceDropup = document.getElementById(
-                'attachment-source-dropup',
-            );
-            if (
-                attachmentSourceDropup &&
-                !e.target.closest('#attachment-source-dropup') &&
-                !e.target.closest('#attach-input-btn')
-            ) {
+            const attachmentSourceDropup = document.getElementById('attachment-source-dropup');
+            if (attachmentSourceDropup &&
+                !target?.closest('#attachment-source-dropup') &&
+                !target?.closest('#attach-input-btn')) {
                 this._closeAttachmentSourceDropup();
             }
-
-            const hostDropdown = document.getElementById(
-                'hostname-tabs-dropdown',
-            );
+            const hostDropdown = document.getElementById('hostname-tabs-dropdown');
             if (hostDropdown && !hostDropdown.classList.contains('hidden')) {
-                if (
-                    !e.target.closest('#hostname-display') &&
-                    !e.target.closest('#hostname-tabs-dropdown')
-                ) {
+                if (!target?.closest('#hostname-display') &&
+                    !target?.closest('#hostname-tabs-dropdown')) {
                     hostDropdown.classList.add('hidden');
                 }
             }
-
-            const overflowDropdown = document.getElementById(
-                'tab-overflow-dropdown',
-            );
-            if (
-                overflowDropdown &&
-                !overflowDropdown.classList.contains('hidden')
-            ) {
-                if (
-                    !e.target.closest('#tab-overflow-btn') &&
-                    !e.target.closest('#tab-overflow-dropdown')
-                ) {
+            const overflowDropdown = document.getElementById('tab-overflow-dropdown');
+            if (overflowDropdown &&
+                !overflowDropdown.classList.contains('hidden')) {
+                if (!target?.closest('#tab-overflow-btn') &&
+                    !target?.closest('#tab-overflow-dropdown')) {
                     this._closeOverflowDropdown();
                 }
             }
         });
-
         const sortTabsBtn = document.getElementById('sort-tabs-btn');
         if (sortTabsBtn) {
             sortTabsBtn.addEventListener('click', (e) => {
@@ -2564,7 +2502,6 @@ export class TabManager {
                 this.sortTabsByWorkspace();
             });
         }
-
         const overflowBtn = document.getElementById('tab-overflow-btn');
         if (overflowBtn) {
             overflowBtn.addEventListener('click', (e) => {
@@ -2572,9 +2509,9 @@ export class TabManager {
                 this._toggleOverflowDropdown();
             });
         }
-
         const handleOverflowEscape = (e) => {
-            if (e.key !== 'Escape') return;
+            if (e.key !== 'Escape')
+                return;
             e.preventDefault();
             e.stopPropagation();
             this._closeOverflowDropdown({ restoreFocus: true });
@@ -2585,15 +2522,12 @@ export class TabManager {
             ?.addEventListener('keydown', handleOverflowEscape);
         sortTabsBtn?.addEventListener('keydown', (e) => {
             const dropdown = document.getElementById('tab-overflow-dropdown');
-            if (
-                e.key === 'Escape' &&
+            if (e.key === 'Escape' &&
                 dropdown &&
-                !dropdown.classList.contains('hidden')
-            ) {
+                !dropdown.classList.contains('hidden')) {
                 handleOverflowEscape(e);
             }
         });
-
         // Passive scroll listener keeps the tab-list selector state in sync as the
         // user horizontally scrolls the strip. rAF-coalesced via a tiny
         // scheduler so we don't over-read.
@@ -2601,7 +2535,8 @@ export class TabManager {
         if (strip) {
             let rafPending = false;
             const onScroll = () => {
-                if (rafPending) return;
+                if (rafPending)
+                    return;
                 rafPending = true;
                 requestAnimationFrame(() => {
                     rafPending = false;
@@ -2613,11 +2548,9 @@ export class TabManager {
             window.addEventListener('resize', onScroll, { passive: true });
         }
     }
-
     getActiveTab() {
-        return this.tabs?.get(this.activePaneId);
+        return this.activePaneId ? this.tabs.get(this.activePaneId) : undefined;
     }
-
     // Browser chrome has a deliberately small, composable language:
     // Φ = all quiet, ϕ = a live terminal emitted output recently, and
     // the pre-existing leading ● remains exclusively for done/attention.
@@ -2625,70 +2558,66 @@ export class TabManager {
     updateDocumentTitle() {
         const state = getTerminalActivityState(this.tabs.values());
         document.title = formatTerminalActivityTitle(this.app.hostname, state);
-
-        const indicator = document.getElementById(
-            'terminal-activity-indicator',
-        );
+        const indicator = document.getElementById('terminal-activity-indicator');
         if (indicator) {
             const hostnameKnown = Boolean(this.app.hostname);
             applyTerminalActivityIndicator(state.hasActivity, hostnameKnown);
         }
-
         // App owns favicon generation; guard keeps TabManager independently
         // usable in focused tests and lightweight embeds.
         if (this.app && typeof this.app.setTerminalActivity === 'function') {
             this.app.setTerminalActivity(state.hasActivity);
         }
     }
-
     focusActiveTerminal() {
         const activeTab = this.getActiveTab();
         if (activeTab?.term) {
             activeTab.term.focus();
         }
     }
-
     focusInputTextArea() {
-        if (!this.inputTextArea) return;
-        if (this.inputBarContainer?.classList.contains('hidden')) return;
+        if (!this.inputTextArea)
+            return;
+        if (this.inputBarContainer?.classList.contains('hidden'))
+            return;
         this.inputTextArea.focus({ preventScroll: true });
         const len = this.inputTextArea.value.length;
         this.inputTextArea.setSelectionRange(len, len);
     }
-
     toggleInputFocus() {
-        if (!this.inputTextArea) return;
-        if (this.inputBarContainer?.classList.contains('hidden')) return;
+        if (!this.inputTextArea)
+            return;
+        if (this.inputBarContainer?.classList.contains('hidden'))
+            return;
         if (document.activeElement === this.inputTextArea) {
             this.inputTextArea.blur();
             this.focusActiveTerminal();
-        } else {
+        }
+        else {
             this.focusInputTextArea();
         }
     }
-
     handleInputToggleShortcut(e) {
-        if (e.defaultPrevented) return false;
+        if (e.defaultPrevented)
+            return false;
         // Require Ctrl without Alt or Meta (Cmd).
-        if (!e.ctrlKey || e.altKey || e.metaKey) return false;
+        if (!e.ctrlKey || e.altKey || e.metaKey)
+            return false;
         if (e.key !== '`' && e.key !== '~' && e.code !== 'Backquote') {
             return false;
         }
-
         e.preventDefault();
         this.toggleInputFocus();
         return true;
     }
-
     // ── Hot-v1 attach bootstrap, gap repair, screen checkpoints ──
-
     // The bounded delta ever allowed into the live terminal on attach or
     // reconnect. Checkpoint + delta ≤ 192 KiB first payload,
     // independent of session age.
     _paneData(tabInfo, data) {
         const pty = tabInfo.ws;
         if (pty && pty.mode === 'hot') {
-            tabInfo._streamDecoder = pty.decoder;
+            tabInfo._streamDecoder = pty.decoder ?? null;
             tabInfo.queuedSeq = pty.lastFrameEnd;
         }
         // The painted frontier is the source frontier this text completes,
@@ -2698,14 +2627,15 @@ export class TabManager {
         // xterm write/callback. At quiescence they still own a frontier,
         // including the incomplete UTF-8 prefix retained by the decoder.
         // Checkpoints subtract that prefix exactly once; reconnect keeps it.
-        if (pty?.mode === 'hot' && data.length === 0 &&
-            !tabInfo.writePending && !tabInfo.writeBuffer?.length &&
+        if (pty?.mode === 'hot' &&
+            data.length === 0 &&
+            !tabInfo.writePending &&
+            !tabInfo.writeBuffer?.length &&
             !tabInfo._bootstrapGate) {
-            this._advanceDrained(tabInfo, pty.lastFrameEnd);
+            this._advanceDrained(tabInfo, pty.lastFrameEnd ?? 0);
             this._scheduleCheckpointUpload(tabInfo);
         }
     }
-
     // Fetches raw replay pages from the server. Returns
     // { bytes, start, end, endCursor, resizes, initCols, initRows,
     // historyIncomplete, ephemeral } or null after transient failures. A
@@ -2719,18 +2649,18 @@ export class TabManager {
     async _fetchReplayPages(paneId, from, through, epoch, fences = {}) {
         for (let attempt = 0; attempt < 3; attempt++) {
             const range = await this._fetchReplayPagesOnce(paneId, from, through, epoch, fences.signal, fences);
-            if (range || fences.signal?.aborted) return range;
-            if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 25 * (attempt + 1)));
+            if (range || fences.signal?.aborted)
+                return range;
+            if (attempt < 2)
+                await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
         }
         return null;
     }
-
     _historyPermanentError(message) {
         const error = new Error(message);
         error.historyPermanent = true;
         return error;
     }
-
     async _fetchReplayPagesOnce(paneId, from, through, epoch, requestSignal, fences = {}) {
         const { throughCursor, afterCursor, latest } = fences;
         try {
@@ -2740,10 +2670,17 @@ export class TabManager {
             // gzip usually compresses text far below that. Old Chromium
             // lacks AbortSignal.timeout: degrade to an unbounded fetch
             // there (as before) rather than failing every delta closed.
-            const timeout = typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(30000) : undefined;
-            const signal = requestSignal && timeout && typeof AbortSignal.any === 'function'
-                ? AbortSignal.any([requestSignal, timeout]) : requestSignal || timeout;
-            const validCursor = (v) => typeof v === 'string' && v.length <= 128 && /^v1\.\d+\.\d+\.\d+$/.test(v);
+            const timeout = typeof AbortSignal.timeout === 'function'
+                ? AbortSignal.timeout(30000)
+                : undefined;
+            const signal = requestSignal &&
+                timeout &&
+                typeof AbortSignal.any === 'function'
+                ? AbortSignal.any([requestSignal, timeout])
+                : requestSignal || timeout;
+            const validCursor = (v) => typeof v === 'string' &&
+                v.length <= 128 &&
+                /^v1\.\d+\.\d+\.\d+$/.test(v);
             let cursor = from;
             let chained = afterCursor;
             let endCursor;
@@ -2755,12 +2692,17 @@ export class TabManager {
             // Through stays fenced at the attach head for every page: the
             // server caps each response at 2 MiB and the end cursor chains
             // marker filtering. Only the start advances.
-            const throughParam = latest ? 'latest' : (fences.requestThrough ?? through);
-            const fenceParam = !latest && throughCursor !== undefined ? `&through_event_cursor=${encodeURIComponent(throughCursor)}` : '';
+            const throughParam = latest
+                ? 'latest'
+                : (fences.requestThrough ?? through);
+            const fenceParam = !latest && throughCursor !== undefined
+                ? `&through_event_cursor=${encodeURIComponent(throughCursor)}`
+                : '';
             // One request per call: the caller pages, parses, yields, and
             // reports progress between responses. A marker-only page
             // advances the chain without moving the bytes.
-            if (cursor > through) return null;
+            if (cursor > through)
+                return null;
             let bytes;
             let resizes;
             {
@@ -2768,16 +2710,17 @@ export class TabManager {
                 // between our attach and this fetch must 409, never serve
                 // another lifetime's bytes into this stream.
                 const epochParam = epoch !== undefined ? `&epoch=${epoch}` : '';
-                const cursorParam = chained !== undefined ? `&after_event_cursor=${encodeURIComponent(chained)}` : '';
-                const res = await fetch(
-                    `/api/terminals/${encodeURIComponent(paneId)}/replay?from=${cursor}&through=${throughParam}${epochParam}${fenceParam}${cursorParam}`,
-                    { cache: 'no-store', signal },
-                );
-                if (res.status === 204) return null;
+                const cursorParam = chained !== undefined
+                    ? `&after_event_cursor=${encodeURIComponent(chained)}`
+                    : '';
+                const res = await fetch(`/api/terminals/${encodeURIComponent(paneId)}/replay?from=${cursor}&through=${throughParam}${epochParam}${fenceParam}${cursorParam}`, { cache: 'no-store', signal });
+                if (res.status === 204)
+                    return null;
                 if ([400, 404, 409, 413].includes(res.status)) {
                     throw this._historyPermanentError(`Terminal history unavailable (${res.status}); the requested range was not skipped.`);
                 }
-                if (!res.ok) return null;
+                if (!res.ok)
+                    return null;
                 // Bound decompressed data too: Content-Length can name
                 // compressed bytes or be absent entirely.
                 const maxBytes = 4 + 65536 + (2 << 20);
@@ -2789,7 +2732,8 @@ export class TabManager {
                     try {
                         for (;;) {
                             const { value, done } = await reader.read();
-                            if (done) break;
+                            if (done)
+                                break;
                             size += value.byteLength;
                             if (size > maxBytes) {
                                 await reader.cancel();
@@ -2797,63 +2741,117 @@ export class TabManager {
                             }
                             parts.push(value);
                         }
-                    } finally { reader.releaseLock(); }
+                    }
+                    finally {
+                        reader.releaseLock();
+                    }
                     buf = new Uint8Array(size);
                     let offset = 0;
-                    for (const part of parts) { buf.set(part, offset); offset += part.byteLength; }
-                } else {
+                    for (const part of parts) {
+                        buf.set(part, offset);
+                        offset += part.byteLength;
+                    }
+                }
+                else {
                     buf = new Uint8Array(await res.arrayBuffer());
                 }
-                if (buf.byteLength < 4 || buf.byteLength > maxBytes) return null;
-                const jsonLen =
-                    ((buf[0] << 24) |
-                        (buf[1] << 16) |
-                        (buf[2] << 8) |
-                        buf[3]) >>>
+                if (buf.byteLength < 4 || buf.byteLength > maxBytes)
+                    return null;
+                const jsonLen = ((buf[0] << 24) |
+                    (buf[1] << 16) |
+                    (buf[2] << 8) |
+                    buf[3]) >>>
                     0;
-                if (jsonLen > 65536 || 4 + jsonLen > buf.byteLength) return null;
+                if (jsonLen > 65536 || 4 + jsonLen > buf.byteLength)
+                    return null;
                 let hdr;
                 try {
-                    hdr = JSON.parse(
-                        new TextDecoder().decode(buf.subarray(4, 4 + jsonLen)),
-                    );
-                } catch (_e) {
+                    hdr = JSON.parse(new TextDecoder().decode(buf.subarray(4, 4 + jsonLen)));
+                }
+                catch (_e) {
                     return null;
                 }
                 // No skipped prefixes: validate bytes, lifetime and geometry
                 // before admitting any part into the terminal.
                 const data = buf.subarray(4 + jsonLen);
-                const seq = n => Number.isSafeInteger(n) && n >= 0;
-                if (!hdr || !seq(hdr.epoch) ||
+                const seq = (n) => Number.isSafeInteger(n) && n >= 0;
+                if (!hdr ||
+                    !seq(hdr.epoch) ||
                     (epoch !== undefined && hdr.epoch !== epoch) ||
-                    !seq(hdr.start) || !seq(hdr.end) ||
-                    hdr.start !== cursor || hdr.end < hdr.start ||
-                    (!latest && hdr.end > throughParam) ||
+                    !seq(hdr.start) ||
+                    !seq(hdr.end) ||
+                    hdr.start !== cursor ||
+                    hdr.end < hdr.start ||
+                    (!latest && hdr.end > Number(throughParam)) ||
                     data.byteLength !== hdr.end - hdr.start ||
                     !validCursor(hdr.event_cursor) ||
-                    !Number.isInteger(hdr.initial_cols) || hdr.initial_cols <= 0 || hdr.initial_cols > 65535 ||
-                    !Number.isInteger(hdr.initial_rows) || hdr.initial_rows <= 0 || hdr.initial_rows > 65535 ||
-                    (hdr.resizes !== undefined && (!Array.isArray(hdr.resizes) || hdr.resizes.length > 256 ||
-                        hdr.resizes.some((m, i) => !Array.isArray(m) || m.length !== 3 ||
-                            !seq(m[0]) || m[0] < hdr.start || m[0] > hdr.end || (i > 0 && m[0] < hdr.resizes[i - 1][0]) || !Number.isInteger(m[1]) ||
-                            !Number.isInteger(m[2]) || m[1] <= 0 || m[2] <= 0 || m[1] > 65535 || m[2] > 65535)))) return null;
-
+                    !Number.isInteger(hdr.initial_cols) ||
+                    hdr.initial_cols <= 0 ||
+                    hdr.initial_cols > 65535 ||
+                    !Number.isInteger(hdr.initial_rows) ||
+                    hdr.initial_rows <= 0 ||
+                    hdr.initial_rows > 65535 ||
+                    (hdr.resizes !== undefined &&
+                        (!Array.isArray(hdr.resizes) ||
+                            hdr.resizes.length > 256 ||
+                            hdr.resizes.some((m, i) => !Array.isArray(m) ||
+                                m.length !== 3 ||
+                                !seq(m[0]) ||
+                                m[0] < hdr.start ||
+                                m[0] > hdr.end ||
+                                (i > 0 &&
+                                    m[0] <
+                                        hdr.resizes[i - 1][0]) ||
+                                !Number.isInteger(m[1]) ||
+                                !Number.isInteger(m[2]) ||
+                                m[1] <= 0 ||
+                                m[2] <= 0 ||
+                                m[1] > 65535 ||
+                                m[2] > 65535))))
+                    return null;
                 const event = hdr.event_cursor.split('.').slice(1).map(Number);
-                const afterOrdinal = chained === undefined ? 0 : Number(chained.split('.').at(-1));
-                if (event.some(n => !seq(n)) || event[0] !== hdr.epoch || event[1] !== hdr.end || event[2] - afterOrdinal !== (hdr.resizes?.length ?? 0) ||
-                    (!latest && throughCursor !== undefined && event[2] > Number(throughCursor.split('.').at(-1)))) return null;
+                const afterOrdinal = chained === undefined
+                    ? 0
+                    : Number(chained.split('.').at(-1));
+                if (event.some((n) => !seq(n)) ||
+                    event[0] !== hdr.epoch ||
+                    event[1] !== hdr.end ||
+                    event[2] - afterOrdinal !== (hdr.resizes?.length ?? 0) ||
+                    (!latest &&
+                        throughCursor !== undefined &&
+                        event[2] > Number(throughCursor.split('.').at(-1))))
+                    return null;
                 if (latest) {
-                    if (!seq(hdr.through) || hdr.through < hdr.end || !validCursor(hdr.through_event_cursor)) return null;
-                    const target = hdr.through_event_cursor.split('.').slice(1).map(Number);
-                    if (target.some(n => !seq(n)) || target[0] !== hdr.epoch || target[1] !== hdr.through || target[2] < event[2]) return null;
+                    if (!seq(hdr.through) ||
+                        hdr.through < hdr.end ||
+                        !validCursor(hdr.through_event_cursor))
+                        return null;
+                    const target = hdr.through_event_cursor
+                        .split('.')
+                        .slice(1)
+                        .map(Number);
+                    if (target.some((n) => !seq(n)) ||
+                        target[0] !== hdr.epoch ||
+                        target[1] !== hdr.through ||
+                        target[2] < event[2])
+                        return null;
                 }
-                if (!latest && throughCursor !== undefined &&
-                    (hdr.through !== throughParam || hdr.through_event_cursor !== throughCursor)) return null;
+                if (!latest &&
+                    throughCursor !== undefined &&
+                    (hdr.through !== throughParam ||
+                        hdr.through_event_cursor !== throughCursor))
+                    return null;
                 targetThrough = hdr.through;
                 targetCursor = hdr.through_event_cursor;
-                if (!pageInit) pageInit = { initCols: hdr.initial_cols, initRows: hdr.initial_rows };
-                if (hdr.history_incomplete === true) incomplete = true;
-                if (hdr.ephemeral === true) ephemeralPage = true;
+                if (!pageInit)
+                    pageInit = {
+                        initCols: hdr.initial_cols,
+                        initRows: hdr.initial_rows,
+                    };
+                if (hdr.history_incomplete === true)
+                    incomplete = true;
+                if (hdr.ephemeral === true)
+                    ephemeralPage = true;
                 // A latest page may overrun the requested end: trim bytes
                 // and markers to it. Trimming only happens on the final
                 // page, so no chained cursor is lost.
@@ -2862,7 +2860,7 @@ export class TabManager {
                 let pageEnd = hdr.end;
                 if (pageEnd > through) {
                     pageData = data.subarray(0, through - cursor);
-                    pageResizes = pageResizes.filter(m => m[0] <= through);
+                    pageResizes = pageResizes.filter((m) => m[0] <= through);
                     pageEnd = through;
                     // The response cursor certifies the untrimmed page.
                     // Carry only the geometry actually parsed by this view.
@@ -2873,10 +2871,13 @@ export class TabManager {
                 if (hdr.end <= cursor) {
                     // A marker-only page advances the chain, not the bytes.
                     // Neither advancing is a stuck server, not a slow one.
-                    if (hdr.event_cursor === undefined || hdr.event_cursor === chained) return null;
+                    if (hdr.event_cursor === undefined ||
+                        hdr.event_cursor === chained)
+                        return null;
                     chained = hdr.event_cursor;
                     endCursor = hdr.event_cursor;
-                } else {
+                }
+                else {
                     cursor = pageEnd;
                     if (hdr.event_cursor !== undefined) {
                         chained = hdr.event_cursor;
@@ -2895,7 +2896,9 @@ export class TabManager {
                 bytes,
                 // Production replay consumes bytes through its stream decoder.
                 // Keep the text convenience without decoding the span twice.
-                get text() { return new TextDecoder().decode(bytes); },
+                get text() {
+                    return new TextDecoder().decode(bytes);
+                },
                 resizes,
                 initCols: pageInit ? pageInit.initCols : 80,
                 initRows: pageInit ? pageInit.initRows : 24,
@@ -2903,15 +2906,16 @@ export class TabManager {
                 ephemeral: ephemeralPage,
                 ...(endCursor === undefined ? {} : { endCursor }),
             };
-        } catch (error) {
+        }
+        catch (error) {
             // Permanent history failures propagate to the caller; anything
             // else (timeout, transport, abort, malformed envelope) stays a
             // transient null for the existing retry paths.
-            if (error?.historyPermanent) throw error;
+            if (error?.historyPermanent)
+                throw error;
             return null;
         }
     }
-
     // Attaches the hot protocol's data/gap callbacks onto a pane's socket
     // options. Returns the PTYWebSocketOptions object for the ctor.
     // hostname_override is a display label only — it never rides a
@@ -2923,16 +2927,18 @@ export class TabManager {
             onGap: (from, to) => this._onLiveGap(tabInfo, from, to),
         };
     }
-
     async _onAttachHead(tabInfo, info) {
         const pty = tabInfo.ws;
-        if (pty?.mode !== 'hot') return;
+        if (!pty || pty.mode !== 'hot')
+            return;
         const prevEpoch = tabInfo.paneEpoch;
         const samePane = prevEpoch !== undefined && prevEpoch === info.epoch;
         if (!samePane || !tabInfo._termOpened) {
-            tabInfo._replayHistorical = !!tabInfo._termOpened || !tabInfo._freshReplay;
+            tabInfo._replayHistorical =
+                !!tabInfo._termOpened || !tabInfo._freshReplay;
             tabInfo._historicalReplayFence = tabInfo._replayHistorical
-                ? { head: info.head, cursor: info.eventCursor } : null;
+                ? { head: info.head, cursor: info.eventCursor }
+                : null;
         }
         if (!samePane) {
             // A different pane lifetime owns a different byte stream.
@@ -2945,21 +2951,26 @@ export class TabManager {
             const drain = this._drainSettled(tabInfo);
             tabInfo._bootstrapGate = drain;
             await drain;
-            if (tabInfo.ws !== pty || tabInfo.paneEpoch !== info.epoch || tabInfo.finalizing) return;
-            if (tabInfo._bootstrapGate === drain) tabInfo._bootstrapGate = null;
+            if (tabInfo.ws !== pty ||
+                tabInfo.paneEpoch !== info.epoch ||
+                tabInfo.finalizing)
+                return;
+            if (tabInfo._bootstrapGate === drain)
+                tabInfo._bootstrapGate = null;
         }
         // Durability warnings ride the attach and every replay page.
         // Surface them once per pane lifetime, beside the terminal.
-        if (!samePane) this._noteReplayDurability(tabInfo, info);
-
+        if (!samePane)
+            this._noteReplayDurability(tabInfo, info);
         if (!tabInfo._termOpened) {
-            tabInfo._streamDecoder = pty.decoder;
+            tabInfo._streamDecoder = pty.decoder ?? null;
             // Fresh tab: size the parser to the replay baseline and open
             // the terminal now; the retained prefix replays in the
             // background. First paint is not gated on the network.
             try {
                 tabInfo.term.resize(info.initialCols, info.initialRows);
-            } catch (_e) {
+            }
+            catch (_e) {
                 /* default size; post-open fit corrects it */
             }
             tabInfo.paneEpoch = info.epoch;
@@ -2971,18 +2982,17 @@ export class TabManager {
             this._bootstrappedRelease(tabInfo, pty, 0, info.head, info.eventCursor);
             return;
         }
-
         if (samePane) {
             // Same-epoch replay belongs to the terminal, not its old socket.
             while (tabInfo._bootstrapGate) {
                 const pendingBootstrap = tabInfo._bootstrapGate;
-                await pendingBootstrap.catch(() => {});
-                if (
-                    tabInfo.isDead ||
+                await pendingBootstrap.catch(() => { });
+                if (tabInfo.isDead ||
                     tabInfo.ws !== pty ||
-                    tabInfo.paneEpoch !== info.epoch
-                ) return;
-                if (tabInfo._bootstrapGate === pendingBootstrap) break;
+                    tabInfo.paneEpoch !== info.epoch)
+                    return;
+                if (tabInfo._bootstrapGate === pendingBootstrap)
+                    break;
             }
             // Finish old-socket writes before choosing the resume point.
             // Fetching from a stale drainedSeq while those writes are still
@@ -2992,11 +3002,9 @@ export class TabManager {
                 tabInfo._bootstrapGen = (tabInfo._bootstrapGen ?? 0) + 1;
                 tabInfo._bootstrapGate = drainGate;
                 await drainGate;
-                if (
-                    tabInfo.isDead ||
+                if (tabInfo.isDead ||
                     tabInfo.ws !== pty ||
-                    tabInfo._bootstrapGate !== drainGate
-                ) {
+                    tabInfo._bootstrapGate !== drainGate) {
                     if (tabInfo._bootstrapGate === drainGate) {
                         tabInfo._bootstrapGate = null;
                     }
@@ -3013,31 +3021,35 @@ export class TabManager {
             // A parsed batch can end with an incomplete UTF-8 prefix in
             // the decoder, even though no glyph reached xterm yet. Keep
             // that prefix on a same-pane, fully-drained reconnect.
-            if (
-                tabInfo._streamDecoder &&
+            if (tabInfo._streamDecoder &&
                 from === tabInfo.queuedSeq &&
-                from <= info.head
-            ) {
+                from <= info.head) {
                 pty.decoder = tabInfo._streamDecoder;
             }
-            tabInfo._streamDecoder = pty.decoder;
+            tabInfo._streamDecoder = pty.decoder ?? null;
             tabInfo.paneEpoch = info.epoch;
             tabInfo.paneOldest = info.oldest;
             if (from >= 0 && from <= info.head) {
                 this._bootstrappedRelease(tabInfo, pty, from, info.head, info.eventCursor);
-            } else {
+            }
+            else {
                 // A resize is not a repair for missing source bytes. Never
                 // release a socket across an unfilled or regressed frontier.
-                try { pty.ws?.close(); } catch (_e) {}
+                try {
+                    pty.ws?.close?.();
+                }
+                catch (_e) { }
             }
             return;
         }
-
         // Keep the old lifetime's coherent view until a validated page
         // arrives. A slow or failed request must not erase the last view.
         pty.decoder = new TextDecoder('utf-8');
         tabInfo._streamDecoder = pty.decoder;
-        tabInfo._replayBaseline = { cols: info.initialCols, rows: info.initialRows };
+        tabInfo._replayBaseline = {
+            cols: info.initialCols,
+            rows: info.initialRows,
+        };
         tabInfo.paneEpoch = info.epoch;
         tabInfo.paneOldest = info.oldest;
         tabInfo.queuedSeq = 0;
@@ -3045,8 +3057,6 @@ export class TabManager {
         tabInfo._replayCursor = `v1.${info.epoch}.0.0`;
         this._bootstrappedRelease(tabInfo, pty, 0, info.head, info.eventCursor);
     }
-
-
     // Replays the raw journal from `from` to the attach head in the
     // background, then releases live delivery. Aborted silently when the
     // page is gone or the pane is dead. Ordered bootstrap: finish parsing,
@@ -3070,17 +3080,21 @@ export class TabManager {
                 tabInfo._bootstrapGate = null;
                 if (tabInfo.ws === pty) {
                     try {
-                        pty.release();
-                    } catch (_e) {}
-                    if (tabInfo._pendingPanelFit) this._queuePanelFit(tabInfo);
+                        pty.release?.();
+                    }
+                    catch (_e) { }
+                    if (tabInfo._pendingPanelFit)
+                        this._queuePanelFit(tabInfo);
                 }
             }
         };
-        const boot = (async () => {
+        let boot = null;
+        boot = (async () => {
             let outcome = null;
             try {
                 outcome = await this._bootstrapDelta(tabInfo, from, head, gen, releaseOnce, throughCursor);
-            } catch (error) {
+            }
+            catch (error) {
                 console.warn('[term] bootstrap failed:', error);
                 outcome = { kind: 'failed', error };
             }
@@ -3092,10 +3106,12 @@ export class TabManager {
                     // The reader cancelled the replay: drop the partial
                     // prefix and show live output only. The frontier jumps
                     // to the attach head; held frames carry the tail.
-                    if (tabInfo.ws !== pty || tabInfo._bootstrapGen !== gen) return;
+                    if (tabInfo.ws !== pty || tabInfo._bootstrapGen !== gen)
+                        return;
                     try {
                         this._resetPaneBuffer(tabInfo);
-                    } catch (e) {
+                    }
+                    catch (e) {
                         console.error('[term] reset on replay cancel failed:', e);
                     }
                     tabInfo.queuedSeq = head;
@@ -3114,16 +3130,19 @@ export class TabManager {
                     return;
                 default: {
                     // Never release held live frames across an unfilled interval.
-                    if (tabInfo.ws !== pty || tabInfo._bootstrapGen !== gen) return;
+                    if (tabInfo.ws !== pty || tabInfo._bootstrapGen !== gen)
+                        return;
                     tabInfo._bootstrapGate = null;
-                    try { pty.ws?.close(); } catch (_e) {}
+                    try {
+                        pty.ws?.close?.();
+                    }
+                    catch (_e) { }
                 }
             }
         })();
         tabInfo._bootstrapGate = boot;
         this._trackBootstrap(tabInfo, boot);
     }
-
     // Tracked bootstrap: prod never awaits these, so settled entries prune
     // themselves (no per-reconnect slot leak) and rejections are swallowed
     // here — a failed delta only means a slower open, never a crash.
@@ -3133,109 +3152,149 @@ export class TabManager {
         tabInfo._pendingBootstraps = tabInfo._pendingBootstraps || [];
         tabInfo._pendingBootstraps.push(promise);
         promise
-            .catch(() => {})
+            .catch(() => { })
             .finally(() => {
-                const arr = tabInfo._pendingBootstraps;
-                if (!arr) return;
-                const i = arr.indexOf(promise);
-                if (i >= 0) arr.splice(i, 1);
-            });
+            const arr = tabInfo._pendingBootstraps;
+            if (!arr)
+                return;
+            const i = arr.indexOf(promise);
+            if (i >= 0)
+                arr.splice(i, 1);
+        });
     }
-
     // Durability warnings ride the attach and every replay page. Note them
     // once per pane lifetime: some output may be missing, or the pane may
     // not survive a restart.
     _noteReplayDurability(tabInfo, info) {
         const epoch = tabInfo.paneEpoch;
-        if (epoch === undefined) return;
+        if (epoch === undefined)
+            return;
         tabInfo._durabilityNoted ??= {};
-        if (tabInfo._durabilityNoted[epoch]) return;
-        const incomplete = info.historyIncomplete === true;
+        if (tabInfo._durabilityNoted[epoch])
+            return;
+        const incomplete = info.history_incomplete === true;
         const ephemeral = info.ephemeral === true;
-        if (!incomplete && !ephemeral) return;
+        if (!incomplete && !ephemeral)
+            return;
         tabInfo._durabilityNoted[epoch] = true;
         const parts = [];
-        if (incomplete) parts.push('some output from before the last shutdown was not recorded');
-        if (ephemeral) parts.push('this pane is not persisted and will not survive a restart');
-        this.app?.showToast?.(`Terminal history notice: ${parts.join('; ')}.`, { type: 'warning', title: 'Terminal' });
+        if (incomplete) {
+            parts.push('some output from before the last shutdown was not recorded');
+        }
+        if (ephemeral) {
+            parts.push('this pane is not persisted and will not survive a restart');
+        }
+        this.app?.showToast?.(`Terminal history notice: ${parts.join('; ')}.`, {
+            type: 'info',
+            title: 'Terminal',
+        });
     }
-
     // Concise replay progress beside the terminal, never a blocking modal.
     // Quick replays skip the pill; longer ones show bytes and a cancel.
     _showReplayProgress(tabInfo, done, total) {
         const remaining = total - done;
-        if (remaining <= 262144 && !tabInfo._replayProgressEl) return;
+        if (remaining <= 262144 && !tabInfo._replayProgressEl)
+            return;
         let el = tabInfo._replayProgressEl;
         if (!el || !el.isConnected) {
             el = document.createElement('div');
             el.className = 'replay-progress';
-            el.innerHTML = '<span class="replay-progress-text"></span><button class="replay-progress-cancel btn">Cancel</button>';
-            el.querySelector('.replay-progress-cancel').addEventListener('click', () => {
+            el.innerHTML =
+                '<span class="replay-progress-text"></span><button class="replay-progress-cancel btn">Cancel</button>';
+            el.querySelector('.replay-progress-cancel')?.addEventListener('click', () => {
                 tabInfo._replayCancel = true;
                 tabInfo._replayAbort?.abort();
             });
             tabInfo.termContainer?.appendChild(el);
             tabInfo._replayProgressEl = el;
         }
-        const fmt = (n) => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MiB` : `${Math.max(0, Math.round(n / 1024))} KiB`;
-        el.querySelector('.replay-progress-text').textContent =
-            total > 0 ? `Replaying history ${fmt(done)} / ${fmt(total)}` : 'Replaying history';
+        const fmt = (n) => n >= 1048576
+            ? `${(n / 1048576).toFixed(1)} MiB`
+            : `${Math.max(0, Math.round(n / 1024))} KiB`;
+        const text = el.querySelector('.replay-progress-text');
+        if (text)
+            text.textContent =
+                total > 0
+                    ? `Replaying history ${fmt(done)} / ${fmt(total)}`
+                    : 'Replaying history';
     }
-
     _hideReplayProgress(tabInfo) {
         tabInfo._replayProgressEl?.remove();
         tabInfo._replayProgressEl = null;
     }
-
     // A received geometry marker is adopted, never answered: adopting must
     // not emit another resize, or two viewers would echo forever.
     async _adoptLiveGeometry(tabInfo, geom, socket = tabInfo?.ws) {
-        const current = () => this.tabs.get(tabInfo.paneId) === tabInfo && !tabInfo.finalizing && socket === tabInfo.ws;
-        if (!geom || socket?.mode !== 'hot' || !current()) return;
+        if (!socket)
+            return;
+        const current = () => this.tabs.get(tabInfo.paneId) === tabInfo &&
+            !tabInfo.finalizing &&
+            socket === tabInfo.ws;
+        if (!geom || socket?.mode !== 'hot' || !current())
+            return;
         const m = /^v1\.(\d+)\.(\d+)\.(\d+)$/.exec(geom.event_cursor || '');
-        if (!m || Number(m[1]) !== tabInfo.paneEpoch) return;
-        const cols = geom.cols;
-        const rows = geom.rows;
-        if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols <= 0 || rows <= 0 || cols > 65535 || rows > 65535) return;
+        if (!m || Number(m[1]) !== tabInfo.paneEpoch)
+            return;
+        const cols = geom.cols ?? 0;
+        const rows = geom.rows ?? 0;
+        if (!Number.isInteger(cols) ||
+            !Number.isInteger(rows) ||
+            cols <= 0 ||
+            rows <= 0 ||
+            cols > 65535 ||
+            rows > 65535)
+            return;
         // Stop socket delivery synchronously, before yielding to xterm.
         // Bytes on each side of this marker must parse in different grids.
         socket.hold?.();
         await this._drainSettled(tabInfo);
-        if (!current()) return;
+        if (!current())
+            return;
         try {
             const ordinal = Number(m[3]);
             const previous = Number(tabInfo._replayCursor?.split('.').at(-1) ?? '0');
-            if (ordinal <= previous) { socket.release?.(); return; }
-            if (Number(m[2]) !== (tabInfo.drainedSeq ?? 0) || ordinal !== previous + 1) {
-                socket.ws?.close();
+            if (ordinal <= previous) {
+                socket.release?.();
                 return;
             }
-            if (tabInfo.term && (tabInfo.term.cols !== cols || tabInfo.term.rows !== rows))
+            if (Number(m[2]) !== (tabInfo.drainedSeq ?? 0) ||
+                ordinal !== previous + 1) {
+                socket.ws?.close?.();
+                return;
+            }
+            if (tabInfo.term &&
+                (tabInfo.term.cols !== cols || tabInfo.term.rows !== rows))
                 this._resizeWithReaderAnchor(tabInfo, () => tabInfo.term.resize(cols, rows));
-            tabInfo._replayCursor = geom.event_cursor;
-        } catch (_e) {
-            try { socket.ws?.close(); } catch (_ignored) {}
+            tabInfo._replayCursor = geom.event_cursor ?? null;
+        }
+        catch (_e) {
+            try {
+                socket.ws?.close?.();
+            }
+            catch (_ignored) { }
             return;
         }
         socket.release?.();
     }
-
-
-
-
     async _parseRecordingRange(tabInfo, range, current, deliver, decodeSocket = tabInfo.ws, historical = true) {
         // Resize only after preceding bytes reach the parser. Applying
         // geometry to a queued write interprets that write in the new grid.
         await this._drainSettled(tabInfo);
-        if (!current()) return false;
-        const markers = (range.resizes || []).slice().sort((a, b) => a[0] - b[0]);
+        if (!current())
+            return false;
+        const markers = (range.resizes || [])
+            .slice()
+            .sort((a, b) => a[0] - b[0]);
         let prior;
         const changes = [];
         for (const marker of markers) {
-            if (marker[0] < range.start) prior = marker;
-            else if (marker[0] <= range.end) changes.push(marker);
+            if (marker[0] < range.start)
+                prior = marker;
+            else if (marker[0] <= range.end)
+                changes.push(marker);
         }
-        if (prior) changes.unshift(prior);
+        if (prior)
+            changes.unshift(prior);
         // Replayed bytes can make xterm answer old queries; those replies
         // must not reach the live app. The input path suppresses non-user
         // output while this flag stands.
@@ -3250,10 +3309,13 @@ export class TabManager {
                 if (deliver) {
                     // The socket alone owns decoding and gap sequencing.
                     deliver(bytes);
-                } else {
-                    const text = decodeSocket?.decodeOutput ? decodeSocket.decodeOutput(bytes)
-                        : decodeSocket?.decoder ? decodeSocket.decoder.decode(bytes, { stream: true })
-                        : new TextDecoder().decode(bytes);
+                }
+                else {
+                    const text = decodeSocket?.decodeOutput
+                        ? decodeSocket.decodeOutput(bytes)
+                        : decodeSocket?.decoder
+                            ? decodeSocket.decoder.decode(bytes, { stream: true })
+                            : new TextDecoder().decode(bytes);
                     this.writeToTerminal(tabInfo, text);
                 }
                 await this._drainSettled(tabInfo);
@@ -3263,39 +3325,48 @@ export class TabManager {
                     tabInfo.queuedSeq = Math.max(tabInfo.queuedSeq ?? 0, batchEnd);
                     this._advanceDrained(tabInfo, batchEnd);
                 }
-                if (!current()) return false;
+                if (!current())
+                    return false;
                 cursor = batchEnd;
             }
             return true;
         };
         try {
             for (const [at, cols, rows] of changes) {
-                if (!await parse(Math.max(range.start, at))) return false;
-                if (!current()) return false;
+                if (!(await parse(Math.max(range.start, at))))
+                    return false;
+                if (!current())
+                    return false;
                 if (tabInfo.term.cols !== cols || tabInfo.term.rows !== rows)
                     this._resizeWithReaderAnchor(tabInfo, () => tabInfo.term.resize(cols, rows));
-                if (at >= range.start) tabInfo._replayCursor = `v1.${epoch}.${at}.${++ordinal}`;
+                if (at >= range.start)
+                    tabInfo._replayCursor = `v1.${epoch}.${at}.${++ordinal}`;
             }
             return await parse(range.end);
-        } finally {
+        }
+        finally {
             tabInfo._historyParsing = false;
         }
     }
-
     async _bootstrapDelta(tabInfo, from, head, expectGen, onReady, throughCursor) {
         const ws = tabInfo.ws;
         const epoch = tabInfo.paneEpoch;
         const historicalFence = tabInfo._historicalReplayFence;
         let admitted = false;
-        const current = () => !tabInfo.finalizing && tabInfo.paneEpoch === epoch &&
+        const current = () => !tabInfo.finalizing &&
+            tabInfo.paneEpoch === epoch &&
             (tabInfo.ws === ws || admitted) &&
             (expectGen === undefined || tabInfo._bootstrapGen === expectGen);
-        if (!current()) return { kind: 'cancelled', reason: 'stale' };
+        if (!current())
+            return { kind: 'cancelled', reason: 'stale' };
         // Even a zero-delta resume must finish its queued writes before
         // fitting the live viewport and synchronizing backend dimensions.
-        if (from === head || tabInfo.writePending || tabInfo.writeBuffer?.length) {
+        if (from === head ||
+            tabInfo.writePending ||
+            tabInfo.writeBuffer?.length) {
             await this._drainSettled(tabInfo);
-            if (!current()) return { kind: 'cancelled', reason: 'stale' };
+            if (!current())
+                return { kind: 'cancelled', reason: 'stale' };
         }
         let cursor = from;
         const target = head;
@@ -3309,17 +3380,22 @@ export class TabManager {
         this._showReplayProgress(tabInfo, cursor, target);
         const prepareParser = () => {
             const baseline = tabInfo._replayBaseline;
-            if (!baseline) return current();
+            if (!baseline)
+                return current();
             this._resetPaneBuffer(tabInfo);
             tabInfo.term.resize(baseline.cols, baseline.rows);
             tabInfo._replayBaseline = null;
             if (tabInfo._pendingRestartNotice) {
                 tabInfo._pendingRestartNotice = false;
-                this.app?.showToast?.('Session restarted.', { type: 'info', title: 'Terminal' });
+                this.app?.showToast?.('Session restarted.', {
+                    type: 'info',
+                    title: 'Terminal',
+                });
             }
             return current();
         };
-        while (cursor < target || (throughCursor !== undefined && chained !== throughCursor)) {
+        while (cursor < target ||
+            (throughCursor !== undefined && chained !== throughCursor)) {
             if (tabInfo._replayCancel) {
                 this._hideReplayProgress(tabInfo);
                 return { kind: 'live-now' };
@@ -3327,20 +3403,31 @@ export class TabManager {
             // Finish the original cold prefix silently after a failed page.
             // Later bytes missed while disconnected keep live reply handling.
             const historical = historicalFence
-                ? cursor < historicalFence.head || (cursor === historicalFence.head &&
-                    Number(chained.split('.').at(-1)) < Number(historicalFence.cursor.split('.').at(-1)))
+                ? cursor < historicalFence.head ||
+                    (cursor === historicalFence.head &&
+                        Number(chained.split('.').at(-1)) <
+                            Number(historicalFence.cursor.split('.').at(-1)))
                 : tabInfo._replayHistorical !== false;
             const pageTarget = historicalFence && historical ? historicalFence.head : target;
-            const pageFence = historicalFence && historical ? historicalFence.cursor : throughCursor;
+            const pageFence = historicalFence && historical
+                ? historicalFence.cursor
+                : throughCursor;
             let d;
             try {
                 // Through stays fenced at the attach head: the server
                 // caps each page at 2 MiB and the end cursor chains.
-                d = await this._fetchReplayPages(tabInfo.paneId, cursor, pageTarget, tabInfo.paneEpoch, { throughCursor: pageFence, afterCursor: chained, signal: abort.signal });
-            } catch (error) {
+                d = await this._fetchReplayPages(tabInfo.paneId, cursor, pageTarget, tabInfo.paneEpoch, {
+                    throughCursor: pageFence,
+                    afterCursor: chained,
+                    signal: abort.signal,
+                });
+            }
+            catch (error) {
                 this._hideReplayProgress(tabInfo);
-                if (!error?.historyPermanent) throw error;
-                if (!current()) return { kind: 'cancelled', reason: 'stale' };
+                if (!error?.historyPermanent)
+                    throw error;
+                if (!current())
+                    return { kind: 'cancelled', reason: 'stale' };
                 // The journal never evicts, so a permanent failure is a
                 // rebirth or a malformed request, not a servable span.
                 // Fail for a fresh atomic attach instead of healing
@@ -3355,27 +3442,38 @@ export class TabManager {
                 this._hideReplayProgress(tabInfo);
                 return { kind: 'live-now' };
             }
-            if (!d || d.start !== cursor || d.end < cursor || d.end > target || d.byteLength !== d.end - cursor ||
+            if (!d ||
+                d.start !== cursor ||
+                d.end < cursor ||
+                d.end > target ||
+                d.byteLength !== d.end - cursor ||
                 (d.bytes && d.bytes.byteLength !== d.byteLength)) {
                 this._hideReplayProgress(tabInfo);
-                return { kind: 'failed', error: new Error('malformed replay page') };
+                return {
+                    kind: 'failed',
+                    error: new Error('malformed replay page'),
+                };
             }
             if (d.end === cursor && d.endCursor === chained) {
                 // Neither the bytes nor the chain advanced: stuck.
                 this._hideReplayProgress(tabInfo);
-                return { kind: 'failed', error: new Error('replay page made no progress') };
+                return {
+                    kind: 'failed',
+                    error: new Error('replay page made no progress'),
+                };
             }
             admitted = true;
             if (!prepareParser()) {
                 this._hideReplayProgress(tabInfo);
                 return { kind: 'cancelled', reason: 'stale' };
             }
-            if (d.endCursor !== undefined) chained = d.endCursor;
+            if (d.endCursor !== undefined)
+                chained = d.endCursor;
             this._noteReplayDurability(tabInfo, d);
             if (d.bytes?.byteLength || d.resizes?.length) {
                 // A false here is a stale intent: the parser stopped because
                 // this attempt no longer owns the pane.
-                if (!await this._parseRecordingRange(tabInfo, d, current, undefined, ws, historical)) {
+                if (!(await this._parseRecordingRange(tabInfo, d, current, undefined, ws, historical))) {
                     this._hideReplayProgress(tabInfo);
                     return { kind: 'cancelled', reason: 'stale' };
                 }
@@ -3384,24 +3482,28 @@ export class TabManager {
                 this._hideReplayProgress(tabInfo);
                 return { kind: 'cancelled', reason: 'stale' };
             }
-            if (ws?.mode === 'hot' && ws.decoder) tabInfo._streamDecoder = ws.decoder;
+            if (ws?.mode === 'hot' && ws.decoder)
+                tabInfo._streamDecoder = ws.decoder;
             if ((tabInfo.queuedSeq ?? 0) <= d.end) {
                 tabInfo.queuedSeq = d.end;
                 tabInfo.drainedSeq = d.end;
             }
             cursor = d.end;
-            if (chained !== undefined) tabInfo._replayCursor = chained;
+            if (chained !== undefined)
+                tabInfo._replayCursor = chained;
             this._showReplayProgress(tabInfo, cursor, target);
             // Yield between pages so typing, scrolling, tab switching,
             // and touch stay responsive during a long replay.
-            await new Promise(resolve => setTimeout(resolve, 0));
+            await new Promise((resolve) => setTimeout(resolve, 0));
         }
         this._hideReplayProgress(tabInfo);
         // An empty, geometry-free attach is already a complete baseline.
-        if (!prepareParser()) return { kind: 'cancelled', reason: 'stale' };
+        if (!prepareParser())
+            return { kind: 'cancelled', reason: 'stale' };
         // Finish replay writes before fitting and releasing live output.
         await this._drainSettled(tabInfo);
-        if (!current()) return { kind: 'cancelled', reason: 'stale' };
+        if (!current())
+            return { kind: 'cancelled', reason: 'stale' };
         // Restore visible panel geometry; hidden parsers keep the recorded
         // grid until activation provides measurable panel dimensions.
         this._fitVisibleTerminal(tabInfo);
@@ -3411,10 +3513,14 @@ export class TabManager {
         // Every attachment needs a real resize, including equal-size and
         // zero-delta reconnects. Only the current socket may own this sizing.
         // A dead pane keeps its final grid: no resize to a gone process.
-        if (!tabInfo.isDead && this._terminalPanelVisible?.(tabInfo) !== false && tabInfo.ws === ws && typeof ws?.sendResize === 'function' &&
+        if (!tabInfo.isDead &&
+            this._terminalPanelVisible?.(tabInfo) !== false &&
+            tabInfo.ws === ws &&
+            typeof ws?.sendResize === 'function' &&
             ws.sendResize(tabInfo.term.cols, tabInfo.term.rows) !== false) {
             tabInfo._sizedWs = ws;
-        } else {
+        }
+        else {
             tabInfo._pendingPanelFit = true;
             tabInfo._pendingForceResize = true;
         }
@@ -3427,10 +3533,10 @@ export class TabManager {
         this._scheduleCheckpointUpload(tabInfo);
         return { kind: 'applied', through: cursor };
     }
-
     async _onLiveGap(tabInfo, from, to) {
         const pty = tabInfo.ws;
-        if (pty?.mode !== 'hot') return;
+        if (pty?.mode !== 'hot')
+            return;
         // Order with an in-flight bootstrap: the delta must enqueue first,
         // or the patch (newer bytes) lands below it. Stale when the socket
         // swapped mid-fetch: verify identity before touching watermarks.
@@ -3438,17 +3544,20 @@ export class TabManager {
         // the new head owns the stream now, so this patch dissolves.
         while (tabInfo._bootstrapGate) {
             const gate = tabInfo._bootstrapGate;
-            await gate.catch(() => {});
-            if (tabInfo.isDead || tabInfo.ws !== pty) return;
+            await gate.catch(() => { });
+            if (tabInfo.isDead || tabInfo.ws !== pty)
+                return;
             // A parse-drain gate can hand off to a recording bootstrap.
             // Wait for the successor too, rather than patch ahead of it.
-            if (tabInfo._bootstrapGate === gate) break;
+            if (tabInfo._bootstrapGate === gate)
+                break;
         }
         // The wait may have outlived the hole: a flush-stop re-fire (or
         // another patch) can advance past `from` while this event waits.
         // liveSeq only moves forward, so from < liveSeq means this range
         // is covered — the remainder, if any, re-fires on its own.
-        if (from < pty.liveSeq) return;
+        if (from < (pty.liveSeq ?? 0))
+            return;
         const bootGen = tabInfo._bootstrapGen;
         // One gap fetch per tab at a time. Concurrent onGap events
         // describe overlapping ranges of the same hole; letting two
@@ -3456,10 +3565,14 @@ export class TabManager {
         // (duplication plus loss). The in-flight patch's flush re-fires
         // onGap if a gap remains, so dropping concurrent events converges
         // instead of stalling.
-        if (tabInfo._gapInFlight) return;
+        if (tabInfo._gapInFlight)
+            return;
         tabInfo._gapInFlight = true;
         pty.hold?.();
-        const current = () => !tabInfo.finalizing && tabInfo.ws === pty && pty.mode === 'hot' && tabInfo._bootstrapGen === bootGen;
+        const current = () => !tabInfo.finalizing &&
+            tabInfo.ws === pty &&
+            pty.mode === 'hot' &&
+            tabInfo._bootstrapGen === bootGen;
         let recovered = false;
         try {
             const ordinal = tabInfo._replayCursor?.split('.').at(-1) ?? '0';
@@ -3472,34 +3585,54 @@ export class TabManager {
                     // Resolve latest once, then keep that finite fence
                     // even if the process continues producing output.
                     d = await this._fetchReplayPages(tabInfo.paneId, cursor, to, tabInfo.paneEpoch, {
-                        latest: targetCursor === undefined, requestThrough: targetThrough,
-                        throughCursor: targetCursor, afterCursor: chained,
+                        latest: targetCursor === undefined,
+                        requestThrough: targetThrough,
+                        throughCursor: targetCursor,
+                        afterCursor: chained,
                     });
                     if (d && targetCursor === undefined) {
                         targetThrough = d.through;
                         targetCursor = d.throughCursor;
                     }
-                } catch (error) {
+                }
+                catch (error) {
                     // The journal never evicts: retry through a new
                     // atomic attach instead of patching around it.
-                    if (error?.historyPermanent) {
-                        try { pty.ws?.close(); } catch (_e) {}
+                    if (error
+                        ?.historyPermanent) {
+                        try {
+                            pty.ws?.close?.();
+                        }
+                        catch (_e) { }
                         return;
                     }
                     throw error;
                 }
-                if (tabInfo.finalizing || tabInfo.ws !== pty || tabInfo._bootstrapGen !== bootGen) return;
-                if (!d || d.start !== cursor || d.end < cursor || d.end > to ||
-                    d.byteLength !== d.end - cursor || d.bytes?.byteLength !== d.byteLength ||
+                if (tabInfo.finalizing ||
+                    tabInfo.ws !== pty ||
+                    tabInfo._bootstrapGen !== bootGen)
+                    return;
+                if (!d ||
+                    d.start !== cursor ||
+                    d.end < cursor ||
+                    d.end > to ||
+                    d.byteLength !== d.end - cursor ||
+                    d.bytes?.byteLength !== d.byteLength ||
                     (d.end === cursor && d.endCursor === chained)) {
                     // Retry through a new atomic attach. Do not discard the
                     // hole, reset the decoder, or inject text into its stream.
-                    try { pty.ws?.close(); } catch (_e) {}
+                    try {
+                        pty.ws?.close?.();
+                    }
+                    catch (_e) { }
                     return;
                 }
-                if (d.endCursor !== undefined) chained = d.endCursor;
+                if (d.endCursor !== undefined)
+                    chained = d.endCursor;
                 this._noteReplayDurability(tabInfo, d);
-                if (!await this._parseRecordingRange(tabInfo, d, current, bytes => pty.applyGapPatch(bytes), pty, false)) return;
+                const patch = (bytes) => pty.applyGapPatch?.(bytes);
+                if (!(await this._parseRecordingRange(tabInfo, d, current, patch, pty, false)))
+                    return;
                 tabInfo.queuedSeq = pty.lastFrameEnd;
                 tabInfo.drainedSeq = d.end;
                 tabInfo._replayCursor = chained;
@@ -3507,23 +3640,31 @@ export class TabManager {
             }
             this._fitVisibleTerminal(tabInfo);
             recovered = true;
-        } finally {
-            if (tabInfo._bootstrapGen === bootGen) tabInfo._gapInFlight = false;
+        }
+        finally {
+            if (tabInfo._bootstrapGen === bootGen)
+                tabInfo._gapInFlight = false;
             // applyGapPatch may encounter the next hole while this handler
             // owns the gate. Re-fire after relinquishing it, not before.
-            if (recovered && tabInfo.ws === pty && !tabInfo.finalizing) pty.release?.();
+            if (recovered && tabInfo.ws === pty && !tabInfo.finalizing)
+                pty.release?.();
         }
     }
-
     // Exit carries no head. Finish the already-admitted bootstrap, then
     // capture one finite tail fence and parse through both bytes and events.
-    async _drainReplayTail(tabInfo, socket = tabInfo.ws) {
+    async _drainReplayTail(tabInfo, socket = tabInfo.ws ?? undefined) {
+        if (!socket)
+            return;
         const gate = tabInfo._bootstrapGate;
-        if (gate) await gate;
+        if (gate)
+            await gate;
         const epoch = tabInfo.paneEpoch;
-        const current = () => tabInfo.ws === socket && tabInfo.paneEpoch === epoch && !tabInfo.finalizing;
+        const current = () => tabInfo.ws === socket &&
+            tabInfo.paneEpoch === epoch &&
+            !tabInfo.finalizing;
         await this._drainSettled(tabInfo);
-        if (!current()) return;
+        if (!current())
+            return;
         socket.hold?.();
         let from = tabInfo.drainedSeq ?? 0;
         const ordinal = tabInfo._replayCursor?.split('.').at(-1) ?? '0';
@@ -3532,30 +3673,38 @@ export class TabManager {
         let throughCursor;
         do {
             const page = await this._fetchReplayPages(tabInfo.paneId, from, through, epoch, {
-                latest: throughCursor === undefined, throughCursor, afterCursor: after,
+                latest: throughCursor === undefined,
+                throughCursor,
+                afterCursor: after,
             });
-            if (!current()) return;
-            if (!page) throw new Error('final output replay unavailable; the tail was not skipped');
+            if (!current())
+                return;
+            if (!page)
+                throw new Error('final output replay unavailable; the tail was not skipped');
             if (throughCursor === undefined) {
                 through = page.through;
                 throughCursor = page.throughCursor;
             }
-            if (page.end === from && page.endCursor === after && after !== throughCursor)
+            if (page.end === from &&
+                page.endCursor === after &&
+                after !== throughCursor)
                 throw new Error('final output replay made no progress');
-            if (!await this._parseRecordingRange(tabInfo, page, current, undefined, socket, false)) return;
+            if (!(await this._parseRecordingRange(tabInfo, page, current, undefined, socket, false)))
+                return;
             from = page.end;
-            after = page.endCursor;
+            after = page.endCursor ?? after;
             tabInfo.queuedSeq = tabInfo.drainedSeq = from;
             tabInfo._replayCursor = after;
             this._noteReplayDurability(tabInfo, page);
         } while (from < through || after !== throughCursor);
     }
-
     _scheduleCheckpointUpload(tabInfo) {
-        if (!tabInfo.serializeAddon || !tabInfo._ckptEnabled) return;
-        clearTimeout(tabInfo._ckptTimer);
+        if (!tabInfo.serializeAddon || !tabInfo._ckptEnabled)
+            return;
+        clearTimeout(tabInfo._ckptTimer ?? undefined);
         const now = Date.now();
-        if (!tabInfo._ckptWaitingSince) tabInfo._ckptWaitingSince = now;
+        if (!tabInfo._ckptWaitingSince)
+            tabInfo._ckptWaitingSince = now;
         const wait = now - tabInfo._ckptWaitingSince >= CHECKPOINT_MAX_WAIT_MS
             ? 0
             : CHECKPOINT_QUIET_MS;
@@ -3564,52 +3713,58 @@ export class TabManager {
             this._uploadCheckpoint(tabInfo);
         }, wait);
     }
-
     _uploadCheckpoint(tabInfo, options = {}) {
         const pty = tabInfo.ws;
-        if (
-            !tabInfo.serializeAddon ||
+        if (!tabInfo.serializeAddon ||
             !pty ||
             pty.mode !== 'hot' ||
-            tabInfo.isDead || tabInfo.writePending || tabInfo.writeBuffer?.length ||
+            tabInfo.isDead ||
+            tabInfo.writePending ||
+            tabInfo.writeBuffer?.length ||
             !tabInfo.term ||
             tabInfo.paneEpoch === undefined ||
-            tabInfo.drainedSeq === undefined
-        )
+            tabInfo.drainedSeq === undefined)
             return;
         // SerializeAddon restores mouse tracking but omits its encoding.
         // A restored Pi pane would then emit X10 instead of the SGR reports
         // the running TUI expects. Preserve the actual encoding, not a
         // coder-specific guess or a forced global mouse mode.
-        const encoding = tabInfo.term._core?.mouseStateService?.activeEncoding;
-        const mouseMode = encoding === 'SGR' ? '\x1b[?1006h'
-            : encoding === 'SGR_PIXELS' ? '\x1b[?1016h' : '';
+        const encoding = internals(tabInfo.term)._core?.mouseStateService
+            ?.activeEncoding;
+        const mouseMode = encoding === 'SGR'
+            ? '\x1b[?1006h'
+            : encoding === 'SGR_PIXELS'
+                ? '\x1b[?1016h'
+                : '';
         let ansi = '';
         try {
-            let scrollback = isCoarseViewport() ? PHONE_CHECKPOINT_ROWS : LIVE_SCROLLBACK_ROWS;
+            let scrollback = isCoarseViewport()
+                ? PHONE_CHECKPOINT_ROWS
+                : LIVE_SCROLLBACK_ROWS;
             const budget = isCoarseViewport()
                 ? COARSE_CHECKPOINT_BYTES
                 : MAX_CHECKPOINT_BYTES;
-            for (let attempt = 0; ; attempt++) {
+            for (let attempt = 0;; attempt++) {
                 const snapshot = terminalSnapshot(tabInfo.term, tabInfo.serializeAddon, { scrollback });
-                if (!snapshot && !mouseMode) return;
+                if (!snapshot && !mouseMode)
+                    return;
                 // Pending parser bytes must remain last, including after the
                 // mouse encoding that SerializeAddon does not carry.
                 ansi = mouseMode + snapshot;
                 // The server bounds UTF-8 bytes, not UTF-16 string length.
                 const bytes = new TextEncoder().encode(ansi).byteLength;
-                if (bytes <= budget) break;
+                if (bytes <= budget)
+                    break;
                 // Never post a snapshot the server cannot accept. The cold
                 // recording, not a truncated string, owns omitted history.
-                if (scrollback === 0) return;
-                const lines = Math.min(scrollback,
-                    tabInfo.term.buffer?.active?.baseY ?? scrollback) + tabInfo.term.rows;
-                const target = Math.max(0,
-                    Math.floor(budget * lines / bytes) - tabInfo.term.rows);
-                scrollback = Math.min(scrollback - 1, target,
-                    attempt ? Math.floor(scrollback / 2) : scrollback);
+                if (scrollback === 0)
+                    return;
+                const lines = Math.min(scrollback, tabInfo.term.buffer?.active?.baseY ?? scrollback) + tabInfo.term.rows;
+                const target = Math.max(0, Math.floor((budget * lines) / bytes) - tabInfo.term.rows);
+                scrollback = Math.min(scrollback - 1, target, attempt ? Math.floor(scrollback / 2) : scrollback);
             }
-        } catch (e) {
+        }
+        catch (e) {
             console.error('[term] serialize failed:', e);
             return;
         }
@@ -3631,44 +3786,40 @@ export class TabManager {
         tabInfo._ckptWaitingSince = 0;
         const url = `/api/terminals/${encodeURIComponent(tabInfo.paneId)}/checkpoint`;
         const json = JSON.stringify(payload);
-        const beacon = () =>
-            navigator.sendBeacon?.(
-                url,
-                new Blob([json], { type: 'application/json' }),
-            );
+        const beacon = () => navigator.sendBeacon?.(url, new Blob([json], { type: 'application/json' }));
         if (options?.unload) {
             beacon();
             return;
         }
-        if (beacon()) return;
+        if (beacon())
+            return;
         fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: json,
         })
             .then((res) => {
-                if (res.ok) termPerfMark('ckpt-uploaded');
-            })
-            .catch(() => {});
+            if (res.ok)
+                termPerfMark('ckpt-uploaded');
+        })
+            .catch(() => { });
     }
-
     _openTermAndViewport(tabInfo) {
         if (tabInfo._termOpened) {
-            if (tabInfo._pendingViewport) tabInfo._pendingViewport();
+            tabInfo._pendingViewport?.();
             return;
         }
-        clearTimeout(tabInfo._openFallbackTimer);
+        clearTimeout(tabInfo._openFallbackTimer ?? undefined);
         tabInfo._termOpened = true;
         try {
             tabInfo.term.open(tabInfo.termContainer);
-        } catch (e) {
+        }
+        catch (e) {
             console.error('[term] open failed:', e);
         }
         // Prevent browser viewport jump when xterm focuses its hidden
         // textarea (moved out of createTab so hot tabs can open late).
-        const textarea = tabInfo.termContainer.querySelector(
-            'textarea.xterm-helper-textarea',
-        );
+        const textarea = tabInfo.termContainer.querySelector('textarea.xterm-helper-textarea');
         if (textarea) {
             const originalFocus = textarea.focus.bind(textarea);
             textarea.focus = (options) => {
@@ -3679,34 +3830,40 @@ export class TabManager {
         for (const hook of tabInfo._postOpenHooks || []) {
             try {
                 hook(tabInfo.term);
-            } catch (e) {
+            }
+            catch (e) {
                 console.error('[term] post-open hook failed:', e);
             }
         }
         tabInfo._postOpenHooks = [];
         this._observeTerminalPanel(tabInfo);
-        if (tabInfo._pendingViewport) tabInfo._pendingViewport();
+        tabInfo._pendingViewport?.();
     }
-
     // FitAddon does not observe its container. Watch the actual panel so
     // drawers, splitters, input bars and CSS changes share one resize path.
     _observeTerminalPanel(tabInfo) {
-        if (typeof ResizeObserver !== 'function' || tabInfo._panelObserver || !tabInfo.termContainer) return;
-        tabInfo._panelObserver = new ResizeObserver(entries => {
-            const rect = (entries || []).find(entry => entry.target === tabInfo.termContainer)?.contentRect;
-            const changed = rect && (!tabInfo._panelBox || tabInfo._panelBox.width !== rect.width || tabInfo._panelBox.height !== rect.height);
-            if (rect) tabInfo._panelBox = { width: rect.width, height: rect.height };
+        if (typeof ResizeObserver !== 'function' ||
+            tabInfo._panelObserver ||
+            !tabInfo.termContainer)
+            return;
+        tabInfo._panelObserver = new ResizeObserver((entries) => {
+            const rect = (entries || []).find((entry) => entry.target === tabInfo.termContainer)?.contentRect;
+            const changed = rect &&
+                (!tabInfo._panelBox ||
+                    tabInfo._panelBox.width !== rect.width ||
+                    tabInfo._panelBox.height !== rect.height);
+            if (rect)
+                tabInfo._panelBox = { width: rect.width, height: rect.height };
             this._queuePanelFit(tabInfo, { forceResize: Boolean(changed) });
         });
         tabInfo._panelObserver.observe(tabInfo.termContainer);
     }
-
     _terminalPanelVisible(tabInfo) {
-        if (typeof document === 'undefined' || document.hidden) return false;
+        if (typeof document === 'undefined' || document.hidden)
+            return false;
         const rect = tabInfo.termContainer?.getBoundingClientRect?.();
         return !rect || (rect.width > 0 && rect.height > 0);
     }
-
     _fitVisibleTerminal(tabInfo) {
         if (!this._terminalPanelVisible(tabInfo)) {
             tabInfo._pendingPanelFit = true;
@@ -3719,48 +3876,61 @@ export class TabManager {
         }
         this._resizeWithReaderAnchor(tabInfo, () => tabInfo.fitAddon?.fit?.());
     }
-
     // A resize emits onScroll before the reader's marker has been restored.
     // Do not replace that marker with the resize's temporary viewport row.
     _resizeWithReaderAnchor(tabInfo, resize) {
         const term = tabInfo.term;
-        const anchor = term?._phiReaderAnchor;
-        if (!anchor) { resize(); return; }
+        const anchor = internals(term)._phiReaderAnchor;
+        if (!anchor) {
+            resize();
+            return;
+        }
         const restoring = this._restoringReaderAnchor;
         this._restoringReaderAnchor = true;
         try {
             resize();
-            if (!anchor.marker.isDisposed && anchor.marker.line >= 0 &&
-                term.buffer.active.type === 'normal' && this._terminalPanelVisible(tabInfo)) {
+            if (!anchor.marker.isDisposed &&
+                anchor.marker.line >= 0 &&
+                term.buffer.active.type === 'normal' &&
+                this._terminalPanelVisible(tabInfo)) {
                 // Browser xterm can still have its pre-resize pixel offset.
                 // Re-sync it before scrollToLine computes a relative move.
                 this._resyncViewportScroll(tabInfo, true);
                 term.scrollToLine(anchor.marker.line);
             }
-        } finally {
+        }
+        finally {
             this._restoringReaderAnchor = restoring;
         }
     }
-
     _queueActiveRefresh() {
         const tab = this.getActiveTab();
-        if (tab) this._queuePanelFit(tab, { forceResize: true });
+        if (tab)
+            this._queuePanelFit(tab, { forceResize: true });
     }
-
     _refreshTerminalScreen(tabInfo) {
-        tabInfo.term?._core?.viewport?.syncScrollArea?.(true);
+        internals(tabInfo.term)._core?.viewport?.syncScrollArea(true);
         this._resyncViewportScroll(tabInfo);
-        try { tabInfo.term?.refresh?.(0, Math.max(0, tabInfo.term.rows - 1)); }
-        catch (error) { console.warn('[term] renderer refresh deferred:', error); }
+        try {
+            tabInfo.term?.refresh?.(0, Math.max(0, tabInfo.term.rows - 1));
+        }
+        catch (error) {
+            console.warn('[term] renderer refresh deferred:', error);
+        }
     }
-
     _queuePanelFit(tabInfo, { forceResize = false } = {}) {
         tabInfo._pendingForceResize = Boolean(tabInfo._pendingForceResize || forceResize);
-        if (tabInfo._panelFitRAF !== undefined && tabInfo._panelFitRAF !== null) return;
+        if (tabInfo._panelFitRAF !== undefined && tabInfo._panelFitRAF !== null)
+            return;
         const fit = () => {
             tabInfo._panelFitRAF = null;
-            if (tabInfo.finalizing || tabInfo.isDead || tabInfo !== this.getActiveTab()) return;
-            if (tabInfo._bootstrapGate || tabInfo.writePending || !this._terminalPanelVisible(tabInfo)) {
+            if (tabInfo.finalizing ||
+                tabInfo.isDead ||
+                tabInfo !== this.getActiveTab())
+                return;
+            if (tabInfo._bootstrapGate ||
+                tabInfo.writePending ||
+                !this._terminalPanelVisible(tabInfo)) {
                 tabInfo._pendingPanelFit = true;
                 return;
             }
@@ -3769,47 +3939,38 @@ export class TabManager {
             tabInfo._pendingForceResize = false;
             this.fitActiveTerminal({ forceResize: force });
         };
-        if (typeof requestAnimationFrame === 'function') tabInfo._panelFitRAF = requestAnimationFrame(fit);
-        else fit();
+        if (typeof requestAnimationFrame === 'function')
+            tabInfo._panelFitRAF = requestAnimationFrame(fit);
+        else
+            fit();
     }
-
     // Called from each socket's onOpen. Hot tabs wait briefly for
     // ATTACH_HEAD (so the checkpoint can be written pre-open); everything
     // else opens immediately.
     _paneOpened(tabInfo) {
         if (tabInfo._termOpened) {
-            if (tabInfo._pendingViewport) tabInfo._pendingViewport();
+            tabInfo._pendingViewport?.();
             return;
         }
-        clearTimeout(tabInfo._openFallbackTimer);
-        tabInfo._openFallbackTimer = setTimeout(
-            () => this._openTermAndViewport(tabInfo),
-            300,
-        );
+        clearTimeout(tabInfo._openFallbackTimer ?? undefined);
+        tabInfo._openFallbackTimer = setTimeout(() => this._openTermAndViewport(tabInfo), 300);
     }
-
     writeToTerminal(tabInfo, data, frontier) {
         // Disconnection and process exit do not dispose xterm. Already
         // received output still belongs to its history, including exit
         // sequences that leave the alternate screen. Only teardown cancels.
-        if (tabInfo.finalizing) return;
-
+        if (tabInfo.finalizing)
+            return;
         // First live/replay byte of an attach. Measured against
         // the socket-open mark so attach latency is attributable end-to-end.
         if (!tabInfo._perfWrote) {
             tabInfo._perfWrote = true;
             termPerfMark('first-write');
             if (tabInfo._perfAttachAt) {
-                const attachMs = termPerfMeasureBetween(
-                    'attach-to-first-write',
-                    tabInfo._perfAttachAt,
-                );
-                console.info(
-                    `[phi-perf] attach-to-first-write: ${attachMs.toFixed(0)}ms`,
-                );
+                const attachMs = termPerfMeasureBetween('attach-to-first-write', tabInfo._perfAttachAt);
+                console.info(`[phi-perf] attach-to-first-write: ${attachMs.toFixed(0)}ms`);
             }
         }
-
         if (tabInfo.loaderEl && !tabInfo.hasStarted) {
             tabInfo.hasStarted = true;
             const loader = tabInfo.loaderEl;
@@ -3821,7 +3982,6 @@ export class TabManager {
             }, 300);
             tabInfo.loaderEl = null;
         }
-
         // Track PTY activity on output.
         tabInfo.lastOutputAt = Date.now();
         if (!tabInfo.isBusy) {
@@ -3835,49 +3995,53 @@ export class TabManager {
             // Subsequent writes stay in the same live-output state.
             this.updateDocumentTitle();
         }
-
         this._enqueueTerminalWrite(tabInfo, data, frontier);
     }
-
     // Local screen text shares the parser FIFO without representing PTY
     // activity or advancing source-sequence accounting.
     _enqueueTerminalWrite(tabInfo, data, frontier) {
-        if (tabInfo.finalizing) return;
+        if (tabInfo.finalizing)
+            return;
         this._pushWriteRun(tabInfo, data.length, frontier);
         tabInfo.writeBuffer += data;
-        if (!tabInfo.writePending) this._flushTerminalWrite(tabInfo);
+        if (!tabInfo.writePending)
+            this._flushTerminalWrite(tabInfo);
     }
-
     // Each queued span records the source frontier it completes. Text with no
     // frontier (a banner, a recorded replay) can never advance the painted
     // frontier, so P cannot inherit bytes that were only received.
     _pushWriteRun(tabInfo, length, frontier) {
-        if (!tabInfo.writeRuns) tabInfo.writeRuns = [];
+        if (!tabInfo.writeRuns)
+            tabInfo.writeRuns = [];
         const runs = tabInfo.writeRuns;
         const last = runs[runs.length - 1];
         const end = (last ? last.end : 0) + length;
-        if (last && last.frontier === frontier) last.end = end;
-        else runs.push({ end, frontier });
+        if (last && last.frontier === frontier)
+            last.end = end;
+        else
+            runs.push({ end, frontier });
     }
-
     // Advance the painted frontier. Only source spans that were parsed may
     // move it, and it never moves backwards.
     _advanceDrained(tabInfo, frontier) {
-        if (!Number.isSafeInteger(frontier)) return;
-        if (frontier <= (tabInfo.drainedSeq ?? 0)) return;
+        if (!Number.isSafeInteger(frontier))
+            return;
+        if (frontier <= (tabInfo.drainedSeq ?? 0))
+            return;
         tabInfo.drainedSeq = frontier;
     }
-
     // Splits the run list at the batch boundary without mutating it: the
     // caller commits `rest` only when the batch is admitted.
     _splitWriteRuns(tabInfo, length) {
         const runs = tabInfo.writeRuns;
-        if (!runs || runs.length === 0) return { painted: undefined, rest: [] };
+        if (!runs || runs.length === 0)
+            return { painted: undefined, rest: [] };
         let painted;
         let index = 0;
         while (index < runs.length && runs[index].end <= length) {
             const run = runs[index++];
-            if (run.frontier !== undefined) painted = run.frontier;
+            if (run.frontier !== undefined)
+                painted = run.frontier;
         }
         const rest = runs.slice(index).map((run) => ({
             end: run.end - length,
@@ -3885,41 +4049,41 @@ export class TabManager {
         }));
         return { painted, rest };
     }
-
     // Resolves bootstrap watermark waiters. Called wherever the pump
     // reaches quiescence (callback tail with an empty buffer, early
     // returns); resolving is always safe because every waiter owner
     // re-verifies socket, generation, and death before touching state.
     _runDrainWaiters(tabInfo) {
         const waiters = tabInfo._drainWaiters;
-        if (!waiters || waiters.length === 0) return;
+        if (!waiters || waiters.length === 0)
+            return;
         tabInfo._drainWaiters = [];
         for (const resolve of waiters) {
             try {
                 resolve();
-            } catch (_e) {}
+            }
+            catch (_e) { }
         }
     }
-
     // Resolves once the write queue drains past everything enqueued so
     // far — proving xterm parsed it — or immediately when already
     // quiescent or finalized. A disconnected pane must finish parsing.
     _drainSettled(tabInfo) {
         return new Promise((resolve) => {
-            if (
-                tabInfo.finalizing ||
-                (!tabInfo.writePending && !tabInfo.writeBuffer?.length)
-            ) {
+            if (tabInfo.finalizing ||
+                (!tabInfo.writePending && !tabInfo.writeBuffer?.length)) {
                 resolve();
-            } else {
-                if (!tabInfo._drainWaiters) tabInfo._drainWaiters = [];
+            }
+            else {
+                if (!tabInfo._drainWaiters)
+                    tabInfo._drainWaiters = [];
                 tabInfo._drainWaiters.push(resolve);
             }
         });
     }
-
     _flushTerminalWrite(tabInfo) {
-        if (tabInfo.writePending || tabInfo._writeRetryTimer) return;
+        if (tabInfo.writePending || tabInfo._writeRetryTimer)
+            return;
         // Quiescence runs drain waiters (bootstrap watermarks): every
         // byte enqueued so far is parsed at this point — the pump is
         // strictly FIFO and a pending batch would still be flagged above.
@@ -3929,18 +4093,19 @@ export class TabManager {
             this._runDrainWaiters(tabInfo);
             return;
         }
-
         // Capture follow state before xterm grows the buffer. This is the same
         // strict predicate used by the scroll-to-bottom button.
         const buffer = tabInfo.term?.buffer?.active;
-        const followBottom =
-            buffer &&
+        const followBottom = buffer &&
             buffer.viewportY >= buffer.baseY &&
             tabInfo.userFollowBottom !== false;
         let length = Math.min(MAX_WRITE_CHARS, tabInfo.writeBuffer.length);
         // Do not split an astral character at a UTF-16 boundary.
         const last = tabInfo.writeBuffer.charCodeAt(length - 1);
-        if (length < tabInfo.writeBuffer.length && last >= 0xd800 && last <= 0xdbff) length--;
+        if (length < tabInfo.writeBuffer.length &&
+            last >= 0xd800 &&
+            last <= 0xdbff)
+            length--;
         const data = tabInfo.writeBuffer.slice(0, length);
         tabInfo.writeBuffer = tabInfo.writeBuffer.slice(length);
         // Runs this batch fully covers are parsed once its callback fires; a
@@ -3951,11 +4116,9 @@ export class TabManager {
         const painted = consumed.painted;
         tabInfo.writePending = true;
         let parsed = false;
-
         // Measures xterm parse+render time for each batch (slow
         // ones only). Recorded from buffer swap to write callback.
         const _writeT0 = performance.now();
-
         // Keep one bounded parse in flight. A refused write is retryable;
         // it must not remove bytes or let the drain watermark pass them.
         try {
@@ -3976,46 +4139,40 @@ export class TabManager {
                             this._runDrainWaiters(tabInfo);
                             return;
                         }
-
-                        if (followBottom && tabInfo.userFollowBottom !== false) {
+                        if (followBottom &&
+                            tabInfo.userFollowBottom !== false) {
                             tabInfo.term.scrollToBottom();
                             this._clearReaderAnchor(tabInfo);
-                        } else if (tabInfo.term._phiReaderAnchor) {
+                        }
+                        else if (internals(tabInfo.term)._phiReaderAnchor) {
                             this._restoreReaderAnchor(tabInfo);
                         }
-                        tabInfo.term._core?.viewport?.syncScrollArea(true);
-
+                        internals(tabInfo.term)._core?.viewport?.syncScrollArea(true);
                         // The parsed frontier is safe to publish only outside xterm's
                         // callback, and never while a bootstrap delta is pending.
                         // The painted front may advance as soon as a source
                         // span is parsed; only the upload waits for quiescence.
-                        if (
-                            !tabInfo._bootstrapGate &&
-                            (!tabInfo.ws || tabInfo.ws.mode === 'hot')
-                        ) {
-                            this._advanceDrained(tabInfo, painted);
-                            if (
-                                tabInfo.writeBuffer.length === 0 &&
-                                tabInfo.queuedSeq !== undefined
-                            ) {
+                        if (!tabInfo._bootstrapGate &&
+                            (!tabInfo.ws || tabInfo.ws.mode === 'hot')) {
+                            this._advanceDrained(tabInfo, painted ?? 0);
+                            if (tabInfo.writeBuffer.length === 0 &&
+                                tabInfo.queuedSeq !== undefined) {
                                 this._scheduleCheckpointUpload(tabInfo);
                             }
                         }
-
                         // Apply a deferred visible fit before admitting the next
                         // FIFO batch. Hidden/inactive panes keep their fit intent.
-                        if (
-                            tabInfo._pendingPanelFit &&
+                        if (tabInfo._pendingPanelFit &&
                             !tabInfo._bootstrapGate &&
                             tabInfo === this.getActiveTab() &&
-                            this._terminalPanelVisible(tabInfo)
-                        ) {
+                            this._terminalPanelVisible(tabInfo)) {
                             const forceResize = tabInfo._pendingForceResize;
                             tabInfo._pendingPanelFit = false;
                             tabInfo._pendingForceResize = false;
                             this.fitActiveTerminal({ forceResize });
                         }
-                    } catch (e) {
+                    }
+                    catch (e) {
                         console.error('[term] write failed:', e);
                         tabInfo.writePending = false;
                         if (tabInfo.finalizing) {
@@ -4033,7 +4190,8 @@ export class TabManager {
             });
             // Admitted: the batch now owns those runs.
             tabInfo.writeRuns = consumed.rest;
-        } catch (e) {
+        }
+        catch (e) {
             console.error('[term] write failed:', e);
             tabInfo.writePending = false;
             if (tabInfo.finalizing) {
@@ -4042,70 +4200,70 @@ export class TabManager {
             }
             // A synchronous post-parse callback error must not duplicate
             // admitted bytes. A pre-admission refusal keeps the exact FIFO.
-            if (!parsed) tabInfo.writeBuffer = data + tabInfo.writeBuffer;
+            if (!parsed)
+                tabInfo.writeBuffer = data + tabInfo.writeBuffer;
             tabInfo._writeRetryTimer = setTimeout(() => {
                 tabInfo._writeRetryTimer = null;
                 this._flushTerminalWrite(tabInfo);
             }, 50);
         }
     }
-
     updateDirectModeUI(tab, skipFit = false) {
         this._setPiRpcActionVisibility(tab);
+        // The input row is absent on tabs whose chrome is not mounted yet;
+        // there is nothing to paint and nothing to measure in that case.
+        const toggle = this.directModeToggle;
+        const bar = this.inputBarContainer;
         const modeLabel = tab.directMode
             ? 'Switch to staged text input and expand the text bar'
             : 'Switch to direct terminal input and collapse the text bar';
-        this.directModeToggle.textContent = tab.directMode ? '⌃' : '⌄';
-        this.directModeToggle.title = modeLabel;
-        this.directModeToggle.setAttribute('aria-label', modeLabel);
-
+        toggle.textContent = tab.directMode ? '⌃' : '⌄';
+        toggle.title = modeLabel;
+        toggle.setAttribute('aria-label', modeLabel);
         // Save scroll state before DOM changes alter the terminal height
         if (tab && !tab.isDead && tab.isAtBottom === undefined) {
             const buffer = tab.term.buffer.active;
             tab.isAtBottom = buffer.viewportY >= buffer.baseY;
             tab.lastScrollY = buffer.viewportY;
         }
-
         if (tab.coder === 'pi-rpc') {
             tab.directMode = false;
-            this.directModeToggle.classList.remove('active');
-            this.inputBarContainer.classList.remove('direct-mode-active');
-            this.inputBarContainer.classList.remove('hidden');
+            toggle.classList.remove('active');
+            bar.classList.remove('direct-mode-active');
+            bar.classList.remove('hidden');
             this.renderPresets('pi-rpc');
-        } else if (tab.directMode) {
-            this.directModeToggle.classList.add('active');
-            this.inputBarContainer.classList.add('direct-mode-active');
-            this.inputBarContainer.classList.remove('hidden');
+        }
+        else if (tab.directMode) {
+            toggle.classList.add('active');
+            bar.classList.add('direct-mode-active');
+            bar.classList.remove('hidden');
             this.presetsContainer.classList.add('hidden');
             this._placeCompactQuickChips([]);
-        } else {
-            this.directModeToggle.classList.remove('active');
-            this.inputBarContainer.classList.remove('direct-mode-active');
-            this.inputBarContainer.classList.remove('hidden');
+        }
+        else {
+            toggle.classList.remove('active');
+            bar.classList.remove('direct-mode-active');
+            bar.classList.remove('hidden');
             this.presetsContainer.classList.remove('hidden');
             // Make sure presets exist and are populated
             this.renderPresets(tab.coder);
         }
-
         // Keep the same interrupt and search buttons, with their handlers, in
         // the collapsed row; restore them beside Send when staged input returns.
         if (this.cancelInputBtn) {
             if (tab.directMode) {
-                this.directModeToggle.before(this.cancelInputBtn);
+                toggle.before(this.cancelInputBtn);
                 if (this.sessionSearchBtn)
                     this.cancelInputBtn.before(this.sessionSearchBtn);
-            } else {
+            }
+            else {
                 this.sendInputBtn?.parentElement?.append(this.cancelInputBtn);
                 if (this.sessionSearchBtn)
                     this.sendInputBtn?.before(this.sessionSearchBtn);
             }
         }
-        this.directModeToggle.setAttribute(
-            'aria-expanded',
-            String(!tab.directMode),
-        );
-        this.directModeToggle.setAttribute('aria-controls', 'input-bar-container');
-
+        toggle.setAttribute('aria-expanded', String(!tab.directMode));
+        toggle.setAttribute('aria-controls', 'input-bar-container');
         // Toggle Ctrl+T button visibility based on backend
         if (this.ctrlTBtn) {
             if (['opencode', 'pi'].includes(tab.coder)) {
@@ -4117,17 +4275,17 @@ export class TabManager {
                         : 'Send Ctrl+T (Explain/Analyze)';
                 this.ctrlTBtn.setAttribute('aria-label', this.ctrlTBtn.title);
                 this.ctrlTBtn.classList.remove('hidden');
-            } else {
+            }
+            else {
                 this.ctrlTBtn.classList.add('hidden');
             }
         }
-
         // skipFit is the NEVER-keyboard contract: the focus-driven
         // direct-mode exit toggles chrome whose layout shift must not
         // refit, resend, or scroll while the keyboard is moving.
-        if (!skipFit) this.fitActiveTerminal();
+        if (!skipFit)
+            this.fitActiveTerminal();
     }
-
     // Mobile-only scrollback lane. Desktop always keeps the full
     // LIVE_SCROLLBACK_ROWS; under the fast-mode gate (forced on for
     // mobile viewports, or user fast_mode) a valid mobileScrollbackRows
@@ -4143,14 +4301,18 @@ export class TabManager {
                     return Math.floor(n);
                 }
             }
-        } catch (_e) {
+        }
+        catch (_e) {
             /* fail-safe below */
         }
         return LIVE_SCROLLBACK_ROWS;
     }
-
     _connectTabSocket(tabInfo, initialCmd = '') {
-        if (!tabInfo || tabInfo.isReview || tabInfo.isKanban || tabInfo.coder === 'pi-rpc') return;
+        if (!tabInfo ||
+            tabInfo.isReview ||
+            tabInfo.isKanban ||
+            tabInfo.coder === 'pi-rpc')
+            return;
         if (this._serverProtocolBlocked()) {
             this._showProtocolBlockedOverlay(tabInfo);
             return;
@@ -4158,110 +4320,90 @@ export class TabManager {
         tabInfo._protocolBlocked = false;
         tabInfo._cachedScreen = null;
         if (tabInfo.pinned) {
-            const fetchFn = (this.app?.scope && typeof this.app.scope.fetch === 'function')
+            const fetchFn = this.app?.scope && typeof this.app.scope.fetch === 'function'
                 ? (url, opts) => this.app.scope.fetch(url, opts)
                 : fetch;
             fetchFn(`/api/terminals/${tabInfo.paneId}/pin`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ pinned: true }),
-            }).then((response) => response.text()).catch((err) =>
-                console.error('[term] Failed to sync pin on backend:', err),
-            );
+            })
+                .then((response) => response.text())
+                .catch((err) => console.error('[term] Failed to sync pin on backend:', err));
         }
-
-        const ws = new PTYWebSocket(
-            tabInfo.paneId,
-            (data) => {
-                if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing || tabInfo.ws !== ws) return;
-                this._paneData(tabInfo, data);
-            },
-            (control) => {
-                if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing || tabInfo.ws !== ws) return;
-                this.handleControlMessage(tabInfo, control, ws);
-            },
-            () => {
-                if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing || tabInfo.ws !== ws) return;
-                this._handleTerminalDisconnect(tabInfo);
-            },
-            () => {
-                if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing ||
-                    tabInfo.exitCode != null || tabInfo.ws !== ws) return;
-                tabInfo._perfAttachAt = performance.now();
-                tabInfo._perfWrote = false;
-                termPerfMark('ws-open');
-                // Viewport activation waits for the hot bootstrap (or the
-                // 300ms fallback) — _openTermAndViewport runs it after open.
-                tabInfo._pendingViewport = () => {
-                    try {
-                        if (tabInfo === this.getActiveTab()) {
-                            this.activateTabViewport(tabInfo, {
-                                scrollToBottom: true,
-                                autoReconnect: false,
-                            });
-                        } else {
-                            this._fitVisibleTerminal(tabInfo);
-                            this.sendResizeToBackend(tabInfo);
-                        }
-                    } catch (e) {
-                        console.error(
-                            '[term] Fit/resize error on initial socket open:',
-                            e,
-                        );
+        const ws = new PTYWebSocket(tabInfo.paneId, (data) => {
+            if (this.tabs.get(tabInfo.paneId) !== tabInfo ||
+                tabInfo.finalizing ||
+                tabInfo.ws !== ws)
+                return;
+            this._paneData(tabInfo, data);
+        }, (control) => {
+            if (this.tabs.get(tabInfo.paneId) !== tabInfo ||
+                tabInfo.finalizing ||
+                tabInfo.ws !== ws)
+                return;
+            this.handleControlMessage(tabInfo, control, ws);
+        }, () => {
+            if (this.tabs.get(tabInfo.paneId) !== tabInfo ||
+                tabInfo.finalizing ||
+                tabInfo.ws !== ws)
+                return;
+            this._handleTerminalDisconnect(tabInfo);
+        }, () => {
+            if (this.tabs.get(tabInfo.paneId) !== tabInfo ||
+                tabInfo.finalizing ||
+                tabInfo.exitCode != null ||
+                tabInfo.ws !== ws)
+                return;
+            tabInfo._perfAttachAt = performance.now();
+            tabInfo._perfWrote = false;
+            termPerfMark('ws-open');
+            // Viewport activation waits for the hot bootstrap (or the
+            // 300ms fallback) — _openTermAndViewport runs it after open.
+            tabInfo._pendingViewport = () => {
+                try {
+                    if (tabInfo === this.getActiveTab()) {
+                        this.activateTabViewport(tabInfo, {
+                            scrollToBottom: true,
+                            autoReconnect: false,
+                        });
                     }
-                };
-                this._paneOpened(tabInfo);
-                if (initialCmd) {
-                    // Deliver startup command after terminal settles
-                    setTimeout(() => {
-                        if (
-                            initialCmd.length > 16 ||
-                            initialCmd.includes('\n')
-                        ) {
-                            this.sendInput(
-                                tabInfo,
-                                `\x1b[200~${initialCmd}\x1b[201~\r`,
-                            );
-                        } else {
-                            this.sendInput(tabInfo, `${initialCmd}\r`);
-                        }
-                    }, 1000);
+                    else {
+                        this._fitVisibleTerminal(tabInfo);
+                        this.sendResizeToBackend(tabInfo);
+                    }
                 }
-            },
-            this._hotOptions(tabInfo),
-        );
-
+                catch (e) {
+                    console.error('[term] Fit/resize error on initial socket open:', e);
+                }
+            };
+            this._paneOpened(tabInfo);
+            if (initialCmd) {
+                // Deliver startup command after terminal settles
+                setTimeout(() => {
+                    if (initialCmd.length > 16 ||
+                        initialCmd.includes('\n')) {
+                        this.sendInput(tabInfo, `\x1b[200~${initialCmd}\x1b[201~\r`);
+                    }
+                    else {
+                        this.sendInput(tabInfo, `${initialCmd}\r`);
+                    }
+                }, 1000);
+            }
+        }, this._hotOptions(tabInfo));
         this._setCurrentTabSocket(tabInfo, ws);
     }
-
-    createTab(
-        paneId,
-        sessionId,
-        title,
-        coder,
-        workspace = '',
-        cwd = '',
-        pinned = true,
-        marked = false,
-        initialCmd = '',
-        piRpcSessionPath = null,
-        opencodeMode = null,
-        initialPiBridge = null,
-        options = null,
-    ) {
+    createTab(paneId, sessionId, title, coder, workspace = '', cwd = '', pinned = true, marked = false, initialCmd = '', piRpcSessionPath = null, opencodeMode = null, initialPiBridge = null, options = null) {
         // If tab already exists, just switch to it
         if (this.tabs.has(paneId)) {
             // A reattach still carries the current HTTP bridge
             // baseline: seed it through ordering before switching.
-            if (initialPiBridge != null)
-                this._seedHttpPiBridge(
-                    this.tabs.get(paneId),
-                    initialPiBridge,
-                );
+            const existing = this.tabs.get(paneId);
+            if (initialPiBridge != null && existing)
+                this._seedHttpPiBridge(existing, initialPiBridge);
             this.switchTab(paneId, { userInitiated: true });
             return;
         }
-
         const savedDraft = this.loadTabDraft(paneId);
         // Resolve the coder favicon: registry first (covers built-
         // ins and custom backends), then the legacy fallback map
@@ -4271,28 +4413,24 @@ export class TabManager {
         // ins and custom backends), then the legacy fallback map
         // for UI pseudo-tabs the registry doesn't advertise.
         faviconUrl = logoFor(coder) || CODER_FAVICONS[coder];
-        if (!faviconUrl) faviconUrl = 'vendor/logos/bash.jpg';
-
+        if (!faviconUrl)
+            faviconUrl = 'vendor/logos/bash.jpg';
         // Create elements
         const tabEl = document.createElement('div');
         tabEl.className = 'tab';
-        if (pinned) tabEl.classList.add('pinned');
+        if (pinned)
+            tabEl.classList.add('pinned');
         tabEl.setAttribute('data-pane-id', paneId);
         // Tabs default to pinned (server keeps the PTY alive across WS
         // disconnects / reloads). Pinning is a session-protection concept,
         // not a position-lock - all tabs get drag-reorder regardless of
         // pin state (moveTabTo / applyTabOrder / saveTabOrder).
         tabEl.draggable = true;
-        tabEl.addEventListener('dragstart', (e) =>
-            this.handleTabDragStart(e, paneId),
-        );
+        tabEl.addEventListener('dragstart', (e) => this.handleTabDragStart(e, paneId));
         tabEl.addEventListener('dragend', (e) => this.handleTabDragEnd(e));
-        tabEl.addEventListener('dragover', (e) =>
-            this.handleTabDragOver(e, paneId),
-        );
+        tabEl.addEventListener('dragover', (e) => this.handleTabDragOver(e, paneId));
         tabEl.addEventListener('dragleave', (e) => this.handleTabDragLeave(e));
         tabEl.addEventListener('drop', (e) => this.handleTabDrop(e, paneId));
-
         // Stash the worktree glyph + cwd on the tab DOM so the legend, the
         // tab-list dropdown, and the hover preview can read them without a tabs
         // Map lookup (the Map entry lands ~300 lines later - see NOTE below).
@@ -4309,11 +4447,9 @@ export class TabManager {
             <span class="tab-title ${marked ? 'marked' : ''}">${escapeHtml(title)}</span>
             <button class="tab-close">×</button>
         `;
-
         const termContainer = document.createElement('div');
         termContainer.className = 'term-container';
         termContainer.id = `term-${paneId}`;
-
         let loaderEl = null;
         if (coder !== 'review' && coder !== 'kanban' && coder !== 'pi-rpc') {
             loaderEl = document.createElement('div');
@@ -4324,13 +4460,10 @@ export class TabManager {
             `;
             termContainer.appendChild(loaderEl);
         }
-
         this.tabsContainer.appendChild(tabEl);
         this.terminalsWrapper.appendChild(termContainer);
-
         // Hide empty state landing page on tab creation
         this.hideEmptyState();
-
         // NOTE: tab-list selector refresh is intentionally
         // NOT done here. createTab() still has 300+ lines to go (PTY
         // spawn, WS attach, xterm.js fit, etc.) before this.tabs.set()
@@ -4339,33 +4472,35 @@ export class TabManager {
         // missing from the legend and overflow count until the next
         // event happened to trigger a refresh. Both are called below
         // immediately after the tabs.set instead.
-
         tabEl.addEventListener('click', (e) => {
-            const currentPaneId = tabEl.getAttribute('data-pane-id');
-            if (e.target.closest('.tab-close')) {
+            const target = e.target;
+            const currentPaneId = tabEl.getAttribute('data-pane-id') ?? '';
+            if (target?.closest('.tab-close')) {
                 e.stopPropagation();
                 this.closeTab(currentPaneId);
-            } else if (e.target.closest('.tab-pin')) {
+            }
+            else if (target?.closest('.tab-pin')) {
                 e.stopPropagation();
                 this.togglePinTab(currentPaneId);
-            } else {
+            }
+            else {
                 this.switchTab(currentPaneId, { userInitiated: true });
             }
         });
-
         tabEl.addEventListener('dblclick', (e) => {
-            const titleEl = e.target.closest('.tab-title');
-            if (!titleEl) return;
+            const titleEl = e.target?.closest?.('.tab-title');
+            if (!titleEl)
+                return;
             e.preventDefault();
             e.stopPropagation();
-            const currentPaneId = tabEl.getAttribute('data-pane-id');
+            const currentPaneId = tabEl.getAttribute('data-pane-id') ?? '';
             this.openTabRenamer(currentPaneId, titleEl);
         });
-
         if (coder === 'review' || coder === 'kanban' || coder === 'pi-rpc') {
             if (coder === 'review' || coder === 'pi-rpc') {
                 termContainer.classList.add('review-panel');
-            } else if (coder === 'kanban') {
+            }
+            else if (coder === 'kanban') {
                 termContainer.classList.add('kanban-panel');
             }
             const tabInfo = {
@@ -4392,10 +4527,10 @@ export class TabManager {
             this.tabs.set(paneId, tabInfo);
             this._placeNewTabByWorkspace(paneId);
             this.switchTab(paneId);
-            if (coder === 'pi-rpc') this.savePiRpcTabs();
+            if (coder === 'pi-rpc')
+                this.savePiRpcTabs();
             return;
         }
-
         // Initialize xterm.js instance. The preferred size is resolved
         // against FitAddon's measured grid on the first fit below.
         const term = new window.Terminal({
@@ -4403,8 +4538,7 @@ export class TabManager {
             cursorBlink: true,
             cursorStyle: 'bar',
             fontSize: terminalPreferredFontSize(this.app?.terminalFontSize),
-            fontFamily:
-                this.app?.terminalFontFamily || 'JetBrains Mono, monospace',
+            fontFamily: this.app?.terminalFontFamily || 'JetBrains Mono, monospace',
             // Resident output scrolls locally. Older output remains in the
             // recording and loads through the manual history button; the
             // hot-v1 state attach stays bounded.
@@ -4422,15 +4556,11 @@ export class TabManager {
                 },
             },
         });
-
         const fitAddon = new window.FitAddon.FitAddon();
         term.loadAddon(fitAddon);
-
         const searchAddon = new window.SearchAddon.SearchAddon();
         term.loadAddon(searchAddon);
-
         this._installTerminalLinkProvider(term);
-
         // Screen-checkpoint serializer; loaded when the vendor
         // addon is present; its absence only disables client checkpoints
         // (attach then falls back to the bounded delta).
@@ -4439,12 +4569,10 @@ export class TabManager {
             serializeAddon = new window.SerializeAddon.SerializeAddon();
             term.loadAddon(serializeAddon);
         }
-
         // Open in DOM — deferred. Hot-v1 tabs wait for ATTACH_HEAD so the
         // screen checkpoint + bounded delta are written pre-open (one
         // render); legacy/fallback opens run via _paneOpened's 300ms guard.
         // _openTermAndViewport performs the actual open + textarea patch.
-
         // Register OSC 52 clipboard handler
         if (term.parser?.registerOscHandler) {
             term.parser.registerOscHandler(52, (data) => {
@@ -4457,9 +4585,11 @@ export class TabManager {
                     return true;
                 }
                 const parts = data.split(';');
-                if (parts.length < 2) return true;
+                if (parts.length < 2)
+                    return true;
                 const base64Text = parts[1].replace(/[^A-Za-z0-9+/=]/g, '');
-                if (base64Text === '?') return true;
+                if (base64Text === '?')
+                    return true;
                 try {
                     const binaryString = atob(base64Text);
                     const bytes = new Uint8Array(binaryString.length);
@@ -4468,39 +4598,33 @@ export class TabManager {
                     }
                     const text = new TextDecoder('utf-8').decode(bytes);
                     this._agentClipboardCopy(text);
-                } catch (e) {
+                }
+                catch (e) {
                     console.error('OSC 52 decode error:', e);
                 }
                 return true;
             });
         }
-
         // (textarea focus patch moved into _openTermAndViewport — the
         // textarea does not exist until term.open runs)
-
         // Right-click on terminal → copy xterm selection.
         // Uses capture phase on termContainer so we fire BEFORE xterm's own
         // contextmenu handler (which calls stopPropagation and blocks bubble-phase listeners).
-        termContainer.addEventListener(
-            'contextmenu',
-            (e) => {
-                const sel = term.getSelection();
-                if (!sel) return;
-                e.preventDefault();
-                e.stopPropagation();
-                this.copyTextRobustly(sel);
-            },
-            { capture: true },
-        );
-
+        termContainer.addEventListener('contextmenu', (e) => {
+            const sel = term.getSelection();
+            if (!sel)
+                return;
+            e.preventDefault();
+            e.stopPropagation();
+            this.copyTextRobustly(sel);
+        }, { capture: true });
         term.attachCustomKeyEventHandler((e) => {
             // Let the document handler open the bar exactly once. Returning
             // false keeps either find chord out of the PTY in both modes.
-            if (isTerminalFindShortcut(e)) return false;
-            if (
-                e.type === 'keydown' &&
-                this.app?.handlePanelResizeShortcut?.(e)
-            ) {
+            if (isTerminalFindShortcut(e))
+                return false;
+            if (e.type === 'keydown' &&
+                this.app?.handlePanelResizeShortcut?.(e)) {
                 return false;
             }
             if (e.type === 'keydown' && this.handleInputToggleShortcut?.(e)) {
@@ -4508,8 +4632,7 @@ export class TabManager {
             }
             const isMac = isMacPlatform();
             if (e.type === 'keydown') {
-                const isCopy =
-                    (isMac && e.metaKey && e.key.toLowerCase() === 'c') ||
+                const isCopy = (isMac && e.metaKey && e.key.toLowerCase() === 'c') ||
                     (!isMac &&
                         e.ctrlKey &&
                         e.shiftKey &&
@@ -4526,15 +4649,13 @@ export class TabManager {
             // Support Ctrl/Cmd + (+/- / 0) zoom shortcuts inside xterm (pass through to browser/desktop)
             if (e.type === 'keydown' && (e.ctrlKey || e.metaKey) && !e.altKey) {
                 const k = e.key;
-                if (
-                    k === '+' ||
+                if (k === '+' ||
                     k === '=' ||
                     k === '-' ||
                     k === '_' ||
                     k === '0' ||
                     k === 'Add' ||
-                    k === 'Subtract'
-                ) {
+                    k === 'Subtract') {
                     return false;
                 }
             }
@@ -4545,19 +4666,16 @@ export class TabManager {
                 }
                 return false;
             }
-            if (
-                e.type === 'keydown' &&
+            if (e.type === 'keydown' &&
                 (e.ctrlKey || e.metaKey) &&
                 e.shiftKey &&
                 !e.altKey &&
-                (e.key === 'r' || e.key === 'R')
-            ) {
+                (e.key === 'r' || e.key === 'R')) {
                 this.handleGlobalTabShortcuts(e);
                 return false;
             }
             // Support Alt+1..9 (and Cmd+1..9 / Option+1..9 on macOS) tab switching inside xterm
-            const isTabSwitchModifier =
-                !e.ctrlKey && !e.shiftKey && (e.altKey || (isMac && e.metaKey));
+            const isTabSwitchModifier = !e.ctrlKey && !e.shiftKey && (e.altKey || (isMac && e.metaKey));
             if (isTabSwitchModifier && tabShortcutDigit(e) !== null) {
                 if (e.type === 'keydown') {
                     this.handleGlobalTabShortcuts(e);
@@ -4572,22 +4690,18 @@ export class TabManager {
             // bar uses, but with no emptiness gate: a draft in the input bar
             // must not change what Enter means on a focused terminal
             // (answering a TUI prompt mid-draft keeps the draft staged).
-            if (
-                !tabInfo.directMode &&
+            if (!tabInfo.directMode &&
                 e.type === 'keydown' &&
-                this._forwardKeyToPty(e, tabInfo)
-            ) {
+                this._forwardKeyToPty(e, tabInfo)) {
                 return false;
             }
             // In non-direct mode: redirect printable keystrokes to the input textarea
-            if (
-                !tabInfo.directMode &&
+            if (!tabInfo.directMode &&
                 e.type === 'keydown' &&
                 e.key.length === 1 &&
                 !e.ctrlKey &&
                 !e.altKey &&
-                !e.metaKey
-            ) {
+                !e.metaKey) {
                 // preventDefault: focus moves to the textarea mid-keydown, so
                 // without it the browser's default insertion lands there too
                 // and doubles the character.
@@ -4600,9 +4714,7 @@ export class TabManager {
                 // but the textarea's input listeners (spam-scroll,
                 // lastInputValue, autosize, prompt-history cursor reset)
                 // still need to run.
-                this.inputTextArea.dispatchEvent(
-                    new Event('input', { bubbles: true }),
-                );
+                this.inputTextArea.dispatchEvent(new Event('input', { bubbles: true }));
                 return false;
             }
             // Prevent browser default for standard CLI shortcuts in direct mode
@@ -4613,133 +4725,111 @@ export class TabManager {
             }
             return true;
         });
-
         // Search selects matches, including during delayed live-output
         // refreshes. Those are not copy gestures: the HTTP clipboard fallback
         // focuses a hidden textarea and would take focus from the find bar.
         let selectingSearchMatch = false;
-        searchAddon.onBeforeSearch?.(() => { selectingSearchMatch = true; });
-        searchAddon.onAfterSearch?.(() => { selectingSearchMatch = false; });
+        searchAddon.onBeforeSearch?.(() => {
+            selectingSearchMatch = true;
+        });
+        searchAddon.onAfterSearch?.(() => {
+            selectingSearchMatch = false;
+        });
         term.onSelectionChange(() => {
-            if (selectingSearchMatch) return;
+            if (selectingSearchMatch)
+                return;
             const sel = term.getSelection();
             if (sel) {
                 this.copyTextRobustly(sel, true);
             }
         });
-
         // Legacy OpenCode's full-screen TUI needs keyboard scroll events.
         // Mini uses normal xterm scrollback: never intercept its wheel or
         // touch gestures and never inject TUI navigation keys into it.
-        termContainer.addEventListener(
-            'wheel',
-            (e) => {
-                if (isFindBarTarget(e.target)) return;
-                if (tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo)) return;
-
-                const isUp = e.deltaY < 0;
-
-                // Scale scroll amount from the wheel delta for natural-feeling speed
-                // Math.abs(deltaY) is typically ~100 for a single notch; clamp to a sane range
-                const lines = Math.max(
-                    1,
-                    Math.min(Math.round(Math.abs(e.deltaY) / 40), 8),
-                );
-
-                e.preventDefault();
-                e.stopPropagation();
-                const seq = isUp ? '\x1b\x19' : '\x1b\x05';
-                const payload = seq.repeat(lines);
-                if (tabInfo.ws && !tabInfo.isDead) {
-                    tabInfo.ws.sendInput(payload);
-                }
-            },
-            { capture: true, passive: false },
-        );
-
+        termContainer.addEventListener('wheel', (e) => {
+            if (isFindBarTarget(e.target))
+                return;
+            if (tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo))
+                return;
+            const isUp = e.deltaY < 0;
+            // Scale scroll amount from the wheel delta for natural-feeling speed
+            // Math.abs(deltaY) is typically ~100 for a single notch; clamp to a sane range
+            const lines = Math.max(1, Math.min(Math.round(Math.abs(e.deltaY) / 40), 8));
+            e.preventDefault();
+            e.stopPropagation();
+            const seq = isUp ? '\x1b\x19' : '\x1b\x05';
+            const payload = seq.repeat(lines);
+            if (tabInfo.ws && !tabInfo.isDead) {
+                tabInfo.ws.sendInput(payload);
+            }
+        }, { capture: true, passive: false });
         // Touch scrolling for OpenCode alt screen (TUI) on mobile viewports
         let termTouchStartY = 0;
         let termTouchRemainder = 0;
-        termContainer.addEventListener(
-            'touchstart',
-            (e) => {
-                if (isFindBarTarget(e.target)) return;
-                if (tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo)) return;
-                if (e.touches.length === 1) {
-                    termTouchStartY = e.touches[0].clientY;
-                    termTouchRemainder = 0;
-                }
-            },
-            { capture: true, passive: false },
-        );
-
-        termContainer.addEventListener(
-            'touchmove',
-            (e) => {
-                if (isFindBarTarget(e.target)) return;
-                if (tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo)) return;
-                if (e.touches.length === 1 && termTouchStartY !== null) {
-                    const currentY = e.touches[0].clientY;
-                    const rawDelta = currentY - termTouchStartY;
-                    const totalDelta = rawDelta + termTouchRemainder;
-                    const cellHeight = 16;
-
-                    const lines = Math.floor(Math.abs(totalDelta) / cellHeight);
-                    if (lines > 0) {
-                        e.preventDefault();
-                        e.stopPropagation();
-
-                        const isUp = totalDelta > 0; // swipe down -> scroll up
-                        const seq = isUp ? '\x1b\x19' : '\x1b\x05';
-                        const payload = seq.repeat(lines);
-
-                        if (tabInfo.ws && !tabInfo.isDead) {
-                            tabInfo.ws.sendInput(payload);
-                        }
-
-                        const consumed =
-                            lines * cellHeight * (totalDelta > 0 ? 1 : -1);
-                        termTouchRemainder = totalDelta - consumed;
-                        termTouchStartY = currentY;
+        termContainer.addEventListener('touchstart', (e) => {
+            if (isFindBarTarget(e.target))
+                return;
+            if (tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo))
+                return;
+            if (e.touches.length === 1) {
+                termTouchStartY = e.touches[0].clientY;
+                termTouchRemainder = 0;
+            }
+        }, { capture: true, passive: false });
+        termContainer.addEventListener('touchmove', (e) => {
+            if (isFindBarTarget(e.target))
+                return;
+            if (tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo))
+                return;
+            if (e.touches.length === 1 && termTouchStartY !== null) {
+                const currentY = e.touches[0].clientY;
+                const rawDelta = currentY - termTouchStartY;
+                const totalDelta = rawDelta + termTouchRemainder;
+                const cellHeight = 16;
+                const lines = Math.floor(Math.abs(totalDelta) / cellHeight);
+                if (lines > 0) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const isUp = totalDelta > 0; // swipe down -> scroll up
+                    const seq = isUp ? '\x1b\x19' : '\x1b\x05';
+                    const payload = seq.repeat(lines);
+                    if (tabInfo.ws && !tabInfo.isDead) {
+                        tabInfo.ws.sendInput(payload);
                     }
+                    const consumed = lines * cellHeight * (totalDelta > 0 ? 1 : -1);
+                    termTouchRemainder = totalDelta - consumed;
+                    termTouchStartY = currentY;
                 }
-            },
-            { capture: true, passive: false },
-        );
-
+            }
+        }, { capture: true, passive: false });
         // Setup terminal bell notification sound.
         const bellAudio = new Audio('vendor/bell.wav');
         bellAudio.volume = 0.3;
         term.onBell(() => {
             bellAudio.currentTime = 0;
-            bellAudio.play().catch(() => {});
+            bellAudio.play().catch(() => { });
         });
-
         // Graceful WebGL/Canvas renderer. The addon is attached on first
         // activation, not here: see _attachTermWebgl for why one GL context
         // per open tab is too expensive to hold for hidden tabs.
-
         // Load Unicode 11 Addon for correct emoji cell width measurements
         try {
             const unicode11 = new window.Unicode11Addon.Unicode11Addon();
             term.loadAddon(unicode11);
             term.unicode.activeVersion = '11';
             console.log('[term] Loaded Unicode 11 character width addon');
-        } catch (e) {
+        }
+        catch (e) {
             console.warn('[term] Failed to load Unicode 11 addon:', e);
         }
-
-        const activeWS =
-            workspace ||
+        const activeWS = workspace ||
             (this.app.sessionsManager
                 ? this.app.sessionsManager.activeWorkspace
                 : '');
-        const activeCWD =
-            cwd ||
+        const activeCWD = cwd ||
             (this.app.sessionsManager
                 ? this.app.sessionsManager.activeCWD
                 : '');
-
         const tabInfo = {
             paneId,
             sessionId,
@@ -4751,11 +4841,9 @@ export class TabManager {
             // Pin the server's launch mode to this pane. Older servers and
             // profiles with no advertised mode retain legacy behavior.
             opencodeMode: coder === 'opencode'
-                ? (opencodeMode || getCoder(coder)?.opencode_mode || 'legacy')
+                ? opencodeMode || getCoder(coder)?.opencode_mode || 'legacy'
                 : null,
-            piMode: coder === 'pi'
-                ? (options?.piMode || null)
-                : null,
+            piMode: coder === 'pi' ? options?.piMode || null : null,
             term,
             fitAddon,
             searchAddon,
@@ -4780,7 +4868,9 @@ export class TabManager {
             // tab is inactive (written on switch-away, read on switch-in).
             draft: savedDraft.draft || '',
             draftAttachments: savedDraft.draftAttachments || [],
-            ...(savedDraft.pasteRecovery ? { pasteRecovery: savedDraft.pasteRecovery } : {}),
+            ...(savedDraft.pasteRecovery
+                ? { pasteRecovery: savedDraft.pasteRecovery }
+                : {}),
             lastOutputAt: undefined,
             isBusy: false,
             isAttention: false,
@@ -4812,7 +4902,6 @@ export class TabManager {
             userFollowBottom: true,
             _piTitleRevision: -1,
         };
-
         if (options?.live === false) {
             tabInfo._detachedCache = true;
             tabInfo.ws = null;
@@ -4821,24 +4910,31 @@ export class TabManager {
                 this._openTermAndViewport(tabInfo);
                 const { ansi, cols, rows } = options.cachedScreen;
                 if (cols > 0 && rows > 0) {
-                    try { tabInfo.term.resize(cols, rows); } catch {}
+                    try {
+                        tabInfo.term.resize(cols, rows);
+                    }
+                    catch { }
                 }
                 if (ansi) {
                     if (tabInfo.loaderEl) {
-                        try { tabInfo.loaderEl.remove(); } catch {}
+                        try {
+                            tabInfo.loaderEl.remove();
+                        }
+                        catch { }
                         tabInfo.loaderEl = null;
                     }
                     try {
                         this._enqueueTerminalWrite(tabInfo, ansi);
-                    } catch (e) {
+                    }
+                    catch (e) {
                         console.error('[term] failed to write cached screen:', e);
                     }
                 }
             }
-        } else {
+        }
+        else {
             this._connectTabSocket(tabInfo, initialCmd);
         }
-
         if (tabInfo.pasteRecovery) {
             tabInfo.directMode = false;
             tabInfo._inputRestriction = this._pasteRecoveryStatusText(tabInfo);
@@ -4850,23 +4946,17 @@ export class TabManager {
         // or advances it through the same ordering check.
         if (initialPiBridge != null)
             this._seedHttpPiBridge(tabInfo, initialPiBridge);
-
         // A real scroll gesture takes ownership away from any in-flight
         // fit/reflow restore. Do not use term.onScroll for this: xterm emits
         // it for our own programmatic scrolls too, which would weaken the
         // proven 10ms/300ms stabilization loop. DOM input events identify
         // user intent without changing that loop's timing or behavior.
-        const cancelFollowForUserScroll = () =>
-            this._cancelScrollFollowForUserScroll(tabInfo);
+        const cancelFollowForUserScroll = () => this._cancelScrollFollowForUserScroll(tabInfo);
         termContainer.addEventListener('wheel', cancelFollowForUserScroll, {
             capture: true,
             passive: true,
         });
-        termContainer.addEventListener(
-            'touchstart',
-            cancelFollowForUserScroll,
-            { capture: true, passive: true },
-        );
+        termContainer.addEventListener('touchstart', cancelFollowForUserScroll, { capture: true, passive: true });
         // Pointerdown needs the xterm viewport, which only exists after the
         // deferred open — install it post-open instead.
         tabInfo._postOpenHooks = tabInfo._postOpenHooks || [];
@@ -4874,38 +4964,31 @@ export class TabManager {
             openedTerm.element
                 ?.querySelector('.xterm-viewport')
                 ?.addEventListener('pointerdown', cancelFollowForUserScroll, {
-                    capture: true,
-                    passive: true,
-                });
+                capture: true,
+                passive: true,
+            });
         });
-
         // Escape hatch: when the DOM scroll area is stale, wheel-down clamps
         // at a fake bottom while real output sits below (viewportY < baseY).
         // Detect the clamp and scroll the buffer directly — reaching the true
         // bottom re-engages follow via the scroll listeners in the button
         // block below. Registered bubble-phase so the opencode capture
         // handler's stopPropagation keeps opencode tabs out of this path.
-        termContainer.addEventListener(
-            'wheel',
-            (e) => {
-                if (e.deltaY <= 0) return;
-                const buf = tabInfo.term?.buffer?.active;
-                if (!buf || buf.viewportY >= buf.baseY) return;
-                const vp =
-                    tabInfo.term.element?.querySelector('.xterm-viewport');
-                if (!vp) return;
-                if (vp.scrollTop + vp.clientHeight >= vp.scrollHeight - 1) {
-                    // Same wheel→lines scaling as the opencode handler above.
-                    const lines = Math.max(
-                        1,
-                        Math.min(Math.round(e.deltaY / 40), 8),
-                    );
-                    tabInfo.term.scrollLines(lines);
-                }
-            },
-            { passive: true },
-        );
-
+        termContainer.addEventListener('wheel', (e) => {
+            if (e.deltaY <= 0)
+                return;
+            const buf = tabInfo.term?.buffer?.active;
+            if (!buf || buf.viewportY >= buf.baseY)
+                return;
+            const vp = tabInfo.term.element?.querySelector('.xterm-viewport');
+            if (!vp)
+                return;
+            if (vp.scrollTop + vp.clientHeight >= vp.scrollHeight - 1) {
+                // Same wheel→lines scaling as the opencode handler above.
+                const lines = Math.max(1, Math.min(Math.round(e.deltaY / 40), 8));
+                tabInfo.term.scrollLines(lines);
+            }
+        }, { passive: true });
         // Scroll-to-bottom affordance: a small floating button that
         // fades in when the user scrolls up into scrollback, fades out
         // when they return to the live bottom. Click jumps to the
@@ -4924,10 +5007,7 @@ export class TabManager {
         const scrollToBottomBtn = document.createElement('button');
         scrollToBottomBtn.className = 'scroll-to-bottom-btn hidden';
         scrollToBottomBtn.setAttribute('type', 'button');
-        scrollToBottomBtn.setAttribute(
-            'aria-label',
-            'Jump to bottom of output',
-        );
+        scrollToBottomBtn.setAttribute('aria-label', 'Jump to bottom of output');
         scrollToBottomBtn.title = 'Jump to bottom';
         scrollToBottomBtn.innerHTML = '\u2193'; // ↓
         scrollToBottomBtn.addEventListener('click', (e) => {
@@ -4941,24 +5021,22 @@ export class TabManager {
         });
         termContainer.appendChild(scrollToBottomBtn);
         tabInfo.scrollToBottomBtn = scrollToBottomBtn;
-
-
         const updateScrollBtn = () => {
-            if (
-                tabInfo.isDead ||
+            if (tabInfo.isDead ||
                 tabInfo.coder === 'review' ||
                 tabInfo.coder === 'kanban' ||
-                tabInfo.coder === 'pi-rpc'
-            ) {
+                tabInfo.coder === 'pi-rpc') {
                 scrollToBottomBtn.classList.add('hidden');
                 return;
             }
             const buf = tabInfo.term?.buffer?.active;
-            if (!buf) return;
+            if (!buf)
+                return;
             const atBottom = buf.viewportY >= buf.baseY;
             if (atBottom) {
                 scrollToBottomBtn.classList.add('hidden');
-            } else {
+            }
+            else {
                 scrollToBottomBtn.classList.remove('hidden');
             }
         };
@@ -4970,7 +5048,8 @@ export class TabManager {
             // to the live tail. Lets the user "release" and re-follow
             // without needing to click Jump-to-bottom.
             term.onScroll(() => {
-                if (this._restoringReaderAnchor) return;
+                if (this._restoringReaderAnchor)
+                    return;
                 const b = tabInfo.term?.buffer?.active;
                 if (b && b.viewportY >= b.baseY) {
                     tabInfo.userFollowBottom = true;
@@ -4989,15 +5068,18 @@ export class TabManager {
         // bottom and forgets the reading position instead of restoring a row
         // from before the TUI took over.
         term.buffer?.onBufferChange?.((buffer) => {
-            if (buffer.type !== 'normal') return;
+            if (buffer.type !== 'normal')
+                return;
             // The app exiting its full-screen TUI lands at the bottom. A pane
             // repainting its own buffer is not the app leaving: the loader
             // places that view itself, and following here would undo it.
-            if (tabInfo._ownBufferReset || tabInfo._historyParsing) return;
+            if (tabInfo._ownBufferReset || tabInfo._historyParsing)
+                return;
             this._clearReaderAnchor(tabInfo);
             tabInfo.userFollowBottom = true;
             requestAnimationFrame(() => {
-                if (tabInfo.isDead || tabInfo.finalizing) return;
+                if (tabInfo.isDead || tabInfo.finalizing)
+                    return;
                 this._spamScrollToBottom(tabInfo);
             });
         });
@@ -5011,36 +5093,30 @@ export class TabManager {
         // so defer one frame (house rAF-coalesce pattern) to read fresh
         // coordinates.
         let viewportScrollRafPending = false;
-        termContainer.addEventListener(
-            'scroll',
-            () => {
-                if (viewportScrollRafPending) return;
-                viewportScrollRafPending = true;
-                requestAnimationFrame(() => {
-                    viewportScrollRafPending = false;
-                    updateScrollBtn();
-                    const b = tabInfo.term?.buffer?.active;
-                    if (b) {
-                        if (b.viewportY >= b.baseY) {
-                            tabInfo.userFollowBottom = true;
-                            this._clearReaderAnchor(tabInfo);
-                        } else {
-                            this._cancelScrollFollowForUserScroll(tabInfo);
-                        }
+        termContainer.addEventListener('scroll', () => {
+            if (viewportScrollRafPending)
+                return;
+            viewportScrollRafPending = true;
+            requestAnimationFrame(() => {
+                viewportScrollRafPending = false;
+                updateScrollBtn();
+                const b = tabInfo.term?.buffer?.active;
+                if (b) {
+                    if (b.viewportY >= b.baseY) {
+                        tabInfo.userFollowBottom = true;
+                        this._clearReaderAnchor(tabInfo);
                     }
-                });
-            },
-            { capture: true, passive: true },
-        );
-        termContainer.addEventListener(
-            'keydown',
-            (e) => {
-                if (['PageUp', 'PageDown', 'Home', 'End'].includes(e.key)) {
-                    this._cancelScrollFollowForUserScroll(tabInfo);
+                    else {
+                        this._cancelScrollFollowForUserScroll(tabInfo);
+                    }
                 }
-            },
-            { capture: true, passive: true },
-        );
+            });
+        }, { capture: true, passive: true });
+        termContainer.addEventListener('keydown', (e) => {
+            if (['PageUp', 'PageDown', 'Home', 'End'].includes(e.key)) {
+                this._cancelScrollFollowForUserScroll(tabInfo);
+            }
+        }, { capture: true, passive: true });
         // Read coordinates after the parser completes, not before the write.
         // Checkpoint restores and buffer switches can change button visibility.
         const origWrite = tabInfo.term.write.bind(tabInfo.term);
@@ -5048,14 +5124,12 @@ export class TabManager {
             cb?.();
             updateScrollBtn();
         });
-
         // Refresh the tab-list selector NOW that the tab is registered in
         // this.tabs. Previously this was called much earlier in
         // createTab (line ~899) which left the selector one tab
         // behind until something else triggered a re-render. Now it
         // always reflects the full tab set.
         this.updateTabOverflow();
-
         // Staged mode only gates typing, not terminal protocol replies.
         // Full-screen Pi scrolls its own transcript via SGR mouse reports;
         // dropping these leaves a perfectly drawn but unscrollable screen.
@@ -5063,55 +5137,82 @@ export class TabManager {
         // Terminal paste also bypasses the typing gate: a captured DOM paste
         // carries its own context through term.paste's synchronous onData.
         let terminalUserInput = false;
-        term._core?.coreService?.onUserInput?.(() => { terminalUserInput = true; });
+        internals(term)._core?.coreService?.onUserInput?.(() => {
+            terminalUserInput = true;
+        });
         termContainer.addEventListener('paste', (e) => {
             const dt = e.clipboardData;
-            if (!dt) return;
+            if (!dt)
+                return;
             let hasText = false;
             try {
                 const types = dt.types ? Array.from(dt.types) : [];
-                hasText = types.includes('text/plain') || types.includes('text');
-            } catch { hasText = true; }
-            if (!hasText) return;
+                hasText =
+                    types.includes('text/plain') || types.includes('text');
+            }
+            catch {
+                hasText = true;
+            }
+            if (!hasText)
+                return;
             let text = '';
-            try { text = dt.getData('text/plain') ?? ''; } catch { return; }
+            try {
+                text = dt.getData('text/plain') ?? '';
+            }
+            catch {
+                return;
+            }
             e.preventDefault();
             e.stopPropagation();
-            if (!text) return;
+            if (!text)
+                return;
             this._routeTerminalPaste(tabInfo, term, text);
         }, { capture: true });
         term.onData((data) => {
             const fromUser = terminalUserInput;
             terminalUserInput = false;
             const pasteCtx = tabInfo._terminalPaste;
-            if (pasteCtx && (tabInfo.finalizing || this.tabs?.get(tabInfo.paneId) !== tabInfo ||
-                !tabInfo.ws || tabInfo.isDead || tabInfo.ws.ws?.readyState !== 1)) return;
+            if (pasteCtx &&
+                (tabInfo.finalizing ||
+                    this.tabs?.get(tabInfo.paneId) !== tabInfo ||
+                    !tabInfo.ws ||
+                    tabInfo.isDead ||
+                    tabInfo.ws.ws?.readyState !== 1))
+                return;
             // Replayed bytes can carry old DSR/OSC/DCS queries: xterm answers
             // them, but those replies must not reach the live app. Keep real
             // keyboard/IME/paste input distinguishable.
-            if (tabInfo._historyParsing && !fromUser) return;
-            const protocolReply =
-                /^(?:\x1b\[<\d+;\d+;\d+[Mm])+$/.test(data) ||
+            if (tabInfo._historyParsing && !fromUser)
+                return;
+            const protocolReply = 
+            // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI control-sequence reply
+            /^(?:\x1b\[<\d+;\d+;\d+[Mm])+$/.test(data) ||
+                // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI control-sequence reply
                 /^\x1b\[\??[\d;:]*[cnRu]$/.test(data);
             if (tabInfo.directMode || protocolReply || pasteCtx) {
-                if (pasteCtx) pasteCtx.outcome = 'unconfirmed';
+                if (pasteCtx)
+                    pasteCtx.outcome = 'unconfirmed';
                 const accepted = this.sendInput(tabInfo, data);
-                if (pasteCtx && accepted) pasteCtx.outcome = 'accepted';
+                if (pasteCtx && accepted)
+                    pasteCtx.outcome = 'accepted';
                 // Enter-only follow: a bare physical Enter that the pane
                 // accepted is a submit; a printable key, a protocol reply, a
                 // paste carrying newlines, or a refused send is not.
-                if (tabInfo.directMode && !pasteCtx && accepted && fromUser && data === '\r') {
+                if (tabInfo.directMode &&
+                    !pasteCtx &&
+                    accepted &&
+                    fromUser &&
+                    data === '\r') {
                     this._resumeFollowOnSubmit(tabInfo);
                 }
             }
         });
-
         // X10 mouse reports use byte-valued strings, not UTF-8 text.
         // Forwarding through sendInput would corrupt non-ASCII coordinates.
         term.onBinary?.((data) => {
-            if (!tabInfo.isDead && !tabInfo._historyParsing && tabInfo.ws) tabInfo.ws.sendBinaryInput(data);
+            if (!tabInfo.isDead)
+                tabInfo.ws?.sendBinaryInput?.(data);
         });
-
         // Double click terminal → toggle direct focus mode
         termContainer.addEventListener('dblclick', (e) => {
             e.preventDefault();
@@ -5121,29 +5222,25 @@ export class TabManager {
                 const buffer = tab.term.buffer.active;
                 tab.isAtBottom = buffer.viewportY >= buffer.baseY;
                 tab.lastScrollY = buffer.viewportY;
-
                 // 2. Toggle mode
                 tab.directMode = !tab.directMode;
-
                 // 3. Focus first so focus-induced browser scroll resets are captured
                 if (tab.directMode) {
                     term.focus();
-                } else {
+                }
+                else {
                     this.inputTextArea.focus({ preventScroll: true });
                 }
-
                 // 4. Update UI and fit (which will restore the scroll perfectly)
                 this.updateDirectModeUI(tab);
             }
         });
-
         // Switch to the newly created tab
         this.switchTab(paneId);
         this.saveTabsState();
         if (document.body.classList.contains('show-tab-shortcuts')) {
             this.updateTabShortcutHints(true);
         }
-
         // Initial fit delay to let rendering engine draw
         setTimeout(() => {
             if (tabInfo === this.getActiveTab()) {
@@ -5154,19 +5251,21 @@ export class TabManager {
             }
         }, 100);
     }
-
     // A user-initiated finalization closes the PTY WebSocket too. Its
     // onclose callback is asynchronous, so it can arrive after the tab
     // teardown starts; that expected close must not masquerade as a lost
     // terminal or offer to reconnect a tab the user just closed.
     _handleTerminalDisconnect(tabInfo, message = 'Connection lost') {
-        if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing) return;
-        for (const timer of ['reconnectWatchdogTimer', 'reconnectStableTimer']) {
-            clearTimeout(tabInfo[timer]);
+        if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing)
+            return;
+        for (const timer of [
+            'reconnectWatchdogTimer',
+            'reconnectStableTimer',
+        ]) {
+            clearTimeout(tabInfo[timer] ?? undefined);
             tabInfo[timer] = null;
         }
         tabInfo.reconnectInFlight = false;
-
         // Deliberately not written into the terminal buffer: the overlay
         // and disconnect banner already report the lost connection,
         // and unlike them a buffer write is permanent scrollback that
@@ -5180,27 +5279,28 @@ export class TabManager {
         this.updateDocumentTitle();
         this._showReconnectOverlay(tabInfo);
         const msg = tabInfo.termContainer?.querySelector('.reconnect-msg');
-        if (msg && tabInfo.exitCode == null) msg.innerText = message;
+        if (msg && tabInfo.exitCode == null)
+            msg.innerText = message;
         this.maybeAutoReconnect(tabInfo);
         this.updateDisconnectBanner();
     }
-
     renderPiRpcStatusBar() {
         const bar = this.piRpcStatusBar;
-        if (!bar) return;
+        if (!bar)
+            return;
         const activeTab = this.getActiveTab();
         let raw = null;
         if (activeTab?.coder === 'pi-rpc') {
             raw = getPiRpcStatus(activeTab.paneId);
-        } else if (
-            activeTab?.coder === 'pi' &&
-            this._piBridgeContextEligible(activeTab)
-        ) {
+        }
+        else if (activeTab?.coder === 'pi' &&
+            this._piBridgeContextEligible(activeTab)) {
             // Capable Pi PTY tabs reuse the same meter, formatting,
             // thresholds, and progressbar semantics; only real
             // cwd/model/tokens/window are adapted in.
             raw = this._piBridgeStatusFor(activeTab);
-        } else {
+        }
+        else {
             bar.classList.add('hidden');
             bar.replaceChildren();
             return;
@@ -5214,32 +5314,30 @@ export class TabManager {
                 .replace(/^\/home\/[^/]+/, '~');
         }
         const tokens = [];
-        if (display.input !== '—') tokens.push(`↑${display.input}`);
-        if (display.output !== '—') tokens.push(`↓${display.output}`);
+        if (display.input !== '—')
+            tokens.push(`↑${display.input}`);
+        if (display.output !== '—')
+            tokens.push(`↓${display.output}`);
         if (display.cacheRead !== '—' && display.cacheRead !== '0')
             tokens.push(`R${display.cacheRead}`);
-        if (
-            display.cacheWrite !== '—' &&
+        if (display.cacheWrite !== '—' &&
             display.cacheWrite !== '0' &&
-            display.cacheWrite !== '0.0'
-        )
+            display.cacheWrite !== '0.0')
             tokens.push(`W${display.cacheWrite}`);
         // Pi's footer appends the running cost after the token counts
         // (footer.js: $0.123), so the same slot carries it here.
-        if (display.cost !== '—') tokens.push(display.cost);
+        if (display.cost !== '—')
+            tokens.push(display.cost);
         const leftText = tokens.join('  ');
-        const modelRight =
-            display.model !== '—'
-                ? `${display.model}${display.thinking !== '—' ? ` • ${display.thinking}` : ''}`
-                : display.thinking !== '—'
-                  ? display.thinking
-                  : '';
-
+        const modelRight = display.model !== '—'
+            ? `${display.model}${display.thinking !== '—' ? ` • ${display.thinking}` : ''}`
+            : display.thinking !== '—'
+                ? display.thinking
+                : '';
         // Thin context meter — replaces the 203.5K / 1M text, lives in statusbar
         const usedTokens = raw?.contextUsedTokens;
         const windowTokens = raw?.contextWindowTokens;
-        const ratioKnown =
-            typeof usedTokens === 'number' &&
+        const ratioKnown = typeof usedTokens === 'number' &&
             Number.isFinite(usedTokens) &&
             typeof windowTokens === 'number' &&
             Number.isFinite(windowTokens) &&
@@ -5247,14 +5345,15 @@ export class TabManager {
         const ratioExact = ratioKnown
             ? Math.min(100, Math.max(0, (usedTokens / windowTokens) * 100))
             : null;
-        const ratioPercent =
-            ratioExact !== null ? Math.round(ratioExact * 10) / 10 : null;
+        const ratioPercent = ratioExact !== null ? Math.round(ratioExact * 10) / 10 : null;
         let fillTheme = '';
         if (ratioExact !== null) {
-            if (ratioExact < 40) fillTheme = ' pi-rpc-context-meter-fill--low';
+            if (ratioExact < 40)
+                fillTheme = ' pi-rpc-context-meter-fill--low';
             else if (ratioExact <= 70)
                 fillTheme = ' pi-rpc-context-meter-fill--mid';
-            else fillTheme = ' pi-rpc-context-meter-fill--high';
+            else
+                fillTheme = ' pi-rpc-context-meter-fill--high';
         }
         const meterEl = document.createElement('span');
         meterEl.className = 'pi-rpc-context-meter pi-rpc-status-meter';
@@ -5268,10 +5367,12 @@ export class TabManager {
         // Keep legacy green/yellow/red for backward compat but primary is low/mid/high theme
         let legacy = '';
         if (ratioExact !== null) {
-            if (ratioExact < 40) legacy = ' pi-rpc-context-meter-fill--green';
+            if (ratioExact < 40)
+                legacy = ' pi-rpc-context-meter-fill--green';
             else if (ratioExact <= 70)
                 legacy = ' pi-rpc-context-meter-fill--yellow';
-            else legacy = ' pi-rpc-context-meter-fill--red';
+            else
+                legacy = ' pi-rpc-context-meter-fill--red';
         }
         fill.className =
             `pi-rpc-context-meter-fill${fillTheme}${legacy}`.trim();
@@ -5280,11 +5381,11 @@ export class TabManager {
         meterText.className = 'pi-rpc-context-meter-text';
         meterText.textContent = display.context;
         meterEl.append(fill, meterText);
-
         bar.classList.remove('hidden');
         // The Pi TUI prints its own status line, so the PTY tab needs no
         // second meter. The chat surface has no TUI and keeps its own.
-        if (activeTab?.coder === 'pi') bar.classList.add('hidden');
+        if (activeTab?.coder === 'pi')
+            bar.classList.add('hidden');
         const cwdEl = document.createElement('div');
         cwdEl.className = 'pi-rpc-status-cwd';
         // Pi's footer line is `cwd (branch) • session-name`; the RPC state
@@ -5293,55 +5394,51 @@ export class TabManager {
             ? `${cwdDisplay} • ${display.title}`
             : cwdDisplay;
         cwdEl.title = raw?.cwd || display.cwd;
-
         const mainRow = document.createElement('div');
         mainRow.className = 'pi-rpc-status-main';
-
         const leftEl = document.createElement('span');
         leftEl.className = 'pi-rpc-status-tokens';
         leftEl.textContent = leftText;
-
         const rightEl = document.createElement('span');
         rightEl.className = 'pi-rpc-status-model';
         rightEl.textContent = modelRight;
-        if (modelRight) rightEl.title = modelRight;
-
-        if (meterEl) mainRow.append(leftEl, meterEl, rightEl);
-        else mainRow.append(leftEl, rightEl);
+        if (modelRight)
+            rightEl.title = modelRight;
+        if (meterEl)
+            mainRow.append(leftEl, meterEl, rightEl);
+        else
+            mainRow.append(leftEl, rightEl);
         bar.replaceChildren(cwdEl, mainRow);
     }
-
     // A pane can be searched whenever it renders output in this browser:
     // live or disconnected, bridged or not. Never gate on a request.
     _sessionSearchEligible(tab) {
-        return Boolean(
-            tab?.termContainer && (tab.term || tab.coder === 'pi-rpc'),
-        );
+        return Boolean(tab?.termContainer && (tab.term || tab.coder === 'pi-rpc'));
     }
-
     _setPiRpcActionVisibility(tab) {
         const hidden = tab?.coder === 'pi-rpc';
         for (const element of [this.copyInputBtn, this.directModeToggle]) {
             element?.classList.toggle('hidden', hidden);
         }
         this.thinkingVisibilityBtn?.classList.toggle('hidden', !hidden);
-        if (hidden) this.directModeToggle?.classList.remove('active');
+        if (hidden)
+            this.directModeToggle?.classList.remove('active');
         if (this.sessionSearchBtn) {
-            this.sessionSearchBtn.disabled =
-                !this._sessionSearchEligible(tab);
+            this.sessionSearchBtn.disabled = !this._sessionSearchEligible(tab);
         }
     }
-
     _closePiSubagentViewerIfOpen() {
         const tab = this.getActiveTab();
-        if (tab?.coder !== 'pi-rpc') return false;
+        if (tab?.coder !== 'pi-rpc')
+            return false;
         return closePiSubagentViewer(tab.paneId);
     }
-
     _togglePiRpcThinkingVisibility(tab) {
-        if (tab?.coder !== 'pi-rpc') return;
+        if (tab?.coder !== 'pi-rpc')
+            return;
         const paneId = tab.paneId;
-        if (!this._thinkingAllVisible) this._thinkingAllVisible = new Map();
+        if (!this._thinkingAllVisible)
+            this._thinkingAllVisible = new Map();
         const next = !(this._thinkingAllVisible.get(paneId) === true);
         this._thinkingAllVisible.set(paneId, next);
         const container = this.tabs.get(paneId)?.termContainer;
@@ -5349,12 +5446,12 @@ export class TabManager {
             container.querySelectorAll('.thinking-block').forEach((el) => {
                 el.classList.toggle('collapsed', !next);
                 const toggle = el.querySelector('.thinking-toggle');
-                if (toggle) toggle.textContent = next ? '▼' : '▶';
+                if (toggle)
+                    toggle.textContent = next ? '▼' : '▶';
             });
         }
         this.renderPresets('pi-rpc');
     }
-
     _closePiRpcDropups(clear = false) {
         let changed = false;
         for (const id of [
@@ -5363,25 +5460,25 @@ export class TabManager {
             'pi-rpc-skills-dropup',
         ]) {
             const dropup = document.getElementById(id);
-            if (!dropup) continue;
-            if (!dropup.classList.contains('hidden')) changed = true;
+            if (!dropup)
+                continue;
+            if (!dropup.classList.contains('hidden'))
+                changed = true;
             dropup.classList.add('hidden');
-            if (clear) dropup.replaceChildren();
+            if (clear)
+                dropup.replaceChildren();
         }
         return changed;
     }
-
     // Draft recovery for a queue item cancelled or copied on the server. The
     // chat pane owns the ledger, the terminal owns the composer, so the pane
     // reports recovery as a document event instead of writing input state.
     _listenQueueRecovery() {
-        if (this._queueRecoveryListening) return;
+        if (this._queueRecoveryListening)
+            return;
         this._queueRecoveryListening = true;
-        document.addEventListener('phi:pi-queue-recovery', (event) =>
-            this._restoreQueueRecovery(event.detail),
-        );
+        document.addEventListener('phi:pi-queue-recovery', (event) => this._restoreQueueRecovery(event.detail));
     }
-
     // _restoreQueueRecovery puts one queue item's text back into the composer,
     // mirroring pi's TUI restoreQueuedMessagesToEditor: the restored text goes
     // before whatever the user has typed, and an inactive pane parks it on the
@@ -5389,14 +5486,17 @@ export class TabManager {
     _restoreQueueRecovery(detail) {
         const paneId = detail?.paneId;
         const item = detail?.recovery?.item;
-        if (!paneId || !item) return;
+        if (!paneId || !item)
+            return;
         const tab = this.tabs.get(paneId);
-        if (!tab) return;
+        if (!tab)
+            return;
         // Text only: the browser never holds the bytes behind a queued
         // attachment, so staging a chip here would send a path that does not
         // exist. Pi's TUI restores queued text into the editor the same way.
         const text = typeof item.message === 'string' ? item.message : '';
-        if (text === '') return;
+        if (text === '')
+            return;
         if (this.getActiveTab()?.paneId !== paneId) {
             tab.draft = tab.draft?.trim() ? `${text}\n\n${tab.draft}` : text;
             return;
@@ -5416,18 +5516,18 @@ export class TabManager {
         this.inputTextArea.focus({ preventScroll: true });
         this._placeCursorAtEnd();
     }
-
     _interruptActivePiRpc() {
         const tab = this.getActiveTab();
-        if (tab?.coder !== 'pi-rpc') return false;
+        if (tab?.coder !== 'pi-rpc')
+            return false;
         const controls = this._piRpcControlsFor(tab);
-        if (!controls.ready || controls.exited || !controls.busy) return false;
+        if (!controls.ready || controls.exited || !controls.busy)
+            return false;
         void rpcChatInterrupt(tab.paneId)
             .then((result) => this._restoreInterruptedPrompt(tab, result))
             .catch((error) => this._piRpcError(error, 'Pi interrupt'));
         return true;
     }
-
     // _restoreInterruptedPrompt puts the interrupted turn's prompt texts back
     // into the composer after a successful abort, mirroring pi's TUI
     // restoreQueuedMessagesToEditor. `result.restored` is captured by the
@@ -5437,11 +5537,10 @@ export class TabManager {
     // instead of touching the shared textarea.
     _restoreInterruptedPrompt(tab, result) {
         const texts = Array.isArray(result?.restored)
-            ? result.restored.filter(
-                  (text) => typeof text === 'string' && text.trim() !== '',
-              )
+            ? result.restored.filter((text) => typeof text === 'string' && text.trim() !== '')
             : [];
-        if (texts.length === 0) return;
+        if (texts.length === 0)
+            return;
         const restored = texts.join('\n\n');
         if (this.getActiveTab()?.paneId !== tab.paneId) {
             tab.draft = tab.draft?.trim()
@@ -5465,17 +5564,12 @@ export class TabManager {
         if (texts.length > 1) {
             // Pi keeps its own steering queue across aborts (no RPC clear op
             // exists), so a verbatim resend would deliver the steers twice.
-            this.app.showToast(
-                `Pi kept ${texts.length - 1} queued steering message${
-                    texts.length > 2 ? 's' : ''
-                }; edit before resending to avoid duplicates`,
-                { type: 'info', title: 'Pi interrupt' },
-            );
+            this.app.showToast(`Pi kept ${texts.length - 1} queued steering message${texts.length > 2 ? 's' : ''}; edit before resending to avoid duplicates`, { type: 'info', title: 'Pi interrupt' });
         }
     }
-
     _handlePiRpcEscape(e) {
-        if (e.isComposing) return true;
+        if (e.isComposing)
+            return true;
         if (this._closePiSubagentViewerIfOpen()) {
             e.preventDefault();
             e.stopPropagation();
@@ -5493,43 +5587,40 @@ export class TabManager {
         }
         return false;
     }
-
     _handlePiRpcKeydown(e) {
-        if (e.isComposing) return;
-        if (e.key !== '/') return;
-        if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+        if (e.isComposing)
+            return;
+        if (e.key !== '/')
+            return;
+        if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey)
+            return;
         const dropup = document.getElementById('pi-rpc-model-dropup');
-        if (!dropup || dropup.classList.contains('hidden')) return;
-        if (
-            e.target instanceof Element &&
-            e.target.closest('input, textarea, select, [contenteditable]')
-        )
+        if (!dropup || dropup.classList.contains('hidden'))
+            return;
+        if (e.target instanceof Element &&
+            e.target.closest('input, textarea, select, [contenteditable]'))
             return;
         e.preventDefault();
         dropup.querySelector('.pi-rpc-model-search')?.focus();
     }
-
     _piRpcControlsFor(tab) {
         const state = tab ? getPiRpcControls(tab.paneId) : null;
         return {
             ready: state?.ready === true,
             exited: state?.exited === true,
             busy: state?.busy === true,
-            queueDepth:
-                Number.isFinite(state?.queueDepth) && state.queueDepth >= 0
-                    ? Math.trunc(state.queueDepth)
-                    : 0,
+            queueDepth: Number.isFinite(state?.queueDepth) &&
+                (state?.queueDepth ?? 0) >= 0
+                ? Math.trunc(state?.queueDepth ?? 0)
+                : 0,
             hasTranscript: state?.hasTranscript === true,
             model: typeof state?.model === 'string' ? state.model : '',
             thinking: typeof state?.thinking === 'string' ? state.thinking : '',
             skills: Array.isArray(state?.skills)
-                ? state.skills.filter(
-                      (item) => typeof item === 'string' && item !== '',
-                  )
+                ? state.skills.filter((item) => typeof item === 'string' && item !== '')
                 : [],
         };
     }
-
     // Pi PTY tabs share the Pi RPC model picker: their current model is
     // the bridge snapshot, not RPC controls. Pi RPC tabs are unchanged.
     _piModelStateFor(tab) {
@@ -5537,11 +5628,11 @@ export class TabManager {
             return { model: tab.piBridge?.model || '' };
         return this._piRpcControlsFor(tab);
     }
-
     // A cancelled or rejected Clear keeps the existing resume path; only
     // an accepted reset drops it, together with the per-chat history.
     _onPiRpcResetResult(paneId, data) {
-        if (data?.cancelled === true) return;
+        if (data?.cancelled === true)
+            return;
         // A fresh session has no per-chat history.
         const resetTab = this.tabs.get(paneId);
         if (resetTab) {
@@ -5552,24 +5643,21 @@ export class TabManager {
         }
         this.savePiRpcTabs();
     }
-
     _piRpcError(error, title = 'Pi RPC') {
-        const message =
-            error instanceof Error
-                ? error.message
-                : String(error ?? 'Control failed');
+        const message = error instanceof Error
+            ? error.message
+            : String(error ?? 'Control failed');
         if (this.app && typeof this.app.showToast === 'function') {
             this.app.showToast(message, { type: 'error', title });
-        } else {
+        }
+        else {
             console.error(`[${title}]`, message);
         }
     }
-
     _setPiRpcDropupButtonsDisabled(dropup, disabled) {
         for (const button of dropup.querySelectorAll('button'))
             button.disabled = disabled;
     }
-
     _piModelPickerHeader(header, model) {
         const full = document.createElement('span');
         full.className = 'pi-model-name-full';
@@ -5580,17 +5668,15 @@ export class TabManager {
         header.title = model || '';
         header.replaceChildren(full, compact);
     }
-
     _renderPiRpcModelsDropup(preserve = false) {
         const dropup = document.getElementById('pi-rpc-model-dropup');
         const activeTab = this.getActiveTab();
-        if (
-            !dropup ||
+        if (!dropup ||
             !activeTab ||
-            (activeTab.coder !== 'pi-rpc' && activeTab.coder !== 'pi')
-        )
+            (activeTab.coder !== 'pi-rpc' && activeTab.coder !== 'pi'))
             return;
-        if (activeTab.coder === 'pi' && !this._piBridgeModelsEligible(activeTab)) {
+        if (activeTab.coder === 'pi' &&
+            !this._piBridgeModelsEligible(activeTab)) {
             this._closePiRpcDropups(true);
             return;
         }
@@ -5615,11 +5701,10 @@ export class TabManager {
             search.setAttribute('aria-label', 'Filter Pi models');
             search.placeholder = 'Filter models…';
             search.addEventListener('input', (event) => {
-                if (event.isComposing) return;
-                if (
-                    typeof event.inputType === 'string' &&
-                    event.inputType.startsWith('insertComposition')
-                )
+                if (event.isComposing)
+                    return;
+                if (typeof event.inputType === 'string' &&
+                    event.inputType.startsWith('insertComposition'))
                     return;
                 this._piRpcModelQuery = search.value.toLowerCase();
                 this._buildPiRpcModelList();
@@ -5629,7 +5714,8 @@ export class TabManager {
                 this._buildPiRpcModelList();
             });
             search.addEventListener('keydown', (event) => {
-                if (event.isComposing) return;
+                if (event.isComposing)
+                    return;
                 if (event.key === 'Escape' && search.value !== '') {
                     search.value = '';
                     this._piRpcModelQuery = '';
@@ -5641,16 +5727,15 @@ export class TabManager {
             const listContainer = document.createElement('div');
             listContainer.className = 'pi-rpc-model-list-container';
             dropup.replaceChildren(sticky, listContainer);
-        } else {
-            const header = dropup.querySelector(
-                '.pi-rpc-model-sticky .dropup-header',
-            );
-            if (header) this._piModelPickerHeader(header, state.model);
         }
-        const listContainer = dropup.querySelector(
-            '.pi-rpc-model-list-container',
-        );
-        if (!listContainer) return;
+        else {
+            const header = dropup.querySelector('.pi-rpc-model-sticky .dropup-header');
+            if (header)
+                this._piModelPickerHeader(header, state.model);
+        }
+        const listContainer = dropup.querySelector('.pi-rpc-model-list-container');
+        if (!listContainer)
+            return;
         // Cache first: the menu never waits for the catalog. A cached list
         // renders immediately and the refresh replaces it in place.
         this._piRpcModelsNote = null;
@@ -5658,14 +5743,14 @@ export class TabManager {
         const loading = document.createElement('div');
         loading.className = 'dropup-row pi-rpc-dropup-message';
         if (cached) {
-            this._piRpcModels = cached.models;
-            this._piBridgeModelsTruncated = cached.truncated === true;
+            this._piRpcModels = cached?.models ?? [];
+            this._piBridgeModelsTruncated = cached?.truncated === true;
             this._buildPiRpcModelList();
-        } else {
+        }
+        else {
             loading.textContent = 'Loading Pi models…';
             listContainer.replaceChildren(loading);
         }
-
         let requestResult;
         try {
             // Opening during a pick would read a catalog from before that
@@ -5674,83 +5759,72 @@ export class TabManager {
             requestResult = this._piRpcModelInflight?.has(paneId)
                 ? null
                 : activeTab.coder === 'pi'
-                  ? this._piBridgeModelsFetch(paneId)
-                  : rpcChatModels(paneId);
-        } catch (error) {
-            this._piRpcModelsNote = `Could not refresh: ${
-                error instanceof Error ? error.message : String(error)
-            }`;
+                    ? this._piBridgeModelsFetch(paneId)
+                    : rpcChatModels(paneId);
+        }
+        catch (error) {
+            this._piRpcModelsNote = `Could not refresh: ${error instanceof Error ? error.message : String(error)}`;
             this._buildPiRpcModelList();
             return;
         }
-        if (requestResult === null) return;
+        if (requestResult === null)
+            return;
         Promise.resolve(requestResult)
             .then((result) => {
-                if (
-                    request !== this._piRpcMenuRequest ||
-                    this.getActiveTab()?.paneId !== paneId ||
-                    (activeTab.coder === 'pi' &&
-                        !this._piBridgeModelsEligible(activeTab))
-                )
-                    return;
-                if (activeTab.coder === 'pi') {
-                    const bridge =
-                        result && typeof result === 'object' ? result : {};
-                    const unavailable = bridge.unavailable === true;
-                    const rows = Array.isArray(bridge.models)
-                        ? bridge.models
-                        : [];
-                    // `unavailable` means the registry read failed or the
-                    // answer was too large: that is not proof the last good
-                    // catalog is empty, so the retained rows stay. A
-                    // successful empty answer is proof, and clears them.
-                    if (unavailable && this._piRpcModels?.length) {
-                        this._piBridgeModelsTruncated =
-                            bridge.truncated === true;
-                        this._piBridgeModelsUnavailable = true;
-                        this._piRpcModelsNote = 'Pi model list unavailable';
-                        this._buildPiRpcModelList();
-                        return;
-                    }
+            if (request !== this._piRpcMenuRequest ||
+                this.getActiveTab()?.paneId !== paneId ||
+                (activeTab.coder === 'pi' &&
+                    !this._piBridgeModelsEligible(activeTab)))
+                return;
+            if (activeTab.coder === 'pi') {
+                const bridge = result && typeof result === 'object' ? result : {};
+                const unavailable = bridge.unavailable === true;
+                const rows = Array.isArray(bridge.models)
+                    ? bridge.models
+                    : [];
+                // `unavailable` means the registry read failed or the
+                // answer was too large: that is not proof the last good
+                // catalog is empty, so the retained rows stay. A
+                // successful empty answer is proof, and clears them.
+                if (unavailable && this._piRpcModels?.length) {
                     this._piBridgeModelsTruncated =
                         bridge.truncated === true;
-                    this._piBridgeModelsUnavailable = unavailable;
-                    this._piRpcModels = rows;
-                } else {
-                    this._piRpcModels = Array.isArray(result) ? result : [];
-                }
-                this._piRpcModelsNote = null;
-                this._savePiRpcModelCache(
-                    activeTab.coder,
-                    paneId,
-                    this._piRpcModels,
-                );
-                this._buildPiRpcModelList();
-            })
-            .catch((error) => {
-                if (
-                    request !== this._piRpcMenuRequest ||
-                    this.getActiveTab()?.paneId !== paneId ||
-                    (activeTab.coder === 'pi' &&
-                        !this._piBridgeModelsEligible(activeTab))
-                )
+                    this._piBridgeModelsUnavailable = true;
+                    this._piRpcModelsNote = 'Pi model list unavailable';
+                    this._buildPiRpcModelList();
                     return;
-                // Keep whatever is rendered. A failed refresh is a note,
-                // never a menu that empties itself.
-                this._piRpcModelsNote = `Could not refresh: ${
-                    error instanceof Error ? error.message : String(error)
-                }`;
-                this._buildPiRpcModelList();
-                this._piRpcError(error, 'Pi models');
-            });
+                }
+                this._piBridgeModelsTruncated = bridge.truncated === true;
+                this._piBridgeModelsUnavailable = unavailable;
+                this._piRpcModels = rows;
+            }
+            else {
+                this._piRpcModels = Array.isArray(result) ? result : [];
+            }
+            this._piRpcModelsNote = null;
+            this._savePiRpcModelCache(activeTab.coder, paneId, this._piRpcModels ?? []);
+            this._buildPiRpcModelList();
+        })
+            .catch((error) => {
+            if (request !== this._piRpcMenuRequest ||
+                this.getActiveTab()?.paneId !== paneId ||
+                (activeTab.coder === 'pi' &&
+                    !this._piBridgeModelsEligible(activeTab)))
+                return;
+            // Keep whatever is rendered. A failed refresh is a note,
+            // never a menu that empties itself.
+            this._piRpcModelsNote = `Could not refresh: ${error instanceof Error ? error.message : String(error)}`;
+            this._buildPiRpcModelList();
+            this._piRpcError(error, 'Pi models');
+        });
     }
-
     // One setter per pane at a time. A pick made while one is in flight is
     // kept per pane as the newest and runs after it, so the last click is the
     // one that lands last instead of two requests racing each other. Picks in
     // one pane never block or displace another pane's.
     _setPiRpcModel(paneId, coder, provider, modelId) {
-        if (!this._piRpcModelInflight) this._piRpcModelInflight = new Map();
+        if (!this._piRpcModelInflight)
+            this._piRpcModelInflight = new Map();
         if (!this._piRpcModelNextByPane)
             this._piRpcModelNextByPane = new Map();
         if (this._piRpcModelInflight.has(paneId)) {
@@ -5770,66 +5844,57 @@ export class TabManager {
         try {
             setterResult =
                 coder === 'pi'
-                    ? this._piBridgeModelSwitch(
-                          paneId,
-                          provider,
-                          modelId,
-                          () =>
-                              this._piRpcModelInflight?.get(paneId) ===
-                                  operation && this.tabs?.get(paneId) === tab,
-                      )
+                    ? this._piBridgeModelSwitch(paneId, provider, modelId, () => this._piRpcModelInflight?.get(paneId) ===
+                        operation && this.tabs?.get(paneId) === tab)
                     : rpcChatSetModel(paneId, provider, modelId);
-        } catch (error) {
+        }
+        catch (error) {
             setterResult = Promise.reject(error);
         }
         const settle = (error) => {
             // A disconnect or a newer owner cleared this pane's slot: this
             // reply is stale, so it reports nothing and starts nobody.
-            if (this._piRpcModelInflight?.get(paneId) !== operation) return;
+            if (this._piRpcModelInflight?.get(paneId) !== operation)
+                return;
             this._piRpcModelInflight.delete(paneId);
             if (this._piRpcModelPending === operation)
                 this._piRpcModelPending = null;
             if (error) {
                 this._piRpcError(error, 'Pi model');
-            } else {
+            }
+            else {
                 if (this.getActiveTab()?.paneId === paneId)
                     this.renderPresets(coder);
             }
             this._flushPiRpcModelNext(paneId);
         };
-        Promise.resolve(setterResult).then(
-            () => settle(null),
-            (error) => settle(error),
-        );
+        Promise.resolve(setterResult).then(() => settle(null), (error) => settle(error));
     }
-
     // A pick that never left the browser is still the user's latest choice, so
     // it waits here until its pane can accept it again instead of being
     // deleted with the failed request.
     _flushPiRpcModelNext(paneId) {
-        if (this._piRpcModelInflight?.has(paneId)) return;
+        if (this._piRpcModelInflight?.has(paneId))
+            return;
         const next = this._piRpcModelNextByPane?.get(paneId);
-        if (!next) return;
+        if (!next)
+            return;
         const tab = this.tabs?.get(paneId);
         if (!tab) {
             this._piRpcModelNextByPane.delete(paneId);
             return;
         }
         if (tab.coder === 'pi') {
-            if (!this._piBridgeModelsEligible(tab)) return;
-        } else if (tab.coder !== 'pi-rpc') {
+            if (!this._piBridgeModelsEligible(tab))
+                return;
+        }
+        else if (tab.coder !== 'pi-rpc') {
             this._piRpcModelNextByPane.delete(paneId);
             return;
         }
         this._piRpcModelNextByPane.delete(paneId);
-        this._setPiRpcModel(
-            next.paneId,
-            next.coder,
-            next.provider,
-            next.modelId,
-        );
+        this._setPiRpcModel(next.paneId, next.coder, next.provider, next.modelId);
     }
-
     // The outcome of a written request is unknown once its pane loses the
     // bridge: drop the slot so a late reply cannot speak for a dead pane. The
     // never-sent queue is untouched and flushes when the pane returns.
@@ -5838,61 +5903,66 @@ export class TabManager {
         if (this._piRpcModelPending?.paneId === paneId)
             this._piRpcModelPending = null;
     }
-
     // Full teardown: the pane is gone, so its queued pick has no future owner.
     _clearPiRpcModelPending(paneId) {
         this._dropPiRpcModelInflight(paneId);
         this._piRpcModelNextByPane?.delete(paneId);
     }
-
     _piRpcModelCacheKey(coder, paneId) {
         // Catalogs are session-scoped (a scoped model list belongs to one
         // pane), so the key carries the pane or another pane's rows would
         // render as this one's.
         return `phi.piRpc.models.${coder}:${paneId ?? ''}`;
     }
-
     // Only plain rows leave here: a corrupt cached entry must not reach the
     // DOM as an object that throws on string conversion.
     _cleanPiRpcModelRows(models) {
-        if (!Array.isArray(models)) return [];
+        if (!Array.isArray(models))
+            return [];
         const rows = [];
         for (const model of models) {
             if (!model || typeof model.provider !== 'string' || !model.provider)
                 continue;
-            if (typeof model.id !== 'string' || !model.id) continue;
-            const row = { provider: model.provider, id: model.id };
+            if (typeof model.id !== 'string' || !model.id)
+                continue;
+            const row = {
+                provider: model.provider,
+                id: model.id,
+            };
             if (typeof model.name === 'string' && model.name)
                 row.name = model.name;
             rows.push(row);
         }
         return rows;
     }
-
     // The last good catalog lives in memory first: localStorage can refuse a
     // write (quota, private mode) and the menu must still open from it. A
     // stored empty list is a real answer and is kept as one.
     _loadPiRpcModelCache(coder, paneId) {
         const key = this._piRpcModelCacheKey(coder, paneId);
         const memory = this._piRpcModelMemory?.get(key);
-        if (memory) return memory;
+        if (memory)
+            return memory;
         try {
             const raw = window.localStorage?.getItem(key);
-            if (typeof raw !== 'string' || !raw) return null;
+            if (typeof raw !== 'string' || !raw)
+                return null;
             const parsed = JSON.parse(raw);
-            if (!Array.isArray(parsed?.models)) return null;
+            if (!Array.isArray(parsed?.models))
+                return null;
             const entry = {
                 models: this._cleanPiRpcModelRows(parsed.models),
                 truncated: parsed.truncated === true,
             };
-            if (!this._piRpcModelMemory) this._piRpcModelMemory = new Map();
+            if (!this._piRpcModelMemory)
+                this._piRpcModelMemory = new Map();
             this._piRpcModelMemory.set(key, entry);
             return entry;
-        } catch (_error) {
+        }
+        catch (_error) {
             return null;
         }
     }
-
     // Catalogs are session-scoped, so a deleted pane's entry has no future
     // owner and is not kept alive by the memory copy or by storage.
     _forgetPiRpcModelCache(coder, paneId) {
@@ -5900,88 +5970,87 @@ export class TabManager {
         this._piRpcModelMemory?.delete(key);
         try {
             window.localStorage?.removeItem(key);
-        } catch (_error) {
+        }
+        catch (_error) {
             /* storage unavailable */
         }
     }
-
     // A pane id changes when its session is replaced, so persisted catalogs
     // would otherwise accumulate until they use up the quota every other
     // write needs. The oldest are dropped first.
     _prunePiRpcModelCaches(keep = 20) {
         try {
             const storage = window.localStorage;
-            if (!storage) return;
+            if (!storage)
+                return;
             const entries = [];
             for (let index = 0; index < storage.length; index++) {
                 const key = storage.key(index);
-                if (
-                    typeof key !== 'string' ||
-                    !key.startsWith('phi.piRpc.models.')
-                )
+                if (typeof key !== 'string' ||
+                    !key.startsWith('phi.piRpc.models.'))
                     continue;
                 let at = 0;
                 try {
-                    at = Number(JSON.parse(storage.getItem(key))?.at) || 0;
-                } catch (_error) {
+                    at =
+                        Number(JSON.parse(storage.getItem(key) ?? '')?.at) || 0;
+                }
+                catch (_error) {
                     at = 0;
                 }
                 entries.push({ key, at });
             }
-            if (entries.length <= keep) return;
+            if (entries.length <= keep)
+                return;
             entries.sort((left, right) => left.at - right.at);
             for (const entry of entries.slice(0, entries.length - keep)) {
                 storage.removeItem(entry.key);
             }
-        } catch (_error) {
+        }
+        catch (_error) {
             // Storage that throws on access (restricted browsing, quota
             // probing) must not turn a successful refresh into an error: the
             // memory copy already serves this session.
         }
     }
-
     _savePiRpcModelCache(coder, paneId, models) {
         const entry = {
             models: this._cleanPiRpcModelRows(models),
             truncated: this._piBridgeModelsTruncated === true,
         };
         const key = this._piRpcModelCacheKey(coder, paneId);
-        if (!this._piRpcModelMemory) this._piRpcModelMemory = new Map();
+        if (!this._piRpcModelMemory)
+            this._piRpcModelMemory = new Map();
         this._piRpcModelMemory.set(key, entry);
         try {
-            window.localStorage?.setItem(
-                key,
-                JSON.stringify({
-                    at: Date.now(),
-                    truncated: entry.truncated,
-                    models: entry.models,
-                }),
-            );
-        } catch (_error) {
+            window.localStorage?.setItem(key, JSON.stringify({
+                at: Date.now(),
+                truncated: entry.truncated,
+                models: entry.models,
+            }));
+        }
+        catch (_error) {
             // localStorage may be unavailable; the memory copy still serves
             // this session.
         }
         this._prunePiRpcModelCaches();
     }
-
     _buildPiRpcModelList() {
         const dropup = document.getElementById('pi-rpc-model-dropup');
         const activeTab = this.getActiveTab();
-        if (
-            !dropup ||
+        if (!dropup ||
             !activeTab ||
             (activeTab.coder !== 'pi-rpc' && activeTab.coder !== 'pi') ||
-            (activeTab.coder === 'pi' && !this._piBridgeModelsEligible(activeTab))
-        )
+            (activeTab.coder === 'pi' &&
+                !this._piBridgeModelsEligible(activeTab)))
             return;
-        const listContainer = dropup.querySelector(
-            '.pi-rpc-model-list-container',
-        );
-        if (!listContainer) return;
+        const listContainer = dropup.querySelector('.pi-rpc-model-list-container');
+        if (!listContainer)
+            return;
         if (!Array.isArray(this._piRpcModels)) {
             // No list yet: a failed load still says so instead of leaving the
             // loading row up forever.
-            if (!this._piRpcModelsNote) return;
+            if (!this._piRpcModelsNote)
+                return;
             const note = document.createElement('div');
             note.className = 'dropup-row pi-rpc-dropup-message';
             note.textContent = this._piRpcModelsNote;
@@ -6005,28 +6074,22 @@ export class TabManager {
         this._loadPiRpcFavoritesIfNeeded();
         const favoriteKey = (model) => `${model.provider}/${model.id}`;
         const favorites = this._piRpcFavorites || new Set();
-        const favoriteRows = models.filter((m) =>
-            favorites.has(favoriteKey(m)),
-        );
+        const favoriteRows = models.filter((m) => favorites.has(favoriteKey(m)));
         const restRows = models.filter((m) => !favorites.has(favoriteKey(m)));
         const matches = (model) => {
-            const haystack = (
-                model.provider +
+            const haystack = (model.provider +
                 ' ' +
                 model.id +
                 ' ' +
-                (model.name || '')
-            ).toLowerCase();
+                (model.name || '')).toLowerCase();
             return query === '' || haystack.includes(query);
         };
         let activeModel = null;
         for (const model of models) {
             // Bridge snapshots name provider/id; RPC controls name id.
-            if (
-                activeTab.coder === 'pi'
-                    ? `${model.provider}/${model.id}` === state.model
-                    : model.id === state.model
-            ) {
+            if (activeTab.coder === 'pi'
+                ? `${model.provider}/${model.id}` === state.model
+                : model.id === state.model) {
                 activeModel = model;
                 break;
             }
@@ -6042,18 +6105,14 @@ export class TabManager {
         const renderRow = (model) => {
             const row = document.createElement('li');
             row.className = 'dropup-row pi-rpc-model-row';
-            if (model === activeModel) row.classList.add('is-active');
+            if (model === activeModel)
+                row.classList.add('is-active');
             const isFavorite = favorites.has(favoriteKey(model));
             const star = document.createElement('button');
             star.type = 'button';
-            star.className = `pi-rpc-model-star${
-                isFavorite ? ' is-favorite' : ''
-            }`;
+            star.className = `pi-rpc-model-star${isFavorite ? ' is-favorite' : ''}`;
             star.textContent = isFavorite ? '★' : '☆';
-            star.setAttribute(
-                'aria-label',
-                isFavorite ? 'Remove from Favorites' : 'Add to Favorites',
-            );
+            star.setAttribute('aria-label', isFavorite ? 'Remove from Favorites' : 'Add to Favorites');
             star.setAttribute('aria-pressed', String(isFavorite));
             star.title = isFavorite
                 ? 'Remove from Favorites'
@@ -6067,10 +6126,11 @@ export class TabManager {
             button.className = 'dropup-model-btn';
             const name = document.createElement('span');
             name.className = 'pi-model-name-full';
-            name.textContent = model.name || model.id;
+            name.textContent = model.name || model.id || '';
             const compactName = document.createElement('span');
             compactName.className = 'pi-model-name-compact';
-            compactName.textContent = (model.name || model.id).split('/').pop();
+            compactName.textContent =
+                (model.name || model.id || '').split('/').pop() || '';
             button.append(name, compactName);
             button.title = `${model.provider}/${model.id}`;
             // A pick is local feedback: the row stays enabled while its
@@ -6078,23 +6138,16 @@ export class TabManager {
             button.disabled = false;
             button.addEventListener('click', (event) => {
                 event.stopPropagation();
-                if (
-                    activeTab.coder === 'pi' &&
+                if (activeTab.coder === 'pi' &&
                     (this.getActiveTab() !== activeTab ||
                         !this._piBridgeModelsEligible(activeTab) ||
-                        !dropup.contains(button))
-                )
+                        !dropup.contains(button)))
                     return;
                 // The pick is local feedback: close the menu now and let the
                 // state event (or the error toast) reconcile it. A slow link
                 // must not freeze the menu for the length of a round trip.
                 this._closePiRpcDropups(true);
-                this._setPiRpcModel(
-                    paneId,
-                    activeTab.coder,
-                    model.provider,
-                    model.id,
-                );
+                this._setPiRpcModel(paneId, activeTab.coder, model.provider ?? '', model.id ?? '');
             });
             const meta = document.createElement('span');
             meta.className = 'pi-rpc-dropup-meta';
@@ -6113,8 +6166,7 @@ export class TabManager {
                 groupEl.classList.add('is-empty');
             }
             const listId = `pi-rpc-model-list-${group.id}`;
-            const expanded =
-                group.alwaysExpanded ||
+            const expanded = group.alwaysExpanded ||
                 (query !== '' && group.id === firstMatchGroup) ||
                 (!group.alwaysExpanded &&
                     this._piRpcModelExpandedGroup === group.id);
@@ -6126,7 +6178,8 @@ export class TabManager {
             if (group.alwaysExpanded) {
                 toggle.disabled = true;
                 toggle.setAttribute('aria-disabled', 'true');
-            } else {
+            }
+            else {
                 toggle.disabled = false;
                 toggle.addEventListener('click', (event) => {
                     event.stopPropagation();
@@ -6144,7 +6197,8 @@ export class TabManager {
             const list = document.createElement('ul');
             list.id = listId;
             list.className = 'pi-rpc-model-list';
-            if (!expanded) list.classList.add('is-collapsed');
+            if (!expanded)
+                list.classList.add('is-collapsed');
             for (const model of groupMatches) {
                 list.appendChild(renderRow(model));
             }
@@ -6183,18 +6237,15 @@ export class TabManager {
         // Auto-open the active model's provider group the first time the
         // picker renders with no favorites (first provider otherwise), so
         // the user does not have to click to see anything.
-        if (
-            favoriteRows.length === 0 &&
+        if (favoriteRows.length === 0 &&
             !this._piRpcModelAutoOpened &&
-            sections.length > 0
-        ) {
+            sections.length > 0) {
             this._piRpcModelAutoOpened = true;
             let openId = sections[0].id;
             if (activeModel) {
-                const hit = sections.find(
-                    (section) => section.label === activeModel.provider,
-                );
-                if (hit) openId = hit.id;
+                const hit = sections.find((section) => section.label === activeModel.provider);
+                if (hit)
+                    openId = hit.id;
             }
             this._piRpcModelExpandedGroup = openId;
         }
@@ -6202,15 +6253,14 @@ export class TabManager {
         // searching. The user's manual expansion choice is overridden;
         // manual state returns when the query clears because
         // _piRpcModelExpandedGroup is never mutated here.
-        const firstMatchGroup =
-            query !== ''
-                ? (sections.find((g) => g.rows.some(matches))?.id ?? null)
-                : null;
+        const firstMatchGroup = query !== ''
+            ? (sections.find((g) => g.rows.some(matches))?.id ?? null)
+            : null;
         const nodes = [];
         let totalMatches = 0;
         const notes = [];
         for (const section of sections) {
-            const { node, matchCount } = renderGroup(section, firstMatchGroup);
+            const { node, matchCount } = renderGroup(section, firstMatchGroup ?? '');
             totalMatches += matchCount;
             nodes.push(node);
         }
@@ -6223,7 +6273,8 @@ export class TabManager {
         }
         if (activeTab.coder === 'pi' && this._piBridgeModelsTruncated)
             notes.push('Partial model list');
-        if (this._piRpcModelsNote) notes.push(this._piRpcModelsNote);
+        if (this._piRpcModelsNote)
+            notes.push(this._piRpcModelsNote);
         for (const text of notes) {
             const note = document.createElement('div');
             note.className = 'dropup-row pi-rpc-dropup-message';
@@ -6232,9 +6283,9 @@ export class TabManager {
         }
         listContainer.replaceChildren(...nodes);
     }
-
     _loadPiRpcFavoritesIfNeeded() {
-        if (this._piRpcFavoritesLoaded) return;
+        if (this._piRpcFavoritesLoaded)
+            return;
         this._piRpcFavoritesLoaded = true;
         let parsed = null;
         try {
@@ -6244,7 +6295,8 @@ export class TabManager {
                 if (Array.isArray(v))
                     parsed = v.filter((s) => typeof s === 'string');
             }
-        } catch (_error) {
+        }
+        catch (_error) {
             // ignore — fall through to seed from config
         }
         if (parsed && parsed.length > 0) {
@@ -6260,11 +6312,9 @@ export class TabManager {
                 .filter(Boolean);
             this._piRpcFavorites = new Set(seeded);
             try {
-                window.localStorage?.setItem(
-                    'phi.piRpc.favorites',
-                    JSON.stringify(seeded),
-                );
-            } catch (_error) {
+                window.localStorage?.setItem('phi.piRpc.favorites', JSON.stringify(seeded));
+            }
+            catch (_error) {
                 // localStorage may be unavailable; in-memory copy is enough
                 // for this session.
             }
@@ -6272,47 +6322,42 @@ export class TabManager {
         }
         this._piRpcFavorites = new Set();
     }
-
     _togglePiRpcFavorite(model) {
         this._loadPiRpcFavoritesIfNeeded();
         const key = `${model.provider}/${model.id}`;
         if (this._piRpcFavorites.has(key)) {
             this._piRpcFavorites.delete(key);
-        } else {
+        }
+        else {
             this._piRpcFavorites.add(key);
         }
         try {
-            window.localStorage?.setItem(
-                'phi.piRpc.favorites',
-                JSON.stringify([...this._piRpcFavorites]),
-            );
-        } catch (_error) {
+            window.localStorage?.setItem('phi.piRpc.favorites', JSON.stringify([...this._piRpcFavorites]));
+        }
+        catch (_error) {
             // localStorage may be unavailable; UI still updates this session.
         }
         this._buildPiRpcModelList();
     }
-
     // Bridge catalog fetch for Pi PTY tabs. Rows arrive mapped to
     // {provider, id} so rendering, favorites, and search stay shared
     // with Pi RPC. Flags ride along so the caller assigns them inside
     // the staleness fence; they drive the empty copy and the footer.
     async _piBridgeModelsFetch(paneId) {
         try {
-            const body = await modelRequestJson(
-                `/api/pi-bridge/models?pane=${encodeURIComponent(paneId)}`,
-            );
+            const body = await modelRequestJson(`/api/pi-bridge/models?pane=${encodeURIComponent(paneId)}`);
             return {
                 models: Array.isArray(body?.models) ? body.models : [],
                 truncated: body?.truncated === true,
                 unavailable: body?.unavailable === true,
             };
-        } catch (error) {
-            if (error?.name === 'AbortError')
+        }
+        catch (error) {
+            if (isAbortError(error))
                 throw new Error('Pi models unavailable (request timed out)');
             throw error;
         }
     }
-
     // Bridge model switch for Pi PTY tabs. A refused switch surfaces
     // its reason; a failed round trip is explicitly unknown, never a
     // guessed failure, since the switch may still have landed.
@@ -6320,47 +6365,35 @@ export class TabManager {
         let body;
         let dispatched = false;
         try {
-            body = await modelRequestJson(
-                '/api/pi-bridge/model',
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        pane: paneId,
-                        provider,
-                        model: modelId,
-                    }),
+            body = await modelRequestJson('/api/pi-bridge/model', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    pane: paneId,
+                    provider,
+                    model: modelId,
+                }),
+            }, {
+                canSend,
+                // A pick made offline is held, never silently dropped.
+                // The menu is already closed: say so once.
+                onQueued: () => this.app?.showToast?.('Offline — model change queued; waiting for connection…', { type: 'info', title: 'Pi model' }),
+                onDispatch: () => {
+                    dispatched = true;
                 },
-                {
-                    canSend,
-                    // A pick made offline is held, never silently dropped.
-                    // The menu is already closed: say so once.
-                    onQueued: () =>
-                        this.app?.showToast?.(
-                            'Offline — model change queued; waiting for connection…',
-                            { type: 'info', title: 'Pi model' },
-                        ),
-                    onDispatch: () => {
-                        dispatched = true;
-                    },
-                },
-            );
-        } catch {
-            throw new Error(
-                dispatched
-                    ? 'unknown — reopen the picker'
-                    : 'Model change not sent — check your connection and try again',
-            );
+            });
         }
-        if (body?.ok === true) return;
+        catch {
+            throw new Error(dispatched
+                ? 'unknown — reopen the picker'
+                : 'Model change not sent — check your connection and try again');
+        }
+        if (body?.ok === true)
+            return;
         if (body?.reason === 'no-auth')
-            throw new Error(
-                'Switch refused: provider has no credentials (no-auth)',
-            );
+            throw new Error('Switch refused: provider has no credentials (no-auth)');
         if (body?.reason === 'unknown-model')
-            throw new Error(
-                'Switch refused: model is not selectable (unknown-model)',
-            );
+            throw new Error('Switch refused: model is not selectable (unknown-model)');
         // ok=false with an empty reason means the attempt errored
         // and its outcome is unknown, like a failed round trip;
         // anything else is an unexpected refusal shape.
@@ -6368,7 +6401,6 @@ export class TabManager {
             throw new Error('unknown — reopen the picker');
         throw new Error('Switch failed');
     }
-
     // Bridge skill list for Pi PTY tabs. The list is fetched when the
     // picker opens, like the model catalog: no per-pane cache, so a
     // session that gained or lost a skill shows the current set.
@@ -6377,10 +6409,7 @@ export class TabManager {
         // Bound the browser too: an HTTP request can stall before reaching Phi.
         const timer = setTimeout(() => controller.abort(), 5000);
         try {
-            const res = await fetch(
-                `/api/pi-bridge/skills?pane=${encodeURIComponent(paneId)}`,
-                { signal: controller.signal },
-            );
+            const res = await fetch(`/api/pi-bridge/skills?pane=${encodeURIComponent(paneId)}`, { signal: controller.signal });
             if (!res.ok)
                 throw new Error(`Pi skills unavailable (${res.status})`);
             const body = await res.json();
@@ -6391,24 +6420,19 @@ export class TabManager {
                 // The origin of the answer: the peer that served the
                 // list. A click must carry it, so the skill can never
                 // reach a runtime that replaced this one.
-                processId:
-                    typeof body.process_id === 'string'
-                        ? body.process_id
-                        : '',
-                generation:
-                    typeof body.generation === 'string'
-                        ? body.generation
-                        : '',
+                processId: typeof body.process_id === 'string' ? body.process_id : '',
+                generation: typeof body.generation === 'string' ? body.generation : '',
             };
-        } catch (error) {
-            if (error?.name === 'AbortError')
+        }
+        catch (error) {
+            if (isAbortError(error))
                 throw new Error('Pi skills unavailable (request timed out)');
             throw error;
-        } finally {
+        }
+        finally {
             clearTimeout(timer);
         }
     }
-
     // Bridge skill invocation for Pi PTY tabs. The ack means the
     // request was dispatched to Pi, never that the agent accepted or
     // completed it. A failed round trip is explicitly unknown and is
@@ -6427,23 +6451,27 @@ export class TabManager {
                 body: JSON.stringify({
                     pane: paneId,
                     name,
-                    process_id: origin.processId,
-                    generation: origin.generation,
+                    process_id: origin?.processId ?? null,
+                    generation: origin?.generation ?? null,
                 }),
                 signal: controller.signal,
             });
-            if (!res.ok) throw new Error('unknown');
+            if (!res.ok)
+                throw new Error('unknown');
             body = await res.json();
-        } catch {
+        }
+        catch {
             throw new Error('Skill send outcome unknown — open Pi to check');
-        } finally {
+        }
+        finally {
             clearTimeout(timer);
         }
         if (!body || typeof body !== 'object' || typeof body.ok !== 'boolean')
             // An ack without a verdict does not say whether the skill
             // landed, so the outcome is unknown.
             throw new Error('Skill send outcome unknown — open Pi to check');
-        if (body.ok === true) return;
+        if (body.ok === true)
+            return;
         const reason = typeof body.reason === 'string' ? body.reason : '';
         if (reason === 'unknown-skill')
             throw new Error('Skill refused: unknown skill (unknown-skill)');
@@ -6453,7 +6481,6 @@ export class TabManager {
             throw new Error('Skill send outcome unknown — open Pi to check');
         throw new Error('Skill send failed');
     }
-
     // Pi RPC skills: the control state already carries the skill command
     // names the session published, so the picker renders locally and a pick
     // sends the /name command through the ordinary prompt path (Pi executes
@@ -6478,11 +6505,10 @@ export class TabManager {
             search.setAttribute('aria-label', 'Filter Pi skills');
             search.placeholder = 'Filter skills…';
             search.addEventListener('input', (event) => {
-                if (event.isComposing) return;
-                if (
-                    typeof event.inputType === 'string' &&
-                    event.inputType.startsWith('insertComposition')
-                )
+                if (event.isComposing)
+                    return;
+                if (typeof event.inputType === 'string' &&
+                    event.inputType.startsWith('insertComposition'))
                     return;
                 this._piRpcSkillQuery = search.value.toLowerCase();
                 this._buildPiRpcSkillsRows(dropup, activeTab, skills);
@@ -6498,12 +6524,10 @@ export class TabManager {
         }
         this._buildPiRpcSkillsRows(dropup, activeTab, skills);
     }
-
     _buildPiRpcSkillsRows(dropup, activeTab, skills) {
-        const listContainer = dropup.querySelector(
-            '.pi-rpc-model-list-container',
-        );
-        if (!listContainer) return;
+        const listContainer = dropup.querySelector('.pi-rpc-model-list-container');
+        if (!listContainer)
+            return;
         const query = this._piRpcSkillQuery || '';
         const visible = query
             ? skills.filter((name) => name.toLowerCase().includes(query))
@@ -6526,7 +6550,8 @@ export class TabManager {
             btn.title = `Run /${name} in this Pi session`;
             btn.addEventListener('click', () => {
                 this._closePiRpcDropups(true);
-                if (this.getActiveTab()?.paneId !== activeTab.paneId) return;
+                if (this.getActiveTab()?.paneId !== activeTab.paneId)
+                    return;
                 const sent = rpcChatSend(activeTab.paneId, `/${name}`);
                 if (!sent)
                     this.app?.showToast?.('pi chat: not ready', {
@@ -6537,16 +6562,17 @@ export class TabManager {
             listContainer.appendChild(row);
         }
     }
-
     _renderPiRpcSkillsDropup(preserve = false) {
         const dropup = document.getElementById('pi-rpc-skills-dropup');
         const activeTab = this.getActiveTab();
-        if (!dropup || !activeTab) return;
+        if (!dropup || !activeTab)
+            return;
         if (activeTab.coder === 'pi-rpc') {
             this._renderPiRpcLocalSkills(dropup, activeTab, preserve);
             return;
         }
-        if (activeTab.coder !== 'pi') return;
+        if (activeTab.coder !== 'pi')
+            return;
         if (!this._piBridgeSkillsEligible(activeTab)) {
             this._closePiRpcDropups(true);
             return;
@@ -6582,11 +6608,10 @@ export class TabManager {
             search.setAttribute('aria-label', 'Filter Pi skills');
             search.placeholder = 'Filter skills…';
             search.addEventListener('input', (event) => {
-                if (event.isComposing) return;
-                if (
-                    typeof event.inputType === 'string' &&
-                    event.inputType.startsWith('insertComposition')
-                )
+                if (event.isComposing)
+                    return;
+                if (typeof event.inputType === 'string' &&
+                    event.inputType.startsWith('insertComposition'))
                     return;
                 this._piBridgeSkillQuery = search.value.toLowerCase();
                 this._buildPiRpcSkillsList();
@@ -6596,7 +6621,8 @@ export class TabManager {
                 this._buildPiRpcSkillsList();
             });
             search.addEventListener('keydown', (event) => {
-                if (event.isComposing) return;
+                if (event.isComposing)
+                    return;
                 if (event.key === 'Escape' && search.value !== '') {
                     search.value = '';
                     this._piBridgeSkillQuery = '';
@@ -6609,10 +6635,9 @@ export class TabManager {
             listContainer.className = 'pi-rpc-model-list-container';
             dropup.replaceChildren(sticky, listContainer);
         }
-        const listContainer = dropup.querySelector(
-            '.pi-rpc-model-list-container',
-        );
-        if (!listContainer) return;
+        const listContainer = dropup.querySelector('.pi-rpc-model-list-container');
+        if (!listContainer)
+            return;
         const loading = document.createElement('div');
         loading.className = 'dropup-row pi-rpc-dropup-message';
         loading.textContent = 'Loading Pi skills…';
@@ -6620,97 +6645,86 @@ export class TabManager {
             // The retained rows are shown at once; the refresh below
             // replaces them in place.
             this._buildPiRpcSkillsList();
-        } else {
+        }
+        else {
             listContainer.replaceChildren(loading);
         }
-
         let requestResult;
         try {
             requestResult = this._piBridgeSkillsFetch(paneId);
-        } catch (error) {
+        }
+        catch (error) {
             this._piRpcError(error, 'Pi skills');
             loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
             return;
         }
         Promise.resolve(requestResult)
             .then((result) => {
-                if (
-                    request !== this._piBridgeSkillsRequest ||
-                    this.getActiveTab()?.paneId !== paneId
-                )
-                    return;
-                const bridge = result && typeof result === 'object' ? result : {};
-                // The origin belongs to the runtime that answered.
-                context.origin = {
-                    processId: bridge.processId || '',
-                    generation: bridge.generation || '',
-                };
-                // The answer is checked against the browser's view: a
-                // list from a runtime the browser already left is stale.
-                if (!this._piBridgeSkillsContextValid(context)) {
-                    this._showPiRpcSkillsMessage(
-                        listContainer,
-                        'Pi skill list unavailable',
-                    );
-                    return;
-                }
-                this._piBridgeSkillsTruncated = bridge.truncated === true;
-                this._piBridgeSkillsUnavailable = bridge.unavailable === true;
-                // A fresh answer replaces the retained one: the rows are
-                // current again.
-                this._piBridgeSkillsStale = false;
-                this._piBridgeSkills = Array.isArray(bridge.skills)
-                    ? bridge.skills
-                    : [];
-                this._buildPiRpcSkillsList();
-            })
+            if (request !== this._piBridgeSkillsRequest ||
+                this.getActiveTab()?.paneId !== paneId)
+                return;
+            const bridge = result && typeof result === 'object' ? result : {};
+            // The origin belongs to the runtime that answered.
+            if (!context)
+                return;
+            context.origin = {
+                processId: bridge.processId || '',
+                generation: bridge.generation || '',
+            };
+            // The answer is checked against the browser's view: a
+            // list from a runtime the browser already left is stale.
+            if (!this._piBridgeSkillsContextValid(context)) {
+                this._showPiRpcSkillsMessage(listContainer, 'Pi skill list unavailable');
+                return;
+            }
+            this._piBridgeSkillsTruncated = bridge.truncated === true;
+            this._piBridgeSkillsUnavailable = bridge.unavailable === true;
+            // A fresh answer replaces the retained one: the rows are
+            // current again.
+            this._piBridgeSkillsStale = false;
+            this._piBridgeSkills = Array.isArray(bridge.skills)
+                ? bridge.skills
+                : [];
+            this._buildPiRpcSkillsList();
+        })
             .catch((error) => {
-                if (
-                    request !== this._piBridgeSkillsRequest ||
-                    this.getActiveTab()?.paneId !== paneId ||
-                    !this._piBridgeSkillsContextBound(context)
-                )
-                    return;
-                if (!this._piBridgeSkillsContextValid(context)) {
-                    // The runtime moved on: the failure belongs to a
-                    // runtime the user already left.
-                    this._showPiRpcSkillsMessage(
-                        listContainer,
-                        'Pi skill list unavailable',
-                    );
-                    return;
+            if (request !== this._piBridgeSkillsRequest ||
+                this.getActiveTab()?.paneId !== paneId ||
+                !this._piBridgeSkillsContextBound(context))
+                return;
+            if (!this._piBridgeSkillsContextValid(context)) {
+                // The runtime moved on: the failure belongs to a
+                // runtime the user already left.
+                this._showPiRpcSkillsMessage(listContainer, 'Pi skill list unavailable');
+                return;
+            }
+            if (reused) {
+                // The list stays: a failed refresh never empties
+                // it. The note says the list may be out of date.
+                // The rows are not rebuilt, so a row that holds the
+                // keyboard focus keeps it. The note is state, so a
+                // later filter rebuild keeps it too.
+                const wasStale = this._piBridgeSkillsStale;
+                this._piBridgeSkillsStale = true;
+                if (!wasStale) {
+                    this._showPiRpcSkillsNote(listContainer, 'Refresh failed — showing the last known skills');
                 }
-                if (reused) {
-                    // The list stays: a failed refresh never empties
-                    // it. The note says the list may be out of date.
-                    // The rows are not rebuilt, so a row that holds the
-                    // keyboard focus keeps it. The note is state, so a
-                    // later filter rebuild keeps it too.
-                    const wasStale = this._piBridgeSkillsStale;
-                    this._piBridgeSkillsStale = true;
-                    if (!wasStale) {
-                        this._showPiRpcSkillsNote(
-                            listContainer,
-                            'Refresh failed — showing the last known skills',
-                        );
-                    }
-                    return;
-                }
-                loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
-                this._piRpcError(error, 'Pi skills');
-            });
+                return;
+            }
+            loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
+            this._piRpcError(error, 'Pi skills');
+        });
     }
-
     // _showPiRpcSkillsNote keeps the rendered list and adds one short
     // status line. A failed refresh must not empty the list.
     _showPiRpcSkillsNote(listContainer, text) {
-        if (!listContainer) return;
+        if (!listContainer)
+            return;
         const note = document.createElement('div');
         note.className = 'dropup-row pi-rpc-dropup-message';
         note.textContent = text;
         listContainer.append(note);
     }
-
     // _piBridgeSkillsReusable reports whether the retained answer can
     // be shown again for this runtime, and hands its origin to the new
     // context. The last good answer stays on screen while the picker
@@ -6719,60 +6733,54 @@ export class TabManager {
     // it.
     _piBridgeSkillsReusable(context) {
         const retained = this._piBridgeSkillsContext;
-        if (
-            !retained ||
-            retained.paneId !== context.paneId ||
+        if (!retained ||
+            retained.paneId !== context?.paneId ||
             !Array.isArray(this._piBridgeSkills) ||
-            !this._piBridgeSkillsContextValid(retained)
-        )
+            !this._piBridgeSkillsContextValid(retained))
+            return false;
+        if (!context)
             return false;
         context.origin = retained.origin;
         return true;
     }
-
     // _showPiRpcSkillsMessage replaces the picker list with one message
     // row. A stale answer or a failure for a runtime the user already
     // left must not leave the picker on "Loading".
     _showPiRpcSkillsMessage(listContainer, text) {
-        if (!listContainer) return;
+        if (!listContainer)
+            return;
         const message = document.createElement('div');
         message.className = 'dropup-row pi-rpc-dropup-message';
         message.textContent = text;
         listContainer.replaceChildren(message);
     }
-
     _buildPiRpcSkillsList() {
         const dropup = document.getElementById('pi-rpc-skills-dropup');
         const activeTab = this.getActiveTab();
-        if (!dropup || !activeTab || activeTab.coder !== 'pi') return;
-        if (!this._piBridgeSkillsEligible(activeTab)) return;
-        const listContainer = dropup.querySelector(
-            '.pi-rpc-model-list-container',
-        );
-        if (!listContainer) return;
+        if (!dropup || !activeTab || activeTab.coder !== 'pi')
+            return;
+        if (!this._piBridgeSkillsEligible(activeTab))
+            return;
+        const listContainer = dropup.querySelector('.pi-rpc-model-list-container');
+        if (!listContainer)
+            return;
         const paneId = activeTab.paneId;
         const query = this._piBridgeSkillQuery;
         // The rows belong to the runtime that produced the list.
         const context = this._piBridgeSkillsContext;
-        if (!this._piBridgeSkillsContextValid(context)) return;
+        if (!this._piBridgeSkillsContextValid(context))
+            return;
         // Only a dispatch that belongs to the runtime which produced
         // this list may lock the rows: an older runtime's request must
         // not disable the current picker.
         const pendingOp = this._piBridgeSkillPending?.get(paneId);
-        const pending =
-            !!pendingOp &&
+        const pending = !!pendingOp &&
             this._piBridgeSkillsOriginMatches(pendingOp, context);
-        const skills = (this._piBridgeSkills || []).filter(
-            (skill) =>
-                skill &&
-                typeof skill.name === 'string' &&
-                skill.name !== '',
-        );
+        const skills = (this._piBridgeSkills || []).filter((skill) => skill && typeof skill.name === 'string' && skill.name !== '');
         // Without the answering origin a row cannot be dispatched
         // safely, so the list is unusable rather than dead.
-        const origin = context.origin;
-        const usable =
-            !!origin && origin.processId !== '' && origin.generation !== '';
+        const origin = context?.origin;
+        const usable = !!origin && origin.processId !== '' && origin.generation !== '';
         if (skills.length === 0 || !usable) {
             const empty = document.createElement('div');
             empty.className = 'dropup-row pi-rpc-dropup-message';
@@ -6784,16 +6792,14 @@ export class TabManager {
             // An empty retained list is stale too: the warning belongs
             // to the state, so it is shown here as well.
             if (this._piBridgeSkillsStale) {
-                this._showPiRpcSkillsNote(
-                    listContainer,
-                    'Refresh failed — showing the last known skills',
-                );
+                this._showPiRpcSkillsNote(listContainer, 'Refresh failed — showing the last known skills');
             }
             return;
         }
         const matches = (skill) => {
-            const haystack =
-                skill.name + ' ' + (skill.description || '').toLowerCase();
+            const haystack = (skill.name ?? '') +
+                ' ' +
+                (skill.description ?? '').toLowerCase();
             return query === '' || haystack.toLowerCase().includes(query);
         };
         const rows = skills.filter(matches).map((skill) => {
@@ -6802,19 +6808,17 @@ export class TabManager {
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'dropup-model-btn';
-            button.textContent = skill.name;
-            button.title = skill.description || skill.name;
+            button.textContent = skill.name ?? '';
+            button.title = skill.description || skill.name || '';
             button.disabled = pending;
             button.addEventListener('click', (event) => {
                 event.stopPropagation();
                 // Re-check at the point of use: the peer, the socket, the
                 // runtime, or the capability can be gone while the row
                 // is on screen.
-                if (
-                    this.getActiveTab() !== activeTab ||
+                if (this.getActiveTab() !== activeTab ||
                     !this._piBridgeSkillsContextValid(context) ||
-                    !dropup.contains(button)
-                )
+                    !dropup.contains(button))
                     return;
                 const operation = {
                     paneId,
@@ -6830,62 +6834,57 @@ export class TabManager {
                 this._setPiRpcDropupButtonsDisabled(dropup, true);
                 let invokeResult;
                 try {
-                    invokeResult = this._piBridgeSkillInvoke(
-                        paneId,
-                        skill.name,
-                        origin,
-                    );
-                } catch (error) {
+                    invokeResult = this._piBridgeSkillInvoke(paneId, skill.name ?? '', origin);
+                }
+                catch (error) {
                     invokeResult = Promise.reject(error);
                 }
                 Promise.resolve(invokeResult)
                     .then(() => {
-                        // A newer dispatch for the same pane keeps the
-                        // slot; the settled one never touches it.
-                        if (this._piBridgeSkillPending?.get(paneId) === operation)
-                            this._piBridgeSkillPending.delete(paneId);
-                        // A closed pane reports nothing.
-                        if (this.tabs?.get(operation.paneId) !== operation.tab)
-                            return;
-                        // The dispatch is confirmed whatever happened to
-                        // the socket or the runtime meanwhile.
-                        if (this.getActiveTab()?.paneId === paneId) {
-                            this.app?.showToast?.(
-                                `Sent ${skill.name} to Pi`,
-                                { type: 'success', title: 'Pi skill' },
-                            );
-                        }
-                        // Only the runtime that received the dispatch
-                        // may close the picker; a replacement runtime
-                        // keeps its own state.
-                        if (
-                            this._piBridgeSkillsRuntimeCurrent(operation) &&
-                            this.getActiveTab()?.paneId === paneId
-                        )
-                            this._closePiRpcDropups(true);
-                    })
+                    // A newer dispatch for the same pane keeps the
+                    // slot; the settled one never touches it.
+                    if (this._piBridgeSkillPending?.get(paneId) ===
+                        operation)
+                        this._piBridgeSkillPending.delete(paneId);
+                    // A closed pane reports nothing.
+                    if (this.tabs?.get(operation.paneId) !== operation.tab)
+                        return;
+                    // The dispatch is confirmed whatever happened to
+                    // the socket or the runtime meanwhile.
+                    if (this.getActiveTab()?.paneId === paneId) {
+                        this.app?.showToast?.(`Sent ${skill.name} to Pi`, {
+                            type: 'success',
+                            title: 'Pi skill',
+                        });
+                    }
+                    // Only the runtime that received the dispatch
+                    // may close the picker; a replacement runtime
+                    // keeps its own state.
+                    if (this._piBridgeSkillsRuntimeCurrent(operation) &&
+                        this.getActiveTab()?.paneId === paneId)
+                        this._closePiRpcDropups(true);
+                })
                     .catch((error) => {
-                        if (this._piBridgeSkillPending?.get(paneId) === operation)
-                            this._piBridgeSkillPending.delete(paneId);
-                        // A closed pane reports nothing.
-                        if (this.tabs?.get(operation.paneId) !== operation.tab)
-                            return;
-                        // The dispatch may still have landed: the
-                        // outcome is unknown whatever happened to the
-                        // socket or the runtime meanwhile, so the user
-                        // learns it exactly once and it is never resent.
-                        this._piRpcError(error, 'Pi skill');
-                        // Only the runtime that received the dispatch
-                        // may re-open the picker; a replacement runtime
-                        // keeps its own state.
-                        const current = this.getActiveTab();
-                        if (
-                            this._piBridgeSkillsRuntimeCurrent(operation) &&
-                            current?.paneId === paneId &&
-                            this._piBridgeSkillsEligible(current)
-                        )
-                            this._renderPiRpcSkillsDropup(true);
-                    });
+                    if (this._piBridgeSkillPending?.get(paneId) ===
+                        operation)
+                        this._piBridgeSkillPending.delete(paneId);
+                    // A closed pane reports nothing.
+                    if (this.tabs?.get(operation.paneId) !== operation.tab)
+                        return;
+                    // The dispatch may still have landed: the
+                    // outcome is unknown whatever happened to the
+                    // socket or the runtime meanwhile, so the user
+                    // learns it exactly once and it is never resent.
+                    this._piRpcError(error, 'Pi skill');
+                    // Only the runtime that received the dispatch
+                    // may re-open the picker; a replacement runtime
+                    // keeps its own state.
+                    const current = this.getActiveTab();
+                    if (this._piBridgeSkillsRuntimeCurrent(operation) &&
+                        current?.paneId === paneId &&
+                        this._piBridgeSkillsEligible(current))
+                        this._renderPiRpcSkillsDropup(true);
+                });
             });
             const meta = document.createElement('span');
             meta.className = 'pi-rpc-dropup-meta';
@@ -6903,29 +6902,18 @@ export class TabManager {
         if (this._piBridgeSkillsStale) {
             // The rows are the last known ones. The note belongs to the
             // state, so a filter rebuild keeps it.
-            this._showPiRpcSkillsNote(
-                listContainer,
-                'Refresh failed — showing the last known skills',
-            );
+            this._showPiRpcSkillsNote(listContainer, 'Refresh failed — showing the last known skills');
         }
     }
-
     _renderPiRpcThinkingDropup() {
         const dropup = document.getElementById('pi-rpc-thinking-dropup');
         const tab = this.getActiveTab();
         const bridgeTab = tab?.coder === 'pi';
-        if (
-            !dropup ||
-            (!bridgeTab && tab?.coder !== 'pi-rpc')
-        )
+        if (!dropup || (!bridgeTab && tab?.coder !== 'pi-rpc'))
             return;
-
         const paneId = tab.paneId;
         const context = bridgeTab ? this._piBridgeThinkingContext(tab) : null;
-        if (
-            bridgeTab &&
-            (!context || !this._piBridgeThinkingEligible(tab))
-        ) {
+        if (bridgeTab && (!context || !this._piBridgeThinkingEligible(tab))) {
             this._renderPiPtyThinkingFallback(dropup, tab);
             return;
         }
@@ -6934,27 +6922,28 @@ export class TabManager {
         const request = bridgeTab
             ? (this._piBridgeThinkingMenuRequest || 0) + 1
             : ++this._piRpcMenuRequest;
-        if (bridgeTab) this._piBridgeThinkingMenuRequest = request;
+        if (bridgeTab)
+            this._piBridgeThinkingMenuRequest = request;
         const state = bridgeTab ? null : this._piRpcControlsFor(tab);
         const header = document.createElement('div');
         header.className = 'dropup-header';
-        header.textContent = `Thinking · ${bridgeTab ? tab.piBridge.thinking_level || '—' : state.thinking || '—'}`;
+        header.textContent = `Thinking · ${bridgeTab
+            ? tab.piBridge?.thinking_level || '—'
+            : state?.thinking || '—'}`;
         const loading = document.createElement('div');
         loading.className = 'dropup-row pi-rpc-dropup-message';
         loading.textContent = 'Loading Pi thinking levels…';
         dropup.replaceChildren(header, loading);
-
-        const current = () =>
-            bridgeTab
-                ? request === this._piBridgeThinkingMenuRequest &&
-                  !dropup.classList.contains('hidden') &&
-                  this.getActiveTab() === tab &&
-                  this.tabs?.get(paneId) === tab &&
-                  tab.ws === socket &&
-                  this._piBridgeThinkingEligible(tab) &&
-                  (!context || this._piBridgeThinkingContextValid(context))
-                : request === this._piRpcMenuRequest &&
-                  this.getActiveTab()?.paneId === paneId;
+        const current = () => bridgeTab
+            ? request === this._piBridgeThinkingMenuRequest &&
+                !dropup.classList.contains('hidden') &&
+                this.getActiveTab() === tab &&
+                this.tabs?.get(paneId) === tab &&
+                tab.ws === socket &&
+                this._piBridgeThinkingEligible(tab) &&
+                (!context || this._piBridgeThinkingContextValid(context))
+            : request === this._piRpcMenuRequest &&
+                this.getActiveTab()?.paneId === paneId;
         const offerNativePicker = () => {
             loading.textContent = 'Pi thinking levels unavailable';
             const native = document.createElement('button');
@@ -6963,7 +6952,8 @@ export class TabManager {
             native.textContent = 'Open native Thinking picker';
             native.addEventListener('click', (event) => {
                 event.stopPropagation();
-                if (current()) this.sendSlashCommand(tab, '/thinking');
+                if (current())
+                    this.sendSlashCommand(tab, '/thinking');
             });
             loading.appendChild(native);
         };
@@ -6971,147 +6961,149 @@ export class TabManager {
             loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
             this._piRpcError(error, 'Pi thinking');
         };
-
         if (bridgeTab && !context) {
             offerNativePicker();
             return;
         }
-
         let requestResult;
         try {
             requestResult = bridgeTab
                 ? this._piBridgeThinkingLevels(paneId)
                 : rpcChatThinkingLevels(paneId);
-        } catch (error) {
+        }
+        catch (error) {
             if (bridgeTab) {
-                if (current()) offerNativePicker();
-            } else {
+                if (current())
+                    offerNativePicker();
+            }
+            else {
                 showRpcError(error);
             }
             return;
         }
         Promise.resolve(requestResult)
             .then((result) => {
-                if (!current()) return;
-                let levels = result;
-                if (bridgeTab) {
-                    if (!this._piBridgeThinkingOriginMatches(context, result)) {
-                        offerNativePicker();
-                        return;
-                    }
-                    levels = result.levels;
-                }
-                if (!Array.isArray(levels) || levels.length === 0) {
-                    if (bridgeTab) {
-                        offerNativePicker();
-                    } else {
-                        loading.textContent = 'No Pi thinking levels available';
-                    }
+            if (!current())
+                return;
+            let levels = result;
+            if (bridgeTab) {
+                if (!this._piBridgeThinkingOriginMatches(context, result)) {
+                    offerNativePicker();
                     return;
                 }
-
-                dropup.replaceChildren(header);
-                const pending =
-                    this._piRpcThinkingPending?.paneId === paneId;
-                for (const level of levels) {
-                    if (typeof level !== 'string') continue;
-                    const row = document.createElement('div');
-                    row.className = 'dropup-row';
-                    const button = document.createElement('button');
-                    button.type = 'button';
-                    button.className = 'dropup-model-btn';
-                    button.textContent = level;
-                    button.disabled = pending;
-                    button.addEventListener('click', (event) => {
-                        event.stopPropagation();
-                        if (bridgeTab && !current()) return;
-                        const operation = bridgeTab
-                            ? { paneId, context, level }
-                            : { paneId, level };
-                        this._piRpcThinkingPending = operation;
-                        this._setPiRpcDropupButtonsDisabled(dropup, true);
-                        let setterResult;
-                        try {
-                            setterResult = bridgeTab
-                                ? this._piBridgeThinkingSet(context, level, result)
-                                : rpcChatSetThinking(paneId, level);
-                        } catch (error) {
-                            setterResult = Promise.reject(error);
-                        }
-                        Promise.resolve(setterResult)
-                            .then(() => {
-                                // A superseded operation owns nothing, so it
-                                // cannot close or re-render a newer picker.
-                                if (
-                                    bridgeTab &&
-                                    this._piRpcThinkingPending !== operation
-                                )
-                                    return;
-                                if (this._piRpcThinkingPending === operation)
-                                    this._piRpcThinkingPending = null;
-                                if (bridgeTab) {
-                                    if (!this._piBridgeThinkingContextValid(context))
-                                        return;
-                                    if (!dropup.classList.contains('hidden')) {
-                                        this._closePiRpcDropups(true);
-                                    }
-                                } else if (this.getActiveTab()?.paneId === paneId) {
-                                    this.renderPresets('pi-rpc');
-                                    this._closePiRpcDropups(true);
-                                }
-                            })
-                            .catch((error) => {
-                                if (
-                                    bridgeTab &&
-                                    this._piRpcThinkingPending !== operation
-                                )
-                                    return;
-                                if (this._piRpcThinkingPending === operation)
-                                    this._piRpcThinkingPending = null;
-                                if (bridgeTab) {
-                                    if (!this._piBridgeThinkingContextValid(context))
-                                        return;
-                                    this._piRpcError(error, 'Pi thinking');
-                                    this._renderPiRpcThinkingDropup();
-                                } else {
-                                    this._piRpcError(error, 'Pi thinking');
-                                    if (this.getActiveTab()?.paneId === paneId)
-                                        this._renderPiRpcThinkingDropup();
-                                }
-                            });
-                    });
-                    row.appendChild(button);
-                    dropup.appendChild(row);
+                levels = result.levels;
+            }
+            if (!Array.isArray(levels) || levels.length === 0) {
+                if (bridgeTab) {
+                    offerNativePicker();
                 }
-            })
+                else {
+                    loading.textContent = 'No Pi thinking levels available';
+                }
+                return;
+            }
+            dropup.replaceChildren(header);
+            const pending = this._piRpcThinkingPending?.paneId === paneId;
+            for (const level of levels) {
+                if (typeof level !== 'string')
+                    continue;
+                const row = document.createElement('div');
+                row.className = 'dropup-row';
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'dropup-model-btn';
+                button.textContent = level;
+                button.disabled = pending;
+                button.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    if (bridgeTab && !current())
+                        return;
+                    const operation = bridgeTab
+                        ? { paneId, context, level }
+                        : { paneId, level };
+                    this._piRpcThinkingPending = operation;
+                    this._setPiRpcDropupButtonsDisabled(dropup, true);
+                    let setterResult;
+                    try {
+                        setterResult = bridgeTab
+                            ? this._piBridgeThinkingSet(context, level, result)
+                            : rpcChatSetThinking(paneId, level);
+                    }
+                    catch (error) {
+                        setterResult = Promise.reject(error);
+                    }
+                    Promise.resolve(setterResult)
+                        .then(() => {
+                        // A superseded operation owns nothing, so it
+                        // cannot close or re-render a newer picker.
+                        if (bridgeTab &&
+                            this._piRpcThinkingPending !== operation)
+                            return;
+                        if (this._piRpcThinkingPending === operation)
+                            this._piRpcThinkingPending = null;
+                        if (bridgeTab) {
+                            if (!this._piBridgeThinkingContextValid(context))
+                                return;
+                            if (!dropup.classList.contains('hidden')) {
+                                this._closePiRpcDropups(true);
+                            }
+                        }
+                        else if (this.getActiveTab()?.paneId === paneId) {
+                            this.renderPresets('pi-rpc');
+                            this._closePiRpcDropups(true);
+                        }
+                    })
+                        .catch((error) => {
+                        if (bridgeTab &&
+                            this._piRpcThinkingPending !== operation)
+                            return;
+                        if (this._piRpcThinkingPending === operation)
+                            this._piRpcThinkingPending = null;
+                        if (bridgeTab) {
+                            if (!this._piBridgeThinkingContextValid(context))
+                                return;
+                            this._piRpcError(error, 'Pi thinking');
+                            this._renderPiRpcThinkingDropup();
+                        }
+                        else {
+                            this._piRpcError(error, 'Pi thinking');
+                            if (this.getActiveTab()?.paneId === paneId)
+                                this._renderPiRpcThinkingDropup();
+                        }
+                    });
+                });
+                row.appendChild(button);
+                dropup.appendChild(row);
+            }
+        })
             .catch((error) => {
-                if (!current()) return;
-                if (bridgeTab) offerNativePicker();
-                else showRpcError(error);
-            });
+            if (!current())
+                return;
+            if (bridgeTab)
+                offerNativePicker();
+            else
+                showRpcError(error);
+        });
     }
-
     _bindThinkingPresetStore(scope = this.app?.scope) {
         this.thinkingPresetStore?.bind?.(scope);
     }
-
     _bindAttachmentStore(scope = this.app?.scope) {
         this.attachmentStore?.bind?.(scope);
         const active = this.getActiveTab();
-        if (active?.coder === 'pi') void this._restoreAttachmentDraft(active, scope);
+        if (active?.coder === 'pi')
+            void this._restoreAttachmentDraft(active, scope);
     }
-
     _attachmentNetworkOffline() {
         return typeof navigator !== 'undefined' && navigator.onLine === false;
     }
-
     _scheduleAttachmentRecovery(tab, owner, scope) {
-        if (
-            !tab || this.getActiveTab() !== tab ||
+        if (!tab ||
+            this.getActiveTab() !== tab ||
             !this.attachmentStore.isActive(owner) ||
             this._attachmentNetworkOffline() ||
-            tab._attachmentRecoveryTimer
-        ) return;
+            tab._attachmentRecoveryTimer)
+            return;
         const delays = [1000, 2000, 4000, 8000, 16000, 30000];
         const attempt = tab._attachmentRecoveryAttempt || 0;
         const base = delays[Math.min(attempt, delays.length - 1)];
@@ -7119,50 +7111,55 @@ export class TabManager {
         tab._attachmentRecoveryAttempt = attempt + 1;
         tab._attachmentRecoveryTimer = setTimeout(() => {
             tab._attachmentRecoveryTimer = null;
-            if (
-                this.getActiveTab() !== tab ||
+            if (this.getActiveTab() !== tab ||
                 !this.attachmentStore.isActive(owner) ||
-                this._attachmentNetworkOffline()
-            ) return;
+                this._attachmentNetworkOffline())
+                return;
             void this._refreshAttachmentContext(tab, owner, scope);
             for (const item of tab.draftAttachments || []) {
-                if (item.uploadState === 'attempted' || item.uploadState === 'unknown') void this._checkAttachmentItemStatus(tab, item, scope);
+                if (item.uploadState === 'attempted' ||
+                    item.uploadState === 'unknown')
+                    void this._checkAttachmentItemStatus(tab, item, scope);
             }
-            if (tab._attachmentPendingSnapshot?.state === 'unknown') void this._checkAttachmentSendStatus(tab, tab._attachmentPendingSnapshot);
+            if (tab._attachmentPendingSnapshot &&
+                tab._attachmentPendingSnapshot.state === 'unknown')
+                void this._checkAttachmentSendStatus(tab, tab._attachmentPendingSnapshot);
         }, delay);
     }
-
     _cancelAttachmentRecovery(tab) {
-        if (!tab?._attachmentRecoveryTimer) return;
+        if (!tab?._attachmentRecoveryTimer)
+            return;
         clearTimeout(tab._attachmentRecoveryTimer);
         tab._attachmentRecoveryTimer = null;
     }
-
     _wakeAttachmentRecovery(tab = this.getActiveTab()) {
-        if (!tab || tab.coder !== 'pi') return;
+        if (!tab || tab.coder !== 'pi')
+            return;
         this._cancelAttachmentRecovery(tab);
         tab._attachmentRecoveryAttempt = 0;
         void this._restoreAttachmentDraft(tab, this.app?.scope);
         const owner = this._captureAttachmentOwner(tab, this.app?.scope);
         void this._refreshAttachmentContext(tab, owner, this.app?.scope);
     }
-
     async _restoreAttachmentDraft(tab, scope = this.app?.scope) {
-        if (!tab || tab.coder !== 'pi' || tab.isDead === true) return;
+        if (!tab || tab.coder !== 'pi' || tab.isDead === true)
+            return;
         const owner = this._captureAttachmentOwner(tab, scope);
         const key = this._attachmentOwnerKey(owner);
-        if (tab._attachmentRestoredOwnerKey === key || tab._attachmentRestorePending === key) return;
-        if (tab._attachmentPendingPersists?.get(key)) return;
+        if (tab._attachmentRestoredOwnerKey === key ||
+            tab._attachmentRestorePending === key)
+            return;
+        if (tab._attachmentPendingPersists?.get(key))
+            return;
         const editVersion = tab._attachmentEditVersion || 0;
         tab._attachmentRestorePending = key;
         try {
             const loaded = await this.attachmentStore.loadDraft(owner);
-            if (
-                this.tabs?.get(tab.paneId) !== tab ||
+            if (this.tabs?.get(tab.paneId) !== tab ||
                 this._attachmentOwnerKey(this._captureAttachmentOwner(tab, this.app?.scope)) !== key ||
                 (tab._attachmentEditVersion || 0) !== editVersion ||
-                tab._attachmentPendingPersists?.get(key)
-            ) return;
+                tab._attachmentPendingPersists?.get(key))
+                return;
             tab._attachmentDraftOwner = owner;
             tab._attachmentRestoredOwnerKey = key;
             tab._attachmentDurable = loaded.durable;
@@ -7173,8 +7170,14 @@ export class TabManager {
                     const blob = loaded.blobs.get(saved.id);
                     let file = null;
                     try {
-                        if (blob && typeof File === 'function') file = new File([blob], saved.name, { type: saved.type });
-                    } catch { /* Keep metadata; the lost blob is shown as a retained error. */ }
+                        if (blob && typeof File === 'function')
+                            file = new File([blob], saved.name, {
+                                type: saved.type,
+                            });
+                    }
+                    catch {
+                        /* Keep metadata; the lost blob is shown as a retained error. */
+                    }
                     return {
                         ...saved,
                         path: saved.path || '',
@@ -7182,21 +7185,36 @@ export class TabManager {
                         phiAttachment: true,
                         owner,
                         file,
-                        uploadState: saved.uploadState === 'attempted' ? 'unknown' : saved.uploadState,
-                        errorReason: blob || saved.source === 'server' || saved.uploadState === 'ready' ? saved.errorReason : 'storage',
+                        uploadState: saved.uploadState === 'attempted'
+                            ? 'unknown'
+                            : saved.uploadState,
+                        errorReason: blob ||
+                            saved.source === 'server' ||
+                            saved.uploadState === 'ready'
+                            ? saved.errorReason
+                            : 'storage',
                     };
                 });
                 for (const item of tab.draftAttachments) {
-                    if (!item.file && item.source !== 'server' && item.uploadState !== 'ready') {
+                    if (!item.file &&
+                        item.source !== 'server' &&
+                        item.uploadState !== 'ready') {
                         item.uploadState = 'error';
                         item.errorReason = 'storage';
                     }
-                    this._attachmentRequestScopes.set(item.id, { scope, controller: new AbortController() });
+                    this._attachmentRequestScopes.set(item.id, {
+                        scope,
+                        controller: new AbortController(),
+                    });
                 }
-                if (this.getActiveTab() === tab && this.attachmentStore.isActive(owner)) {
+                if (this.getActiveTab() === tab &&
+                    this.attachmentStore.isActive(owner)) {
                     for (const item of tab.draftAttachments) {
-                        if (item.uploadState === 'waiting' && item.file) void this._startAttachmentUpload(tab, item, scope, false);
-                        else if (item.uploadState === 'attempted' || item.uploadState === 'unknown') void this._checkAttachmentItemStatus(tab, item, scope);
+                        if (item.uploadState === 'waiting' && item.file)
+                            void this._startAttachmentUpload(tab, item, scope, false);
+                        else if (item.uploadState === 'attempted' ||
+                            item.uploadState === 'unknown')
+                            void this._checkAttachmentItemStatus(tab, item, scope);
                     }
                 }
                 if (this.getActiveTab() === tab) {
@@ -7206,20 +7224,40 @@ export class TabManager {
                     this._renderAttachmentStrip();
                     this.adjustInputHeight();
                 }
-            } else {
+            }
+            else {
                 tab._attachmentRevision = 0;
                 tab.draftAttachments = tab.draftAttachments || [];
             }
-            if (!loaded.durable) tab._attachmentNotice = this.attachmentStore.storageWarning || 'Not saved on this device; keep this tab open.';
+            if (!loaded.durable)
+                tab._attachmentNotice =
+                    this.attachmentStore.storageWarning ||
+                        'Not saved on this device; keep this tab open.';
             this._renderAttachmentStatus(tab);
             const outbox = await this.attachmentStore.outboxForOwner(owner);
-            if (this.tabs?.get(tab.paneId) !== tab || this._attachmentOwnerKey(this._captureAttachmentOwner(tab, this.app?.scope)) !== key) return;
+            if (this.tabs?.get(tab.paneId) !== tab ||
+                this._attachmentOwnerKey(this._captureAttachmentOwner(tab, this.app?.scope)) !== key)
+                return;
             const orderedOutbox = [...outbox].sort((a, b) => b.updatedAt - a.updatedAt);
             const lastSubmitted = orderedOutbox.find((record) => record.state === 'dispatched');
             if (lastSubmitted && !tab._attachmentLastSubmitted) {
-                tab._attachmentLastSubmitted = { ...lastSubmitted, owner, scope, state: 'dispatched' };
+                tab._attachmentLastSubmitted = {
+                    ...lastSubmitted,
+                    owner,
+                    scope,
+                    pane: lastSubmitted.paneId,
+                    draftRevision: lastSubmitted.revision,
+                    context: lastSubmitted.context,
+                    outboxState: lastSubmitted.state,
+                    items: lastSubmitted.items,
+                    state: 'dispatched',
+                };
             }
-            const pending = orderedOutbox.find((record) => record.state === 'waiting' || record.state === 'attempted' || record.state === 'unknown' || record.state === 'refused' || record.state === 'cancelled');
+            const pending = orderedOutbox.find((record) => record.state === 'waiting' ||
+                record.state === 'attempted' ||
+                record.state === 'unknown' ||
+                record.state === 'refused' ||
+                record.state === 'cancelled');
             if (!pending || tab._attachmentPendingSnapshot) {
                 this._renderAttachmentStatus(tab);
                 return;
@@ -7229,9 +7267,23 @@ export class TabManager {
                 const blob = blobs.get(saved.id);
                 let file = null;
                 try {
-                    if (blob && typeof File === 'function') file = new File([blob], saved.name, { type: saved.type });
-                } catch { /* The status remains recoverable as metadata. */ }
-                return { ...saved, source: saved.source || 'device', phiAttachment: true, owner, file, uploadState: saved.uploadState, errorReason: saved.errorReason };
+                    if (blob && typeof File === 'function')
+                        file = new File([blob], saved.name, {
+                            type: saved.type,
+                        });
+                }
+                catch {
+                    /* The status remains recoverable as metadata. */
+                }
+                return {
+                    ...saved,
+                    source: saved.source || 'device',
+                    phiAttachment: true,
+                    owner,
+                    file,
+                    uploadState: saved.uploadState,
+                    errorReason: saved.errorReason,
+                };
             });
             const snapshot = {
                 id: pending.id,
@@ -7239,7 +7291,7 @@ export class TabManager {
                 owner,
                 ownerKey: key,
                 draftRevision: pending.revision,
-                scope,
+                scope: scope,
                 context: pending.context,
                 text: pending.text,
                 items,
@@ -7248,27 +7300,35 @@ export class TabManager {
                 reason: pending.reason,
             };
             tab._attachmentPendingSnapshot = snapshot;
-            tab._attachmentNotice = pending.state === 'waiting'
-                ? 'Waiting to submit the saved attachment snapshot.'
-                : pending.state === 'refused'
-                  ? attachmentRefusalNotice(pending.reason)
-                  : pending.state === 'cancelled'
-                    ? 'Waiting send canceled. Restore it to edit or forget the local copy.'
-                    : 'Submission not confirmed. Check Pi before resending.';
+            tab._attachmentNotice =
+                pending.state === 'waiting'
+                    ? 'Waiting to submit the saved attachment snapshot.'
+                    : pending.state === 'refused'
+                        ? attachmentRefusalNotice(pending.reason)
+                        : pending.state === 'cancelled'
+                            ? 'Waiting send canceled. Restore it to edit or forget the local copy.'
+                            : 'Submission not confirmed. Check Pi before resending.';
             this._renderAttachmentStripForTab(tab);
             this._renderAttachmentStatus(tab);
-            if (pending.state === 'waiting') void this._recoverAttachmentOutbox(tab, snapshot);
-            else if (pending.state === 'attempted' || pending.state === 'unknown') void this._checkAttachmentSendStatus(tab, snapshot);
-        } catch {
-            if (this.tabs?.get(tab.paneId) === tab && (tab._attachmentEditVersion || 0) === editVersion) {
-                tab._attachmentNotice = 'Not saved on this device; keep this tab open.';
+            if (pending.state === 'waiting')
+                void this._recoverAttachmentOutbox(tab, snapshot);
+            else if (pending.state === 'attempted' ||
+                pending.state === 'unknown')
+                void this._checkAttachmentSendStatus(tab, snapshot);
+        }
+        catch {
+            if (this.tabs?.get(tab.paneId) === tab &&
+                (tab._attachmentEditVersion || 0) === editVersion) {
+                tab._attachmentNotice =
+                    'Not saved on this device; keep this tab open.';
                 this._renderAttachmentStatus(tab);
             }
-        } finally {
-            if (tab._attachmentRestorePending === key) tab._attachmentRestorePending = null;
+        }
+        finally {
+            if (tab._attachmentRestorePending === key)
+                tab._attachmentRestorePending = null;
         }
     }
-
     _thinkingFallbackContext(tab) {
         return {
             tab,
@@ -7278,39 +7338,35 @@ export class TabManager {
             capable: !!this._piBridgeThinkingContext(tab),
         };
     }
-
     _thinkingFallbackContextCurrent(context) {
-        return (
-            this.getActiveTab() === context.tab &&
+        if (!context)
+            return false;
+        return (this.getActiveTab() === context.tab &&
             this.tabs?.get(context.paneId) === context.tab &&
             context.tab.paneId === context.paneId &&
             context.tab.ws === context.socket &&
-            this.thinkingPresetStore?.ownerId === context.ownerId
-        );
+            this.thinkingPresetStore?.ownerId === context.ownerId);
     }
-
     _thinkingFallbackContextValid(context) {
-        return (
-            this._thinkingFallbackContextCurrent(context) &&
+        if (!context)
+            return false;
+        return (this._thinkingFallbackContextCurrent(context) &&
             context.capable === false &&
-            !this._piBridgeThinkingContext(context.tab)
-        );
+            !this._piBridgeThinkingContext(context.tab));
     }
-
     _piThinkingPtyLive(tab) {
-        const socket = tab?.ws?.ws ?? tab?.ws;
-        return (
-            this.getActiveTab() === tab &&
+        const socket = (tab?.ws?.ws ?? tab?.ws);
+        return (this.getActiveTab() === tab &&
             this.tabs?.get(tab.paneId) === tab &&
             tab.isDead !== true &&
-            socket?.readyState === 1
-        );
+            socket?.readyState === 1);
     }
-
     // Pi PTY tabs without a usable Thinking bridge still get the bottom-bar
     // menu. Management works offline; PTY dispatch revalidates a live socket.
     _renderPiPtyThinkingFallback(dropup, tab) {
         const store = this.thinkingPresetStore;
+        if (!store)
+            return;
         const state = store.getState();
         const context = this._thinkingFallbackContext(tab);
         const paneId = context.paneId;
@@ -7319,13 +7375,13 @@ export class TabManager {
         header.className = 'dropup-header';
         header.textContent = 'Thinking · saved options';
         dropup.replaceChildren(header);
-
-        const current = () =>
-            !dropup.classList.contains('hidden') &&
+        const current = () => !dropup.classList.contains('hidden') &&
             this._thinkingFallbackContextValid(context);
         const send = (command, saved = false) => {
-            if (!this._thinkingFallbackContextCurrent(context)) return;
-            if (!this._piThinkingPtyLive(tab)) return;
+            if (!this._thinkingFallbackContextCurrent(context))
+                return;
+            if (!this._piThinkingPtyLive(tab))
+                return;
             if (saved && this._piBridgeThinkingContext(tab)) {
                 this._renderPiRpcThinkingDropup();
                 return;
@@ -7333,11 +7389,9 @@ export class TabManager {
             if (this.sendSlashCommand(tab, command))
                 dropup.classList.add('hidden');
         };
-
         for (const level of state.desired) {
             const row = document.createElement('div');
             row.className = 'dropup-row';
-
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'dropup-model-btn pi-thinking-saved-level';
@@ -7345,7 +7399,8 @@ export class TabManager {
             button.disabled = !this._piThinkingPtyLive(tab);
             button.addEventListener('click', (event) => {
                 event.stopPropagation();
-                if (!this._thinkingFallbackContextCurrent(context)) return;
+                if (!this._thinkingFallbackContextCurrent(context))
+                    return;
                 if (this._piBridgeThinkingContext(tab)) {
                     this._renderPiRpcThinkingDropup();
                     return;
@@ -7353,10 +7408,8 @@ export class TabManager {
                 send(`/thinking ${level}`, true);
             });
             row.appendChild(button);
-
             const actions = document.createElement('div');
             actions.className = 'dropup-row-actions';
-
             const editBtn = document.createElement('button');
             editBtn.type = 'button';
             editBtn.className = 'dropup-action-btn dropup-edit-btn';
@@ -7365,10 +7418,10 @@ export class TabManager {
             editBtn.setAttribute('aria-label', `Edit Thinking option ${level}`);
             editBtn.addEventListener('click', (event) => {
                 event.stopPropagation();
-                if (current()) void this._editThinkingPreset(tab, level);
+                if (current())
+                    void this._editThinkingPreset(tab, level);
             });
             actions.appendChild(editBtn);
-
             const delBtn = document.createElement('button');
             delBtn.type = 'button';
             delBtn.className = 'dropup-action-btn dropup-del-btn';
@@ -7377,23 +7430,21 @@ export class TabManager {
             delBtn.setAttribute('aria-label', `Delete Thinking option ${level}`);
             delBtn.addEventListener('click', (event) => {
                 event.stopPropagation();
-                if (!current()) return;
+                if (!current())
+                    return;
                 const desired = store.getState().desired;
                 store.setLevels(desired.filter((item) => item !== level));
             });
             actions.appendChild(delBtn);
-
             row.appendChild(actions);
             dropup.appendChild(row);
         }
-
         if (state.desired.length === 0) {
             const empty = document.createElement('div');
             empty.className = 'dropup-row pi-rpc-dropup-message';
             empty.textContent = 'No saved Thinking options yet';
             dropup.appendChild(empty);
         }
-
         const nativeRow = document.createElement('div');
         nativeRow.className = 'dropup-row';
         const native = document.createElement('button');
@@ -7407,7 +7458,6 @@ export class TabManager {
         });
         nativeRow.appendChild(native);
         dropup.appendChild(nativeRow);
-
         const refreshRow = document.createElement('div');
         refreshRow.className = 'dropup-row pi-thinking-refresh-row';
         const refresh = document.createElement('button');
@@ -7416,20 +7466,20 @@ export class TabManager {
         refresh.textContent = 'Refresh';
         refresh.addEventListener('click', (event) => {
             event.stopPropagation();
-            if (current()) void store.refresh();
+            if (current())
+                void store.refresh();
         });
         refreshRow.appendChild(refresh);
         dropup.appendChild(refreshRow);
-
         for (const message of [state.storageWarning, state.error]) {
-            if (!message) continue;
+            if (!message)
+                continue;
             const note = document.createElement('div');
             note.className =
                 'dropup-row pi-rpc-dropup-message pi-thinking-status';
             note.textContent = message;
             dropup.appendChild(note);
         }
-
         // Sent snapshots need a deliberate reconciliation; blind local edits
         // need confirmation before replacing an unseen server list.
         if (state.attempt || state.saveRequired) {
@@ -7442,27 +7492,26 @@ export class TabManager {
             retry.disabled = state.writing;
             retry.addEventListener('click', (event) => {
                 event.stopPropagation();
-                if (retry.disabled) return;
+                if (retry.disabled)
+                    return;
                 void store.saveAgain();
             });
             recovery.appendChild(retry);
             if (state.confirmed !== null) {
                 const useServer = document.createElement('button');
                 useServer.type = 'button';
-                useServer.className =
-                    'dropup-model-btn pi-thinking-use-server';
+                useServer.className = 'dropup-model-btn pi-thinking-use-server';
                 useServer.textContent = 'Use server list';
                 useServer.disabled = state.writing;
                 useServer.addEventListener('click', (event) => {
                     event.stopPropagation();
-                    if (
-                        useServer.disabled ||
+                    if (useServer.disabled ||
                         !current() ||
-                        !confirm('Discard your Thinking changes and use the server list?')
-                    )
+                        !confirm('Discard your Thinking changes and use the server list?'))
                         return;
                     void store.refresh().then((refreshed) => {
-                        if (refreshed && this._thinkingFallbackContextValid(context))
+                        if (refreshed &&
+                            this._thinkingFallbackContextValid(context))
                             store.useServerList();
                     });
                 });
@@ -7470,9 +7519,8 @@ export class TabManager {
             }
             dropup.appendChild(recovery);
         }
-
-        if (state.confirmed === null) void store.ensureLoaded();
-
+        if (state.confirmed === null)
+            void store.ensureLoaded();
         const addRow = document.createElement('div');
         addRow.className = 'dropup-add-row';
         const addBtn = document.createElement('button');
@@ -7482,25 +7530,28 @@ export class TabManager {
         addBtn.disabled = thinkingPresetTokens(state.desired).length === 0;
         addBtn.addEventListener('click', (event) => {
             event.stopPropagation();
-            if (addBtn.disabled || !current()) return;
+            if (addBtn.disabled || !current())
+                return;
             void this._addThinkingPreset(tab);
         });
         addRow.appendChild(addBtn);
         dropup.appendChild(addRow);
     }
-
     // Pi validates the chosen level against the active model, so the editor
     // only guarantees vocabulary here, not model support.
     async _addThinkingPreset(tab) {
         const context = this._thinkingFallbackContext(tab);
-        if (!this._thinkingFallbackContextValid(context)) return;
+        if (!this._thinkingFallbackContextValid(context))
+            return;
         const store = this.thinkingPresetStore;
+        if (!store)
+            return;
         const available = thinkingPresetTokens(store.getState().desired);
-        if (available.length === 0) return;
+        if (available.length === 0)
+            return;
         const values = await this.app.openConfigEditor({
             title: 'Add Thinking option',
-            subtitle:
-                'Saved levels appear in the Pi Thinking menu when the bridge is unavailable. Pi validates whether the selected level is supported by the active model.',
+            subtitle: 'Saved levels appear in the Pi Thinking menu when the bridge is unavailable. Pi validates whether the selected level is supported by the active model.',
             fields: [
                 {
                     id: 'level',
@@ -7511,27 +7562,31 @@ export class TabManager {
             ],
             submitLabel: 'Add Option',
         });
-        if (!values || !this._thinkingFallbackContextValid(context)) return;
+        if (!values || !this._thinkingFallbackContextValid(context))
+            return;
         const level = values.level;
-        if (!level || !THINKING_PRESET_LEVELS.includes(level)) return;
+        if (!level ||
+            !THINKING_PRESET_LEVELS.includes(level))
+            return;
         const desired = store.getState().desired;
-        if (desired.includes(level)) return;
+        if (desired.includes(level))
+            return;
         store.setLevels([...desired, level]);
     }
-
     async _editThinkingPreset(tab, existingLevel) {
         const context = this._thinkingFallbackContext(tab);
-        if (!this._thinkingFallbackContextValid(context)) return;
+        if (!this._thinkingFallbackContextValid(context))
+            return;
         const store = this.thinkingPresetStore;
+        if (!store)
+            return;
         const desired = store.getState().desired;
-        if (!desired.includes(existingLevel)) return;
-        const allowed = thinkingPresetTokens(
-            desired.filter((level) => level !== existingLevel),
-        );
+        if (!existingLevel || !desired.includes(existingLevel))
+            return;
+        const allowed = thinkingPresetTokens(desired.filter((level) => level !== existingLevel));
         const values = await this.app.openConfigEditor({
             title: 'Edit Thinking option',
-            subtitle:
-                'Saved levels appear in the Pi Thinking menu when the bridge is unavailable. Pi validates whether the selected level is supported by the active model.',
+            subtitle: 'Saved levels appear in the Pi Thinking menu when the bridge is unavailable. Pi validates whether the selected level is supported by the active model.',
             fields: [
                 {
                     id: 'level',
@@ -7542,18 +7597,21 @@ export class TabManager {
             ],
             submitLabel: 'Save Option',
         });
-        if (!values || !this._thinkingFallbackContextValid(context)) return;
+        if (!values || !this._thinkingFallbackContextValid(context))
+            return;
         const level = values.level;
-        if (!level || !THINKING_PRESET_LEVELS.includes(level)) return;
+        if (!level ||
+            !THINKING_PRESET_LEVELS.includes(level))
+            return;
         const current = store.getState().desired;
-        if (!current.includes(existingLevel)) return;
-        if (level !== existingLevel && current.includes(level)) return;
-        if (level === existingLevel) return;
-        store.setLevels(
-            current.map((item) => (item === existingLevel ? level : item)),
-        );
+        if (!existingLevel || !current.includes(existingLevel))
+            return;
+        if (level !== existingLevel && current.includes(level))
+            return;
+        if (level === existingLevel)
+            return;
+        store.setLevels(current.map((item) => (item === existingLevel ? level : item)));
     }
-
     // _sendPiRpcCompact runs the RPC Compact action from either the
     // button or a queued press. A run in progress queues the explicit
     // action for that run instead of aborting it; a second press
@@ -7561,7 +7619,8 @@ export class TabManager {
     // not seen the context those messages will add.
     _sendPiRpcCompact(tabInfo) {
         const paneId = tabInfo.paneId;
-        if (this._piRpcCompactPending?.has(paneId)) return;
+        if (this._piRpcCompactPending?.has(paneId))
+            return;
         if (tabInfo._piRpcCompactQueued) {
             tabInfo._piRpcCompactQueued = false;
             this._piCompactToast('Queued compaction cancelled');
@@ -7570,7 +7629,8 @@ export class TabManager {
             return;
         }
         const state = this._piRpcControlsFor(tabInfo);
-        if (!state.ready || state.exited) return;
+        if (!state.ready || state.exited)
+            return;
         if (state.busy && state.queueDepth === 0) {
             tabInfo._piRpcCompactQueued = true;
             this._piCompactToast('Compact queued — runs when Pi is idle');
@@ -7585,34 +7645,35 @@ export class TabManager {
         if (!this._piRpcCompactPending)
             this._piRpcCompactPending = new Set();
         this._piRpcCompactPending.add(paneId);
-        if (this.getActiveTab() === tabInfo) this.renderPresets('pi-rpc');
+        if (this.getActiveTab() === tabInfo)
+            this.renderPresets('pi-rpc');
         let compactResult;
         try {
             compactResult = rpcChatCompact(paneId);
-        } catch (error) {
+        }
+        catch (error) {
             compactResult = Promise.reject(error);
         }
-        Promise.resolve(compactResult)
+        Promise.resolve(compactResult ?? null)
             .catch((error) => {
-                if (this.tabs.has(paneId)) this._piRpcError(error, 'Compact');
-            })
+            if (this.tabs.has(paneId))
+                this._piRpcError(error, 'Compact');
+        })
             .finally(() => {
-                this._piRpcCompactPending.delete(paneId);
-                if (this.getActiveTab()?.paneId === paneId)
-                    this.renderPresets('pi-rpc');
-            });
+            this._piRpcCompactPending.delete(paneId);
+            if (this.getActiveTab()?.paneId === paneId)
+                this.renderPresets('pi-rpc');
+        });
     }
-
     // _flushPiRpcCompactQueue runs one held press on the idle status
     // edge. The queue is scoped to the turn it was pressed in; a
     // queued user message cancels it because compacting afterwards
     // would include context the user did not intend.
     _flushPiRpcCompactQueue(tabInfo) {
-        if (!tabInfo?._piRpcCompactQueued) return;
-        if (
-            tabInfo.coder !== 'pi-rpc' ||
-            this.tabs.get(tabInfo.paneId) !== tabInfo
-        ) {
+        if (!tabInfo?._piRpcCompactQueued)
+            return;
+        if (tabInfo.coder !== 'pi-rpc' ||
+            this.tabs.get(tabInfo.paneId) !== tabInfo) {
             tabInfo._piRpcCompactQueued = false;
             return;
         }
@@ -7623,9 +7684,7 @@ export class TabManager {
         }
         if (state.queueDepth > 0) {
             tabInfo._piRpcCompactQueued = false;
-            this._piCompactToast(
-                'Queued compaction cancelled — Pi has queued messages',
-            );
+            this._piCompactToast('Queued compaction cancelled — Pi has queued messages');
             if (this.getActiveTab() === tabInfo)
                 this.renderPresets('pi-rpc');
             return;
@@ -7635,9 +7694,9 @@ export class TabManager {
         tabInfo._piRpcCompactQueued = false;
         this._sendPiRpcCompact(tabInfo);
     }
-
     _renderPiRpcPresets() {
-        if (!this.presetsContainer) return;
+        if (!this.presetsContainer)
+            return;
         const activeTab = this.getActiveTab();
         const presetFocus = this._presetFocusKey();
         this.presetsContainer.replaceChildren();
@@ -7651,7 +7710,6 @@ export class TabManager {
         const state = this._piRpcControlsFor(activeTab);
         const paneId = activeTab.paneId;
         const menuDisabled = !state.ready || state.exited;
-
         const compactButton = document.createElement('button');
         compactButton.type = 'button';
         compactButton.className = 'preset-btn pi-rpc-compact-btn';
@@ -7665,14 +7723,18 @@ export class TabManager {
         if (compactPending) {
             compactLabel = 'Compacting…';
             compactTitle = 'Compacting…';
-        } else if (compactQueued) {
+        }
+        else if (compactQueued) {
             compactLabel = 'Compact queued';
             compactTitle = 'Compact queued — press to cancel';
-        } else if (menuDisabled) {
+        }
+        else if (menuDisabled) {
             compactTitle = 'Compact unavailable: Pi is not ready';
-        } else if (state.busy && state.queueDepth === 0) {
+        }
+        else if (state.busy && state.queueDepth === 0) {
             compactTitle = 'Compact after this turn';
-        } else if (state.queueDepth > 0) {
+        }
+        else if (state.queueDepth > 0) {
             compactTitle = 'Compact unavailable: messages queued';
         }
         compactButton.textContent = compactLabel;
@@ -7680,10 +7742,10 @@ export class TabManager {
         compactButton.disabled = menuDisabled || compactPending;
         compactButton.addEventListener('click', (event) => {
             event.stopPropagation();
-            if (compactButton.disabled) return;
+            if (compactButton.disabled)
+                return;
             this._sendPiRpcCompact(activeTab);
         });
-
         const resetButton = document.createElement('button');
         resetButton.type = 'button';
         resetButton.className = 'preset-btn pi-rpc-reset-btn';
@@ -7694,55 +7756,48 @@ export class TabManager {
             menuDisabled || state.busy || state.queueDepth > 0 || resetPending;
         resetButton.addEventListener('click', (event) => {
             event.stopPropagation();
-            if (resetButton.disabled) return;
-            if (
-                state.hasTranscript &&
-                !confirm(
-                    'Reset Chat starts a fresh conversation and cannot be undone. Continue?',
-                )
-            )
+            if (resetButton.disabled)
                 return;
-            if (!this._piRpcResetPending) this._piRpcResetPending = new Set();
+            if (state.hasTranscript &&
+                !confirm('Reset Chat starts a fresh conversation and cannot be undone. Continue?'))
+                return;
+            if (!this._piRpcResetPending)
+                this._piRpcResetPending = new Set();
             this._piRpcResetPending.add(paneId);
             this.renderPresets('pi-rpc');
             let resetResult;
             try {
                 resetResult = rpcChatReset(paneId);
-            } catch (error) {
+            }
+            catch (error) {
                 resetResult = Promise.reject(error);
             }
             Promise.resolve(resetResult)
                 .then((data) => {
-                    this._onPiRpcResetResult(paneId, data);
-                })
+                this._onPiRpcResetResult(paneId, data);
+            })
                 .catch((error) => this._piRpcError(error, 'Reset Chat'))
                 .finally(() => {
-                    this._piRpcResetPending.delete(paneId);
-                    if (this.getActiveTab()?.paneId === paneId)
-                        this.renderPresets('pi-rpc');
-                });
+                this._piRpcResetPending.delete(paneId);
+                if (this.getActiveTab()?.paneId === paneId)
+                    this.renderPresets('pi-rpc');
+            });
         });
         const thinkingVisibilityBtn = this.thinkingVisibilityBtn;
         if (thinkingVisibilityBtn) {
             if (!this._thinkingAllVisible)
                 this._thinkingAllVisible = new Map();
-            const allVisible =
-                this._thinkingAllVisible.get(paneId) === true;
+            const allVisible = this._thinkingAllVisible.get(paneId) === true;
             thinkingVisibilityBtn.textContent = allVisible
                 ? 'Hide thinking'
                 : 'Show thinking';
             thinkingVisibilityBtn.title = 'Toggle all thinking blocks';
-            thinkingVisibilityBtn.setAttribute(
-                'aria-label',
-                thinkingVisibilityBtn.textContent,
-            );
+            thinkingVisibilityBtn.setAttribute('aria-label', thinkingVisibilityBtn.textContent);
             // Visibility is local: keep it usable while Pi is disconnected.
             thinkingVisibilityBtn.disabled = false;
         }
-
         const divider = document.createElement('div');
         divider.className = 'presets-divider';
-
         const quickCmdsButton = document.createElement('button');
         quickCmdsButton.type = 'button';
         quickCmdsButton.className = 'preset-btn model-trigger-btn';
@@ -7751,11 +7806,8 @@ export class TabManager {
         quickCmdsButton.disabled = menuDisabled;
         quickCmdsButton.addEventListener('click', (event) => {
             event.stopPropagation();
-            this._toggleDropup('quick-commands-dropup', quickCmdsButton, () =>
-                this.renderQuickCmdsDropup(),
-            );
+            this._toggleDropup('quick-commands-dropup', quickCmdsButton, () => this.renderQuickCmdsDropup());
         });
-
         const modelButton = document.createElement('button');
         modelButton.type = 'button';
         modelButton.className =
@@ -7767,11 +7819,8 @@ export class TabManager {
         modelButton.disabled = menuDisabled;
         modelButton.addEventListener('click', (event) => {
             event.stopPropagation();
-            this._toggleDropup('pi-rpc-model-dropup', modelButton, () =>
-                this._renderPiRpcModelsDropup(),
-            );
+            this._toggleDropup('pi-rpc-model-dropup', modelButton, () => this._renderPiRpcModelsDropup());
         });
-
         const thinkingButton = document.createElement('button');
         thinkingButton.type = 'button';
         thinkingButton.className =
@@ -7785,43 +7834,31 @@ export class TabManager {
             menuDisabled || this._piRpcThinkingPending?.paneId === paneId;
         thinkingButton.addEventListener('click', (event) => {
             event.stopPropagation();
-            this._toggleDropup('pi-rpc-thinking-dropup', thinkingButton, () =>
-                this._renderPiRpcThinkingDropup(),
-            );
+            this._toggleDropup('pi-rpc-thinking-dropup', thinkingButton, () => this._renderPiRpcThinkingDropup());
         });
-
         // Same knob the bridge gives the Pi (term) tab: no list, no button,
         // so a session without skills never shows a dead control.
         let skillsButton = null;
         if (state.skills.length > 0) {
-            skillsButton = document.createElement('button');
-            skillsButton.type = 'button';
-            skillsButton.className =
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className =
                 'preset-btn model-trigger-btn pi-rpc-skills-trigger';
-            skillsButton.textContent = 'Skills ▾';
-            skillsButton.title = 'Send a Pi skill to the session';
-            skillsButton.setAttribute('aria-label', 'Send a Pi skill');
-            skillsButton.disabled = menuDisabled;
-            skillsButton.addEventListener('click', (event) => {
+            button.textContent = 'Skills ▾';
+            button.title = 'Send a Pi skill to the session';
+            button.setAttribute('aria-label', 'Send a Pi skill');
+            button.disabled = menuDisabled;
+            button.addEventListener('click', (event) => {
                 event.stopPropagation();
-                if (skillsButton.disabled) return;
-                this._toggleDropup(
-                    'pi-rpc-skills-dropup',
-                    skillsButton,
-                    () => this._renderPiRpcSkillsDropup(),
-                );
+                if (button.disabled)
+                    return;
+                this._toggleDropup('pi-rpc-skills-dropup', button, () => this._renderPiRpcSkillsDropup());
             });
+            skillsButton = button;
         }
-
-        this.presetsContainer.append(
-            compactButton,
-            resetButton,
-            divider,
-            quickCmdsButton,
-            modelButton,
-            thinkingButton,
-        );
-        if (skillsButton) this.presetsContainer.appendChild(skillsButton);
+        this.presetsContainer.append(compactButton, resetButton, divider, quickCmdsButton, modelButton, thinkingButton);
+        if (skillsButton)
+            this.presetsContainer.appendChild(skillsButton);
         const qcDropup = document.getElementById('quick-commands-dropup');
         if (qcDropup && !qcDropup.classList.contains('hidden'))
             this.renderQuickCmdsDropup();
@@ -7837,13 +7874,15 @@ export class TabManager {
         // Keep open pickers on top of the rebuit row's current height.
         document
             .querySelectorAll('.model-presets-dropup:not(.hidden)')
-            .forEach((d) => this._syncDropupOffset(d));
+            .forEach((d) => {
+            this._syncDropupOffset(d);
+        });
         this._restorePresetFocus(presetFocus);
     }
-
     switchTab(paneId, { userInitiated = false } = {}) {
         this._closePiRpcDropups();
-        if (this.tabs?.has?.(paneId)) this.app?.removeReadyPane?.(paneId);
+        if (this.tabs?.has?.(paneId))
+            this.app?.removeReadyPane?.(paneId);
         if (this.activePaneId === paneId) {
             const activeTab = this.getActiveTab();
             if (activeTab) {
@@ -7862,37 +7901,39 @@ export class TabManager {
             this.renderPiRpcStatusBar();
             return;
         }
-
         this._resetPiRecall({ flush: true });
         // Deactivate current active tab
         const prevTab = this.getActiveTab();
         if (prevTab) {
             this._cancelAttachmentRecovery(prevTab);
-            if (prevTab._attachmentContextController) prevTab._attachmentContextController.abort();
+            if (prevTab._attachmentContextController)
+                prevTab._attachmentContextController.abort();
             for (const item of prevTab.draftAttachments || []) {
-                if (item.uploadState === 'uploading') this._attachmentRequestScopes.get(item.id)?.controller?.abort();
+                if (item.uploadState === 'uploading')
+                    this._attachmentRequestScopes
+                        .get(item.id)
+                        ?.controller?.abort();
             }
             if (prevTab.term) {
                 prevTab.isAtBottom =
                     prevTab.term.buffer.active.viewportY >=
-                    prevTab.term.buffer.active.baseY;
+                        prevTab.term.buffer.active.baseY;
                 prevTab.lastScrollY = prevTab.term.buffer.active.viewportY;
             }
             // Park the draft on the outgoing tab, mirroring the scroll save
             // above. review/kanban tabs hide the input bar and never carry
             // one. Guard inputTextArea: test harnesses build partial managers.
-            if (
-                this.inputTextArea &&
+            if (this.inputTextArea &&
                 prevTab.coder !== 'review' &&
-                prevTab.coder !== 'kanban'
-            ) {
+                prevTab.coder !== 'kanban') {
                 const changed = prevTab.draft !== this.inputTextArea.value ||
                     prevTab.draftAttachments !== this.stagedAttachments;
                 prevTab.draft = this.inputTextArea.value;
                 prevTab.draftAttachments = this.stagedAttachments;
                 // Startup briefly switches through each tab. An unchanged
                 // parked draft must not invalidate its pending IDB restore.
-                if (changed || !prevTab._attachmentRestorePending) this.saveTabDraft(prevTab);
+                if (changed || !prevTab._attachmentRestorePending)
+                    this.saveTabDraft(prevTab);
             }
             prevTab.tabEl.classList.remove('active');
             prevTab.termContainer.classList.remove('active');
@@ -7902,14 +7943,13 @@ export class TabManager {
             if (prevTab.coder === 'pi')
                 this._invalidatePiBridgeThinking(prevTab);
         }
-
         // Set new active tab
         this.activePaneId = paneId;
         const newTab = this.getActiveTab();
-        if (!newTab) return;
+        if (!newTab)
+            return;
         this._setPiRpcActionVisibility(newTab);
         this._updateAttachmentControl(newTab);
-
         newTab.tabEl.classList.add('active');
         newTab.termContainer.classList.add('active');
         if (newTab.isAttention) {
@@ -7920,11 +7960,11 @@ export class TabManager {
         // Fleet strip follows the active tab: replay the pi-rpc pane's
         // last snapshot, or hide the strip for tabs without a chat pane.
         syncPiSubagentStrip(newTab.paneId);
-
         // Show/hide staged input & direct mode based on tab settings
         if (newTab.coder === 'review' || newTab.coder === 'kanban') {
             this.inputBarContainer.classList.add('hidden');
-        } else {
+        }
+        else {
             this.inputBarContainer.classList.remove('hidden');
             this.updateDirectModeUI(newTab);
             // Restore the incoming tab's parked draft. Reset the prompt-
@@ -7944,7 +7984,6 @@ export class TabManager {
                 }
             }
         }
-
         // Scroll tabs bar to active tab
         newTab.tabEl.scrollIntoView({
             behavior: 'smooth',
@@ -7954,22 +7993,21 @@ export class TabManager {
         this.saveTabsState();
         this.updateTabOverflow?.();
         this._refreshOverflowDropdown?.();
-
         // Close-triggered selections use the same project synchronization as
         // any other tab selection so the sidebar matches the active tab.
         // Preserve scroll position if user had scrolled up in newTab; only snap to
         // bottom if newTab is following bottom or already at bottom.
         const shouldScrollToBottom = newTab.term
             ? newTab.userFollowBottom !== false &&
-              (newTab.term.buffer?.active?.viewportY ?? 0) >=
-                  (newTab.term.buffer?.active?.baseY ?? 0)
+                (newTab.term.buffer?.active?.viewportY ?? 0) >=
+                    (newTab.term.buffer?.active?.baseY ?? 0)
             : true;
-
         const projectSyncStart = globalThis.performance?.now?.();
         let projectSynced;
         try {
             projectSynced = this._syncProjectForTab(newTab);
-        } finally {
+        }
+        finally {
             termPerfMeasureBetween('switch-sync-project', projectSyncStart);
         }
         if (projectSynced) {
@@ -7980,7 +8018,6 @@ export class TabManager {
             });
             return;
         }
-
         this.activateTabViewport(newTab, {
             scrollToBottom: shouldScrollToBottom,
             autoReconnect: true,
@@ -7990,7 +8027,6 @@ export class TabManager {
         this._renderInputRestriction();
         this.updateDocumentTitle();
     }
-
     // Update sidebar state for an explicit tab selection. Returns true for
     // independent views whose viewport activation is handled by switchTab.
     _syncProjectForTab(newTab) {
@@ -8000,26 +8036,20 @@ export class TabManager {
         if (newTab.coder !== 'pi-rpc') {
             this.app.sessionsManager.switchCoder(newTab.coder, true);
         }
-
         // Kanban and review are independent views. They do not track the
         // user's terminal project context, so never apply their snapshot.
-        if (
-            newTab.coder === 'kanban' ||
+        if (newTab.coder === 'kanban' ||
             newTab.coder === 'review' ||
-            newTab.coder === 'pi-rpc'
-        ) {
+            newTab.coder === 'pi-rpc') {
             this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
             return true;
         }
-
-        const selectedWorkspace =
-            newTab.workspace || this.app.sessionsManager.activeWorkspace;
+        const selectedWorkspace = newTab.workspace || this.app.sessionsManager.activeWorkspace;
         const selectedCoder = newTab.coder;
         const selectedCwd = newTab.cwd;
         const isCurrentProjectContext = () => {
             const sessionsManager = this.app.sessionsManager;
-            return (
-                sessionsManager.activeCoder === selectedCoder &&
+            return (sessionsManager.activeCoder === selectedCoder &&
                 (!selectedWorkspace ||
                     (sessionsManager.activeWorkspace &&
                         normalizePath(sessionsManager.activeWorkspace) ===
@@ -8027,70 +8057,65 @@ export class TabManager {
                 (!selectedCwd ||
                     (sessionsManager.activeCWD &&
                         normalizePath(sessionsManager.activeCWD) ===
-                            normalizePath(selectedCwd)))
-            );
+                            normalizePath(selectedCwd))));
         };
-
         // Sync project / workspace context from the tab using normalized paths.
-        const workspaceChanged =
-            newTab.workspace &&
+        const workspaceChanged = newTab.workspace &&
             normalizePath(this.app.sessionsManager.activeWorkspace) !==
                 normalizePath(newTab.workspace);
         const coderChanged = prevCoder !== newTab.coder;
-        const cwdChanged =
-            newTab.cwd &&
+        const cwdChanged = newTab.cwd &&
             normalizePath(this.app.sessionsManager.activeCWD) !==
                 normalizePath(newTab.cwd);
-
         if (newTab._detachedCache) {
             if (workspaceChanged) {
-                this.app.sessionsManager.workspaceSelect.value = newTab.workspace;
+                this.app.sessionsManager.workspaceSelect.value =
+                    newTab.workspace;
                 this.app.sessionsManager.activeWorkspace = newTab.workspace;
                 this.app.sessionsManager.activeCWD = newTab.cwd;
                 this.app.sessionsManager.updateWorkspaceSelectWidth();
-            } else if (coderChanged) {
+            }
+            else if (coderChanged) {
                 this.app.sessionsManager.activeCWD = newTab.cwd;
             }
             return false;
         }
-
         if (workspaceChanged) {
             this.app.sessionsManager.workspaceSelect.value = newTab.workspace;
             this.app.sessionsManager.activeWorkspace = newTab.workspace;
             this.app.sessionsManager.activeCWD = newTab.cwd;
             this.app.sessionsManager.updateWorkspaceSelectWidth();
-
             this.app.sessionsManager.loadWorktrees(newTab.cwd).then(() => {
-                if (!isCurrentProjectContext()) return;
+                if (!isCurrentProjectContext())
+                    return;
                 const activeTab = this.getActiveTab();
                 if (activeTab) {
-                    this.app.sessionsManager.highlightActiveSession(
-                        activeTab.sessionId,
-                    );
+                    this.app.sessionsManager.highlightActiveSession(activeTab.sessionId);
                 }
                 this.app.diffController.refreshDiff();
                 if (this.app.markdownManager) {
                     this.app.markdownManager.refreshFiles({ force: false });
                 }
             });
-        } else if (coderChanged) {
+        }
+        else if (coderChanged) {
             // Workspace is the same, but coder changed. Rebuild worktrees for
             // the new coder.
             this.app.sessionsManager.activeCWD = newTab.cwd;
             this.app.sessionsManager.loadWorktrees(newTab.cwd).then(() => {
-                if (!isCurrentProjectContext()) return;
+                if (!isCurrentProjectContext())
+                    return;
                 const activeTab = this.getActiveTab();
                 if (activeTab) {
-                    this.app.sessionsManager.highlightActiveSession(
-                        activeTab.sessionId,
-                    );
+                    this.app.sessionsManager.highlightActiveSession(activeTab.sessionId);
                 }
                 this.app.diffController.refreshDiff();
                 if (this.app.markdownManager) {
                     this.app.markdownManager.refreshFiles({ force: false });
                 }
             });
-        } else if (cwdChanged) {
+        }
+        else if (cwdChanged) {
             // Workspace and coder are the same, only CWD changed.
             this.app.sessionsManager.activeCWD = newTab.cwd;
             this.app.sessionsManager.highlightActiveWorktree(newTab.cwd);
@@ -8099,7 +8124,8 @@ export class TabManager {
             if (this.app.markdownManager) {
                 this.app.markdownManager.refreshFiles({ force: false });
             }
-        } else {
+        }
+        else {
             // Workspace, coder, and CWD are all the same; only the session
             // may have changed.
             this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
@@ -8112,46 +8138,40 @@ export class TabManager {
         }
         return false;
     }
-
     togglePinTab(paneId) {
         const tab = this.tabs.get(paneId);
-        if (!tab) return;
-
+        if (!tab)
+            return;
         tab.pinned = !tab.pinned;
         if (tab.pinned) {
             tab.tabEl.classList.add('pinned');
-        } else {
+        }
+        else {
             tab.tabEl.classList.remove('pinned');
         }
-
         // Sync with backend API.
         this.syncBackendPin(paneId, tab.pinned);
-
         this.saveTabsState();
     }
-
     syncBackendPin(paneId, pinned) {
         fetch(`/api/terminals/${paneId}/pin`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ pinned: pinned }),
-        }).then((response) => response.text()).catch((err) =>
-            console.error('[term] Failed to sync pin on backend:', err),
-        );
+        })
+            .then((response) => response.text())
+            .catch((err) => console.error('[term] Failed to sync pin on backend:', err));
     }
-
     syncBackendMark(paneId, marked) {
         fetch(`/api/terminals/${paneId}/mark`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ marked: marked }),
-        }).catch((err) =>
-            console.error('[term] Failed to sync mark on backend:', err),
-        );
+        }).catch((err) => console.error('[term] Failed to sync mark on backend:', err));
     }
-
     _setTabTitle(tabInfo, title) {
-        if (!tabInfo || typeof title !== 'string') return false;
+        if (!tabInfo || typeof title !== 'string')
+            return false;
         const changed = tabInfo.title !== title;
         tabInfo.title = title;
         const titleEl = tabInfo.tabEl?.querySelector('.tab-title');
@@ -8163,20 +8183,17 @@ export class TabManager {
         }
         this.updateTabOverflow?.();
         this._refreshOverflowDropdown?.();
-        if (
-            this._hieroPreview?.classList.contains('visible') &&
-            this._hieroPreviewSourceEl === tabInfo.tabEl
-        ) {
+        if (this._hieroPreview?.classList.contains('visible') &&
+            this._hieroPreviewSourceEl === tabInfo.tabEl) {
             this._showHieroPreview(tabInfo.tabEl);
         }
         return changed;
     }
-
     openTabRenamer(paneId, titleEl) {
         const tab = this.tabs.get(paneId);
-        if (!tab) return;
+        if (!tab)
+            return;
         const openingTitle = tab.title || '';
-
         const input = document.createElement('input');
         input.type = 'text';
         input.className = 'rename-input tab-title';
@@ -8184,7 +8201,6 @@ export class TabManager {
         titleEl.replaceWith(input);
         input.focus({ preventScroll: true });
         input.select();
-
         const restoreLatestTitle = () => {
             const span = document.createElement('span');
             span.className = `tab-title ${tab.marked ? 'marked' : ''}`;
@@ -8193,7 +8209,8 @@ export class TabManager {
         };
         let done = false;
         const commit = () => {
-            if (done) return;
+            if (done)
+                return;
             done = true;
             const next = input.value.trim();
             const latestTitle = tab.title || '';
@@ -8202,48 +8219,46 @@ export class TabManager {
                     // Review and Kanban tabs own their own titles; no
                     // backend sync.
                     this._setTabTitle(tab, next);
-                } else if (tab.isChatRpc) {
+                }
+                else if (tab.isChatRpc) {
                     // Pi RPC keeps the current label until Pi's native
                     // session_info_changed event reaches the backend.
-                    rpcChatSetName(paneId, next).catch((error) =>
-                        console.error(
-                            '[term] Failed to rename Pi RPC session:',
-                            error,
-                        ),
-                    );
+                    rpcChatSetName(paneId, next).catch((error) => console.error('[term] Failed to rename Pi RPC session:', error));
                     this.app?.sessionsManager?.loadSessions?.();
-                } else if (tab.coder === 'pi') {
+                }
+                else if (tab.coder === 'pi') {
                     // The backend sends one native /name command. Keep the
                     // current label until file-backed native state confirms it.
-                    this.syncBackendTitle(paneId, next).catch(() => {});
+                    this.syncBackendTitle(paneId, next).catch(() => { });
                     setTimeout(() => {
                         this.app?.sessionsManager?.loadSessions?.();
                     }, 600);
-                } else {
+                }
+                else {
                     this._setTabTitle(tab, next);
-                    this.syncBackendTitle(paneId, next).catch(() => {});
+                    this.syncBackendTitle(paneId, next).catch(() => { });
                 }
             }
             restoreLatestTitle();
         };
         const cancel = () => {
-            if (done) return;
+            if (done)
+                return;
             done = true;
             restoreLatestTitle();
         };
-
         input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 e.preventDefault();
                 commit();
-            } else if (e.key === 'Escape') {
+            }
+            else if (e.key === 'Escape') {
                 e.preventDefault();
                 cancel();
             }
         });
         input.addEventListener('blur', commit);
     }
-
     syncBackendTitle(paneId, title) {
         return fetch(`/api/terminals/${paneId}/title`, {
             method: 'POST',
@@ -8251,17 +8266,16 @@ export class TabManager {
             body: JSON.stringify({ title }),
         })
             .then((response) => {
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status} renaming terminal`);
-                }
-                return response;
-            })
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status} renaming terminal`);
+            }
+            return response;
+        })
             .catch((err) => {
-                console.error('[term] Failed to sync title on backend:', err);
-                throw err;
-            });
+            console.error('[term] Failed to sync title on backend:', err);
+            throw err;
+        });
     }
-
     // Soft-close: when the user clicks × on a tab, the tab leaves the
     // visible strip for SOFT_CLOSE_GRACE_MS and appears in the tab-list
     // dropdown with an Undo action. The PTY stays alive until the grace
@@ -8276,11 +8290,10 @@ export class TabManager {
     // the oldest closing tab is finalized immediately.
     static SOFT_CLOSE_GRACE_MS = 3000;
     static MAX_SOFT_CLOSED_TABS = 3;
-
     closeTab(paneId) {
         const tab = this.tabs.get(paneId);
-        if (!tab) return;
-
+        if (!tab)
+            return;
         // If already soft-closing, the user clicked × again - treat it as
         // "I really mean it" and finalize immediately. They can still
         // click Undo in the toast within the grace window if it changed
@@ -8289,10 +8302,8 @@ export class TabManager {
             this.finalizeCloseTab(paneId);
             return;
         }
-
         this.softCloseTab(paneId);
     }
-
     // Mark tab as soft-closing: strip entry fades, × swaps to ↻, a tiny
     // countdown pill appears on the strip so the user can see how long
     // they have to undo. The PTY is NOT killed yet — if the user clicks
@@ -8304,51 +8315,40 @@ export class TabManager {
     // (or × twice), the closing tab is finalized.
     softCloseTab(paneId) {
         const tab = this.tabs.get(paneId);
-        if (!tab || tab.softClosing) return;
+        if (!tab || tab.softClosing)
+            return;
         this.app?.removeReadyPane?.(paneId);
-
         const wasActive = this.activePaneId === paneId;
         tab.softClosing = true;
         tab.softCloseStartedAt = Date.now();
         tab.tabEl.classList.add('soft-closed');
-
         // Cap: if too many closing tabs exist, finalize the oldest. This
         // keeps the dropdown bounded and the grace memory footprint small.
-        const softTabs = Array.from(this.tabs.values()).filter(
-            (t) => t.softClosing,
-        );
+        const softTabs = Array.from(this.tabs.values()).filter((t) => t.softClosing);
         if (softTabs.length > TabManager.MAX_SOFT_CLOSED_TABS) {
-            softTabs.sort(
-                (a, b) =>
-                    (a.softCloseStartedAt || 0) - (b.softCloseStartedAt || 0),
-            );
+            softTabs.sort((a, b) => (a.softCloseStartedAt || 0) - (b.softCloseStartedAt || 0));
             this.finalizeCloseTab(softTabs[0].paneId);
-            if (!this.tabs.has(paneId)) return;
+            if (!this.tabs.has(paneId))
+                return;
         }
-
         this._startSoftCloseCountdown(tab);
-
         // Closing the active tab selects and synchronizes a visible survivor.
-        if (wasActive) this._selectTabAfterClose(paneId);
-
+        if (wasActive)
+            this._selectTabAfterClose(paneId);
         // Undo toast for all soft-closes. The dropdown is the durable
         // recovery affordance; the toast remains a quick shortcut.
         if (this.app?.showToast) {
-            const toastEl = this.app.showToast(
-                `Closed "${tab.title || tab.coder || 'tab'}"`,
-                {
-                    type: 'info',
-                    title: 'Tab closed',
-                    duration: TabManager.SOFT_CLOSE_GRACE_MS,
-                    action: {
-                        text: 'Undo',
-                        callback: () => this.undoCloseTab(paneId),
-                    },
+            const toastEl = this.app.showToast(`Closed "${tab.title || tab.coder || 'tab'}"`, {
+                type: 'info',
+                title: 'Tab closed',
+                duration: TabManager.SOFT_CLOSE_GRACE_MS,
+                action: {
+                    text: 'Undo',
+                    callback: () => this.undoCloseTab(paneId),
                 },
-            );
+            });
             tab.softCloseToast = toastEl;
         }
-
         tab.softCloseTimer = setTimeout(() => {
             this.finalizeCloseTab(paneId);
         }, TabManager.SOFT_CLOSE_GRACE_MS);
@@ -8358,9 +8358,9 @@ export class TabManager {
         // closing rows must lose their cues and unread priority at once.
         this._refreshHostnameTabsDropdown?.();
     }
-
     _selectTabAfterClose(paneId) {
-        if (this.activePaneId !== paneId) return;
+        if (this.activePaneId !== paneId)
+            return;
         const ordered = Array.from(this.tabs.values());
         const currentIndex = ordered.findIndex((tab) => tab.paneId === paneId);
         let nextTab = null;
@@ -8376,13 +8376,13 @@ export class TabManager {
             this.switchTab(nextTab.paneId);
             return;
         }
-
         // No visible survivor remains. Leave the closing tabs recoverable in
         // the dropdown, but show the normal empty state during the grace.
         const tab = this.tabs.get(paneId);
         // Soft-close keeps socket and bridge state alive for Undo, so revoke
         // the pending Thinking operation or it still owns the restored context.
-        if (tab?.coder === 'pi') this._invalidatePiBridgeThinking(tab, false);
+        if (tab?.coder === 'pi')
+            this._invalidatePiBridgeThinking(tab, false);
         tab?.tabEl?.classList.remove('active');
         tab?.termContainer?.classList.remove('active');
         this.activePaneId = null;
@@ -8397,35 +8397,25 @@ export class TabManager {
         this.updateDocumentTitle?.();
         this.saveTabsState?.();
     }
-
     _softCloseRemainingSeconds(tab) {
         const startedAt = tab.softCloseStartedAt || Date.now();
-        return Math.max(
-            0,
-            Math.ceil(
-                (TabManager.SOFT_CLOSE_GRACE_MS - (Date.now() - startedAt)) /
-                    1000,
-            ),
-        );
+        return Math.max(0, Math.ceil((TabManager.SOFT_CLOSE_GRACE_MS - (Date.now() - startedAt)) /
+            1000));
     }
-
     _updateClosingTabCountdown(tab) {
         const dropdown = document.getElementById('tab-overflow-dropdown');
-        if (!dropdown || dropdown.classList.contains('hidden')) return;
-        for (const row of dropdown.querySelectorAll(
-            '.tab-overflow-closing-row',
-        )) {
-            if (row.dataset.paneId !== tab.paneId) continue;
-            const countdown = row.querySelector(
-                '.tab-overflow-closing-countdown',
-            );
+        if (!dropdown || dropdown.classList.contains('hidden'))
+            return;
+        for (const row of dropdown.querySelectorAll('.tab-overflow-closing-row')) {
+            if (row.dataset.paneId !== tab.paneId)
+                continue;
+            const countdown = row.querySelector('.tab-overflow-closing-countdown');
             if (countdown) {
                 countdown.textContent = `Closing in ${this._softCloseRemainingSeconds(tab)}s`;
             }
             break;
         }
     }
-
     // Keep the closing-tab row current while its dropdown is open. When the
     // dropdown is closed, its next render computes the remaining time fresh.
     _startSoftCloseCountdown(tab) {
@@ -8438,7 +8428,6 @@ export class TabManager {
         tick();
         tab.softCloseCountdownTimer = setInterval(tick, 250);
     }
-
     _stopSoftCloseCountdown(tab) {
         if (tab.softCloseCountdownTimer) {
             clearInterval(tab.softCloseCountdownTimer);
@@ -8446,14 +8435,13 @@ export class TabManager {
         }
         this.updateTabOverflow?.();
     }
-
     // Reverse a soft-close: cancel the timer, restore the strip entry,
     // and explicitly select the tab. Explicit Undo is a normal user
     // selection, so it is allowed to restore that tab's project context.
     undoCloseTab(paneId) {
         const tab = this.tabs.get(paneId);
-        if (!tab?.softClosing) return;
-
+        if (!tab?.softClosing)
+            return;
         if (tab.softCloseTimer) {
             clearTimeout(tab.softCloseTimer);
             tab.softCloseTimer = null;
@@ -8463,30 +8451,30 @@ export class TabManager {
             tab.softCloseToast = null;
             if (typeof this.app?.dismissToast === 'function') {
                 this.app.dismissToast(toastEl);
-            } else {
+            }
+            else {
                 toastEl.classList.remove('show');
                 setTimeout(() => toastEl.remove?.(), 200);
             }
         }
         this._stopSoftCloseCountdown(tab);
-
         tab.softClosing = false;
         tab.softCloseStartedAt = null;
         tab.tabEl.classList.remove('soft-closed');
-        if (this.activePaneId === null) this.hideEmptyState?.();
-
+        if (this.activePaneId === null)
+            this.hideEmptyState?.();
         this.switchTab(paneId, { userInitiated: true });
         this.updateTabOverflow?.();
         this._refreshOverflowDropdown?.();
     }
-
     disposeTabClient(paneId, { preserveStorage = false } = {}) {
         const tab = this.tabs.get(paneId);
-        if (!tab) return;
-        if (!preserveStorage) this.app?.removeReadyPane?.(paneId);
+        if (!tab)
+            return;
+        if (!preserveStorage)
+            this.app?.removeReadyPane?.(paneId);
         tab.finalizing = true;
         this._clearReaderAnchor(tab);
-
         // The pending native Compact waiter is pane-keyed, so a closed
         // pane must drop it here or a later tab on the same pane id
         // inherits "Compacting…" from this one.
@@ -8495,11 +8483,11 @@ export class TabManager {
         // marker revalidates against the next press's target.
         this._invalidatePiBridgeReload?.(tab);
         tab._panelObserver?.disconnect();
-        if (tab._panelFitRAF != null && typeof cancelAnimationFrame === 'function') {
+        if (tab._panelFitRAF != null &&
+            typeof cancelAnimationFrame === 'function') {
             cancelAnimationFrame(tab._panelFitRAF);
         }
         tab._panelFitRAF = null;
-
         if (tab._openFallbackTimer) {
             clearTimeout(tab._openFallbackTimer);
             tab._openFallbackTimer = null;
@@ -8520,7 +8508,6 @@ export class TabManager {
             clearTimeout(tab.stopSpamTimeout);
             tab.stopSpamTimeout = null;
         }
-
         if (tab.softCloseTimer) {
             clearTimeout(tab.softCloseTimer);
             tab.softCloseTimer = null;
@@ -8530,17 +8517,16 @@ export class TabManager {
             tab.softCloseToast = null;
             if (typeof this.app?.dismissToast === 'function') {
                 this.app.dismissToast(toastEl);
-            } else {
+            }
+            else {
                 toastEl.classList.remove('show');
                 setTimeout(() => toastEl.remove?.(), 200);
             }
         }
         this._stopSoftCloseCountdown?.(tab);
-
         if (tab.coder === 'pi-rpc' && typeof destroyRpcChat === 'function') {
             destroyRpcChat(tab.paneId);
         }
-
         if (tab.autoReconnectTimer) {
             clearTimeout(tab.autoReconnectTimer);
             tab.autoReconnectTimer = null;
@@ -8553,38 +8539,39 @@ export class TabManager {
             clearTimeout(tab.reconnectWatchdogTimer);
             tab.reconnectWatchdogTimer = null;
         }
-
         try {
-            if (tab.ws) tab.ws.close();
-        } catch (e) {
+            if (tab.ws)
+                tab.ws.close?.();
+        }
+        catch (e) {
             console.error('[tab] WS close error:', e);
         }
-
         try {
-            if (tab.term) tab.term.dispose();
-        } catch (e) {
+            if (tab.term)
+                tab.term.dispose();
+        }
+        catch (e) {
             console.error('[tab] Term dispose error:', e);
         }
-
         try {
-            if (tab.tabEl) tab.tabEl.remove();
-            if (tab.termContainer) tab.termContainer.remove();
-        } catch (e) {
+            if (tab.tabEl)
+                tab.tabEl.remove();
+            if (tab.termContainer)
+                tab.termContainer.remove();
+        }
+        catch (e) {
             console.error('[tab] DOM removal error:', e);
         }
-
         if (this.app?.kanbanManager && tab.isKanban) {
             this.app.kanbanManager.cleanup?.();
         }
         if (this.app?.reviewManager && tab.isReview) {
             this.app.reviewManager.cleanup?.();
         }
-
         if (tab.coder === 'pi-rpc' && this.activePaneId === paneId) {
             this._piRpcResetPending?.delete(paneId);
             this._closePiRpcDropups?.(true);
         }
-
         const wasPiRpc = tab.coder === 'pi-rpc';
         // The pane is leaving the map, so bridge Thinking ownership goes with
         // it; a stuck pending would block the Thinking controls elsewhere.
@@ -8592,24 +8579,24 @@ export class TabManager {
         this._clearPiRpcModelPending(tab.paneId);
         // A detach keeps the pane and its catalog for the reconnect; only a
         // real close drops the entry.
-        if (!preserveStorage) this._forgetPiRpcModelCache(tab.coder, tab.paneId);
+        if (!preserveStorage)
+            this._forgetPiRpcModelCache(tab.coder, tab.paneId);
         this.tabs.delete(paneId);
-
         if (!preserveStorage) {
             try {
                 localStorage.removeItem(serverKey(`phi_tab_draft_${paneId}`));
-            } catch {}
+            }
+            catch { }
             this.updateDocumentTitle?.();
             this.updateDisconnectBanner?.();
             this.saveTabsState?.();
-            if (wasPiRpc) this.savePiRpcTabs?.();
-
+            if (wasPiRpc)
+                this.savePiRpcTabs?.();
             this.updateTabOverflow?.();
             this._refreshOverflowDropdown?.();
             if (document.body?.classList?.contains('show-tab-shortcuts')) {
                 this.updateTabShortcutHints?.(true);
             }
-
             if (this.tabs.size === 0) {
                 this.activePaneId = null;
                 this._setPiRpcActionVisibility?.(null);
@@ -8622,17 +8609,15 @@ export class TabManager {
                 if (this.app?.markdownManager) {
                     this.app.markdownManager.refreshFiles?.({ force: true });
                 }
-            } else if (this.activePaneId === paneId) {
-                const survivor = Array.from(this.tabs.values()).find(
-                    (candidate) => !candidate.softClosing,
-                );
+            }
+            else if (this.activePaneId === paneId) {
+                const survivor = Array.from(this.tabs.values()).find((candidate) => !candidate.softClosing);
                 if (survivor) {
                     this.switchTab?.(survivor.paneId);
                 }
             }
         }
     }
-
     // Actually kill the PTY, close WS, dispose term, drop from Map.
     // Called by the grace timer, by the cap-forced finalize, or by
     // closeTab's "user clicked × twice" path. Idempotent: a single
@@ -8641,15 +8626,16 @@ export class TabManager {
     // guarded so DELETE fires exactly once per tab.
     finalizeCloseTab(paneId, { backendId } = {}) {
         const tab = this.tabs.get(paneId);
-        if (!tab) return;
+        if (!tab)
+            return;
         // Re-entry guard: if finalization is already in progress (from
         // another entry point), don't fire a second DELETE or run the
         // cleanup twice. We use this flag instead of relying on
         // tabs.delete() as the gate, because the delete happens *after*
         // the fetch — the second caller would otherwise race the first.
-        if (tab.finalizing) return;
+        if (tab.finalizing)
+            return;
         tab.finalizing = true;
-
         // Kill the server-side PTY process. We previously swallowed
         // failures with .catch(() => {}) — that hid the actual user
         // bug ("process never gets closed"). Now we surface non-2xx and
@@ -8658,37 +8644,34 @@ export class TabManager {
         // network blip, or 5xx). The 30-min detach grace timer is the
         // server-side backstop either way.
         if (tab.coder !== 'pi-rpc' && !tab.isKanban && !tab.isReview) {
-            const capturedToast =
-                typeof this.app?.captureToastContext === 'function'
-                    ? this.app.captureToastContext()
-                    : typeof this.app?.showToast === 'function'
-                      ? (message, options) => this.app.showToast(message, options)
-                      : null;
+            const capturedToast = (typeof this.app?.captureToastContext === 'function'
+                ? this.app.captureToastContext()
+                : typeof this.app?.showToast === 'function'
+                    ? (message, options) => this.app.showToast(message, options)
+                    : null);
             const targetBackend = backendId || getEmbeddedProfileId();
             const init = targetBackend
-                ? { method: 'DELETE', headers: { 'X-Phi-Backend': targetBackend } }
+                ? {
+                    method: 'DELETE',
+                    headers: { 'X-Phi-Backend': targetBackend },
+                }
                 : { method: 'DELETE' };
             fetch(`/api/terminals/${paneId}`, init)
                 .then((res) => {
-                    if (!res.ok && res.status !== 404) {
-                        // 404 is fine — it just means another caller already
-                        // killed the instance. Anything else (5xx, network,
-                        // CORS) is worth telling the user about.
-                        throw new Error(`DELETE returned ${res.status}`);
-                    }
-                })
+                if (!res.ok && res.status !== 404) {
+                    // 404 is fine — it just means another caller already
+                    // killed the instance. Anything else (5xx, network,
+                    // CORS) is worth telling the user about.
+                    throw new Error(`DELETE returned ${res.status}`);
+                }
+            })
                 .catch((err) => {
-                    console.error('[tab] failed to kill PTY for', paneId, err);
-                    capturedToast?.(
-                        `Could not close "${tab.title || paneId}" on the server — the underlying process may still be running. Try "Restart phi" if it persists.`,
-                        { type: 'error', duration: 8000 },
-                    );
-                });
+                console.error('[tab] failed to kill PTY for', paneId, err);
+                capturedToast?.(`Could not close "${tab.title || paneId}" on the server — the underlying process may still be running. Try "Restart phi" if it persists.`, { type: 'error', duration: 8000 });
+            });
         }
-
         this.disposeTabClient(paneId, { preserveStorage: false });
     }
-
     flushPendingCloses(backendId) {
         for (const tab of Array.from(this.tabs.values())) {
             if (tab.softClosing) {
@@ -8696,7 +8679,6 @@ export class TabManager {
             }
         }
     }
-
     detachAll({ flushBackendId } = {}) {
         this.saveActiveDraft?.();
         this.flushPendingCloses(flushBackendId);
@@ -8716,10 +8698,8 @@ export class TabManager {
         this._refreshOverflowDropdown?.();
         this.showEmptyState?.();
     }
-
     // Closing-tab selection is handled immediately by _selectTabAfterClose;
     // the grace timer only finalizes the already-hidden tab.
-
     showEmptyState() {
         const el = document.getElementById('empty-state');
         if (el) {
@@ -8730,62 +8710,49 @@ export class TabManager {
             }
         }
     }
-
     hideEmptyState() {
         const el = document.getElementById('empty-state');
-        if (el) el.classList.add('hidden');
+        if (el)
+            el.classList.add('hidden');
     }
-
     // ---- Tab list selector + workspace grouping --------------------
     //
     // The tab-list button stays available for all open tabs and the
     // separate Closing tabs section; its tooltip reports clipping.
-
     updateTabOverflow() {
         const strip = document.getElementById('tabs-container');
         const btn = document.getElementById('tab-overflow-btn');
-        if (!strip || !btn) return;
-
-        const closingCount = Array.from(this.tabs?.values?.() || []).filter(
-            (tab) => tab.softClosing,
-        ).length;
+        if (!strip || !btn)
+            return;
+        const closingCount = Array.from(this.tabs?.values?.() || []).filter((tab) => tab.softClosing).length;
         // Count live tabs whose right edge is clipped. Soft-closed tabs
         // remain in the DOM to preserve their order, but are not strip tabs.
         const stripRect = strip.getBoundingClientRect();
         let hiddenCount = 0;
         for (const tabEl of strip.querySelectorAll('.tab')) {
-            if (tabEl.classList.contains('soft-closed')) continue;
+            if (tabEl.classList.contains('soft-closed'))
+                continue;
             const tabRect = tabEl.getBoundingClientRect();
-            if (tabRect.left >= stripRect.right - 1) hiddenCount += 1;
-            else if (
-                tabRect.right > stripRect.right + 1 &&
+            if (tabRect.left >= stripRect.right - 1)
+                hiddenCount += 1;
+            else if (tabRect.right > stripRect.right + 1 &&
                 tabRect.left > stripRect.left &&
-                tabRect.right - stripRect.right > tabRect.width / 2
-            ) {
+                tabRect.right - stripRect.right > tabRect.width / 2) {
                 hiddenCount += 1;
             }
         }
-
         const details = [];
         if (hiddenCount > 0)
-            details.push(
-                `${hiddenCount} more tab${hiddenCount === 1 ? '' : 's'}`,
-            );
+            details.push(`${hiddenCount} more tab${hiddenCount === 1 ? '' : 's'}`);
         if (closingCount > 0)
-            details.push(
-                `${closingCount} closing tab${closingCount === 1 ? '' : 's'}`,
-            );
+            details.push(`${closingCount} closing tab${closingCount === 1 ? '' : 's'}`);
         const label = details.length
             ? `Show tab list (${details.join(', ')})`
             : 'Show tab list';
         btn.title = label;
         btn.setAttribute('aria-label', label);
-        btn.setAttribute(
-            'aria-expanded',
-            btn.getAttribute('aria-expanded') === 'true' ? 'true' : 'false',
-        );
+        btn.setAttribute('aria-expanded', btn.getAttribute('aria-expanded') === 'true' ? 'true' : 'false');
     }
-
     // ----- Hover preview card -------------------------------------------------
     //
     // A single shared element (#tab-hiero-preview, appended to <body>) shows
@@ -8795,7 +8762,8 @@ export class TabManager {
     // we moved the pool from 12 generic glyphs to 96 distinct Egyptian
     // hieroglyphs, where each glyph is much more memorable.
     _initHieroPreview() {
-        if (this._hieroPreview) return;
+        if (this._hieroPreview)
+            return;
         const el = document.createElement('div');
         el.className = 'tab-hiero-preview';
         el.id = 'tab-hiero-preview';
@@ -8816,10 +8784,7 @@ export class TabManager {
         this._hieroPreviewLabel = el.querySelector('.tab-hiero-preview-label');
         this._hieroPreviewPath = el.querySelector('.tab-hiero-preview-path');
         this._hieroPreviewCount = el.querySelector('.tab-hiero-preview-count');
-        this._hieroPreviewStatus = el.querySelector(
-            '.tab-hiero-preview-status',
-        );
-
+        this._hieroPreviewStatus = el.querySelector('.tab-hiero-preview-status');
         // Event delegation on the tabs container - one listener, works for
         // every tab and any tab created later (event bubbles up).
         if (this.tabsContainer) {
@@ -8828,13 +8793,17 @@ export class TabManager {
             // pointer actually enters/leaves the tab, so the preview
             // (and its shimmer) doesn't replay on intra-tab movement.
             this.tabsContainer.addEventListener('mouseover', (e) => {
-                const tabEl = e.target.closest('.tab');
-                if (tabEl && !tabEl.contains(e.relatedTarget))
+                const target = e.target;
+                const tabEl = target?.closest('.tab');
+                const related = e.relatedTarget;
+                if (tabEl && !tabEl.contains(related))
                     this._showHieroPreview(tabEl);
             });
             this.tabsContainer.addEventListener('mouseout', (e) => {
-                const tabEl = e.target.closest('.tab');
-                if (tabEl && !tabEl.contains(e.relatedTarget))
+                const target = e.target;
+                const tabEl = target?.closest('.tab');
+                const related = e.relatedTarget;
+                if (tabEl && !tabEl.contains(related))
                     this._hideHieroPreview();
             });
         }
@@ -8844,13 +8813,17 @@ export class TabManager {
         const sessionList = document.getElementById('session-list');
         if (sessionList) {
             sessionList.addEventListener('mouseover', (e) => {
-                const headerEl = e.target.closest('.worktree-header');
-                if (headerEl && !headerEl.contains(e.relatedTarget))
+                const target = e.target;
+                const headerEl = target?.closest('.worktree-header');
+                const related = e.relatedTarget;
+                if (headerEl && !headerEl.contains(related))
                     this._showWorktreeHieroPreview(headerEl);
             });
             sessionList.addEventListener('mouseout', (e) => {
-                const headerEl = e.target.closest('.worktree-header');
-                if (headerEl && !headerEl.contains(e.relatedTarget))
+                const target = e.target;
+                const headerEl = target?.closest('.worktree-header');
+                const related = e.relatedTarget;
+                if (headerEl && !headerEl.contains(related))
                     this._hideHieroPreview();
             });
         }
@@ -8859,26 +8832,23 @@ export class TabManager {
         window.addEventListener('scroll', () => this._hideHieroPreview(), true);
         window.addEventListener('resize', () => this._hideHieroPreview());
     }
-
     // Show the preview for a tab. Anchor: below the tab (default large size).
     _showHieroPreview(tabEl) {
         const p = this._hieroPreview;
-        if (!p) return;
-        const paneId = tabEl.dataset.paneId;
+        if (!p)
+            return;
+        const paneId = tabEl.dataset.paneId ?? '';
         const tab = this.tabs.get(paneId);
         // Even if we don't have a tab record yet (mid-createTab), we can
         // still show what we know from the DOM data attributes.
         const glyph = tabEl.dataset.worktreeGlyph || '◆';
         const label = (tab && this.getProjectWorktreeLabel(tab.cwd)) || '—';
         const path = tab?.cwd || tabEl.dataset.cwd || '';
-
         // Title read at hover-time, never stashed, so renames and truncated
         // tab strips always resolve to the current full title. Mid-createTab
         // the Map entry doesn't exist yet - the .tab-title span does.
         const titleSpan = tabEl.querySelector('.tab-title');
-        const titleText =
-            tab?.title || (titleSpan ? titleSpan.textContent : '');
-
+        const titleText = tab?.title || (titleSpan ? titleSpan.textContent : '');
         // Live status line - coder-agnostic, from the client-side busy/idle
         // tracking every PTY tab gets (isBusy set on output frames, cleared
         // by the idle sweep). Review/kanban tabs have neither field, so the
@@ -8888,17 +8858,17 @@ export class TabManager {
         if (tab?.isBusy) {
             busy = true;
             statusText = `● busy ${formatDurationMin(Date.now() - (tab.busyStartTime || Date.now()))}`;
-        } else if (tab && typeof tab.lastOutputAt === 'number') {
+        }
+        else if (tab && typeof tab.lastOutputAt === 'number') {
             statusText = `idle · last output ${formatDurationMin(Date.now() - tab.lastOutputAt)} ago`;
         }
-
         // Count tabs sharing this hieroglyph - lets users see "you have
         // 3 tabs in this worktree" at a glance from the preview.
         let count = 0;
         for (const t of this.tabs.values()) {
-            if (t.tabEl && t.tabEl.dataset.worktreeGlyph === glyph) count++;
+            if (t.tabEl && t.tabEl.dataset.worktreeGlyph === glyph)
+                count++;
         }
-
         this._populateHieroPreview({
             glyph,
             titleText,
@@ -8907,41 +8877,40 @@ export class TabManager {
             sourceEl: tabEl,
             anchor: 'below',
             size: 'large',
-            countText:
-                count > 1
-                    ? `${count} tabs in this worktree`
-                    : count === 1
-                      ? '1 tab in this worktree'
-                      : '',
+            countText: count > 1
+                ? `${count} tabs in this worktree`
+                : count === 1
+                    ? '1 tab in this worktree'
+                    : '',
             statusText,
             busy,
         });
     }
-
     // Show the preview for a sidebar worktree header. Anchor: right of the
     // header (medium size so it doesn't compete with the tab preview for
     // visual weight).
     _showWorktreeHieroPreview(headerEl) {
         const p = this._hieroPreview;
-        if (!p) return;
+        if (!p)
+            return;
         const section = headerEl.closest('.worktree-section');
-        const path = section ? section.getAttribute('data-worktree-path') : '';
+        const path = (section ? section.getAttribute('data-worktree-path') : '') ?? '';
         const glyphEl = headerEl.querySelector('.worktree-section-glyph');
         const glyph = glyphEl ? glyphEl.textContent : '◆';
         const nameEl = headerEl.querySelector('.worktree-name');
         const label = nameEl
             ? nameEl.textContent
             : path
-              ? path.split(/[/\\]/).pop()
-              : '—';
-
+                ? path.split(/[/\\]/).pop()
+                : '—';
         // How many tabs would land in this worktree if opened here? Lets
         // the user gauge whether the worktree already has a session
         // before clicking. Cheap: just count open tabs whose cwd matches.
         let count = 0;
         if (path) {
             for (const t of this.tabs.values()) {
-                if (t.cwd === path) count++;
+                if (t.cwd === path)
+                    count++;
             }
         }
         this._populateHieroPreview({
@@ -8951,42 +8920,28 @@ export class TabManager {
             sourceEl: headerEl,
             anchor: 'right',
             size: 'medium',
-            countText:
-                count > 0
-                    ? `${count} tab${count === 1 ? '' : 's'} open in this worktree`
-                    : 'no tabs open in this worktree',
+            countText: count > 0
+                ? `${count} tab${count === 1 ? '' : 's'} open in this worktree`
+                : 'no tabs open in this worktree',
         });
     }
-
     // Common populate + show path. Sets the card text + position based
     // on anchor (below|right) and size (large|medium). titleText/statusText
     // are tab-hover-only; worktree headers leave them empty and the rows
     // collapse via :empty CSS.
-    _populateHieroPreview({
-        glyph,
-        titleText,
-        label,
-        path,
-        sourceEl,
-        anchor,
-        size,
-        countText,
-        statusText,
-        busy,
-    }) {
+    _populateHieroPreview({ glyph, titleText, label, path, sourceEl, anchor, size, countText, statusText, busy, }) {
         const p = this._hieroPreview;
-        if (!p) return;
+        if (!p)
+            return;
         if (isCoarseViewport()) {
             this._hideHieroPreview();
             return;
         }
-
         // Toggle the size modifier. Only one size at a time so the
         // transition between sources is clean (e.g., user hovers a
         // tab then a worktree header).
         p.classList.toggle('tab-hiero-preview-medium', size === 'medium');
         p.classList.toggle('is-busy', !!busy);
-
         this._hieroPreviewSourceEl = sourceEl;
         this._hieroPreviewGlyph.textContent = glyph;
         this._hieroPreviewTitle.textContent = titleText || '';
@@ -8994,7 +8949,6 @@ export class TabManager {
         this._hieroPreviewPath.textContent = path || '';
         this._hieroPreviewCount.textContent = countText || '';
         this._hieroPreviewStatus.textContent = statusText || '';
-
         // Position. Fixed positioning uses viewport coords, so we don't
         // need to account for scroll. Both anchors clamp so the card
         // never leaves the viewport.
@@ -9007,7 +8961,8 @@ export class TabManager {
             // Worktree side: card is medium so its width is mostly
             // content-driven; CSS caps at 260px.
             p.style.minWidth = '';
-        } else {
+        }
+        else {
             // below
             p.style.left = `${Math.max(8, Math.min(window.innerWidth - 200, rect.left))}px`;
             p.style.top = `${rect.bottom + 8}px`;
@@ -9015,53 +8970,46 @@ export class TabManager {
             // paths don't wrap awkwardly. CSS caps at 320px.
             p.style.minWidth = `${Math.max(180, rect.width)}px`;
         }
-
         // Re-trigger the shimmer keyframe by clearing and re-setting
         // animation - forces a reflow so the animation restarts each
         // hover instead of only playing on first show.
-        this._hieroPreviewGlyph.style.animation = 'none';
-        void this._hieroPreviewGlyph.offsetWidth;
-        this._hieroPreviewGlyph.style.animation = '';
-
+        const glyphEl = this._hieroPreviewGlyph;
+        glyphEl.style.animation = 'none';
+        void glyphEl.offsetWidth;
+        glyphEl.style.animation = '';
         p.classList.add('visible');
     }
-
     _hideHieroPreview() {
         if (this._hieroPreview) {
             this._hieroPreview.classList.remove('visible');
         }
         this._hieroPreviewSourceEl = null;
     }
-
     _refreshOverflowDropdown() {
         if (!this._overflowDropdownHidden()) {
             this._buildOverflowDropdown({ preserveState: true });
         }
         const drawer = document.getElementById('sidebar-panel');
-        if (
-            drawer?.classList.contains('drawer-open') &&
-            drawer.dataset.panelMode === 'tabs'
-        ) {
+        if (drawer?.classList.contains('drawer-open') &&
+            drawer.dataset.panelMode === 'tabs') {
             this._buildDrawerTabsBody({ preserveState: true });
         }
     }
-
     // The mobile drawer renders the same grouped tree as the desktop
     // dropdown. One owner for the target and its close callback, so a row
     // tap can never fall through to _closeOverflowDropdown().
-    _buildDrawerTabsBody({ preserveState = false } = {}) {
+    _buildDrawerTabsBody({ preserveState = false, } = {}) {
         const body = document.getElementById('drawer-tabs-body');
-        if (!body) return null;
+        if (!body)
+            return null;
         return this._buildOverflowDropdown({
             preserveState,
             target: body,
-            onClose: () =>
-                document
-                    .getElementById('sidebar-panel')
-                    ?.classList.remove('drawer-open'),
+            onClose: () => document
+                .getElementById('sidebar-panel')
+                ?.classList.remove('drawer-open'),
         });
     }
-
     // Builds the shared ● completion-attention marker for tab-list rows
     // and tree summaries. The strip indicator in _setTabAttention predates
     // this helper and keeps its own construction.
@@ -9073,37 +9021,32 @@ export class TabManager {
         marker.setAttribute('aria-label', label);
         return marker;
     }
-
-    _buildOverflowDropdown({ preserveState = false, target, onClose } = {}) {
-        const dropdown =
-            target || document.getElementById('tab-overflow-dropdown');
-        if (!dropdown) return null;
+    _buildOverflowDropdown({ preserveState = false, target = null, onClose = null, } = {}) {
+        const dropdown = target || document.getElementById('tab-overflow-dropdown');
+        if (!dropdown)
+            return null;
         const close = onClose || (() => this._closeOverflowDropdown());
-
         const collapsedKeys = new Set();
         let savedScrollTop = 0;
         let focusedKey = null;
         let focusedPopup = false;
         if (preserveState) {
             savedScrollTop = dropdown.scrollTop;
-            for (const disclosure of dropdown.querySelectorAll(
-                'details[data-overflow-group-key]',
-            )) {
+            for (const disclosure of dropdown.querySelectorAll('details[data-overflow-group-key]')) {
                 if (!disclosure.open) {
-                    collapsedKeys.add(disclosure.dataset.overflowGroupKey);
+                    collapsedKeys.add(disclosure.dataset.overflowGroupKey ?? '');
                 }
             }
             const active = document.activeElement;
             if (active && dropdown.contains(active)) {
                 focusedPopup = active === dropdown;
-                focusedKey = active.dataset?.overflowFocusKey || null;
+                focusedKey =
+                    active.dataset.overflowFocusKey || null;
             }
         }
-
         dropdown.replaceChildren();
         const entries = Array.from(this.tabs?.entries?.() || []);
-        const faviconFor = (tab) =>
-            tab.faviconUrl ||
+        const faviconFor = (tab) => tab.faviconUrl ||
             tab.tabEl?.querySelector('.tab-favicon')?.getAttribute('src') ||
             '';
         const appendHeader = (iconText, labelText, itemCount, extra = '') => {
@@ -9121,12 +9064,7 @@ export class TabManager {
             header.append(icon, text, count);
             dropdown.appendChild(header);
         };
-        const appendRow = (
-            parent,
-            paneId,
-            tab,
-            { closing = false } = {},
-        ) => {
+        const appendRow = (parent, paneId, tab, { closing = false } = {}) => {
             const row = document.createElement('div');
             row.className = `hostname-dropdown-row${closing ? ' tab-overflow-closing-row' : ''}`;
             row.dataset.paneId = paneId;
@@ -9134,7 +9072,6 @@ export class TabManager {
                 row.classList.add('active');
             if (!closing && tab.isAttention)
                 row.classList.add('has-attention');
-
             const selectBtn = document.createElement('button');
             selectBtn.type = 'button';
             selectBtn.className = 'hostname-dropdown-select-btn';
@@ -9151,14 +9088,8 @@ export class TabManager {
             titleSpan.textContent = tab.title || 'Session';
             selectBtn.append(faviconImg, titleSpan);
             if (!closing && tab.isAttention) {
-                selectBtn.appendChild(
-                    this._makeAttentionMarker(
-                        'hostname-dropdown-attention',
-                        'Needs attention',
-                    ),
-                );
+                selectBtn.appendChild(this._makeAttentionMarker('hostname-dropdown-attention', 'Needs attention'));
             }
-
             if (closing) {
                 const countdown = document.createElement('span');
                 countdown.className =
@@ -9170,14 +9101,14 @@ export class TabManager {
                     this.undoCloseTab(paneId);
                     close();
                 });
-            } else {
+            }
+            else {
                 selectBtn.addEventListener('click', () => {
                     this.switchTab(paneId, { userInitiated: true });
                     close();
                 });
             }
             row.appendChild(selectBtn);
-
             const actionBtn = document.createElement('button');
             actionBtn.type = 'button';
             actionBtn.className = 'hostname-dropdown-close-btn';
@@ -9187,18 +9118,16 @@ export class TabManager {
             ]);
             actionBtn.textContent = closing ? '↻' : '×';
             actionBtn.title = closing ? 'Undo close' : 'Close session';
-            actionBtn.setAttribute(
-                'aria-label',
-                closing
-                    ? `Undo close ${tab.title || 'session'}`
-                    : `Close ${tab.title || 'session'}`,
-            );
+            actionBtn.setAttribute('aria-label', closing
+                ? `Undo close ${tab.title || 'session'}`
+                : `Close ${tab.title || 'session'}`);
             actionBtn.addEventListener('click', (event) => {
                 event.stopPropagation();
                 if (closing) {
                     this.undoCloseTab(paneId);
                     close();
-                } else {
+                }
+                else {
                     this.closeTab(paneId);
                 }
             });
@@ -9206,28 +9135,18 @@ export class TabManager {
             parent.appendChild(row);
             return row;
         };
-
         const closingTabs = entries.filter(([, tab]) => tab.softClosing);
         if (closingTabs.length > 0) {
-            appendHeader(
-                '↻',
-                'Closing tabs',
-                closingTabs.length,
-                ' tab-overflow-closing-group',
-            );
+            appendHeader('↻', 'Closing tabs', closingTabs.length, ' tab-overflow-closing-group');
             for (const [paneId, tab] of closingTabs) {
                 appendRow(dropdown, paneId, tab, { closing: true });
             }
         }
-
         const liveEntries = entries.filter(([, tab]) => !tab.softClosing);
-        const hasUnread = (items) =>
-            items.some((entry) => entry[1].isAttention);
+        const hasUnread = (items) => items.some((entry) => entry[1].isAttention);
         // Unread-bearing groups first; the existing group order stays
         // secondary and each partition keeps its order (stable).
-        const workspaceGroups = this._workspaceTabGroups(
-            liveEntries,
-        ).filter((group) => group.entries.length > 0);
+        const workspaceGroups = this._workspaceTabGroups(liveEntries).filter((group) => group.entries.length > 0);
         const orderedWorkspaceGroups = [
             ...workspaceGroups.filter((group) => hasUnread(group.entries)),
             ...workspaceGroups.filter((group) => !hasUnread(group.entries)),
@@ -9257,27 +9176,18 @@ export class TabManager {
             const workspaceCount = document.createElement('span');
             workspaceCount.className = 'tab-overflow-count';
             workspaceCount.textContent = `${workspaceGroup.entries.length} tab${workspaceGroup.entries.length === 1 ? '' : 's'}`;
-            workspaceSummary.append(
-                workspaceChevron,
-                workspaceLabel,
-                workspaceCount,
-            );
+            workspaceSummary.append(workspaceChevron, workspaceLabel, workspaceCount);
             if (hasUnread(workspaceGroup.entries)) {
                 workspace.classList.add('has-attention');
-                workspaceSummary.appendChild(
-                    this._makeAttentionMarker(
-                        'tab-overflow-attention',
-                        'Contains tabs needing attention',
-                    ),
-                );
+                workspaceSummary.appendChild(this._makeAttentionMarker('tab-overflow-attention', 'Contains tabs needing attention'));
             }
             workspace.appendChild(workspaceSummary);
             dropdown.appendChild(workspace);
-
             const worktrees = new Map();
             for (const entry of workspaceGroup.entries) {
                 const cwd = entry[1].cwd || '';
-                if (!worktrees.has(cwd)) worktrees.set(cwd, []);
+                if (!worktrees.has(cwd))
+                    worktrees.set(cwd, []);
                 worktrees.get(cwd).push(entry);
             }
             const worktreeGroups = Array.from(worktrees, ([cwd, items]) => ({
@@ -9287,12 +9197,8 @@ export class TabManager {
             }));
             const worktreeLabelCounts = new Map();
             for (const group of worktreeGroups) {
-                worktreeLabelCounts.set(
-                    group.label,
-                    (worktreeLabelCounts.get(group.label) || 0) + 1,
-                );
+                worktreeLabelCounts.set(group.label, (worktreeLabelCounts.get(group.label) || 0) + 1);
             }
-
             const orderedWorktreeGroups = [
                 ...worktreeGroups.filter((group) => hasUnread(group.items)),
                 ...worktreeGroups.filter((group) => !hasUnread(group.items)),
@@ -9312,7 +9218,8 @@ export class TabManager {
                 const worktreeSummary = document.createElement('summary');
                 worktreeSummary.dataset.overflowFocusKey =
                     worktree.dataset.overflowGroupKey;
-                if (cwd) worktreeSummary.title = cwd;
+                if (cwd)
+                    worktreeSummary.title = cwd;
                 const chevron = document.createElement('span');
                 chevron.className = 'tab-overflow-chevron';
                 chevron.setAttribute('aria-hidden', 'true');
@@ -9322,7 +9229,7 @@ export class TabManager {
                 glyph.setAttribute('aria-hidden', 'true');
                 glyph.textContent =
                     worktreeGroup.items[0][1].tabEl?.dataset.worktreeGlyph ||
-                    worktreeGlyph(cwd);
+                        worktreeGlyph(cwd);
                 const worktreeLabel = document.createElement('span');
                 worktreeLabel.className = 'tab-overflow-summary-label';
                 worktreeLabel.textContent =
@@ -9332,75 +9239,45 @@ export class TabManager {
                 const worktreeCount = document.createElement('span');
                 worktreeCount.className = 'tab-overflow-count';
                 worktreeCount.textContent = `${worktreeGroup.items.length} tab${worktreeGroup.items.length === 1 ? '' : 's'}`;
-                worktreeSummary.append(
-                    chevron,
-                    glyph,
-                    worktreeLabel,
-                    worktreeCount,
-                );
+                worktreeSummary.append(chevron, glyph, worktreeLabel, worktreeCount);
                 if (hasUnread(worktreeGroup.items)) {
                     worktree.classList.add('has-attention');
-                    worktreeSummary.appendChild(
-                        this._makeAttentionMarker(
-                            'tab-overflow-attention',
-                            'Contains tabs needing attention',
-                        ),
-                    );
+                    worktreeSummary.appendChild(this._makeAttentionMarker('tab-overflow-attention', 'Contains tabs needing attention'));
                 }
                 worktree.appendChild(worktreeSummary);
                 workspace.appendChild(worktree);
                 const orderedItems = [
-                    ...worktreeGroup.items.filter(
-                        ([, tab]) => tab.isAttention,
-                    ),
-                    ...worktreeGroup.items.filter(
-                        ([, tab]) => !tab.isAttention,
-                    ),
+                    ...worktreeGroup.items.filter(([, entry]) => entry.isAttention),
+                    ...worktreeGroup.items.filter(([, entry]) => !entry.isAttention),
                 ];
                 for (const [paneId, tab] of orderedItems) {
                     appendRow(worktree, paneId, tab);
                 }
             }
         }
-
         if (entries.length === 0) {
             const empty = document.createElement('div');
             empty.className = 'tab-overflow-empty';
             empty.textContent = 'No tabs open';
             dropdown.appendChild(empty);
         }
-
         if (preserveState) {
-            for (const disclosure of dropdown.querySelectorAll(
-                'details[data-overflow-group-key]',
-            )) {
-                disclosure.open = !collapsedKeys.has(
-                    disclosure.dataset.overflowGroupKey,
-                );
+            for (const disclosure of dropdown.querySelectorAll('details[data-overflow-group-key]')) {
+                disclosure.open = !collapsedKeys.has(disclosure.dataset.overflowGroupKey ?? '');
             }
             dropdown.scrollTop = savedScrollTop;
             if (focusedPopup) {
                 dropdown.focus({ preventScroll: true });
-            } else if (focusedKey) {
-                const matching = Array.from(
-                    dropdown.querySelectorAll('[data-overflow-focus-key]'),
-                ).find(
-                    (element) =>
-                        element.dataset.overflowFocusKey === focusedKey,
-                );
+            }
+            else if (focusedKey) {
+                const matching = Array.from(dropdown.querySelectorAll('[data-overflow-focus-key]')).find((element) => element.dataset.overflowFocusKey === focusedKey);
                 const isVisible = (element) => {
-                    for (
-                        let ancestor = element.parentElement;
-                        ancestor && ancestor !== dropdown;
-                        ancestor = ancestor.parentElement
-                    ) {
-                        if (
-                            ancestor instanceof HTMLDetailsElement &&
+                    for (let ancestor = element.parentElement; ancestor && ancestor !== dropdown; ancestor = ancestor.parentElement) {
+                        if (ancestor instanceof HTMLDetailsElement &&
                             !ancestor.open &&
                             !(element instanceof HTMLElement &&
                                 element.tagName === 'SUMMARY' &&
-                                element.parentElement === ancestor)
-                        ) {
+                                element.parentElement === ancestor)) {
                             return false;
                         }
                     }
@@ -9408,28 +9285,14 @@ export class TabManager {
                 };
                 if (matching && isVisible(matching)) {
                     matching.focus({ preventScroll: true });
-                } else {
+                }
+                else {
                     const visible = (element) => isVisible(element);
-                    const liveRows = Array.from(
-                        dropdown.querySelectorAll(
-                            '.hostname-dropdown-row:not(.tab-overflow-closing-row)',
-                        ),
-                    ).filter(visible);
-                    const activeRow = liveRows.find((row) =>
-                        row.classList.contains('active'),
-                    );
-                    const fallback =
-                        activeRow?.querySelector(
-                            '.hostname-dropdown-select-btn',
-                        ) ||
-                        liveRows[0]?.querySelector(
-                            '.hostname-dropdown-select-btn',
-                        ) ||
-                        Array.from(
-                            dropdown.querySelectorAll(
-                                '.tab-overflow-closing-row .hostname-dropdown-select-btn',
-                            ),
-                        ).find(visible) ||
+                    const liveRows = Array.from(dropdown.querySelectorAll('.hostname-dropdown-row:not(.tab-overflow-closing-row)')).filter(visible);
+                    const activeRow = liveRows.find((row) => row.classList.contains('active'));
+                    const fallback = activeRow?.querySelector('.hostname-dropdown-select-btn') ||
+                        liveRows[0]?.querySelector('.hostname-dropdown-select-btn') ||
+                        Array.from(dropdown.querySelectorAll('.tab-overflow-closing-row .hostname-dropdown-select-btn')).find(visible) ||
                         dropdown;
                     fallback.focus({ preventScroll: true });
                 }
@@ -9437,55 +9300,48 @@ export class TabManager {
         }
         return dropdown;
     }
-
     _overflowDropdownHidden() {
         const dd = document.getElementById('tab-overflow-dropdown');
         return !dd || dd.classList.contains('hidden');
     }
-
     _focusOverflowDropdownOnOpen(dropdown) {
-        const activeRow = dropdown.querySelector(
-            '.hostname-dropdown-row.active:not(.tab-overflow-closing-row)',
-        );
-        const firstLiveRow = dropdown.querySelector(
-            '.hostname-dropdown-row:not(.tab-overflow-closing-row)',
-        );
-        const undoButton = dropdown.querySelector(
-            '.tab-overflow-closing-row .hostname-dropdown-select-btn',
-        );
+        const activeRow = dropdown.querySelector('.hostname-dropdown-row.active:not(.tab-overflow-closing-row)');
+        const firstLiveRow = dropdown.querySelector('.hostname-dropdown-row:not(.tab-overflow-closing-row)');
+        const undoButton = dropdown.querySelector('.tab-overflow-closing-row .hostname-dropdown-select-btn');
         const row = activeRow || firstLiveRow;
-        const target =
-            row?.querySelector('.hostname-dropdown-select-btn') ||
+        const target = row?.querySelector('.hostname-dropdown-select-btn') ||
             undoButton ||
             dropdown;
         target.focus({ preventScroll: true });
         const targetRow = target.closest('.hostname-dropdown-row');
         targetRow?.scrollIntoView?.({ block: 'nearest' });
     }
-
     _toggleOverflowDropdown() {
         const dd = document.getElementById('tab-overflow-dropdown');
         const btn = document.getElementById('tab-overflow-btn');
-        if (!dd || !btn) return;
+        if (!dd || !btn)
+            return;
         const open = dd.classList.contains('hidden');
         if (open) {
             this._buildOverflowDropdown();
             dd.classList.remove('hidden');
             btn.setAttribute('aria-expanded', 'true');
             this._focusOverflowDropdownOnOpen(dd);
-        } else {
+        }
+        else {
             this._closeOverflowDropdown();
         }
     }
-
     _closeOverflowDropdown({ restoreFocus = false } = {}) {
         const dd = document.getElementById('tab-overflow-dropdown');
         const btn = document.getElementById('tab-overflow-btn');
-        if (dd) dd.classList.add('hidden');
-        if (btn) btn.setAttribute('aria-expanded', 'false');
-        if (restoreFocus) btn?.focus({ preventScroll: true });
+        if (dd)
+            dd.classList.add('hidden');
+        if (btn)
+            btn.setAttribute('aria-expanded', 'false');
+        if (restoreFocus)
+            btn?.focus({ preventScroll: true });
     }
-
     sendInput(tabInfo, payload) {
         // Every PTY writer passes here, including direct terminal typing.
         this._resetPiRecall({ flush: true });
@@ -9493,22 +9349,25 @@ export class TabManager {
             this.app.showToast('Tab is disconnected — input not sent', {
                 type: 'error',
             });
-            if (tabInfo) this._showReconnectOverlay(tabInfo);
+            if (tabInfo)
+                this._showReconnectOverlay(tabInfo);
             return false;
         }
-
         // Track user-initiated commands and cancellation
         if (typeof payload === 'string') {
             if (payload === '\x03' || payload === '\x14') {
                 tabInfo.userTaskActive = false;
                 tabInfo.busyStartTime = null;
-            } else if (payload.includes('\r') || payload.includes('\n')) {
+            }
+            else if (payload.includes('\r') || payload.includes('\n')) {
                 tabInfo.userTaskActive = true;
                 tabInfo.userTaskStartTime = Date.now();
             }
         }
-
-        const ok = tabInfo.ws.sendInput(payload);
+        const socket = tabInfo.ws;
+        const ok = typeof payload === 'string'
+            ? socket?.sendInput(payload)
+            : socket?.sendBinaryInput?.(payload);
         if (!ok) {
             this.app.showToast('Send failed — delivery not confirmed. Check the terminal before retrying.', {
                 type: 'error',
@@ -9518,15 +9377,14 @@ export class TabManager {
         }
         return true;
     }
-
     _initAttachmentControl() {
         const dropup = this.attachmentSourceDropup;
         dropup?.addEventListener('keydown', (event) => {
-            const items = Array.from(
-                dropup.querySelectorAll('[role="menuitem"]'),
-            );
-            if (items.length === 0) return;
-            const currentIndex = items.indexOf(document.activeElement);
+            const items = Array.from(dropup.querySelectorAll('[role="menuitem"]'));
+            if (items.length === 0)
+                return;
+            const focused = document.activeElement;
+            const currentIndex = focused ? items.indexOf(focused) : -1;
             let nextIndex;
             switch (event.key) {
                 case 'ArrowDown':
@@ -9551,7 +9409,9 @@ export class TabManager {
                     return;
             }
             event.preventDefault();
-            items[nextIndex]?.focus({ preventScroll: true });
+            items[nextIndex]?.focus({
+                preventScroll: true,
+            });
         });
         this.inputTextArea?.addEventListener('input', () => {
             const tab = this.getActiveTab();
@@ -9562,7 +9422,8 @@ export class TabManager {
         });
         this.attachInputBtn?.addEventListener('click', () => {
             const tab = this.getActiveTab();
-            if (!tab || tab.coder !== 'pi') return;
+            if (!tab || tab.coder !== 'pi')
+                return;
             if (tab.directMode) {
                 tab.directMode = false;
                 this.updateDirectModeUI(tab);
@@ -9573,20 +9434,10 @@ export class TabManager {
                 scope,
                 owner: this._captureAttachmentOwner(tab, scope),
             };
-            this._toggleDropup(
-                'attachment-source-dropup',
-                this.attachInputBtn,
-                () => this._renderAttachmentSourceDropup(),
-            );
-            this.attachInputBtn.setAttribute(
-                'aria-expanded',
-                String(
-                    !!this.attachmentSourceDropup &&
-                        !this.attachmentSourceDropup.classList.contains(
-                            'hidden',
-                        ),
-                ),
-            );
+            this._toggleDropup('attachment-source-dropup', this.attachInputBtn, () => this._renderAttachmentSourceDropup());
+            const sourceDropup = this.attachmentSourceDropup;
+            this.attachInputBtn?.setAttribute('aria-expanded', String(!!sourceDropup &&
+                !sourceDropup.classList.contains('hidden')));
         });
         this.attachmentFileInput?.addEventListener('change', () => {
             this._takeAttachmentPickerFiles(this.attachmentFileInput);
@@ -9597,22 +9448,27 @@ export class TabManager {
         this.attachmentCameraInput?.addEventListener('change', () => {
             this._takeAttachmentPickerFiles(this.attachmentCameraInput);
         });
-        document.getElementById('attach-server-modal-close')?.addEventListener('click', () => {
+        document
+            .getElementById('attach-server-modal-close')
+            ?.addEventListener('click', () => {
             this._closeAttachmentServerModal();
         });
-        document.getElementById('attach-server-modal-cancel-btn')?.addEventListener('click', () => {
+        document
+            .getElementById('attach-server-modal-cancel-btn')
+            ?.addEventListener('click', () => {
             this._closeAttachmentServerModal();
         });
         this.attachmentServerModal?.addEventListener('click', (event) => {
-            if (event.target === this.attachmentServerModal) this._closeAttachmentServerModal();
+            if (event.target === this.attachmentServerModal)
+                this._closeAttachmentServerModal();
         });
         this._updateAttachmentControl(this.getActiveTab());
     }
-
     _renderAttachmentSourceDropup() {
         const dropup = this.attachmentSourceDropup;
         const selection = this._attachmentPickerOwner;
-        if (!dropup || !selection) return;
+        if (!dropup || !selection)
+            return;
         const mobile = prefersInputBarFocus();
         const header = document.createElement('div');
         header.className = 'dropup-header';
@@ -9623,10 +9479,8 @@ export class TabManager {
                 { label: 'Photos', input: this.attachmentPhotoInput },
                 { label: 'Take Photo', input: this.attachmentCameraInput },
                 { label: 'Files', input: this.attachmentFileInput },
-              ]
-            : [
-                { label: 'Device Files', input: this.attachmentFileInput },
-              ];
+            ]
+            : [{ label: 'Device Files', input: this.attachmentFileInput }];
         for (const source of sources) {
             const row = document.createElement('div');
             row.className = 'dropup-row';
@@ -9640,7 +9494,8 @@ export class TabManager {
                 // Do not await bridge state or an upload before click().
                 this._closeAttachmentSourceDropup();
                 this.attachInputBtn?.focus({ preventScroll: true });
-                if (!source.input) return;
+                if (!source.input)
+                    return;
                 source.input.value = '';
                 source.input.click();
             });
@@ -9657,11 +9512,7 @@ export class TabManager {
             btn.setAttribute('role', 'menuitem');
             btn.addEventListener('click', () => {
                 this._closeAttachmentSourceDropup();
-                this._openAttachmentServerModal(
-                    selection.tab,
-                    selection.owner,
-                    selection.scope,
-                );
+                this._openAttachmentServerModal(selection.tab, selection.owner, selection.scope);
             });
             row.appendChild(btn);
             dropup.appendChild(row);
@@ -9672,10 +9523,17 @@ export class TabManager {
             header.className = 'dropup-header';
             header.textContent = 'Last submitted attachment';
             dropup.appendChild(header);
-            for (const [label, action] of [
-                ['Restore last attachment', () => this._restoreAttachmentSnapshot(selection.tab, submitted, true)],
-                ['Forget local copy', () => void this._forgetAttachmentSnapshot(selection.tab, submitted)],
-            ]) {
+            const actions = [
+                [
+                    'Restore last attachment',
+                    () => this._restoreAttachmentSnapshot(selection.tab, submitted, true),
+                ],
+                [
+                    'Forget local copy',
+                    () => void this._forgetAttachmentSnapshot(selection.tab, submitted),
+                ],
+            ];
+            for (const [label, action] of actions) {
                 const row = document.createElement('div');
                 row.className = 'dropup-row';
                 const btn = document.createElement('button');
@@ -9696,51 +9554,51 @@ export class TabManager {
             preventScroll: true,
         });
     }
-
     _takeAttachmentPickerFiles(input) {
         const files = input?.files ? Array.from(input.files) : [];
         const selection = this._attachmentPickerOwner;
         this._attachmentPickerOwner = null;
-        if (input) input.value = '';
+        if (input)
+            input.value = '';
         // Cancellation changes nothing: an empty selection keeps the draft.
-        if (files.length === 0 || !selection) return;
-        this._stageDeviceAttachments(
-            selection.tab,
-            selection.owner,
-            selection.scope,
-            files,
-        );
+        if (files.length === 0 || !selection)
+            return;
+        this._stageDeviceAttachments(selection.tab, selection.owner, selection.scope, files);
     }
-
     _closeAttachmentSourceDropup() {
         const dropup = this.attachmentSourceDropup;
-        if (!dropup) return false;
+        if (!dropup)
+            return false;
         const wasOpen = !dropup.classList.contains('hidden');
         dropup.classList.add('hidden');
         this.attachInputBtn?.setAttribute('aria-expanded', 'false');
         return wasOpen;
     }
-
     _closeAttachmentOverlays() {
         let changed = this._closeAttachmentSourceDropup();
-        if (changed) this.attachInputBtn?.focus({ preventScroll: true });
-        if (this.attachmentServerModal && !this.attachmentServerModal.classList.contains('hidden')) {
+        if (changed)
+            this.attachInputBtn?.focus({ preventScroll: true });
+        if (this.attachmentServerModal &&
+            !this.attachmentServerModal.classList.contains('hidden')) {
             this._closeAttachmentServerModal();
             changed = true;
         }
         return changed;
     }
-
     _openAttachmentServerModal(tab, owner, scope) {
         const modal = this.attachmentServerModal;
         const host = this.attachmentServerTree;
-        if (!modal || !host || this.tabs?.get(owner.paneId) !== tab) return;
+        if (!modal || !host || this.tabs?.get(owner.paneId) !== tab)
+            return;
         const generation = (this._attachmentServerGeneration || 0) + 1;
         this._attachmentServerGeneration = generation;
         const selection = { tab, owner, scope, generation };
         this._attachmentServerSelection = selection;
         this._attachmentServerEntries = new Map();
-        try { this._attachmentServerTree?.destroy?.(); } catch {}
+        try {
+            this._attachmentServerTree?.destroy?.();
+        }
+        catch { }
         this._attachmentServerTree = null;
         modal.classList.remove('hidden');
         this._setAttachmentServerStatus('');
@@ -9750,62 +9608,75 @@ export class TabManager {
             browse: (path) => this._browseAttachmentServer(selection, path),
             onSelect: (path) => this._selectAttachmentServerFile(selection, path),
         });
-        document.getElementById('attach-server-modal-cancel-btn')?.focus({ preventScroll: true });
+        document
+            .getElementById('attach-server-modal-cancel-btn')
+            ?.focus({ preventScroll: true });
     }
-
     _closeAttachmentServerModal() {
-        this._attachmentServerGeneration = (this._attachmentServerGeneration || 0) + 1;
+        this._attachmentServerGeneration =
+            (this._attachmentServerGeneration || 0) + 1;
         this._attachmentServerSelection = null;
-        try { this._attachmentServerTree?.destroy?.(); } catch {}
+        try {
+            this._attachmentServerTree?.destroy?.();
+        }
+        catch { }
         this._attachmentServerTree = null;
         this.attachmentServerModal?.classList.add('hidden');
-        if (this.attachInputBtn?.isConnected) this.attachInputBtn.focus({ preventScroll: true });
+        if (this.attachInputBtn?.isConnected)
+            this.attachInputBtn.focus({ preventScroll: true });
     }
-
     _setAttachmentServerStatus(text) {
-        if (this.attachmentServerStatus) this.attachmentServerStatus.textContent = text || '';
+        if (this.attachmentServerStatus)
+            this.attachmentServerStatus.textContent = text || '';
     }
-
     _attachmentServerCacheKey(owner, path) {
         return `phi_attach_browse_${this._attachmentOwnerKey(owner)} ${path}`;
     }
-
     _readAttachmentServerCache(owner, path) {
         const memoryKey = `${this._attachmentOwnerKey(owner)} ${path}`;
         const memory = this._attachmentServerMemory?.get(memoryKey);
-        if (memory?.listing && Array.isArray(memory.listing.entries)) return memory;
+        if (memory?.listing && Array.isArray(memory.listing.entries))
+            return memory;
         try {
             const raw = localStorage.getItem(this._attachmentServerCacheKey(owner, path));
-            if (!raw) return null;
+            if (!raw)
+                return null;
             const parsed = JSON.parse(raw);
-            if (!parsed?.listing || !Array.isArray(parsed.listing.entries)) return null;
+            if (!parsed?.listing || !Array.isArray(parsed.listing.entries))
+                return null;
             return parsed;
-        } catch {
+        }
+        catch {
             return null;
         }
     }
-
     async _browseAttachmentServer(selection, path) {
         const current = () => this._attachmentServerSelection === selection;
         const record = (listing) => {
-            if (!current()) return;
+            if (!current())
+                return;
             for (const entry of listing.entries || []) {
-                if (entry && entry.kind === 'file' && typeof entry.path === 'string') {
+                if (entry &&
+                    entry.kind === 'file' &&
+                    typeof entry.path === 'string') {
                     this._attachmentServerEntries.set(entry.path, entry);
                 }
             }
         };
         const serveCached = (why) => {
             const cached = this._readAttachmentServerCache(selection.owner, path);
-            if (!cached) return null;
+            if (!cached)
+                return null;
             record(cached.listing);
-            if (current()) this._setAttachmentServerStatus(`${why} Showing a cached listing.`);
+            if (current())
+                this._setAttachmentServerStatus(`${why} Showing a cached listing.`);
             return cached.listing;
         };
         const offline = this._attachmentNetworkOffline();
         const cached = serveCached(offline ? 'Offline.' : 'Refreshing.');
         if (offline) {
-            if (cached) return cached;
+            if (cached)
+                return cached;
             throw new Error('offline');
         }
         const refresh = (async () => {
@@ -9813,34 +9684,42 @@ export class TabManager {
                 const listing = await browseServerFiles({ ...selection.owner, scope: selection.scope }, path);
                 record(listing);
                 const saved = { at: Date.now(), listing };
-                if (!this._attachmentServerMemory) this._attachmentServerMemory = new Map();
+                if (!this._attachmentServerMemory)
+                    this._attachmentServerMemory = new Map();
                 this._attachmentServerMemory.set(`${this._attachmentOwnerKey(selection.owner)} ${path}`, saved);
                 try {
                     const raw = JSON.stringify(saved);
-                    if (raw.length < 200000) localStorage.setItem(this._attachmentServerCacheKey(selection.owner, path), raw);
-                } catch {}
+                    if (raw.length < 200000)
+                        localStorage.setItem(this._attachmentServerCacheKey(selection.owner, path), raw);
+                }
+                catch { }
                 if (current()) {
-                    if (cached) this._attachmentServerTree?.updateListing(listing);
-                    this._setAttachmentServerStatus(listing.truncated ? 'Showing the first entries; the listing was truncated.' : '');
+                    if (cached)
+                        this._attachmentServerTree?.updateListing(listing);
+                    this._setAttachmentServerStatus(listing.truncated
+                        ? 'Showing the first entries; the listing was truncated.'
+                        : '');
                 }
                 return listing;
-            } catch (error) {
+            }
+            catch (error) {
                 const fallback = serveCached('Refresh failed.');
-                if (fallback) return fallback;
+                if (fallback)
+                    return fallback;
                 throw error;
             }
         })();
         return cached || refresh;
     }
-
     _selectAttachmentServerFile(selection, path) {
-        if (this._attachmentServerSelection !== selection) return;
+        if (this._attachmentServerSelection !== selection)
+            return;
         const entry = this._attachmentServerEntries.get(path);
-        if (!entry || entry.kind !== 'file' || !entry.fingerprint) return;
+        if (!entry || entry.kind !== 'file' || !entry.fingerprint)
+            return;
         this._closeAttachmentServerModal();
         this._stageServerAttachment(selection.tab, selection.owner, selection.scope, entry);
     }
-
     _stageServerAttachment(tab, owner, scope, entry) {
         if (this.tabs?.get(owner.paneId) !== tab || tab.isDead === true) {
             this.app?.showToast?.('The original Pi pane is no longer available.', { type: 'error' });
@@ -9852,7 +9731,9 @@ export class TabManager {
             : [];
         const staged = current.filter((attachment) => attachment.phiAttachment);
         const stagedBytes = staged.reduce((sum, attachment) => sum + (attachment.sizeBytes || 0), 0);
-        const size = Number.isFinite(entry.sizeBytes) ? entry.sizeBytes : 0;
+        const size = Number.isFinite(entry.sizeBytes)
+            ? (entry.sizeBytes ?? 0)
+            : 0;
         const item = {
             id: newAttachmentID(),
             name: entry.name || 'attachment',
@@ -9869,7 +9750,9 @@ export class TabManager {
             serverFingerprint: entry.fingerprint,
             owner,
         };
-        if (size > 25 * 1024 * 1024 || staged.length >= 8 || stagedBytes + size > 50 * 1024 * 1024) {
+        if (size > 25 * 1024 * 1024 ||
+            staged.length >= 8 ||
+            stagedBytes + size > 50 * 1024 * 1024) {
             item.uploadState = 'error';
             item.errorReason = 'limit';
         }
@@ -9882,7 +9765,9 @@ export class TabManager {
             }
             this._renderAttachmentStrip();
         }
-        tab._attachmentNotice = this._attachmentStorageWarning || 'Saving attachment to this device…';
+        tab._attachmentNotice =
+            this._attachmentStorageWarning ||
+                'Saving attachment to this device…';
         this._renderAttachmentStatus(tab);
         const save = this.saveTabDraft(tab);
         if (item.uploadState === 'error') {
@@ -9891,8 +9776,9 @@ export class TabManager {
         }
         void this._refreshAttachmentContext(tab, owner, scope);
         void Promise.resolve(save).then(async (result) => {
-            if (!this._attachmentItemIsCurrent(tab, item)) return;
-            if (result?.conflict) {
+            if (!this._attachmentItemIsCurrent(tab, item))
+                return;
+            if (result && typeof result === 'object' && result.conflict) {
                 item.uploadState = 'error';
                 item.errorReason = 'storage';
                 this._saveAttachmentTab(tab);
@@ -9901,29 +9787,33 @@ export class TabManager {
             void this._snapshotServerAttachment(tab, item, scope);
         });
     }
-
     async _snapshotServerAttachment(tab, item, scope) {
-        if (!item?.owner || !item.serverPath || !item.serverFingerprint || !this._attachmentItemIsCurrent(tab, item)) return;
-        if (
-            this.getActiveTab() !== tab ||
+        if (!item?.owner ||
+            !item.serverPath ||
+            !item.serverFingerprint ||
+            !this._attachmentItemIsCurrent(tab, item))
+            return;
+        if (this.getActiveTab() !== tab ||
             !this.attachmentStore.isActive(item.owner) ||
-            !this._attachmentOwnerCurrent(tab, item.owner, scope)
-        ) {
-            tab._attachmentNotice = 'Upload is parked for its original Phi backend. Switch back to continue.';
+            !this._attachmentOwnerCurrent(tab, item.owner, scope ?? null)) {
+            tab._attachmentNotice =
+                'Upload is parked for its original Phi backend. Switch back to continue.';
             this._renderAttachmentStatus(tab);
             return;
         }
         if (this._attachmentNetworkOffline()) {
             item.uploadState = 'unknown';
             item.errorReason = 'uncertain';
-            tab._attachmentNotice = 'Upload is waiting for a network connection. Your draft is still here.';
+            tab._attachmentNotice =
+                'Upload is waiting for a network connection. Your draft is still here.';
             this._saveAttachmentTab(tab);
             return;
         }
         // Staging leaves the item waiting while the direct snapshot call
         // and a context-refresh recovery race to start it; the pending
         // flag serializes them like _attachmentUploadPending does.
-        if (item._attachmentSnapshotPending) return;
+        if (item._attachmentSnapshotPending)
+            return;
         item._attachmentSnapshotPending = true;
         // The server admits two concurrent ingestions (device PUT or
         // server snapshot) per its store pool; extras stay waiting and
@@ -9938,21 +9828,25 @@ export class TabManager {
             return;
         }
         const controller = new AbortController();
-        this._attachmentRequestScopes.set(item.id, { scope, controller });
+        if (scope)
+            this._attachmentRequestScopes.set(item.id, { scope, controller });
         item.uploadState = 'uploading';
         item.errorReason = '';
         this._saveAttachmentTab(tab);
         try {
-            const snap = await snapshotServerFile(
-                { ...item.owner, scope },
-                { id: item.id, path: item.serverPath, fingerprint: item.serverFingerprint },
-                controller.signal,
-            );
-            if (!this._attachmentItemIsCurrent(tab, item)) return;
+            const snap = await snapshotServerFile({ ...item.owner, scope }, {
+                id: item.id,
+                path: item.serverPath,
+                fingerprint: item.serverFingerprint,
+            }, controller.signal);
+            if (!this._attachmentItemIsCurrent(tab, item))
+                return;
             Object.assign(item, {
                 name: snap.name || item.name,
                 path: snap.path || '',
-                type: snap.mimeType || snap.type || item.type,
+                type: snap.mimeType ||
+                    snap.type ||
+                    item.type,
                 sizeBytes: snap.sizeBytes ?? item.sizeBytes,
                 kind: snap.kind || 'file',
                 sha256: snap.sha256 || '',
@@ -9960,71 +9854,80 @@ export class TabManager {
                 errorReason: '',
             });
             this._saveAttachmentTab(tab);
-        } catch (error) {
-            if (!this._attachmentItemIsCurrent(tab, item)) return;
+        }
+        catch (error) {
+            if (!this._attachmentItemIsCurrent(tab, item))
+                return;
             if (error instanceof AttachmentRequestError && error.uncertain) {
                 item.uploadState = 'unknown';
                 item.errorReason = 'uncertain';
-            } else {
+            }
+            else {
                 item.uploadState = 'error';
-                item.errorReason = error instanceof AttachmentRequestError ? error.reason : 'unavailable';
+                item.errorReason =
+                    error instanceof AttachmentRequestError
+                        ? error.reason
+                        : 'unavailable';
             }
             this._saveAttachmentTab(tab);
-        } finally {
+        }
+        finally {
             item._attachmentSnapshotPending = false;
             this._releaseAttachmentIngestSlot(tab, scope);
         }
     }
-
     _takeAttachmentIngestSlot(tab) {
         const active = tab._attachmentIngestActive || 0;
-        if (active >= 2) return false;
+        if (active >= 2)
+            return false;
         tab._attachmentIngestActive = active + 1;
         return true;
     }
-
     _releaseAttachmentIngestSlot(tab, scope) {
         tab._attachmentIngestActive = Math.max(0, (tab._attachmentIngestActive || 1) - 1);
         this._pumpAttachmentIngest(tab, scope);
     }
-
     _pumpAttachmentIngest(tab, scope) {
-        if (!tab || this.getActiveTab() !== tab) return;
+        if (!tab || this.getActiveTab() !== tab)
+            return;
         for (const item of tab.draftAttachments || []) {
-            if (!item.phiAttachment || item.uploadState !== 'waiting') continue;
-            if ((tab._attachmentIngestActive || 0) >= 2) return;
+            if (!item.phiAttachment || item.uploadState !== 'waiting')
+                continue;
+            if ((tab._attachmentIngestActive || 0) >= 2)
+                return;
             if (item.file) {
                 const queued = item._attachmentQueuedExplicit === true;
                 item._attachmentQueuedExplicit = false;
                 void this._startAttachmentUpload(tab, item, scope, queued);
             }
-            else if (item.serverPath) void this._snapshotServerAttachment(tab, item, scope);
+            else if (item.serverPath)
+                void this._snapshotServerAttachment(tab, item, scope);
         }
     }
-
     async _retryServerAttachment(tab, item) {
-        if (!item?.owner || !item.serverPath || !this._attachmentItemIsCurrent(tab, item)) return;
+        if (!item?.owner ||
+            !item.serverPath ||
+            !this._attachmentItemIsCurrent(tab, item))
+            return;
         const scope = this.app?.scope || null;
         if (!this._attachmentOwnerCurrent(tab, item.owner, scope)) {
-            tab._attachmentNotice = 'This upload belongs to another Phi backend. Switch back to check it.';
+            tab._attachmentNotice =
+                'This upload belongs to another Phi backend. Switch back to check it.';
             this._renderAttachmentStatus(tab);
             return;
         }
         void this._snapshotServerAttachment(tab, item, scope);
     }
-
     _captureAttachmentOwner(tab, scope = this.app?.scope || null) {
         return {
             profileId: scope?.profileId || getEmbeddedProfileId() || '',
-            origin:
-                scope?.origin ||
+            origin: scope?.origin ||
                 getEmbeddedBackendOrigin() ||
                 (typeof window !== 'undefined' ? window.location.origin : ''),
             paneId: tab.paneId,
             cwd: tab.cwd || this.app?.sessionsManager?.activeCWD || '',
         };
     }
-
     _attachmentOwnerKey(owner) {
         return JSON.stringify([
             owner.profileId,
@@ -10033,46 +9936,36 @@ export class TabManager {
             owner.cwd,
         ]);
     }
-
     _attachmentOwnerCurrent(tab, owner, scope) {
-        if (
-            !tab ||
+        if (!tab ||
             tab.isDead === true ||
             this.tabs?.get(owner.paneId) !== tab ||
             tab.paneId !== owner.paneId ||
-            scope?.signal?.aborted
-        )
+            scope?.signal?.aborted)
             return false;
-        const currentProfile =
-            this.app?.scope?.profileId || getEmbeddedProfileId() || '';
-        const currentOrigin =
-            this.app?.scope?.origin ||
+        const currentProfile = this.app?.scope?.profileId || getEmbeddedProfileId() || '';
+        const currentOrigin = this.app?.scope?.origin ||
             getEmbeddedBackendOrigin() ||
             (typeof window !== 'undefined' ? window.location.origin : '');
-        return currentProfile === owner.profileId && currentOrigin === owner.origin;
+        return (currentProfile === owner.profileId && currentOrigin === owner.origin);
     }
-
     _updateAttachmentControl(tab) {
-        if (!this.attachInputBtn) return;
+        if (!this.attachInputBtn)
+            return;
         this.attachInputBtn.classList.toggle('hidden', tab?.coder !== 'pi' || tab?.piMode === 'psi');
-        if (tab?.coder === 'pi') void this._restoreAttachmentDraft(tab, this.app?.scope);
-        if (
-            tab?.coder === 'pi' &&
+        if (tab?.coder === 'pi')
+            void this._restoreAttachmentDraft(tab, this.app?.scope);
+        if (tab?.coder === 'pi' &&
             tab.piBridge?.connected === true &&
-            (tab.piBridge.capabilities || []).includes('pi.attachments.v3')
-        ) {
-            void this._refreshAttachmentContext(
-                tab,
-                this._captureAttachmentOwner(tab),
-                this.app?.scope,
-            );
+            (tab.piBridge.capabilities || []).includes('pi.attachments.v3')) {
+            void this._refreshAttachmentContext(tab, this._captureAttachmentOwner(tab), this.app?.scope);
         }
         this._renderAttachmentStatus(tab);
     }
-
     _renderAttachmentStatus(tab = this.getActiveTab()) {
         const el = this.attachmentStatus;
-        if (!el || this.getActiveTab() !== tab) return;
+        if (!el || this.getActiveTab() !== tab)
+            return;
         if (!tab || tab.coder !== 'pi') {
             el.replaceChildren();
             el.classList.add('hidden');
@@ -10085,12 +9978,12 @@ export class TabManager {
                     ? 'Waiting to send the saved attachment snapshot.'
                     : 'Submitting attachment to Pi…'
                 : snapshot.state === 'unknown'
-                  ? 'Submission not confirmed. Check Pi before resending.'
-                  : snapshot.state === 'refused'
-                    ? attachmentRefusalNotice(snapshot.reason)
-                    : snapshot.state === 'cancelled'
-                      ? 'Waiting send canceled. Restore it to edit or forget the local copy.'
-                      : tab._attachmentNotice || ''
+                    ? 'Submission not confirmed. Check Pi before resending.'
+                    : snapshot.state === 'refused'
+                        ? attachmentRefusalNotice(snapshot.reason)
+                        : snapshot.state === 'cancelled'
+                            ? 'Waiting send canceled. Restore it to edit or forget the local copy.'
+                            : tab._attachmentNotice || ''
             : tab._attachmentNotice || '';
         const warning = this._attachmentStorageWarning || '';
         el.replaceChildren();
@@ -10100,7 +9993,9 @@ export class TabManager {
         }
         el.classList.remove('hidden');
         const label = document.createElement('span');
-        label.textContent = [message, message.includes(warning) ? '' : warning].filter(Boolean).join(' ');
+        label.textContent = [message, message.includes(warning) ? '' : warning]
+            .filter(Boolean)
+            .join(' ');
         el.appendChild(label);
         if (snapshot?.outboxState === 'waiting') {
             const cancel = document.createElement('button');
@@ -10115,32 +10010,27 @@ export class TabManager {
             check.type = 'button';
             check.className = 'btn btn-primary attachment-status-action';
             check.textContent = 'Check status';
-            check.addEventListener('click', () =>
-                void this._checkAttachmentSendStatus(tab, snapshot),
-            );
+            check.addEventListener('click', () => void this._checkAttachmentSendStatus(tab, snapshot));
             el.appendChild(check);
             const restore = document.createElement('button');
             restore.type = 'button';
             restore.className = 'btn btn-primary attachment-status-action';
             restore.textContent = 'Restore to draft';
-            restore.addEventListener('click', () =>
-                this._restoreAttachmentSnapshot(tab, snapshot, true),
-            );
+            restore.addEventListener('click', () => this._restoreAttachmentSnapshot(tab, snapshot, true));
             el.appendChild(restore);
             this._appendForgetAttachmentButton(el, tab, snapshot);
-        } else if (snapshot?.state === 'refused' || snapshot?.state === 'cancelled') {
+        }
+        else if (snapshot?.state === 'refused' ||
+            snapshot?.state === 'cancelled') {
             const restore = document.createElement('button');
             restore.type = 'button';
             restore.className = 'btn btn-primary attachment-status-action';
             restore.textContent = 'Restore to draft';
-            restore.addEventListener('click', () =>
-                this._restoreAttachmentSnapshot(tab, snapshot, false),
-            );
+            restore.addEventListener('click', () => this._restoreAttachmentSnapshot(tab, snapshot, false));
             el.appendChild(restore);
             this._appendForgetAttachmentButton(el, tab, snapshot);
         }
     }
-
     _appendForgetAttachmentButton(el, tab, snapshot) {
         const forget = document.createElement('button');
         forget.type = 'button';
@@ -10149,31 +10039,42 @@ export class TabManager {
         forget.addEventListener('click', () => void this._forgetAttachmentSnapshot(tab, snapshot));
         el.appendChild(forget);
     }
-
     async _cancelWaitingAttachmentSnapshot(tab, snapshot) {
-        if (tab._attachmentPendingSnapshot !== snapshot || snapshot.outboxState !== 'waiting') return;
-        if (snapshot.id && !await this.attachmentStore.cancelWaitingSend(snapshot.id)) return;
+        if (tab._attachmentPendingSnapshot !== snapshot ||
+            snapshot.outboxState !== 'waiting')
+            return;
+        if (snapshot.id &&
+            !(await this.attachmentStore.cancelWaitingSend(snapshot.id)))
+            return;
         snapshot.state = 'cancelled';
         snapshot.outboxState = 'cancelled';
         snapshot.reason = 'cancelled';
-        tab._attachmentNotice = 'Waiting send canceled. Restore it to edit or forget the local copy.';
+        tab._attachmentNotice =
+            'Waiting send canceled. Restore it to edit or forget the local copy.';
         this._renderAttachmentStatus(tab);
     }
-
     async _forgetAttachmentSnapshot(tab, snapshot) {
-        if ((tab._attachmentPendingSnapshot !== snapshot && tab._attachmentLastSubmitted !== snapshot) || !window.confirm('Forget the local attachment copy? This cannot be undone and does not delete the server file.')) return;
-        if (snapshot.id && !await this.attachmentStore.forgetOutbox(snapshot.id)) {
-            tab._attachmentNotice = this.attachmentStore.storageWarning || 'The local copy could not be forgotten.';
+        if ((tab._attachmentPendingSnapshot !== snapshot &&
+            tab._attachmentLastSubmitted !== snapshot) ||
+            !window.confirm('Forget the local attachment copy? This cannot be undone and does not delete the server file.'))
+            return;
+        if (snapshot.id &&
+            !(await this.attachmentStore.forgetOutbox(snapshot.id))) {
+            tab._attachmentNotice =
+                this.attachmentStore.storageWarning ||
+                    'The local copy could not be forgotten.';
             this._renderAttachmentStatus(tab);
             return;
         }
-        if (tab._attachmentPendingSnapshot === snapshot) tab._attachmentPendingSnapshot = null;
-        if (tab._attachmentLastSubmitted === snapshot) tab._attachmentLastSubmitted = null;
-        tab._attachmentNotice = 'Local attachment copy forgotten. This does not delete the server-side file.';
+        if (tab._attachmentPendingSnapshot === snapshot)
+            tab._attachmentPendingSnapshot = null;
+        if (tab._attachmentLastSubmitted === snapshot)
+            tab._attachmentLastSubmitted = null;
+        tab._attachmentNotice =
+            'Local attachment copy forgotten. This does not delete the server-side file.';
         this._renderAttachmentStripForTab(tab);
         this._renderAttachmentStatus(tab);
     }
-
     _stageDeviceAttachments(tab, owner, scope, files) {
         if (this.tabs?.get(owner.paneId) !== tab || tab.isDead === true) {
             this.app?.showToast?.('The original Pi pane is no longer available.', { type: 'error' });
@@ -10184,7 +10085,9 @@ export class TabManager {
             ? tab.draftAttachments.slice()
             : [];
         let stagedCount = current.filter((attachment) => attachment.phiAttachment).length;
-        let stagedBytes = current.reduce((sum, attachment) => attachment.phiAttachment ? sum + (attachment.sizeBytes || 0) : sum, 0);
+        let stagedBytes = current.reduce((sum, attachment) => attachment.phiAttachment
+            ? sum + (attachment.sizeBytes || 0)
+            : sum, 0);
         const staged = [];
         let limited = false;
         for (const file of files) {
@@ -10203,11 +10106,14 @@ export class TabManager {
                 file,
                 owner,
             };
-            if (file.size > 25 * 1024 * 1024 || stagedCount >= 8 || stagedBytes + file.size > 50 * 1024 * 1024) {
+            if (file.size > 25 * 1024 * 1024 ||
+                stagedCount >= 8 ||
+                stagedBytes + file.size > 50 * 1024 * 1024) {
                 item.uploadState = 'error';
                 item.errorReason = 'limit';
                 limited = true;
-            } else {
+            }
+            else {
                 stagedCount += 1;
                 stagedBytes += file.size;
                 staged.push(item);
@@ -10222,18 +10128,22 @@ export class TabManager {
             }
             this._renderAttachmentStrip();
         }
-        tab._attachmentNotice = this._attachmentStorageWarning || 'Saving attachment to this device…';
+        tab._attachmentNotice =
+            this._attachmentStorageWarning ||
+                'Saving attachment to this device…';
         this._renderAttachmentStatus(tab);
         const save = this.saveTabDraft(tab);
         if (limited) {
             this._attachmentToast('Each file is limited to 25 MiB, with at most 8 files and 50 MiB per send.');
         }
-        if (staged.length === 0) return;
+        if (staged.length === 0)
+            return;
         void this._refreshAttachmentContext(tab, owner, scope);
         void Promise.resolve(save).then(async (result) => {
             for (const item of staged) {
-                if (!this._attachmentItemIsCurrent(tab, item)) continue;
-                if (result?.conflict) {
+                if (!this._attachmentItemIsCurrent(tab, item))
+                    continue;
+                if (result && typeof result === 'object' && result.conflict) {
                     item.uploadState = 'error';
                     item.errorReason = 'storage';
                     this._saveAttachmentTab(tab);
@@ -10243,24 +10153,27 @@ export class TabManager {
             }
         });
     }
-
     async _startAttachmentUpload(tab, item, scope, explicit) {
-        if (!item?.owner || !item.file || !this._attachmentItemIsCurrent(tab, item)) return;
-        if (
-            this.getActiveTab() !== tab ||
+        if (!item?.owner ||
+            !item.file ||
+            !this._attachmentItemIsCurrent(tab, item))
+            return;
+        if (this.getActiveTab() !== tab ||
             !this.attachmentStore.isActive(item.owner) ||
-            !this._attachmentOwnerCurrent(tab, item.owner, scope)
-        ) {
-            tab._attachmentNotice = 'Upload is parked for its original Phi backend. Switch back to continue.';
+            !this._attachmentOwnerCurrent(tab, item.owner, scope)) {
+            tab._attachmentNotice =
+                'Upload is parked for its original Phi backend. Switch back to continue.';
             this._renderAttachmentStatus(tab);
             return;
         }
         if (this._attachmentNetworkOffline()) {
-            tab._attachmentNotice = 'Upload is waiting for a network connection. Your draft is still here.';
+            tab._attachmentNotice =
+                'Upload is waiting for a network connection. Your draft is still here.';
             this._renderAttachmentStatus(tab);
             return;
         }
-        if (item._attachmentUploadPending) return;
+        if (item._attachmentUploadPending)
+            return;
         item._attachmentUploadPending = true;
         if (!this._takeAttachmentIngestSlot(tab)) {
             item._attachmentUploadPending = false;
@@ -10268,7 +10181,8 @@ export class TabManager {
             // its explicit intent: deferral is a local slot limit, not a
             // background retry. Background starters stay non-explicit so
             // memory-only auto-flush still pauses per M2.
-            if (explicit) item._attachmentQueuedExplicit = true;
+            if (explicit)
+                item._attachmentQueuedExplicit = true;
             return;
         }
         item._attachmentQueuedExplicit = false;
@@ -10279,34 +10193,35 @@ export class TabManager {
                 return;
             }
             const controller = new AbortController();
-            this._attachmentRequestScopes.set(item.id, { scope, controller });
+            if (scope)
+                this._attachmentRequestScopes.set(item.id, {
+                    scope,
+                    controller,
+                });
             item.uploadState = 'uploading';
             item.errorReason = '';
             this._saveAttachmentTab(tab);
             await this._uploadDeviceAttachment(tab, item, scope, controller);
-        } finally {
+        }
+        finally {
             item._attachmentUploadPending = false;
             this._releaseAttachmentIngestSlot(tab, scope);
         }
     }
-
     _attachmentItemIsCurrent(tab, item) {
-        return (
-            this.tabs?.get(item.owner.paneId) === tab &&
-            (tab.draftAttachments || []).some((candidate) => candidate.id === item.id)
-        );
+        if (!item.owner)
+            return false;
+        return (this.tabs?.get(item.owner.paneId) === tab &&
+            (tab.draftAttachments || []).some((candidate) => candidate.id === item.id));
     }
-
     async _uploadDeviceAttachment(tab, item, scope, controller) {
+        if (!item.owner)
+            return;
         const requestOwner = { ...item.owner, scope };
         try {
-            const uploaded = await uploadAttachmentItem(
-                item.file,
-                item.id,
-                requestOwner,
-                controller.signal,
-            );
-            if (!this._attachmentItemIsCurrent(tab, item)) return;
+            const uploaded = await uploadAttachmentItem(item.file, item.id, requestOwner, controller.signal);
+            if (!this._attachmentItemIsCurrent(tab, item))
+                return;
             Object.assign(item, uploaded, {
                 phiAttachment: true,
                 source: 'device',
@@ -10315,12 +10230,16 @@ export class TabManager {
                 owner: item.owner,
             });
             this._saveAttachmentTab(tab);
-        } catch (error) {
-            if (!this._attachmentItemIsCurrent(tab, item)) return;
+        }
+        catch (error) {
+            if (!this._attachmentItemIsCurrent(tab, item))
+                return;
             if (error instanceof AttachmentRequestError && error.uncertain) {
-                if (this.getActiveTab() === tab && this._attachmentOwnerCurrent(tab, item.owner, scope)) {
+                if (this.getActiveTab() === tab &&
+                    this._attachmentOwnerCurrent(tab, item.owner, scope)) {
                     await this._checkAttachmentItemStatus(tab, item, scope);
-                } else {
+                }
+                else {
                     item.uploadState = 'unknown';
                     item.errorReason = 'uncertain';
                     this._saveAttachmentTab(tab);
@@ -10335,61 +10254,77 @@ export class TabManager {
             this._saveAttachmentTab(tab);
         }
     }
-
     async _checkAttachmentItemStatus(tab, item, scope = this.app?.scope) {
-        if (
-            this.getActiveTab() !== tab ||
+        if (this.getActiveTab() !== tab ||
             this._attachmentNetworkOffline() ||
             !item?.owner ||
-            !this._attachmentItemIsCurrent(tab, item)
-        ) return;
+            !this._attachmentItemIsCurrent(tab, item))
+            return;
         if (!this._attachmentOwnerCurrent(tab, item.owner, scope)) {
-            tab._attachmentNotice = 'This upload belongs to another Phi backend. Switch back to check it.';
+            tab._attachmentNotice =
+                'This upload belongs to another Phi backend. Switch back to check it.';
             this._renderAttachmentStatus(tab);
             return;
         }
-        if (item._attachmentStatusPending) return;
+        if (item._attachmentStatusPending)
+            return;
         item._attachmentStatusPending = true;
         try {
-            const status = await getAttachmentItemStatus(item.id, { ...item.owner, scope });
-            if (!this._attachmentItemIsCurrent(tab, item)) return;
+            const status = await getAttachmentItemStatus(item.id, {
+                ...item.owner,
+                scope,
+            });
+            if (!this._attachmentItemIsCurrent(tab, item))
+                return;
             if (status.state === 'ready' && status.item) {
-                Object.assign(item, status.item, { phiAttachment: true, source: item.source, uploadState: 'ready', owner: item.owner });
-            } else if (status.state === 'receiving') {
+                Object.assign(item, status.item, {
+                    phiAttachment: true,
+                    source: item.source,
+                    uploadState: 'ready',
+                    owner: item.owner,
+                });
+            }
+            else if (status.state === 'receiving') {
                 item.uploadState = 'attempted';
                 item.errorReason = '';
                 this._scheduleAttachmentRecovery(tab, item.owner, scope);
-            } else {
+            }
+            else {
                 item.uploadState = 'unknown';
                 item.errorReason = 'uncertain';
                 this._scheduleAttachmentRecovery(tab, item.owner, scope);
             }
-        } catch {
-            if (!this._attachmentItemIsCurrent(tab, item)) return;
+        }
+        catch {
+            if (!this._attachmentItemIsCurrent(tab, item))
+                return;
             item.uploadState = 'unknown';
             item.errorReason = 'uncertain';
             this._scheduleAttachmentRecovery(tab, item.owner, scope);
-        } finally {
+        }
+        finally {
             item._attachmentStatusPending = false;
         }
         this._saveAttachmentTab(tab);
     }
-
     async _retryDeviceAttachment(tab, item) {
         if (item?.source === 'server') {
             void this._retryServerAttachment(tab, item);
             return;
         }
-        if (!item?.owner || !item.file || !this._attachmentItemIsCurrent(tab, item)) return;
+        if (!item?.owner ||
+            !item.file ||
+            !this._attachmentItemIsCurrent(tab, item))
+            return;
         const scope = this.app?.scope || null;
         if (!this._attachmentOwnerCurrent(tab, item.owner, scope)) {
-            tab._attachmentNotice = 'This upload belongs to another Phi backend. Switch back to check it.';
+            tab._attachmentNotice =
+                'This upload belongs to another Phi backend. Switch back to check it.';
             this._renderAttachmentStatus(tab);
             return;
         }
         void this._startAttachmentUpload(tab, item, scope, true);
     }
-
     _saveAttachmentTab(tab) {
         this.saveTabDraft(tab);
         if (this.getActiveTab() === tab) {
@@ -10399,14 +10334,14 @@ export class TabManager {
         }
         this._renderAttachmentStatus(tab);
     }
-
     async _refreshAttachmentContext(tab, owner, scope) {
         const key = this._attachmentOwnerKey(owner);
         if (this._attachmentNetworkOffline()) {
             tab._attachmentContextNeedsRefresh = true;
             return;
         }
-        if (this.getActiveTab() !== tab || !this.attachmentStore.isActive(owner)) {
+        if (this.getActiveTab() !== tab ||
+            !this.attachmentStore.isActive(owner)) {
             tab._attachmentContextNeedsRefresh = true;
             return;
         }
@@ -10414,29 +10349,27 @@ export class TabManager {
         // the saved active pane. Defer one microtask so that transient tab does
         // not start a request that switchTab would immediately abort.
         await Promise.resolve();
-        if (
-            this.getActiveTab() !== tab ||
+        if (this.getActiveTab() !== tab ||
             !this.attachmentStore.isActive(owner) ||
             !this._attachmentOwnerCurrent(tab, owner, scope) ||
             this._piReloadPending?.has(tab.paneId) ||
-            tab.piBridge?.reload_pending === true
-        ) {
+            tab.piBridge?.reload_pending === true) {
             // Reload replaces the peer. Keep the cached context and draft;
             // its next readiness publication will trigger a fresh read.
             tab._attachmentContextNeedsRefresh = true;
             return;
         }
-        if (tab._attachmentContextPending === key) return;
+        if (tab._attachmentContextPending === key)
+            return;
         const controller = new AbortController();
         tab._attachmentContextController = controller;
         tab._attachmentContextPending = key;
         tab._attachmentContextNeedsRefresh = false;
         try {
             const context = await getAttachmentPiContext({ ...owner, scope }, controller.signal);
-            if (
-                this.tabs?.get(owner.paneId) !== tab ||
-                this._attachmentOwnerKey(this._captureAttachmentOwner(tab)) !== key
-            )
+            if (this.tabs?.get(owner.paneId) !== tab ||
+                this._attachmentOwnerKey(this._captureAttachmentOwner(tab)) !==
+                    key)
                 return;
             tab._attachmentContext = context;
             tab._attachmentContextOwnerKey = key;
@@ -10444,92 +10377,119 @@ export class TabManager {
                 this._cancelAttachmentRecovery(tab);
                 tab._attachmentRecoveryAttempt = 0;
             }
-            const defaultNotice =
-                !tab._attachmentNotice ||
-                tab._attachmentNotice === 'Native Pi attachments are unavailable for this pane.' ||
-                tab._attachmentNotice === 'Pi attachment status is unavailable. Your draft is still here.' ||
-                tab._attachmentNotice === 'Attachment drafts are kept in memory until durable recovery is added.' ||
+            const defaultNotice = !tab._attachmentNotice ||
+                tab._attachmentNotice ===
+                    'Native Pi attachments are unavailable for this pane.' ||
+                tab._attachmentNotice ===
+                    'Pi attachment status is unavailable. Your draft is still here.' ||
+                tab._attachmentNotice ===
+                    'Attachment drafts are kept in memory until durable recovery is added.' ||
                 tab._attachmentNotice === 'Saving attachment to this device…';
             if (defaultNotice && !tab._attachmentPendingSnapshot) {
                 tab._attachmentNotice = context.available
                     ? this.attachmentStore.storageWarning
                     : 'Native Pi attachments are unavailable for this pane.';
             }
-            if (context.available) void this._recoverAttachmentWork(tab, owner, scope);
-            else this._scheduleAttachmentRecovery(tab, owner, scope);
-        } catch {
-            if (!controller.signal.aborted && this.tabs?.get(owner.paneId) === tab) {
-                tab._attachmentNotice = 'Pi attachment status is unavailable. Your draft is still here.';
+            if (context.available)
+                void this._recoverAttachmentWork(tab, owner, scope);
+            else
+                this._scheduleAttachmentRecovery(tab, owner, scope);
+        }
+        catch {
+            if (!controller.signal.aborted &&
+                this.tabs?.get(owner.paneId) === tab) {
+                tab._attachmentNotice =
+                    'Pi attachment status is unavailable. Your draft is still here.';
                 this._scheduleAttachmentRecovery(tab, owner, scope);
             }
-        } finally {
-            if (tab._attachmentContextPending === key) tab._attachmentContextPending = null;
-            if (tab._attachmentContextController === controller) tab._attachmentContextController = null;
-            if (this.getActiveTab() === tab) this._renderAttachmentStatus(tab);
+        }
+        finally {
+            if (tab._attachmentContextPending === key)
+                tab._attachmentContextPending = null;
+            if (tab._attachmentContextController === controller)
+                tab._attachmentContextController = null;
+            if (this.getActiveTab() === tab)
+                this._renderAttachmentStatus(tab);
         }
     }
-
     async _recoverAttachmentWork(tab, owner, scope) {
-        if (
-            this.getActiveTab() !== tab ||
+        if (this.getActiveTab() !== tab ||
             this._attachmentNetworkOffline() ||
             !this.attachmentStore.isActive(owner) ||
-            !this._attachmentOwnerCurrent(tab, owner, scope)
-        ) return;
+            !this._attachmentOwnerCurrent(tab, owner, scope))
+            return;
         for (const item of tab.draftAttachments || []) {
-            if (!item.phiAttachment) continue;
-            if (item.uploadState === 'waiting' && (item.file || item.serverPath)) {
-                if (item.file) void this._startAttachmentUpload(tab, item, scope, false);
-                else void this._snapshotServerAttachment(tab, item, scope);
+            if (!item.phiAttachment)
+                continue;
+            if (item.uploadState === 'waiting' &&
+                (item.file || item.serverPath)) {
+                if (item.file)
+                    void this._startAttachmentUpload(tab, item, scope, false);
+                else
+                    void this._snapshotServerAttachment(tab, item, scope);
             }
-            else if (item.uploadState === 'attempted' || item.uploadState === 'unknown') void this._checkAttachmentItemStatus(tab, item, scope);
+            else if (item.uploadState === 'attempted' ||
+                item.uploadState === 'unknown')
+                void this._checkAttachmentItemStatus(tab, item, scope);
         }
         const snapshot = tab._attachmentPendingSnapshot;
-        if (!snapshot || snapshot.ownerKey !== this._attachmentOwnerKey(owner)) return;
-        if (snapshot.state === 'unknown') void this._checkAttachmentSendStatus(tab, snapshot);
-        else if (snapshot.outboxState === 'waiting') void this._recoverAttachmentOutbox(tab, snapshot);
+        if (!snapshot || snapshot.ownerKey !== this._attachmentOwnerKey(owner))
+            return;
+        if (snapshot.state === 'unknown')
+            void this._checkAttachmentSendStatus(tab, snapshot);
+        else if (snapshot.outboxState === 'waiting')
+            void this._recoverAttachmentOutbox(tab, snapshot);
     }
-
     async _recoverAttachmentOutbox(tab, snapshot, explicit = false) {
         const owner = snapshot.owner;
         if (this._attachmentNetworkOffline()) {
             snapshot.state = 'sending';
             snapshot.outboxState = 'waiting';
-            tab._attachmentNotice = 'Waiting to submit the saved attachment snapshot.';
+            tab._attachmentNotice =
+                'Waiting to submit the saved attachment snapshot.';
             this._renderAttachmentStatus(tab);
             return;
         }
-        if (
-            tab._attachmentPendingSnapshot !== snapshot ||
+        if (tab._attachmentPendingSnapshot !== snapshot ||
             this.getActiveTab() !== tab ||
             !this.attachmentStore.isActive(owner) ||
-            !this._attachmentOwnerCurrent(tab, owner, snapshot.scope)
-        ) return;
-        if (snapshot.items.some((item) => item.uploadState !== 'ready')) return;
+            !this._attachmentOwnerCurrent(tab, owner, snapshot.scope))
+            return;
+        if (snapshot.items.some((item) => item.uploadState !== 'ready'))
+            return;
         try {
-            const context = await getAttachmentPiContext({ ...owner, scope: snapshot.scope });
-            if (tab._attachmentPendingSnapshot !== snapshot) return;
-            if (!context.available || !context.process_id || !context.generation) {
-                tab._attachmentNotice = 'Waiting for the original Pi target to reconnect. The saved send has not been attempted.';
+            const context = await getAttachmentPiContext({
+                ...owner,
+                scope: snapshot.scope,
+            });
+            if (tab._attachmentPendingSnapshot !== snapshot)
+                return;
+            if (!context.available ||
+                !context.process_id ||
+                !context.generation) {
+                tab._attachmentNotice =
+                    'Waiting for the original Pi target to reconnect. The saved send has not been attempted.';
                 this._renderAttachmentStatus(tab);
                 this._scheduleAttachmentRecovery(tab, owner, snapshot.scope);
                 return;
             }
-            const sameModel = (context.model?.provider || '') === (snapshot.context.model?.provider || '') &&
-                (context.model?.id || '') === (snapshot.context.model?.id || '');
-            if (
-                context.process_id !== snapshot.context.process_id ||
+            const sameModel = (context.model?.provider || '') ===
+                (snapshot.context.model?.provider || '') &&
+                (context.model?.id || '') ===
+                    (snapshot.context.model?.id || '');
+            if (context.process_id !== snapshot.context.process_id ||
                 context.generation !== snapshot.context.generation ||
                 context.session_id !== snapshot.context.session_id ||
-                context.leaf_id !== snapshot.context.leaf_id || !sameModel
-            ) {
+                context.leaf_id !== snapshot.context.leaf_id ||
+                !sameModel) {
                 await this.attachmentStore.updateOutbox(snapshot.id, 'refused', 'stale');
                 this._finishAttachmentSnapshot(tab, snapshot, 'refused', 'stale');
                 return;
             }
             // A busy turn is not a refusal: Pi queues the prompt as a steer
             // message and delivers it before the next model call.
-            if (snapshot.items.some((item) => item.kind === 'image') && context.image_available !== true) {
+            if (snapshot.items.some((item) => item.kind === 'image') &&
+                context.image_available !== true) {
                 await this.attachmentStore.updateOutbox(snapshot.id, 'refused', 'unsupported-model');
                 this._finishAttachmentSnapshot(tab, snapshot, 'refused', 'unsupported-model');
                 return;
@@ -10537,13 +10497,14 @@ export class TabManager {
             tab._attachmentContext = context;
             tab._attachmentContextOwnerKey = this._attachmentOwnerKey(owner);
             await this._dispatchAttachmentSnapshot(tab, snapshot, explicit);
-        } catch {
-            tab._attachmentNotice = 'Waiting for the original Pi target to reconnect. The saved send has not been attempted.';
+        }
+        catch {
+            tab._attachmentNotice =
+                'Waiting for the original Pi target to reconnect. The saved send has not been attempted.';
             this._renderAttachmentStatus(tab);
             this._scheduleAttachmentRecovery(tab, owner, snapshot.scope);
         }
     }
-
     // _initAttachmentDropZone wires drag-and-drop file ingestion. The drop
     // zone is intentionally broader than just the input bar: users drop
     // where their cursor is, which is usually the terminal pane, not the
@@ -10557,31 +10518,34 @@ export class TabManager {
     // file is being dragged anywhere on the page. Uses existing --accent
     // tokens — no new colours per AGENTS.md.
     _initAttachmentDropZone() {
-        if (!this.inputBarContainer) return;
-
+        if (!this.inputBarContainer)
+            return;
         // Page-wide dragover: prevent default (required so drop fires)
         // and toggle the visual feedback class on the input bar.
         // Skip when the drag isn't a file (text/uri-list no-op cleanly).
         const isFileDrag = (e) => {
             const dt = e.dataTransfer;
-            if (!dt?.types) return false;
+            if (!dt?.types)
+                return false;
             return Array.from(dt.types).includes('Files');
         };
-
         document.addEventListener('dragover', (e) => {
-            if (!isFileDrag(e)) return;
+            if (!isFileDrag(e))
+                return;
             e.preventDefault();
             try {
-                e.dataTransfer.dropEffect = 'copy';
-            } catch (_) {}
+                if (e.dataTransfer)
+                    e.dataTransfer.dropEffect = 'copy';
+            }
+            catch (_) { }
             this.inputBarContainer.classList.add('is-drop-target');
         });
-
         // dragleave fires on every child boundary; gate by counter so
         // moving across the page keeps the glow on.
         let dragDepth = 0;
         document.addEventListener('dragenter', (e) => {
-            if (!isFileDrag(e)) return;
+            if (!isFileDrag(e))
+                return;
             e.preventDefault();
             dragDepth += 1;
             this.inputBarContainer.classList.add('is-drop-target');
@@ -10597,27 +10561,26 @@ export class TabManager {
             // handler manages tab reordering. Use closest('.tab') rather
             // than a stored tabsContainer reference so this check stays
             // correct across TabManager instances and test resets.
-            if (e.target?.closest?.('.tab')) return;
-            if (!isFileDrag(e)) return;
+            if (e.target?.closest?.('.tab'))
+                return;
+            if (!isFileDrag(e))
+                return;
             e.preventDefault();
             dragDepth = 0;
             this.inputBarContainer.classList.remove('is-drop-target');
-            const files = extractImageFiles(e.dataTransfer.files);
+            const files = extractImageFiles(e.dataTransfer?.files ?? null);
             for (const file of files) {
                 try {
-                    const attachment = await uploadClipboardImage(
-                        file,
-                        file.name || 'dropped',
-                    );
+                    const attachment = await uploadClipboardImage(file, file.name || 'dropped');
                     attachment.source = 'drop';
                     this._addAttachmentChip(attachment);
-                } catch (err) {
-                    this._attachmentToast(`Drop failed: ${err.message}`);
+                }
+                catch (err) {
+                    this._attachmentToast(`Drop failed: ${err instanceof Error ? err.message : String(err)}`);
                 }
             }
         });
     }
-
     // _initAttachmentPasteHandler intercepts image-bearing pastes on the
     // textarea. Text-only pastes fall through to default behavior so
     // pasting a URL into the prompt still works normally.
@@ -10626,31 +10589,30 @@ export class TabManager {
     // terminal pane, Cmd+V flows raw bytes into the PTY as before. This
     // is the only correct way to not break paste-in-terminal.
     _initAttachmentPasteHandler() {
-        if (!this.inputTextArea) return;
+        if (!this.inputTextArea)
+            return;
         this.inputTextArea.addEventListener('paste', async (e) => {
             const items = extractImageItems(e.clipboardData);
-            if (items.length === 0) return; // text paste → let browser handle
+            if (items.length === 0)
+                return; // text paste → let browser handle
             e.preventDefault();
             for (const item of items) {
                 const blob = item.getAsFile?.();
-                if (!blob) continue;
+                if (!blob)
+                    continue;
                 try {
-                    const attachment = await uploadClipboardImage(
-                        blob,
-                        'clipboard.png',
-                    );
+                    const attachment = await uploadClipboardImage(blob, 'clipboard.png');
                     this._addAttachmentChip(attachment);
-                } catch (err) {
-                    this._attachmentToast(`Paste failed: ${err.message}`);
+                }
+                catch (err) {
+                    this._attachmentToast(`Paste failed: ${err instanceof Error ? err.message : String(err)}`);
                 }
             }
         });
     }
-
     // (Removed _initDocumentDropGuard: the page-wide dragover/drop handlers
     // in _initAttachmentDropZone now do both preventDefault AND the upload
     // in one place, so a separate "guard" listener is redundant.)
-
     // _initPromptHistoryKeydown wires Alt+Up / Alt+Down on the staged
     // input textarea to cycle through previously-sent prompts (see
     // _cyclePromptHistory). Kept as its own listener — separate from the
@@ -10658,26 +10620,23 @@ export class TabManager {
     // in isolation, matching the _initAttachmentDropZone /
     // _initAttachmentPasteHandler pattern.
     _initPromptHistoryKeydown() {
-        if (!this.inputTextArea) return;
+        if (!this.inputTextArea)
+            return;
         this.inputTextArea.addEventListener('keydown', (e) => {
-            if (
-                e.key === 'ArrowUp' &&
+            if (e.key === 'ArrowUp' &&
                 e.altKey &&
                 !e.shiftKey &&
                 !e.ctrlKey &&
-                !e.metaKey
-            ) {
+                !e.metaKey) {
                 e.preventDefault();
                 this._cyclePromptHistory('older');
                 return;
             }
-            if (
-                e.key === 'ArrowDown' &&
+            if (e.key === 'ArrowDown' &&
                 e.altKey &&
                 !e.shiftKey &&
                 !e.ctrlKey &&
-                !e.metaKey
-            ) {
+                !e.metaKey) {
                 e.preventDefault();
                 this._cyclePromptHistory('newer');
                 return;
@@ -10701,7 +10660,6 @@ export class TabManager {
             }
         });
     }
-
     // _addAttachmentChip stores the attachment and re-renders the strip.
     _addAttachmentChip(attachment) {
         // De-dupe by path: same file dropped twice shouldn't chip twice.
@@ -10711,33 +10669,34 @@ export class TabManager {
         this.saveActiveDraft();
         this._renderAttachmentStrip();
     }
-
     // _removeAttachmentChip removes a single attachment by id.
     _removeAttachmentChip(id) {
         const attachment = this.stagedAttachments.find((item) => item.id === id);
         if (attachment?.phiAttachment) {
-            if (typeof window.confirm !== 'function' || !window.confirm('Remove this attachment and forget its local copy?')) return;
+            if (typeof window.confirm !== 'function' ||
+                !window.confirm('Remove this attachment and forget its local copy?'))
+                return;
         }
         const request = this._attachmentRequestScopes?.get(id);
-        if (request) request.controller.abort();
+        if (request)
+            request.controller.abort();
         this._attachmentRequestScopes?.delete(id);
-        this.stagedAttachments = this.stagedAttachments.filter(
-            (a) => a.id !== id,
-        );
+        this.stagedAttachments = this.stagedAttachments.filter((a) => a.id !== id);
         this.saveActiveDraft();
         this._renderAttachmentStrip();
     }
-
     // _renderAttachmentStrip repaints the chip strip from stagedAttachments.
     // Idempotent — called on add/remove/send.
     _renderAttachmentStrip() {
-        if (!this.attachmentStrip) return;
+        if (!this.attachmentStrip)
+            return;
         this.attachmentStrip.innerHTML = '';
         const activeTab = this.getActiveTab();
         const snapshot = activeTab?._attachmentPendingSnapshot;
         const visible = this.stagedAttachments.slice();
         for (const item of snapshot?.items || []) {
-            if (!visible.some((a) => a.id === item.id)) visible.push(item);
+            if (!visible.some((a) => a.id === item.id))
+                visible.push(item);
         }
         if (visible.length === 0) {
             this.attachmentStrip.classList.add('hidden');
@@ -10747,40 +10706,41 @@ export class TabManager {
         for (const a of visible) {
             const chip = document.createElement('span');
             chip.className = 'attachment-chip';
-            if (a.phiAttachment && a.uploadState === 'error') chip.classList.add('is-error');
-            if (a.phiAttachment && a.uploadState !== 'ready') chip.classList.add('is-pending');
+            if (a.phiAttachment && a.uploadState === 'error')
+                chip.classList.add('is-error');
+            if (a.phiAttachment && a.uploadState !== 'ready')
+                chip.classList.add('is-pending');
             chip.setAttribute('data-id', a.id);
             chip.title = a.path || a.errorReason || a.name;
-
             const icon = document.createElement('span');
             icon.className = 'attachment-icon';
             icon.textContent = a.source === 'paste' ? '⎘' : '⎗';
             chip.appendChild(icon);
-
             const name = document.createElement('span');
             name.className = 'attachment-name';
             name.textContent = formatChipName(a.name, 40);
             chip.appendChild(name);
-
             const size = document.createElement('span');
             size.className = 'attachment-size';
             size.textContent = this._formatSize(a.sizeBytes);
             chip.appendChild(size);
-
             if (a.phiAttachment) {
                 const state = document.createElement('span');
                 state.className = 'attachment-state';
-                state.textContent = a.uploadState === 'ready'
-                    ? 'Ready'
-                    : a.uploadState === 'uploading' || a.uploadState === 'attempted'
-                      ? 'Uploading'
-                      : a.uploadState === 'waiting'
-                        ? 'Waiting to upload'
-                        : a.uploadState === 'unknown'
-                          ? 'Unconfirmed'
-                          : `Error: ${a.errorReason || 'unavailable'}`;
+                state.textContent =
+                    a.uploadState === 'ready'
+                        ? 'Ready'
+                        : a.uploadState === 'uploading' ||
+                            a.uploadState === 'attempted'
+                            ? 'Uploading'
+                            : a.uploadState === 'waiting'
+                                ? 'Waiting to upload'
+                                : a.uploadState === 'unknown'
+                                    ? 'Unconfirmed'
+                                    : `Error: ${a.errorReason || 'unavailable'}`;
                 chip.appendChild(state);
-                if (a.uploadState === 'unknown' || a.uploadState === 'attempted') {
+                if (a.uploadState === 'unknown' ||
+                    a.uploadState === 'attempted') {
                     const check = document.createElement('button');
                     check.type = 'button';
                     check.className = 'attachment-retry';
@@ -10799,7 +10759,6 @@ export class TabManager {
                     }
                 }
             }
-
             const remove = document.createElement('button');
             remove.className = 'attachment-remove';
             remove.setAttribute('aria-label', 'Remove attachment');
@@ -10807,36 +10766,36 @@ export class TabManager {
             const isFrozen = snapshot?.items?.some((item) => item.id === a.id);
             if (isFrozen) {
                 remove.disabled = true;
-                remove.title = 'This attachment is part of a submitted snapshot';
-            } else {
-                remove.addEventListener('click', () =>
-                    this._removeAttachmentChip(a.id),
-                );
+                remove.title =
+                    'This attachment is part of a submitted snapshot';
+            }
+            else {
+                remove.addEventListener('click', () => this._removeAttachmentChip(a.id));
             }
             chip.appendChild(remove);
-
             this.attachmentStrip.appendChild(chip);
         }
     }
-
     _formatSize(bytes) {
-        if (!Number.isFinite(bytes) || bytes < 0) return '';
-        if (bytes < 1024) return `${bytes} B`;
-        if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+        if (!Number.isFinite(bytes) || bytes < 0)
+            return '';
+        if (bytes < 1024)
+            return `${bytes} B`;
+        if (bytes < 1024 * 1024)
+            return `${Math.round(bytes / 1024)} KB`;
         return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     }
-
     _attachmentToast(message) {
         if (this.app && typeof this.app.showToast === 'function') {
             this.app.showToast(message, {
                 type: 'error',
                 title: 'Attachments',
             });
-        } else {
+        }
+        else {
             console.warn('[attachments]', message);
         }
     }
-
     // _initBrandHud wires hover/focus on the top-left Φ logo to open the
     // self-state HUD popover. No fetch on open/close — every field is
     // computed from local state (hostname, version, tab map, CPU sample).
@@ -10848,47 +10807,49 @@ export class TabManager {
     // cover the popover and steal its hover events.
     _initBrandHud() {
         const brand = document.querySelector('.brand');
-        if (!brand) return;
+        if (!brand)
+            return;
         this.brandEl = brand;
         // Make the brand discoverable as interactive for keyboard users.
         if (!brand.hasAttribute('tabindex'))
             brand.setAttribute('tabindex', '0');
-        if (!brand.hasAttribute('role')) brand.setAttribute('role', 'button');
+        if (!brand.hasAttribute('role'))
+            brand.setAttribute('role', 'button');
         if (!brand.getAttribute('aria-describedby')) {
             brand.setAttribute('aria-describedby', 'self-hud-popover');
         }
-
         // Reparent the popover to <body> so its z-index competes in the
         // root stacking context. Idempotent — no-op if already there.
         if (this.selfHudEl && this.selfHudEl.parentNode !== document.body) {
             document.body.appendChild(this.selfHudEl);
         }
-
         // Reopen cooldown: ignore open triggers (mouseenter / focus) for
         // this many ms after a close. Prevents the flicker race where the
         // HUD closes (e.g. on outside-click), the cursor happens to be
         // still over the brand, and the next mouseenter reopens it.
         let lastClosedAt = 0;
         const HUD_REOPEN_COOLDOWN_MS = 200;
-
         const open = () => {
             if (this.selfHudCloseTimer) {
                 clearTimeout(this.selfHudCloseTimer);
                 this.selfHudCloseTimer = null;
             }
-            if (Date.now() - lastClosedAt < HUD_REOPEN_COOLDOWN_MS) return;
+            if (Date.now() - lastClosedAt < HUD_REOPEN_COOLDOWN_MS)
+                return;
             // The sessions slide-out owns the left of the screen while
             // open, and the brand-anchored HUD floats above it (z-index
             // 9999). Refuse to open until the drawer closes — on touch
             // this is the tap path, on mouse the hover path; both funnel
             // here.
             const sidebar = document.getElementById('sidebar-panel');
-            if (sidebar?.classList.contains('drawer-open')) return;
+            if (sidebar?.classList.contains('drawer-open'))
+                return;
             this._renderSelfHud();
             this._openSelfHud();
         };
         const scheduleClose = (delay = 150) => {
-            if (this.selfHudCloseTimer) clearTimeout(this.selfHudCloseTimer);
+            if (this.selfHudCloseTimer)
+                clearTimeout(this.selfHudCloseTimer);
             // Stamp lastClosedAt immediately so any subsequent mouseenter
             // during the fade-out falls inside the cooldown window.
             lastClosedAt = Date.now();
@@ -10911,12 +10872,10 @@ export class TabManager {
         // Expose closeNow so hostname-click and other consumers don't
         // need to duplicate the cooldown bookkeeping.
         this._closeSelfHudNow = closeNow;
-
         brand.addEventListener('mouseenter', open);
         brand.addEventListener('focus', open);
         brand.addEventListener('mouseleave', () => scheduleClose());
         brand.addEventListener('blur', () => scheduleClose(0));
-
         // Hovering the hostname area must NOT open the HUD — the hostname
         // has its own click behavior (toggles the tab-selector dropdown)
         // and a HUD + tab-selector both opening would clash visually.
@@ -10925,10 +10884,10 @@ export class TabManager {
         const hostnameWrapper = brand.querySelector('.hostname-wrapper');
         if (hostnameWrapper) {
             hostnameWrapper.addEventListener('mouseenter', () => {
-                if (this.selfHudOpen) closeNow();
+                if (this.selfHudOpen)
+                    closeNow();
             });
         }
-
         // Keep the popover open if the cursor moves onto it (grace period).
         if (this.selfHudEl) {
             this.selfHudEl.addEventListener('mouseenter', () => {
@@ -10937,27 +10896,21 @@ export class TabManager {
                     this.selfHudCloseTimer = null;
                 }
             });
-            this.selfHudEl.addEventListener('mouseleave', () =>
-                scheduleClose(),
-            );
+            this.selfHudEl.addEventListener('mouseleave', () => scheduleClose());
         }
-
         // Track scroll/resize while open so the popover follows the brand
         // when the layout shifts. capture:true ensures we catch scrolls on
         // any container (not just window). passive:true keeps it cheap.
         if (this.selfHudEl) {
-            window.addEventListener(
-                'scroll',
-                () => {
-                    if (this.selfHudOpen) this._positionSelfHud();
-                },
-                { capture: true, passive: true },
-            );
+            window.addEventListener('scroll', () => {
+                if (this.selfHudOpen)
+                    this._positionSelfHud();
+            }, { capture: true, passive: true });
             window.addEventListener('resize', () => {
-                if (this.selfHudOpen) this._positionSelfHud();
+                if (this.selfHudOpen)
+                    this._positionSelfHud();
             });
         }
-
         // Esc closes the popover if focus is on the brand. Listening on
         // brand (not document) keeps scope narrow and avoids leaking
         // listeners across test instances.
@@ -10968,73 +10921,73 @@ export class TabManager {
                 brand.focus({ preventScroll: true });
             }
         });
-
         // Touch-only click toggle: on devices without hover (phones,
         // tablets), tap brand to open, tap again to close. On
         // mouse-driven devices, hover owns opening/closing; clicks pass
         // through to the outside-click handler below.
-        const isTouch =
-            typeof window.matchMedia === 'function' &&
+        const isTouch = typeof window.matchMedia === 'function' &&
             window.matchMedia('(hover: none)').matches;
         if (isTouch) {
             brand.addEventListener('click', (e) => {
-                if (e.target.closest('button, .hostname-wrapper')) return;
-                if (this.selfHudOpen) closeNow();
-                else open();
+                const target = e.target;
+                if (target?.closest('button, .hostname-wrapper'))
+                    return;
+                if (this.selfHudOpen)
+                    closeNow();
+                else
+                    open();
             });
         }
-
         // Outside-click closes. Clicks inside the brand or the popover
         // are skipped (the brand's own click handler is responsible for
         // those, and we don't want to fight with it).
         document.addEventListener('click', (e) => {
-            if (!this.selfHudOpen) return;
+            if (!this.selfHudOpen)
+                return;
             const t = e.target;
-            if (
-                t.closest &&
-                (t.closest('.brand') || t.closest('#self-hud-popover'))
-            )
+            if (t?.closest?.('.brand') || t?.closest?.('#self-hud-popover'))
                 return;
             closeNow();
         });
     }
-
     _openSelfHud() {
-        if (!this.selfHudEl) return;
+        if (!this.selfHudEl)
+            return;
         this._positionSelfHud();
         this.selfHudEl.classList.remove('hidden');
         this.selfHudEl.classList.add('is-open');
         this.selfHudEl.setAttribute('aria-hidden', 'false');
         this.selfHudOpen = true;
     }
-
     // _positionSelfHud anchors the popover to the brand's current
     // viewport rect. Called on every open and on scroll/resize while
     // open. Inline style.top/.left beat any CSS rule, which is what
     // we want for dynamic positioning.
     _positionSelfHud() {
-        if (!this.selfHudEl || !this.brandEl) return;
+        if (!this.selfHudEl || !this.brandEl)
+            return;
         const rect = this.brandEl.getBoundingClientRect();
         this.selfHudEl.style.top = `${Math.round(rect.bottom + 10)}px`;
         this.selfHudEl.style.left = `${Math.round(rect.left)}px`;
     }
-
     _closeSelfHud() {
-        if (!this.selfHudEl) return;
-        this.selfHudEl.classList.remove('is-open');
-        this.selfHudEl.setAttribute('aria-hidden', 'true');
+        if (!this.selfHudEl)
+            return;
+        this.selfHudEl?.classList.remove('is-open');
+        this.selfHudEl?.setAttribute('aria-hidden', 'true');
         this.selfHudOpen = false;
         // Hide from layout after the fade-out so it doesn't intercept clicks.
         setTimeout(() => {
-            if (!this.selfHudOpen) this.selfHudEl.classList.add('hidden');
+            if (!this.selfHudOpen)
+                this.selfHudEl?.classList.add('hidden');
         }, 220);
     }
-
     // _renderSelfHud paints the popover from local state. Pure DOM
     // mutation — no network. Re-run on every open so the values are
     // current as of the most recent open event.
     _renderSelfHud() {
-        if (!this.selfHudEl) return;
+        if (!this.selfHudEl)
+            return;
         const version = this.app?.versionInfo?.version || '';
         const hud = buildSelfHud({
             hostname: this.app?.hostname || '',
@@ -11042,11 +10995,9 @@ export class TabManager {
             cpuPercent: this._hudCpuPercent(),
             tabs: this.tabs.values(),
         });
-
         // CPU-driven emphasis class on the popover so the cpu line tints
         // when load climbs. Matches the brand-logo class names.
-        const level =
-            hud.cpuPercent == null ? 'cpu-idle' : cpuLevel(hud.cpuPercent);
+        const level = hud.cpuPercent == null ? 'cpu-idle' : cpuLevel(hud.cpuPercent);
         for (const cls of [
             'cpu-idle',
             'cpu-moderate',
@@ -11056,23 +11007,18 @@ export class TabManager {
             this.selfHudEl.classList.remove(cls);
         }
         this.selfHudEl.classList.add(level);
-
-        const workingGlyph =
-            hud.busy > 0
-                ? '<span class="glyph glyph-working" title="Working">ϕ</span>'
-                : '<span class="glyph glyph-idle" title="Idle">Φ</span>';
-        const attentionGlyph =
-            hud.attention > 0
-                ? '<span class="glyph glyph-attention" title="Needs attention">☥</span>'
-                : '';
-
+        const workingGlyph = hud.busy > 0
+            ? '<span class="glyph glyph-working" title="Working">ϕ</span>'
+            : '<span class="glyph glyph-idle" title="Idle">Φ</span>';
+        const attentionGlyph = hud.attention > 0
+            ? '<span class="glyph glyph-attention" title="Needs attention">☥</span>'
+            : '';
         const versionBit = hud.version
             ? `<span class="self-hud-version">v${escapeHtml(hud.version)}</span>`
             : '';
         const hostBit = hud.hostname
             ? `<span class="glyph">Φ</span><span class="self-hud-host-name">${escapeHtml(hud.hostname)}</span>`
             : '<span class="glyph">Φ</span><span class="self-hud-host-name">phi</span>';
-
         this.selfHudEl.innerHTML = `
             <div class="self-hud-header">
                 <span class="self-hud-host">${hostBit}</span>
@@ -11089,16 +11035,14 @@ export class TabManager {
                     <span class="metric-count">${hud.busy}</span>
                     <span class="metric-label">working</span>
                 </span>
-                ${
-                    hud.attention > 0
-                        ? `
+                ${hud.attention > 0
+            ? `
                 <span class="metric glyph-attention">
                     ${attentionGlyph}
                     <span class="metric-count">${hud.attention}</span>
                     <span class="metric-label">attention</span>
                 </span>`
-                        : ''
-                }
+            : ''}
             </div>
             <div class="self-hud-footer">
                 <span class="cpu">${escapeHtml(formatHudCpu(hud))}</span>
@@ -11106,38 +11050,36 @@ export class TabManager {
             </div>
         `;
     }
-
     sendStagedInput(options) {
         const activeTab = this.getActiveTab();
-        if (!activeTab) return;
-
+        if (!activeTab)
+            return;
         const val = this.inputTextArea.value;
         const attachments = this.stagedAttachments;
         // Empty guard now also allows attachments-only sends. Without
         // this, "drop a screenshot, hit Send with no text" silently
         // does nothing — a confusing dead end.
-        if (!val && attachments.length === 0) return;
+        if (!val && attachments.length === 0)
+            return;
         const itemAttachments = attachments.filter((item) => item.phiAttachment);
         if (itemAttachments.length > 0) {
             this._sendAttachmentSnapshot(activeTab, val, attachments, itemAttachments);
             return;
         }
-
         // A send abandons Pi recall; a deferred arrow flushes first so
         // Pi sees the keys in the order they were pressed.
         this._resetPiRecall({ flush: true });
-
         // Compose payload: text first (if any), then one formatted
         // attachment path per line. Path formatting is per-active-tab
         // coder (claude → @path, bash → raw path).
         const coder = activeTab.coder;
         const lines = [];
-        if (val?.trim()) lines.push(val.trim());
+        if (val?.trim())
+            lines.push(val.trim());
         for (const a of attachments) {
             lines.push(formatAttachment(coder, a));
         }
         let payload = lines.join('\n');
-
         if (coder === 'pi-rpc') {
             if (!rpcChatSend(activeTab.paneId, payload, options)) {
                 this.app.showToast('pi chat: not ready', { type: 'error' });
@@ -11156,30 +11098,32 @@ export class TabManager {
             }
             activeTab.chatHistoryCursor = -1;
             activeTab.chatHistoryPreCycleValue = undefined;
-        } else {
+        }
+        else {
             // Wrap in bracketed paste markers for large prompts or multiline text
             // to prevent TUI trickle-rendering / autocomplete lagging.
             // Codex requires bracketed paste even for short prompts so that
             // inline autocomplete does not intercept keystrokes / Enter.
-            if (
-                coder === 'codex' ||
+            if (coder === 'codex' ||
                 payload.length > 16 ||
-                payload.includes('\n')
-            ) {
+                payload.includes('\n')) {
+                // biome-ignore lint/suspicious/noControlCharactersInRegex: bracketed-paste markers
                 payload = `\x1b[200~${payload.replace(/\x1b/g, '\u241b')}\x1b[201~`;
             }
-
             // Record uncertainty BEFORE invoking the writer: it can accept a
             // prefix and close the socket (or throw) before returning. A known
             // offline refusal stays not-sent. sendInput still owns its toast.
-            if (activeTab.pasteRecovery && activeTab.ws && !activeTab.isDead && activeTab.ws.ws?.readyState === 1) {
+            if (activeTab.pasteRecovery &&
+                activeTab.ws &&
+                !activeTab.isDead &&
+                activeTab.ws.ws?.readyState === 1) {
                 activeTab.pasteRecovery = 'unconfirmed';
                 this.saveActiveDraft();
             }
             const sent = this.sendInput(activeTab, `${payload}\r`);
-            if (!sent) return;
+            if (!sent)
+                return;
         }
-
         // Record this prompt into ~/.phi/prompt_history.json BEFORE
         // clearing the textarea. Fire-and-forget so a slow disk
         // doesn't hold up the send. The backend handles dedup / cap
@@ -11191,14 +11135,11 @@ export class TabManager {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text: sentText, cwd: cwdForHistory }),
-            }).catch((err) =>
-                console.warn('[prompt_history] append failed', err),
-            );
+            }).catch((err) => console.warn('[prompt_history] append failed', err));
             // Reset history cursor — user just sent fresh text, cycling
             // should start back at the most-recent prior entry.
             this._historyCursor = -1;
         }
-
         this.inputTextArea.value = '';
         this.lastInputValue = '';
         this.stagedAttachments = [];
@@ -11206,85 +11147,106 @@ export class TabManager {
         this._renderAttachmentStrip();
         this.adjustInputHeight();
         this._resumeFollowOnSubmit(activeTab);
-
         // Auto sync clipboard on /copy command
         if (val?.includes('/copy')) {
             setTimeout(() => {
-                this.app.syncRemoteClipboard();
+                this.app.syncRemoteClipboard?.();
             }, 300);
         }
-
         this.inputTextArea.focus({ preventScroll: true });
     }
-
     _sendAttachmentSnapshot(tab, text, attachments, items) {
         const legacy = attachments.filter((item) => !item.phiAttachment);
         if (legacy.length > 0) {
-            tab._attachmentNotice = 'Send legacy path attachments separately from new attachments.';
+            tab._attachmentNotice =
+                'Send legacy path attachments separately from new attachments.';
             this._renderAttachmentStatus(tab);
             return;
         }
         if (tab.coder !== 'pi') {
-            tab._attachmentNotice = 'Native attachment sending is available only in regular Pi panes.';
+            tab._attachmentNotice =
+                'Native attachment sending is available only in regular Pi panes.';
             this._renderAttachmentStatus(tab);
             return;
         }
         if (items.length < 1 || items.length > 8) {
-            tab._attachmentNotice = 'Send between 1 and 8 attachments at a time.';
+            tab._attachmentNotice =
+                'Send between 1 and 8 attachments at a time.';
             this._renderAttachmentStatus(tab);
             return;
         }
-        if (items.reduce((sum, item) => sum + (item.sizeBytes || 0), 0) > 50 * 1024 * 1024) {
-            tab._attachmentNotice = 'The attachment batch is over the 50 MiB send limit. Remove a file and send again.';
+        if (items.reduce((sum, item) => sum + (item.sizeBytes || 0), 0) >
+            50 * 1024 * 1024) {
+            tab._attachmentNotice =
+                'The attachment batch is over the 50 MiB send limit. Remove a file and send again.';
             this._renderAttachmentStatus(tab);
             return;
         }
         if (tab._attachmentConflict) {
-            tab._attachmentNotice = 'This draft changed in another tab. Keep this copy open; reload or resolve the conflict before sending.';
+            tab._attachmentNotice =
+                'This draft changed in another tab. Keep this copy open; reload or resolve the conflict before sending.';
             this._renderAttachmentStatus(tab);
             return;
         }
         if (tab._attachmentPendingSnapshot) {
-            tab._attachmentNotice = 'Resolve the earlier attachment submission before sending another attachment.';
+            tab._attachmentNotice =
+                'Resolve the earlier attachment submission before sending another attachment.';
             this._renderAttachmentStatus(tab);
             return;
         }
         const notReady = items.find((item) => item.uploadState !== 'ready');
         if (notReady) {
-            tab._attachmentNotice = notReady.uploadState === 'unknown'
-                ? 'Upload is not confirmed. Check its status before selecting it again.'
-                : 'Wait for the attachment upload to finish or remove the failed item.';
+            tab._attachmentNotice =
+                notReady.uploadState === 'unknown'
+                    ? 'Upload is not confirmed. Check its status before selecting it again.'
+                    : 'Wait for the attachment upload to finish or remove the failed item.';
             this._renderAttachmentStatus(tab);
             return;
         }
         const owner = items[0].owner;
         const scope = this._attachmentRequestScopes.get(items[0].id)?.scope || null;
-        const foreign = items.find((item) => !item.owner || item.owner.paneId !== tab.paneId || this._attachmentOwnerKey(item.owner) !== this._attachmentOwnerKey(owner) || !this._attachmentOwnerCurrent(tab, item.owner, this._attachmentRequestScopes.get(item.id)?.scope || null));
+        const foreign = items.find((item) => !item.owner ||
+            item.owner.paneId !== tab.paneId ||
+            this._attachmentOwnerKey(item.owner) !==
+                this._attachmentOwnerKey(owner) ||
+            !this._attachmentOwnerCurrent(tab, item.owner, this._attachmentRequestScopes.get(item.id)?.scope ?? null));
         if (!owner || foreign) {
-            tab._attachmentNotice = 'This attachment belongs to another pane or Phi server. Select it again here.';
+            tab._attachmentNotice =
+                'This attachment belongs to another pane or Phi server. Select it again here.';
             this._renderAttachmentStatus(tab);
             return;
         }
-        if (!tab.piBridge || tab.piBridge.connected !== true || !(tab.piBridge.capabilities || []).includes('pi.attachments.v3')) {
-            tab._attachmentNotice = 'Pi attachment sending is unavailable for this pane. Existing text and paste/drop behavior is unchanged.';
+        if (!tab.piBridge ||
+            tab.piBridge.connected !== true ||
+            !(tab.piBridge.capabilities || []).includes('pi.attachments.v3')) {
+            tab._attachmentNotice =
+                'Pi attachment sending is unavailable for this pane. Existing text and paste/drop behavior is unchanged.';
             this._renderAttachmentStatus(tab);
             return;
         }
         const ownerKey = this._attachmentOwnerKey(owner);
         const context = tab._attachmentContext;
         if (!context || tab._attachmentContextOwnerKey !== ownerKey) {
-            void this._refreshAttachmentContext(tab, owner, scope);
-            tab._attachmentNotice = 'Checking Pi state. Press Send again when the attachment control is ready.';
+            void this._refreshAttachmentContext(tab, owner, scope ?? undefined);
+            tab._attachmentNotice =
+                'Checking Pi state. Press Send again when the attachment control is ready.';
             this._renderAttachmentStatus(tab);
             return;
         }
-        if (!context.available || !context.process_id || !context.generation || context.session_id === null || context.leaf_id === null) {
-            tab._attachmentNotice = 'Pi attachment sending is unavailable or its target state is unknown. Keep this draft and press Send again after reconnect.';
+        if (!context.available ||
+            !context.process_id ||
+            !context.generation ||
+            context.session_id === null ||
+            context.leaf_id === null) {
+            tab._attachmentNotice =
+                'Pi attachment sending is unavailable or its target state is unknown. Keep this draft and press Send again after reconnect.';
             this._renderAttachmentStatus(tab);
             return;
         }
-        if (items.some((item) => item.kind === 'image') && context.image_available !== true) {
-            tab._attachmentNotice = 'The current Pi model is not confirmed to support image input.';
+        if (items.some((item) => item.kind === 'image') &&
+            context.image_available !== true) {
+            tab._attachmentNotice =
+                'The current Pi model is not confirmed to support image input.';
             this._renderAttachmentStatus(tab);
             return;
         }
@@ -11293,8 +11255,9 @@ export class TabManager {
             pane: tab.paneId,
             owner: { ...owner },
             ownerKey,
-            draftRevision: Number.isSafeInteger(tab._attachmentRevision) ? tab._attachmentRevision : 0,
-            scope,
+            draftRevision: Number.isSafeInteger(tab._attachmentRevision)
+                ? tab._attachmentRevision
+                : 0,
             context: {
                 process_id: context.process_id,
                 generation: context.generation,
@@ -11302,6 +11265,7 @@ export class TabManager {
                 leaf_id: context.leaf_id,
                 model: context.model ? { ...context.model } : null,
             },
+            scope: scope,
             refreshContextBeforeDispatch: this._attachmentNetworkOffline(),
             text: text.trim(),
             items: items.slice(),
@@ -11323,81 +11287,104 @@ export class TabManager {
         this._renderAttachmentStatus(tab);
         void this._freezeAndDispatchAttachmentSnapshot(tab, snapshot);
     }
-
     async _freezeAndDispatchAttachmentSnapshot(tab, snapshot) {
         // Freeze shares the draft-write queue. New typing stays local at once,
         // then persists after this atomic snapshot, not with a future revision.
         // Only preparation is queued; dispatch must not delay the next save.
         const previous = tab._attachmentPersistChain;
-        const freezing = (previous || Promise.resolve()).catch(() => {}).then(() =>
-            this._freezeAttachmentSnapshot(tab, snapshot),
-        );
+        const freezing = (previous || Promise.resolve())
+            .catch(() => { })
+            .then(() => this._freezeAttachmentSnapshot(tab, snapshot));
         tab._attachmentPersistChain = freezing;
         try {
             const frozen = await freezing;
-            if (!frozen || tab._attachmentPendingSnapshot !== snapshot) return;
-            tab._attachmentNotice = frozen.warning || 'Submitting attachment to Pi…';
+            if (!frozen || tab._attachmentPendingSnapshot !== snapshot)
+                return;
+            tab._attachmentNotice =
+                frozen.warning || 'Submitting attachment to Pi…';
             this._renderAttachmentStatus(tab);
             if (['dispatched', 'refused', 'cancelled'].includes(frozen.outbox.state)) {
                 this._finishAttachmentSnapshot(tab, snapshot, frozen.outbox.state, frozen.outbox.reason);
-            } else if (frozen.outbox.state === 'waiting') {
+            }
+            else if (frozen.outbox.state === 'waiting') {
                 if (snapshot.refreshContextBeforeDispatch) {
                     await this._recoverAttachmentOutbox(tab, snapshot, true);
-                } else {
+                }
+                else {
                     await this._dispatchAttachmentSnapshot(tab, snapshot, true);
                 }
-            } else if (frozen.outbox.state === 'attempted' || frozen.outbox.state === 'unknown') {
+            }
+            else if (frozen.outbox.state === 'attempted' ||
+                frozen.outbox.state === 'unknown') {
                 snapshot.state = 'unknown';
-                tab._attachmentNotice = 'Submission not confirmed. Check Pi before resending.';
+                tab._attachmentNotice =
+                    'Submission not confirmed. Check Pi before resending.';
                 this._renderAttachmentStatus(tab);
                 await this._checkAttachmentSendStatus(tab, snapshot);
             }
-        } catch {
+        }
+        catch {
             if (tab._attachmentPendingSnapshot === snapshot) {
                 this._finishAttachmentSnapshot(tab, snapshot, 'refused', 'storage');
             }
-        } finally {
-            if (tab._attachmentPersistChain === freezing) tab._attachmentPersistChain = null;
+        }
+        finally {
+            if (tab._attachmentPersistChain === freezing)
+                tab._attachmentPersistChain = null;
         }
     }
-
     async _freezeAttachmentSnapshot(tab, snapshot) {
-        if (tab._attachmentPendingSnapshot !== snapshot || snapshot.outboxState !== 'waiting') return;
-        snapshot.draftRevision = Number.isSafeInteger(tab._attachmentRevision) ? tab._attachmentRevision : 0;
+        if (tab._attachmentPendingSnapshot !== snapshot ||
+            snapshot.outboxState !== 'waiting')
+            return;
+        snapshot.draftRevision = Number.isSafeInteger(tab._attachmentRevision)
+            ? tab._attachmentRevision
+            : 0;
         if (!snapshot.refreshContextBeforeDispatch) {
             // Bind a NEW online send to a live leaf, not an event-time
             // cache. Never change the origin or rebind a saved outbox.
             // The composer has already responded locally to this click.
-            tab._attachmentNotice = 'Checking Pi state before submitting the attachment.';
+            tab._attachmentNotice =
+                'Checking Pi state before submitting the attachment.';
             this._renderAttachmentStatus(tab);
             try {
-                const context = await getAttachmentPiContext({ ...snapshot.owner, scope: snapshot.scope });
-                if (tab._attachmentPendingSnapshot !== snapshot || snapshot.outboxState !== 'waiting') return;
-                if (
-                    !context.available ||
+                const context = await getAttachmentPiContext({
+                    ...snapshot.owner,
+                    scope: snapshot.scope,
+                });
+                if (tab._attachmentPendingSnapshot !== snapshot ||
+                    snapshot.outboxState !== 'waiting')
+                    return;
+                if (!context.available ||
                     context.process_id !== snapshot.context.process_id ||
                     context.generation !== snapshot.context.generation ||
                     context.session_id !== snapshot.context.session_id ||
-                    context.model?.provider !== snapshot.context.model?.provider ||
+                    context.model?.provider !==
+                        snapshot.context.model?.provider ||
                     context.model?.id !== snapshot.context.model?.id ||
-                    context.leaf_id === null
-                ) {
+                    context.leaf_id === null) {
                     this._finishAttachmentSnapshot(tab, snapshot, 'refused', context.available ? 'stale' : 'unavailable');
                     return;
                 }
-                snapshot.context = { ...snapshot.context, leaf_id: context.leaf_id };
-            } catch {
+                snapshot.context = {
+                    ...snapshot.context,
+                    leaf_id: context.leaf_id,
+                };
+            }
+            catch {
                 // Keep the original target if this read fails. Save the
                 // snapshot locally and use the existing strict recovery.
                 snapshot.refreshContextBeforeDispatch = true;
             }
         }
-        if (tab._attachmentPendingSnapshot !== snapshot || snapshot.outboxState !== 'waiting') return;
-        const frozen = await this.attachmentStore.freezeDraft(
-            snapshot.owner,
-            snapshot.draftRevision,
-            { text: snapshot.text, context: snapshot.context, items: snapshot.items },
-        );
+        if (tab._attachmentPendingSnapshot !== snapshot ||
+            snapshot.outboxState !== 'waiting')
+            return;
+        const frozen = await this.attachmentStore.freezeDraft(snapshot.owner, snapshot.draftRevision, {
+            text: snapshot.text,
+            context: snapshot.context,
+            items: snapshot.items,
+        });
         if (snapshot.outboxState === 'cancelled') {
             if (!frozen.conflict) {
                 snapshot.id = frozen.outbox.id;
@@ -11405,7 +11392,8 @@ export class TabManager {
             }
             return;
         }
-        if (tab._attachmentPendingSnapshot !== snapshot) return;
+        if (tab._attachmentPendingSnapshot !== snapshot)
+            return;
         if (frozen.conflict) {
             this._finishAttachmentSnapshot(tab, snapshot, 'refused', 'stale');
             return;
@@ -11415,36 +11403,42 @@ export class TabManager {
         tab._attachmentRevision = Math.max(tab._attachmentRevision || 0, snapshot.draftRevision + 1);
         return frozen;
     }
-
     async _dispatchAttachmentSnapshot(tab, snapshot, explicit = false) {
-        if (!snapshot.id || tab._attachmentPendingSnapshot !== snapshot) return;
-        if (
-            this.getActiveTab() !== tab ||
+        if (!snapshot.id || tab._attachmentPendingSnapshot !== snapshot)
+            return;
+        if (this.getActiveTab() !== tab ||
             !this.attachmentStore.isActive(snapshot.owner) ||
-            !this._attachmentOwnerCurrent(tab, snapshot.owner, snapshot.scope)
-        ) {
+            !this._attachmentOwnerCurrent(tab, snapshot.owner, snapshot.scope)) {
             snapshot.state = 'sending';
             snapshot.outboxState = 'waiting';
-            tab._attachmentNotice = 'Attachment send is parked for its original pane and backend.';
+            tab._attachmentNotice =
+                'Attachment send is parked for its original pane and backend.';
             this._renderAttachmentStatus(tab);
             return;
         }
         if (this._attachmentNetworkOffline()) {
             snapshot.state = 'sending';
             snapshot.outboxState = 'waiting';
-            tab._attachmentNotice = 'Waiting to submit the saved attachment snapshot.';
+            tab._attachmentNotice =
+                'Waiting to submit the saved attachment snapshot.';
             this._renderAttachmentStatus(tab);
             return;
         }
         const claim = await this.attachmentStore.claimSend(snapshot.id, explicit);
-        if (tab._attachmentPendingSnapshot !== snapshot) return;
+        if (tab._attachmentPendingSnapshot !== snapshot)
+            return;
+        const outbox = claim.outbox;
         if (!claim.claimed) {
-            if (['dispatched', 'refused', 'cancelled'].includes(claim.outbox?.state)) {
-                this._finishAttachmentSnapshot(tab, snapshot, claim.outbox.state, claim.outbox.reason);
-            } else if (claim.outbox?.state === 'attempted' || claim.outbox?.state === 'unknown') {
-                snapshot.outboxState = claim.outbox.state;
+            if (outbox &&
+                ['dispatched', 'refused', 'cancelled'].includes(outbox.state)) {
+                this._finishAttachmentSnapshot(tab, snapshot, outbox.state, outbox.reason);
+            }
+            else if (outbox?.state === 'attempted' ||
+                outbox?.state === 'unknown') {
+                snapshot.outboxState = outbox.state;
                 snapshot.state = 'unknown';
-                tab._attachmentNotice = 'Submission not confirmed. Check Pi before resending.';
+                tab._attachmentNotice =
+                    'Submission not confirmed. Check Pi before resending.';
                 this._renderAttachmentStatus(tab);
                 void this._checkAttachmentSendStatus(tab, snapshot);
             }
@@ -11459,10 +11453,7 @@ export class TabManager {
             attachment_ids: snapshot.items.map((item) => item.id),
         };
         try {
-            const result = await sendAttachmentPrompt(
-                { ...snapshot.owner, scope: snapshot.scope },
-                body,
-            );
+            const result = await sendAttachmentPrompt({ ...snapshot.owner, scope: snapshot.scope }, body);
             if (result.state === 'dispatched') {
                 this._finishAttachmentSnapshot(tab, snapshot, 'dispatched', '');
                 return;
@@ -11473,7 +11464,8 @@ export class TabManager {
             }
             this._finishAttachmentSnapshot(tab, snapshot, 'unknown', 'uncertain');
             await this._checkAttachmentSendStatus(tab, snapshot);
-        } catch (error) {
+        }
+        catch (error) {
             if (error instanceof AttachmentRequestError && !error.uncertain) {
                 this._finishAttachmentSnapshot(tab, snapshot, 'refused', error.reason);
                 return;
@@ -11482,70 +11474,88 @@ export class TabManager {
             await this._checkAttachmentSendStatus(tab, snapshot);
         }
     }
-
     _finishAttachmentSnapshot(tab, snapshot, state, reason) {
-        if (tab._attachmentPendingSnapshot !== snapshot) return;
+        if (tab._attachmentPendingSnapshot !== snapshot)
+            return;
         snapshot.state = state;
         snapshot.outboxState = state;
         snapshot.reason = reason;
-        if (snapshot.id) void this.attachmentStore.updateOutbox(snapshot.id, state, reason);
+        if (snapshot.id)
+            void this.attachmentStore.updateOutbox(snapshot.id, state, reason);
         if (state === 'dispatched') {
             tab._attachmentPendingSnapshot = null;
             tab._attachmentLastSubmitted = snapshot;
-            for (const item of snapshot.items) this._attachmentRequestScopes.delete(item.id);
+            for (const item of snapshot.items)
+                this._attachmentRequestScopes.delete(item.id);
             tab._attachmentNotice = 'Submitted to Pi.';
-        } else if (state === 'unknown') {
-            tab._attachmentNotice = 'Submission not confirmed. Check Pi before resending.';
-        } else {
+        }
+        else if (state === 'unknown') {
+            tab._attachmentNotice =
+                'Submission not confirmed. Check Pi before resending.';
+        }
+        else {
             tab._attachmentNotice = attachmentRefusalNotice(reason);
         }
         this._renderAttachmentStripForTab(tab);
         this._renderAttachmentStatus(tab);
     }
-
     _renderAttachmentStripForTab(tab) {
-        if (this.getActiveTab() !== tab) return;
+        if (this.getActiveTab() !== tab)
+            return;
         this.stagedAttachments = tab.draftAttachments || [];
         this._renderAttachmentStrip();
     }
-
     async _checkAttachmentSendStatus(tab, snapshot) {
-        if (this.getActiveTab() !== tab || this._attachmentNetworkOffline() || snapshot._statusPending) return;
+        if (this.getActiveTab() !== tab ||
+            this._attachmentNetworkOffline() ||
+            snapshot._statusPending)
+            return;
         snapshot._statusPending = true;
         try {
-            const status = await getAttachmentSendStatus(
-                { ...snapshot.owner, scope: snapshot.scope },
-                snapshot.id,
-            );
-            if (tab._attachmentPendingSnapshot !== snapshot) return;
+            const status = await getAttachmentSendStatus({ ...snapshot.owner, scope: snapshot.scope }, snapshot.id);
+            if (tab._attachmentPendingSnapshot !== snapshot)
+                return;
             if (status.state === 'dispatched' || status.state === 'refused') {
                 this._finishAttachmentSnapshot(tab, snapshot, status.state, status.reason);
-            } else {
+            }
+            else {
                 this._finishAttachmentSnapshot(tab, snapshot, 'unknown', 'uncertain');
                 this._scheduleAttachmentRecovery(tab, snapshot.owner, snapshot.scope);
             }
-        } catch {
+        }
+        catch {
             if (tab._attachmentPendingSnapshot === snapshot) {
                 this._finishAttachmentSnapshot(tab, snapshot, 'unknown', 'uncertain');
                 this._scheduleAttachmentRecovery(tab, snapshot.owner, snapshot.scope);
             }
-        } finally {
+        }
+        finally {
             snapshot._statusPending = false;
         }
     }
-
     _restoreAttachmentSnapshot(tab, snapshot, warnDuplicate) {
-        if (tab._attachmentPendingSnapshot !== snapshot && tab._attachmentLastSubmitted !== snapshot) return;
-        if (warnDuplicate && !window.confirm('Pi may already have received this attachment. Restoring it and sending again can create a duplicate. Continue?')) return;
-        const currentText = this.getActiveTab() === tab ? this.inputTextArea.value : tab.draft || '';
-        const currentAttachments = this.getActiveTab() === tab ? this.stagedAttachments : tab.draftAttachments || [];
+        if (tab._attachmentPendingSnapshot !== snapshot &&
+            tab._attachmentLastSubmitted !== snapshot)
+            return;
+        if (warnDuplicate &&
+            !window.confirm('Pi may already have received this attachment. Restoring it and sending again can create a duplicate. Continue?'))
+            return;
+        const currentText = this.getActiveTab() === tab
+            ? this.inputTextArea.value
+            : tab.draft || '';
+        const currentAttachments = this.getActiveTab() === tab
+            ? this.stagedAttachments
+            : tab.draftAttachments || [];
         if (currentText || currentAttachments.length) {
-            tab._attachmentNotice = 'Clear the next draft before restoring this attachment snapshot.';
+            tab._attachmentNotice =
+                'Clear the next draft before restoring this attachment snapshot.';
             this._renderAttachmentStatus(tab);
             return;
         }
-        if (tab._attachmentPendingSnapshot === snapshot) tab._attachmentPendingSnapshot = null;
-        if (tab._attachmentLastSubmitted === snapshot) tab._attachmentLastSubmitted = null;
+        if (tab._attachmentPendingSnapshot === snapshot)
+            tab._attachmentPendingSnapshot = null;
+        if (tab._attachmentLastSubmitted === snapshot)
+            tab._attachmentLastSubmitted = null;
         tab.draft = snapshot.text;
         tab.draftAttachments = snapshot.items.slice();
         if (this.getActiveTab() === tab) {
@@ -11556,44 +11566,48 @@ export class TabManager {
             this._renderAttachmentStrip();
             this.adjustInputHeight();
             this.inputTextArea.focus({ preventScroll: true });
-        } else {
+        }
+        else {
             this.saveTabDraft(tab);
         }
-        tab._attachmentNotice = 'Snapshot restored. Review it and press Send to create a new submission.';
+        tab._attachmentNotice =
+            'Snapshot restored. Review it and press Send to create a new submission.';
         this._renderAttachmentStatus(tab);
     }
-
-    sendRawInput(bytes, { focusInputOnMobile = true, submit = false } = {}) {
+    sendRawInput(bytes, { focusInputOnMobile = true, submit = false, } = {}) {
         const activeTab = this.getActiveTab();
-        if (!activeTab || activeTab.coder === 'pi-rpc') return;
+        if (!activeTab || activeTab.coder === 'pi-rpc')
+            return;
         // The backend PTY layer handles the Windows ConPTY quirk where a \r
         // bundled with preceding text fails to register as Enter — see pkg/pty.
         const sent = this.sendInput(activeTab, bytes);
-        if (!sent) return;
-
+        if (!sent)
+            return;
         const isMobile = prefersInputBarFocus();
         if (isMobile) {
-            if (focusInputOnMobile && !activeTab.directMode && this.inputTextArea) {
+            if (focusInputOnMobile &&
+                !activeTab.directMode &&
+                this.inputTextArea) {
                 this.inputTextArea.focus({ preventScroll: true });
-            } else {
+            }
+            else {
                 this.inputTextArea?.blur();
             }
-        } else {
+        }
+        else {
             this.focusActiveTerminal();
         }
-
         // Sending bytes is not a submit unless the caller says so: Cancel,
         // Escape, Ctrl+T, and quick-nav arrows must leave a reader in place.
-        if (submit) this._resumeFollowOnSubmit(activeTab);
-
+        if (submit)
+            this._resumeFollowOnSubmit(activeTab);
         // Auto sync clipboard on /copy command
-        if (bytes.includes('/copy')) {
+        if (typeof bytes === 'string' && bytes.includes('/copy')) {
             setTimeout(() => {
-                this.app.syncRemoteClipboard();
+                this.app.syncRemoteClipboard?.();
             }, 300);
         }
     }
-
     /**
      * Send input to a SPECIFIC tab — does NOT re-resolve the active tab.
      * Thin wrapper over sendInput() (which owns the disconnect toast +
@@ -11604,10 +11618,10 @@ export class TabManager {
      */
     sendToTab(tabInfo, payload, { submit = false } = {}) {
         const sent = this.sendInput(tabInfo, payload);
-        if (sent && submit) this._resumeFollowOnSubmit(tabInfo);
+        if (sent && submit)
+            this._resumeFollowOnSubmit(tabInfo);
         return sent;
     }
-
     /**
      * Raw key→PTY forwarding shared by the staged-input bar (when empty),
      * the terminal's custom key handler (non-direct mode), and the mobile
@@ -11618,13 +11632,16 @@ export class TabManager {
      * Emptiness/modifier gates are caller concerns, not decided here.
      */
     _forwardKeyToPty(e, tab) {
-        if (tab?.coder === 'pi-rpc') return false;
-        if (e.isComposing) return false; // never emit bytes mid-IME composition
+        if (tab?.coder === 'pi-rpc')
+            return false;
+        if (e.isComposing)
+            return false; // never emit bytes mid-IME composition
         let sendChar = null;
         // Shift+Tab (Backtab) — also prevents the browser focus shift.
         if (e.key === 'Tab' && e.shiftKey) {
             sendChar = '\x1b[Z';
-        } else {
+        }
+        else {
             const keys = {
                 ArrowUp: '\u001b[A',
                 ArrowDown: '\u001b[B',
@@ -11642,7 +11659,8 @@ export class TabManager {
             };
             if (keys[e.key]) {
                 sendChar = keys[e.key];
-            } else if (e.ctrlKey) {
+            }
+            else if (e.ctrlKey) {
                 const ctrlKeys = {
                     c: '\x03',
                     o: '\x0f',
@@ -11655,46 +11673,45 @@ export class TabManager {
                 }
             }
         }
-        if (sendChar === null) return false;
+        if (sendChar === null)
+            return false;
         e.preventDefault();
         // Forwarding a key is not a submit except when the key is Enter.
         if (tab) {
-            if (e.key === 'Enter') this.sendToTab(tab, sendChar, { submit: true });
-            else this.sendToTab(tab, sendChar);
+            if (e.key === 'Enter')
+                this.sendToTab(tab, sendChar, { submit: true });
+            else
+                this.sendToTab(tab, sendChar);
         }
         return true;
     }
-
     /**
      * Legacy OpenCode can discard Enter while updating a pasted command.
      * Keep its 200ms gap pinned to the clicked tab. V2 Mini queues Enter
      * behind a pending paste, so it uses the atomic form, like Pi.
      */
     sendSlashCommand(tabInfo, cmd, { focusInputOnMobile = true } = {}) {
-        if (tabInfo?.coder === 'pi-rpc') return false;
+        if (tabInfo?.coder === 'pi-rpc')
+            return false;
         // An obsolete exact-Compact target dispatches nowhere: the tab
         // object is no longer the pane's current session, so neither
         // the native API nor the legacy PTY paste may fire from it.
         // (sendInput never checks map membership, so merely failing
         // eligibility would still PTY-send.) Other commands and
         // backends keep legacy behavior.
-        if (
-            cmd === '/compact' &&
+        if (cmd === '/compact' &&
             tabInfo?.coder === 'pi' &&
             this.tabs &&
-            this.tabs.get(tabInfo.paneId) !== tabInfo
-        )
+            this.tabs.get(tabInfo.paneId) !== tabInfo)
             return true;
         // Exact /compact on a capable ordinary Pi tab takes the native
         // bridge path; anything incapable keeps the legacy paste+Enter.
         // Eligibility precedes every native guard, so a later click
         // while disconnected still reaches the legacy PTY action even
         // when an old HTTP request is still pending.
-        if (
-            cmd === '/compact' &&
+        if (cmd === '/compact' &&
             tabInfo?.coder === 'pi' &&
-            this._piBridgeCompactEligible(tabInfo)
-        ) {
+            this._piBridgeCompactEligible(tabInfo)) {
             return this._sendPiBridgeCompact(tabInfo, {
                 focusInputOnMobile,
             });
@@ -11707,14 +11724,9 @@ export class TabManager {
         // dispatch never silently becomes a second reload. A waiting
         // press cancels and a review press dismisses on any path.
         if (cmd === '/reload' && tabInfo?.coder === 'pi') {
-            if (
-                this.tabs &&
-                this.tabs.get(tabInfo.paneId) !== tabInfo
-            )
+            if (this.tabs && this.tabs.get(tabInfo.paneId) !== tabInfo)
                 return true;
-            if (
-                this._piReloadCancelOrDismiss(tabInfo, focusInputOnMobile)
-            )
+            if (this._piReloadCancelOrDismiss(tabInfo, focusInputOnMobile))
                 return true;
             if (this._piBridgeReloadEligible(tabInfo)) {
                 return this._sendPiBridgeReload(tabInfo, {
@@ -11722,11 +11734,7 @@ export class TabManager {
                 });
             }
             if (this._piReloadBlocked(tabInfo)) {
-                this._piReloadToast(
-                    this._piReloadIntentText(
-                        tabInfo._piReloadIntent,
-                    ),
-                );
+                this._piReloadToast(this._piReloadIntentText(tabInfo._piReloadIntent));
                 this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
                 return true;
             }
@@ -11735,12 +11743,9 @@ export class TabManager {
         }
         const paste = `\x1b[200~${cmd}\x1b[201~`;
         const legacyOpenCode = tabInfo.coder === 'opencode' && !isOpenCodeMini(tabInfo);
-        const sent = this.sendToTab(
-            tabInfo,
-            legacyOpenCode ? paste : `${paste}\r`,
-            { submit: true },
-        );
-        if (!sent) return false;
+        const sent = this.sendToTab(tabInfo, legacyOpenCode ? paste : `${paste}\r`, { submit: true });
+        if (!sent)
+            return false;
         if (legacyOpenCode) {
             // The command is already authorized; only a newer viewport intent
             // cancels the follow, never the send.
@@ -11754,23 +11759,25 @@ export class TabManager {
         this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
         return true;
     }
-
     // _focusAfterSlashCommand keeps one focus tail for the legacy and
     // native slash paths: mobile honors the caller's focus option and
     // desktop returns to the terminal.
     _focusAfterSlashCommand(tabInfo, focusInputOnMobile) {
         const isMobile = prefersInputBarFocus();
         if (isMobile) {
-            if (focusInputOnMobile && !tabInfo.directMode && this.inputTextArea) {
+            if (focusInputOnMobile &&
+                !tabInfo.directMode &&
+                this.inputTextArea) {
                 this.inputTextArea.focus({ preventScroll: true });
-            } else {
+            }
+            else {
                 this.inputTextArea?.blur();
             }
-        } else {
+        }
+        else {
             this.focusActiveTerminal();
         }
     }
-
     // _sendPiBridgeCompact runs the native bridge path for an exact
     // /compact on a capable Pi PTY tab. Always handled (true): a press
     // during a turn is held for that turn, an unqueueable press explains
@@ -11781,7 +11788,8 @@ export class TabManager {
         const paneId = tabInfo.paneId;
         // One native request per pane; a duplicate desktop/mobile
         // click while one is pending is swallowed, never replayed.
-        if (this._piBridgeCompactPending?.get(paneId)) return true;
+        if (this._piBridgeCompactPending?.get(paneId))
+            return true;
         const view = tabInfo.piBridge;
         // A second press cancels the turn-scoped queue instead of
         // dispatching or stacking another request.
@@ -11798,27 +11806,24 @@ export class TabManager {
             // for queued messages, active/unknown compaction, or an
             // unknown Pi state. A press that cannot queue still gets
             // an explanation instead of a dead grey control.
-            if (this._piBridgeCompactQueueable(tabInfo)) {
+            if (view && this._piBridgeCompactQueueable(tabInfo)) {
                 tabInfo._piCompactQueued = {
                     ws: tabInfo.ws,
                     generation: view.generation,
-                    lastRun:
-                        typeof view.last_run === 'string'
-                            ? view.last_run
-                            : '',
+                    lastRun: typeof view.last_run === 'string' ? view.last_run : '',
                 };
-                this._piCompactToast(
-                    'Compact queued — runs when Pi is idle',
-                );
+                this._piCompactToast('Compact queued — runs when Pi is idle');
                 this._refreshPiBridgeModels(tabInfo);
-            } else {
-                this._piCompactToast(
-                    piBridgeCompactReasonText(readiness.reason),
-                );
+            }
+            else {
+                this._piCompactToast(piBridgeCompactReasonText(readiness.reason));
             }
             this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
             return true;
         }
+        // Ready implies a view; the guard keeps that visible to the reader.
+        if (!view)
+            return true;
         const controller = new AbortController();
         const op = {
             tab: tabInfo,
@@ -11850,137 +11855,121 @@ export class TabManager {
                 signal: controller.signal,
                 cache: 'no-store',
             });
-        } catch (error) {
+        }
+        catch (error) {
             request = Promise.reject(error);
         }
-        Promise.resolve(request).then(
-            (res) => {
-                let parsed = null;
-                try {
-                    parsed =
-                        typeof res?.json === 'function' ? res.json() : null;
-                } catch {
-                    parsed = null;
-                }
-                return Promise.resolve(parsed)
-                    .catch(() => null)
-                    .then((json) => ({ res, json }));
-            },
-            () => ({ res: null, json: null }),
-        ).then(({ res, json }) =>
-            this._finalizePiBridgeCompact(
-                op,
-                this._piBridgeCompactOutcome(res, json),
-            ),
-        );
+        Promise.resolve(request)
+            .then((res) => {
+            let parsed = null;
+            try {
+                parsed =
+                    typeof res?.json === 'function' ? res.json() : null;
+            }
+            catch {
+                parsed = null;
+            }
+            return Promise.resolve(parsed)
+                .catch(() => null)
+                .then((json) => ({ res, json }));
+        }, () => ({ res: null, json: null }))
+            .then(({ res, json }) => this._finalizePiBridgeCompact(op, this._piBridgeCompactOutcome(res, json)));
         this._refreshPiBridgeModels(tabInfo);
         this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
         return true;
     }
-
     // _piBridgeCompactQueueable is true only when the one blocker is
     // the run currently in progress. Queued messages, an active or
     // pending compaction, and an unknown sample are never turned into
     // a deferred action: compacting after those would use context the
     // user did not mean to include.
     _piBridgeCompactQueueable(tab) {
-        if (!this._piBridgeCompactEligible(tab)) return false;
+        if (!this._piBridgeCompactEligible(tab))
+            return false;
         const view = tab?.piBridge;
-        return (
-            view?.running === true &&
+        return (view?.running === true &&
             view.compact_queued === false &&
             view.compact_active === false &&
             view.compact_pending === false &&
             piBridgeCompactReady(view).reason ===
-                'Compact unavailable: Pi is busy'
-        );
+                'Compact unavailable: Pi is busy');
     }
-
     // _flushPiBridgeCompactQueue dispatches one held press after the
     // turn it targeted settles. It never replays a dispatched op and
     // cancels if a new turn starts first, the runtime/socket moves,
     // messages queue, or another compaction starts.
     _flushPiBridgeCompactQueue(tabInfo) {
         const queued = tabInfo?._piCompactQueued;
-        if (!queued) return;
-        if (
-            !this._piBridgeCompactEligible(tabInfo) ||
+        if (!queued)
+            return;
+        if (!this._piBridgeCompactEligible(tabInfo) ||
             tabInfo.ws !== queued.ws ||
-            tabInfo.piBridge?.generation !== queued.generation
-        ) {
+            tabInfo.piBridge?.generation !== queued.generation) {
             tabInfo._piCompactQueued = null;
             return;
         }
         const view = tabInfo.piBridge;
+        // A vanished view means the deferred context is gone with it.
+        if (!view) {
+            tabInfo._piCompactQueued = null;
+            return;
+        }
         // Any of these means the deferred context is no longer the one
         // the user asked to compact, whether the turn is still running
         // or has just settled.
-        if (
-            view.compact_queued === true ||
+        if (view.compact_queued === true ||
             view.compact_active === true ||
-            view.compact_pending === true
-        ) {
+            view.compact_pending === true) {
             tabInfo._piCompactQueued = null;
-            const reason =
-                view.compact_queued === true
-                    ? 'Pi has queued messages'
-                    : view.compact_active === true
-                      ? 'a compaction is already running'
-                      : 'a compaction is already pending';
-            this._piCompactToast(
-                `Queued compaction cancelled — ${reason}`,
-            );
+            const reason = view.compact_queued === true
+                ? 'Pi has queued messages'
+                : view.compact_active === true
+                    ? 'a compaction is already running'
+                    : 'a compaction is already pending';
+            this._piCompactToast(`Queued compaction cancelled — ${reason}`);
             this._refreshPiBridgeModels(tabInfo);
             return;
         }
         if (view.running === true) {
-            const lastRun =
-                typeof view.last_run === 'string' ? view.last_run : '';
+            const lastRun = typeof view.last_run === 'string' ? view.last_run : '';
             if (lastRun !== queued.lastRun) {
                 tabInfo._piCompactQueued = null;
-                this._piCompactToast(
-                    'Queued compaction cancelled — a new turn started',
-                );
+                this._piCompactToast('Queued compaction cancelled — a new turn started');
                 this._refreshPiBridgeModels(tabInfo);
             }
             return;
         }
         // The idle sample can lag the lifecycle edge by one frame;
         // keep the queue until readiness is authoritative.
-        if (!piBridgeCompactReady(view).ready) return;
+        if (!piBridgeCompactReady(view).ready)
+            return;
         tabInfo._piCompactQueued = null;
         this._sendPiBridgeCompact(tabInfo, { focusInputOnMobile: false });
     }
-
     _piCompactToast(message) {
         this.app?.showToast?.(message, { type: 'info', title: 'Compact' });
     }
-
     // _piBridgeCompactOutcome maps one Compact HTTP round trip to a
     // safe outcome. Only the exact server vocabulary passes: success
     // needs exactly HTTP 200 with completed (a 202 acceptance is
     // still unknown), refusal needs 409/503, failure 502. Anything
     // else — network failure, unparsable body, wrong status — is
     // unknown, never a silent success and never a PTY replay.
-    _piBridgeCompactOutcome(res, json) {
-        const outcome =
-            json && typeof json === 'object' ? json.outcome : null;
+    _piBridgeCompactOutcome(res, body) {
+        const { outcome = null, reason = null } = jsonBody(body);
         if (res?.status === 200 && outcome === 'completed')
             return { kind: 'completed' };
-        if (
-            outcome === 'rejected-before-start' &&
-            (res?.status === 409 || res?.status === 503)
-        )
+        if (outcome === 'rejected-before-start' &&
+            (res?.status === 409 || res?.status === 503))
             return {
                 kind: 'refused',
                 unavailable: res.status === 503,
-                reason: json.reason,
+                reason,
             };
         if (outcome === 'failed' && res?.status === 502)
-            return { kind: 'failed', reason: json.reason };
+            return { kind: 'failed', reason };
         return { kind: 'unknown' };
     }
-
     // _finalizePiBridgeCompact settles one native Compact op. A late
     // response for a superseded op, a replaced tab, or a closed pane
     // changes nothing, and a same-tab socket swap or runtime
@@ -11990,48 +11979,52 @@ export class TabManager {
     // advances it. Only the current op clears itself, and UI updates
     // land only on its live tab. Never PTY-falls back.
     _finalizePiBridgeCompact(op, result) {
-        if (op.timer) clearTimeout(op.timer);
-        if (this._piBridgeCompactPending?.get(op.paneId) !== op) return;
+        if (op.timer)
+            clearTimeout(op.timer);
+        if (this._piBridgeCompactPending?.get(op.paneId) !== op)
+            return;
         this._piBridgeCompactPending.delete(op.paneId);
-        if (this.tabs?.get(op.paneId) !== op.tab) return;
-        if (op.tab.ws !== op.ws) return;
-        if (op.tab.piBridge?.generation !== op.generation) return;
+        if (this.tabs?.get(op.paneId) !== op.tab)
+            return;
+        if (op.tab.ws !== op.ws)
+            return;
+        if (op.tab.piBridge?.generation !== op.generation)
+            return;
         this._refreshPiBridgeModels(op.tab);
-        if (!this.app || typeof this.app.showToast !== 'function') return;
+        if (!this.app || typeof this.app.showToast !== 'function')
+            return;
         // The reason must be one fixed vocabulary word; an empty or
         // foreign reason renders the bare message. Word-shaped
         // provider text never reaches the toast.
-        const reason =
-            typeof result?.reason === 'string' &&
+        const reason = typeof result?.reason === 'string' &&
             PI_BRIDGE_COMPACT_REASONS.has(result.reason)
-                ? result.reason
-                : '';
+            ? result.reason
+            : '';
         const suffix = reason ? `: ${reason}` : '';
         if (result?.kind === 'completed') {
             this.app.showToast('Compaction complete', {
                 type: 'success',
                 title: 'Compact',
             });
-        } else if (result?.kind === 'refused') {
-            this.app.showToast(
-                result.unavailable
-                    ? 'Compaction unavailable'
-                    : `Compaction refused${suffix}`,
-                { type: 'info', title: 'Compact' },
-            );
-        } else if (result?.kind === 'failed') {
+        }
+        else if (result?.kind === 'refused') {
+            this.app.showToast(result.unavailable
+                ? 'Compaction unavailable'
+                : `Compaction refused${suffix}`, { type: 'info', title: 'Compact' });
+        }
+        else if (result?.kind === 'failed') {
             this.app.showToast(`Compaction failed${suffix}`, {
                 type: 'error',
                 title: 'Compact',
             });
-        } else {
+        }
+        else {
             this.app.showToast('Compaction outcome unknown', {
                 type: 'error',
                 title: 'Compact',
             });
         }
     }
-
     // _invalidatePiBridgeCompact drops the pane's pending native
     // Compact waiter when its dispatch identity no longer holds:
     // socket swapped, runtime generation moved, tab exited, lease
@@ -12044,28 +12037,33 @@ export class TabManager {
     // or replaced identities stay silent.
     _invalidatePiBridgeCompact(tabInfo, reportUnknown = false) {
         const paneId = tabInfo?.paneId;
-        if (paneId == null) return;
+        if (paneId == null)
+            return;
         const op = this._piBridgeCompactPending?.get(paneId);
-        if (!op || op.tab !== tabInfo) return;
-        if (op.timer) clearTimeout(op.timer);
+        if (!op || op.tab !== tabInfo)
+            return;
+        if (op.timer)
+            clearTimeout(op.timer);
         op.timer = null;
         this._piBridgeCompactPending.delete(paneId);
         try {
             op.controller?.abort();
-        } catch (_abortError) {}
+        }
+        catch (_abortError) { }
         if (!reportUnknown) {
             this._refreshPiBridgeModels(tabInfo);
             return;
         }
-        if (this.tabs?.get(paneId) !== tabInfo) return;
+        if (this.tabs?.get(paneId) !== tabInfo)
+            return;
         this._refreshPiBridgeModels(tabInfo);
-        if (!this.app || typeof this.app.showToast !== 'function') return;
+        if (!this.app || typeof this.app.showToast !== 'function')
+            return;
         this.app.showToast('Compaction outcome unknown', {
             type: 'error',
             title: 'Compact',
         });
     }
-
     // _sendPiBridgeReload runs the native bridge path for an exact
     // /reload on a capable Pi PTY tab. Always handled (true): a press
     // with a possibly-sent marker reports it instead of dispatching
@@ -12081,18 +12079,14 @@ export class TabManager {
         // click while one is pending exposes the status, never
         // redispatches.
         if (this._piReloadPending?.get(paneId)) {
-            this._piReloadToast(
-                this._piReloadIntentText(tabInfo._piReloadIntent),
-            );
+            this._piReloadToast(this._piReloadIntentText(tabInfo._piReloadIntent));
             this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
             return true;
         }
         // A possibly-sent marker blocks a fresh dispatch, whatever
         // the current capability says.
         if (this._piReloadBlocked(tabInfo)) {
-            this._piReloadToast(
-                this._piReloadIntentText(tabInfo._piReloadIntent),
-            );
+            this._piReloadToast(this._piReloadIntentText(tabInfo._piReloadIntent));
             this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
             return true;
         }
@@ -12100,10 +12094,7 @@ export class TabManager {
         // An explicit offline signal holds the press even when the
         // retained view still looks eligible; dispatch always
         // revalidates on fresh reconnect state.
-        if (
-            typeof navigator !== 'undefined' &&
-            navigator.onLine === false
-        ) {
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
             if (this._piReloadQueueOffline(tabInfo, focusInputOnMobile))
                 return true;
         }
@@ -12111,7 +12102,7 @@ export class TabManager {
         if (!readiness.ready) {
             // The current run is the only queueable blocker; any
             // other shape explains itself instead of deferring.
-            if (this._piBridgeReloadQueueable(tabInfo)) {
+            if (view && this._piBridgeReloadQueueable(tabInfo)) {
                 tabInfo._piReloadIntent = {
                     v: 1,
                     id: this._piReloadAllocId(),
@@ -12125,35 +12116,29 @@ export class TabManager {
                     requestId: null,
                 };
                 this._piReloadPersist(tabInfo);
-                this._piReloadToast(
-                    'Reload queued — runs when Pi is idle',
-                );
+                this._piReloadToast('Reload queued — runs when Pi is idle');
                 this._refreshPiReloadRow(tabInfo);
                 this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
                 return true;
             }
-            this._piReloadToast(
-                `Reload not sent — ${piBridgeReloadReasonText(readiness.reason)}`,
-            );
+            this._piReloadToast(`Reload not sent — ${piBridgeReloadReasonText(readiness.reason)}`);
             this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
             return true;
         }
+        // Ready implies a view; the guard keeps that visible to the reader.
+        if (!view)
+            return true;
         this._dispatchPiBridgeReload(tabInfo, view, {
             focusInputOnMobile,
         });
         return true;
     }
-
     // _dispatchPiBridgeReload sends one admitted Reload request. The
     // caller fences identity and readiness; the core marks the
     // intent possibly-sent before fetch, bounds the wait, parses
     // strictly, and never falls back. An automatic flush skips the
     // focus tail so background work never steals the keyboard.
-    _dispatchPiBridgeReload(
-        tabInfo,
-        view,
-        { focusInputOnMobile = true, focus = true } = {},
-    ) {
+    _dispatchPiBridgeReload(tabInfo, view, { focusInputOnMobile = true, focus = true } = {}) {
         const paneId = tabInfo.paneId;
         const intent = {
             v: 1,
@@ -12179,7 +12164,8 @@ export class TabManager {
             controller,
             timer: null,
         };
-        if (!this._piReloadPending) this._piReloadPending = new Map();
+        if (!this._piReloadPending)
+            this._piReloadPending = new Map();
         this._piReloadPending.set(paneId, op);
         // The timer finalizes directly: a dropped response still
         // reports unconfirmed even when fetch ignores the abort.
@@ -12203,33 +12189,29 @@ export class TabManager {
                 signal: controller.signal,
                 cache: 'no-store',
             });
-        } catch (error) {
+        }
+        catch (error) {
             request = Promise.reject(error);
         }
-        Promise.resolve(request).then(
-            (res) => {
-                let parsed = null;
-                try {
-                    parsed =
-                        typeof res?.json === 'function' ? res.json() : null;
-                } catch {
-                    parsed = null;
-                }
-                return Promise.resolve(parsed)
-                    .catch(() => null)
-                    .then((json) => ({ res, json }));
-            },
-            () => ({ res: null, json: null }),
-        ).then(({ res, json }) =>
-            this._finalizePiBridgeReload(
-                op,
-                this._piBridgeReloadOutcome(res, json),
-            ),
-        );
+        Promise.resolve(request)
+            .then((res) => {
+            let parsed = null;
+            try {
+                parsed =
+                    typeof res?.json === 'function' ? res.json() : null;
+            }
+            catch {
+                parsed = null;
+            }
+            return Promise.resolve(parsed)
+                .catch(() => null)
+                .then((json) => ({ res, json }));
+        }, () => ({ res: null, json: null }))
+            .then(({ res, json }) => this._finalizePiBridgeReload(op, this._piBridgeReloadOutcome(res, json)));
         this._refreshPiReloadRow(tabInfo);
-        if (focus) this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
+        if (focus)
+            this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
     }
-
     // _piBridgeReloadOutcome maps one Reload HTTP round trip to a
     // safe outcome. Only the exact server vocabulary passes: a
     // receipt needs exactly HTTP 202 with dispatched plus the
@@ -12238,38 +12220,32 @@ export class TabManager {
     // status — is unconfirmed, never a silent success and never a
     // PTY replay.
     _piBridgeReloadOutcome(res, json) {
-        const outcome =
-            json && typeof json === 'object' ? json.outcome : null;
-        const requestId =
-            json &&
-            typeof json === 'object' &&
-            typeof json.request_id === 'string' &&
-            json.request_id
-                ? json.request_id
-                : null;
+        const body = jsonBody(json);
+        const outcome = body.outcome ?? null;
+        const requestId = typeof body.request_id === 'string' && body.request_id
+            ? body.request_id
+            : null;
         if (res?.status === 202 && outcome === 'dispatched' && requestId)
             return { kind: 'dispatched', requestId };
-        if (
-            outcome === 'rejected-before-start' &&
-            (res?.status === 409 || res?.status === 503)
-        )
+        if (outcome === 'rejected-before-start' &&
+            (res?.status === 409 || res?.status === 503))
             return {
                 kind: 'refused',
                 unavailable: res.status === 503,
-                reason: json.reason,
+                reason: body.reason,
                 requestId,
             };
         if (outcome === 'unknown' && res?.status === 504)
             return { kind: 'unknown', requestId };
         return { kind: 'unknown' };
     }
-
     // _piReloadCancelOrDismiss folds a waiting or review press into
     // its local terminal state. True means handled: a queued press
     // cancels, a review press dismisses, and neither dispatches.
     // Called on every path, eligible or not.
     _piReloadCancelOrDismiss(tabInfo, focusInputOnMobile = true) {
-        if (!tabInfo) return false;
+        if (!tabInfo)
+            return false;
         if (!tabInfo._piReloadIntent)
             tabInfo._piReloadIntent = this._piReloadRestore(tabInfo);
         const phase = tabInfo._piReloadIntent?.phase;
@@ -12288,45 +12264,41 @@ export class TabManager {
         }
         return false;
     }
-
     // _piBridgeReloadQueueable is true only when the one blocker is
     // the run currently in progress. Queued messages, active or
     // pending operations, and an unknown sample are never turned
     // into a deferred action.
     _piBridgeReloadQueueable(tab) {
-        if (!this._piBridgeReloadEligible(tab)) return false;
+        if (!this._piBridgeReloadEligible(tab))
+            return false;
         const view = tab?.piBridge;
-        return (
-            view?.running === true &&
+        return (view?.running === true &&
             view.reload_queued === false &&
             view.reload_active === false &&
             view.reload_compact_pending === false &&
             view.reload_pending === false &&
             piBridgeReloadReady(view).reason ===
-                'Reload unavailable: Pi is busy'
-        );
+                'Reload unavailable: Pi is busy');
     }
-
     // _piReloadQueueOffline holds one press while the bridge is
     // away. Last-known support plus complete identity retains the
     // never-sent intent; dispatch always revalidates on fresh
     // reconnect state. True means held; anything else falls through
     // to the legacy path or an explanation.
     _piReloadQueueOffline(tabInfo, focusInputOnMobile = true) {
-        if (tabInfo?.coder !== 'pi') return false;
+        if (tabInfo?.coder !== 'pi')
+            return false;
         const view = tabInfo.piBridge;
-        if (!view || view.state !== 'managed') return false;
+        if (!view || view.state !== 'managed')
+            return false;
         if (!(view.capabilities || []).includes('pi.reload.v1'))
             return false;
-        const stamped = (value) =>
-            typeof value === 'string' && value !== '';
-        if (
-            !stamped(view.process_id) ||
+        const stamped = (value) => typeof value === 'string' && value !== '';
+        if (!stamped(view.process_id) ||
             !stamped(view.generation) ||
             !stamped(view.telemetry_revision) ||
             !stamped(view.run_id) ||
-            !stamped(view.context_revision)
-        )
+            !stamped(view.context_revision))
             return false;
         tabInfo._piReloadIntent = {
             v: 1,
@@ -12346,7 +12318,6 @@ export class TabManager {
         this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
         return true;
     }
-
     // _flushPiBridgeReloadQueue dispatches one held press once its
     // turn settles on the same process, runtime, run, and context.
     // It never replays a dispatched op and moves to review — never
@@ -12355,50 +12326,51 @@ export class TabManager {
     // accepted current-socket state; HTTP seeds never flush.
     _flushPiBridgeReloadQueue(tabInfo) {
         const intent = tabInfo?._piReloadIntent;
-        if (!intent || intent.phase !== 'queued') return;
-        if (!tabInfo.ws || tabInfo._piBridgeFresh !== tabInfo.ws) return;
+        if (!intent || intent.phase !== 'queued')
+            return;
+        if (!tabInfo.ws || tabInfo._piBridgeFresh !== tabInfo.ws)
+            return;
         const view = tabInfo.piBridge;
-        if (
-            view?.process_id !== intent.processId ||
+        if (view?.process_id !== intent.processId ||
             view?.generation !== intent.generation ||
             view?.run_id !== intent.runId ||
-            view?.context_revision !== intent.contextRevision
-        ) {
+            view?.context_revision !== intent.contextRevision) {
             this._piReloadReview(tabInfo, intent);
             return;
         }
-        if (
-            view?.reload_queued === true ||
+        if (view?.reload_queued === true ||
             view?.reload_active === true ||
             view?.reload_compact_pending === true ||
-            view?.reload_pending === true
-        ) {
+            view?.reload_pending === true) {
             this._piReloadReview(tabInfo, intent);
             return;
         }
-        if (view?.running === true) return;
+        if (view?.running === true)
+            return;
         // The idle sample can lag the lifecycle edge by one frame;
         // keep the queue until readiness is authoritative.
-        if (!piBridgeReloadReady(view).ready) return;
-        if (!this._piBridgeReloadEligible(tabInfo)) return;
+        if (!piBridgeReloadReady(view).ready)
+            return;
+        if (!this._piBridgeReloadEligible(tabInfo))
+            return;
         if (typeof navigator !== 'undefined' && navigator.onLine === false)
+            return;
+        // Ready implies a view; the guard keeps that visible to the reader.
+        if (!view)
             return;
         this._dispatchPiBridgeReload(tabInfo, view, { focus: false });
     }
-
     // _piReloadReview moves a waiting intent to its visible
     // not-sent state. The target moved or work appeared; a new user
     // decision is required. Never retargets, never PTY-falls back.
     _piReloadReview(tabInfo, intent) {
-        if (tabInfo?._piReloadIntent !== intent) return;
+        if (!intent || tabInfo?._piReloadIntent !== intent)
+            return;
         intent.phase = 'review';
         this._piReloadPersist(tabInfo);
-        this._piReloadToast(
-            'Reload not sent — review the current Pi session',
-        );
+        this._piReloadToast('Reload not sent — review the current Pi session');
         this._refreshPiReloadRow(tabInfo);
     }
-
     // _finalizePiBridgeReload settles one native Reload op. A late
     // response for a superseded op, a replaced tab, or a superseded
     // intent changes nothing. The durable record is the intent, not
@@ -12406,15 +12378,20 @@ export class TabManager {
     // it for a new explicit decision, and anything uncertain keeps
     // it unconfirmed. Never PTY-falls back.
     _finalizePiBridgeReload(op, result) {
-        if (op.timer) clearTimeout(op.timer);
-        if (this._piReloadPending?.get(op.paneId) !== op) return;
+        if (op.timer)
+            clearTimeout(op.timer);
+        if (this._piReloadPending?.get(op.paneId) !== op)
+            return;
         this._piReloadPending.delete(op.paneId);
-        if (this.tabs?.get(op.paneId) !== op.tab) return;
+        if (this.tabs?.get(op.paneId) !== op.tab)
+            return;
         // A dead tab keeps its marker but reports nothing: the next
         // press on a live target revalidates it.
-        if (op.tab.isDead) return;
-        if (op.tab._piReloadIntent?.id !== op.intentId) return;
+        if (op.tab.isDead)
+            return;
         const intent = op.tab._piReloadIntent;
+        if (!intent || intent.id !== op.intentId)
+            return;
         if (result?.kind === 'dispatched') {
             intent.phase = 'requested';
             intent.requestId = result.requestId;
@@ -12423,60 +12400,57 @@ export class TabManager {
             this._piReloadRetire(op.tab);
             this._refreshPiReloadRow(op.tab);
             this._piReloadToast('Reload requested — check Pi');
-        } else if (result?.kind === 'refused') {
+        }
+        else if (result?.kind === 'refused') {
             this._piReloadClear(op.tab);
             this._refreshPiReloadRow(op.tab);
             // The reason must be one fixed vocabulary word; an
             // empty or foreign reason renders the bare message.
             // Word-shaped provider text never reaches the toast.
-            const reason =
-                typeof result?.reason === 'string' &&
+            const reason = typeof result?.reason === 'string' &&
                 PI_BRIDGE_RELOAD_REASONS.has(result.reason)
-                    ? result.reason
-                    : '';
+                ? result.reason
+                : '';
             const suffix = reason ? `: ${reason}` : '';
-            this._piReloadToast(
-                result.unavailable
-                    ? 'Reload unavailable'
-                    : `Reload refused${suffix}`,
-            );
-        } else {
+            this._piReloadToast(result.unavailable
+                ? 'Reload unavailable'
+                : `Reload refused${suffix}`);
+        }
+        else {
             intent.phase = 'unconfirmed';
-            if (result?.requestId) intent.requestId = result.requestId;
+            if (result?.requestId)
+                intent.requestId = result.requestId;
             this._piReloadPersist(op.tab);
             this._piReloadRetire(op.tab);
             this._refreshPiReloadRow(op.tab);
-            this._piReloadToast(
-                'Reload unconfirmed — check Pi. Not retried.',
-                'error',
-            );
+            this._piReloadToast('Reload unconfirmed — check Pi. Not retried.', 'error');
         }
     }
-
     _piReloadToast(message, type = 'info') {
         this.app?.showToast?.(message, { type, title: 'Reload' });
     }
-
     // _piReloadIntentText renders one blocking intent for the toast.
     // A receipt is entry evidence, never completion; anything else
     // uncertain stays explicitly unconfirmed.
     _piReloadIntentText(intent) {
         if (intent?.phase === 'requested')
             return 'Reload requested — check Pi';
-        if (intent?.phase === 'sending') return 'Reload sending…';
+        if (intent?.phase === 'sending')
+            return 'Reload sending…';
         return 'Reload unconfirmed — check Pi. Not retried.';
     }
-
     // _piReloadBlocked is true while a possibly-sent marker covers
     // the current target. A marker for a replaced process or runtime
     // is spent and clears for a new decision; an unverifiable target
     // keeps the marker rather than guessing.
     _piReloadBlocked(tabInfo) {
-        if (!tabInfo) return false;
+        if (!tabInfo)
+            return false;
         if (!tabInfo._piReloadIntent)
             tabInfo._piReloadIntent = this._piReloadRestore(tabInfo);
         const intent = tabInfo._piReloadIntent;
-        if (!intent) return false;
+        if (!intent)
+            return false;
         // Waiting and review states cancel and dismiss; only a
         // possibly-sent marker blocks.
         if (intent.phase === 'queued' || intent.phase === 'review')
@@ -12484,12 +12458,10 @@ export class TabManager {
         const view = tabInfo.piBridge;
         const proc = view?.process_id;
         const gen = view?.generation;
-        if (
-            typeof proc === 'string' &&
+        if (typeof proc === 'string' &&
             proc &&
             typeof gen === 'string' &&
-            gen
-        ) {
+            gen) {
             if (proc !== intent.processId || gen !== intent.generation) {
                 this._piReloadClear(tabInfo);
                 return false;
@@ -12498,16 +12470,13 @@ export class TabManager {
         }
         return true;
     }
-
     _piReloadAllocId() {
         this._piReloadSeq = (this._piReloadSeq || 0) + 1;
         return `r${Date.now().toString(36)}-${this._piReloadSeq.toString(36)}-${Math.floor(Math.random() * 0xffffff).toString(36)}`;
     }
-
     _piReloadStoreKey(paneId) {
         return `${PI_BRIDGE_RELOAD_STORE_PREFIX}${paneId}`;
     }
-
     // _piReloadPersist stores the tab's small intent record when
     // storage is available. Memory stays authoritative: a storage
     // failure or an oversized record never blocks the session.
@@ -12515,14 +12484,13 @@ export class TabManager {
         const intent = tabInfo?._piReloadIntent;
         let storage = null;
         try {
-            storage =
-                typeof localStorage === 'undefined'
-                    ? null
-                    : localStorage;
-        } catch {
+            storage = typeof localStorage === 'undefined' ? null : localStorage;
+        }
+        catch {
             storage = null;
         }
-        if (!storage || !tabInfo?.paneId) return;
+        if (!storage || !tabInfo?.paneId)
+            return;
         const key = this._piReloadStoreKey(tabInfo.paneId);
         try {
             if (!intent) {
@@ -12530,13 +12498,14 @@ export class TabManager {
                 return;
             }
             const text = JSON.stringify(intent);
-            if (text.length > 4096) return;
+            if (text.length > 4096)
+                return;
             storage.setItem(key, text);
-        } catch {
+        }
+        catch {
             // Memory stays authoritative.
         }
     }
-
     // _piReloadRestore reads one persisted intent. Only the exact
     // versioned shape passes; malformed records are ignored without
     // executing anything. A restored sending marker weakens to
@@ -12544,18 +12513,18 @@ export class TabManager {
     _piReloadRestore(tabInfo) {
         let storage = null;
         try {
-            storage =
-                typeof localStorage === 'undefined'
-                    ? null
-                    : localStorage;
-        } catch {
+            storage = typeof localStorage === 'undefined' ? null : localStorage;
+        }
+        catch {
             storage = null;
         }
-        if (!storage || !tabInfo?.paneId) return null;
+        if (!storage || !tabInfo?.paneId)
+            return null;
         let raw = null;
         try {
             raw = storage.getItem(this._piReloadStoreKey(tabInfo.paneId));
-        } catch {
+        }
+        catch {
             return null;
         }
         if (typeof raw !== 'string' || !raw || raw.length > 4096)
@@ -12563,37 +12532,35 @@ export class TabManager {
         let intent = null;
         try {
             intent = JSON.parse(raw);
-        } catch {
+        }
+        catch {
             return null;
         }
-        if (!intent || typeof intent !== 'object') return null;
-        const positive = (s) =>
-            typeof s === 'string' &&
-            /^[1-9][0-9]*$/.test(s) &&
-            s.length <= 20;
-        const counter = (s) =>
-            typeof s === 'string' &&
+        if (!intent || typeof intent !== 'object')
+            return null;
+        const positive = (s) => typeof s === 'string' && /^[1-9][0-9]*$/.test(s) && s.length <= 20;
+        const counter = (s) => typeof s === 'string' &&
             /^(0|[1-9][0-9]*)$/.test(s) &&
             s.length <= 20;
-        if (intent.v !== 1) return null;
-        if (
-            typeof intent.id !== 'string' ||
+        if (intent.v !== 1)
+            return null;
+        if (typeof intent.id !== 'string' ||
             !intent.id ||
-            intent.id.length > 128
-        )
+            intent.id.length > 128)
             return null;
-        if (
-            !['sending', 'requested', 'unconfirmed', 'queued', 'review'].includes(
-                intent.phase,
-            )
-        )
+        if (![
+            'sending',
+            'requested',
+            'unconfirmed',
+            'queued',
+            'review',
+        ].includes(intent.phase))
             return null;
-        if (intent.paneId !== tabInfo.paneId) return null;
-        if (
-            typeof intent.processId !== 'string' ||
+        if (intent.paneId !== tabInfo.paneId)
+            return null;
+        if (typeof intent.processId !== 'string' ||
             !intent.processId ||
-            intent.processId.length > 256
-        )
+            intent.processId.length > 256)
             return null;
         if (!positive(intent.generation) || !positive(intent.pubRev))
             return null;
@@ -12615,12 +12582,11 @@ export class TabManager {
         }
         return intent;
     }
-
     _piReloadClear(tabInfo) {
-        if (tabInfo) tabInfo._piReloadIntent = null;
+        if (tabInfo)
+            tabInfo._piReloadIntent = null;
         this._piReloadPersist(tabInfo);
     }
-
     // _piReloadRetire clears a blocking intent on release evidence:
     // the same process and runtime, no pending native Reload, and a
     // high-water mark covering the receipt's request ID. The ID
@@ -12633,25 +12599,28 @@ export class TabManager {
     // replays or resends.
     _piReloadRetire(tabInfo) {
         const intent = tabInfo?._piReloadIntent;
-        if (!intent || tabInfo?.coder !== 'pi') return;
-        if (!intent.requestId) return;
-        const view = tabInfo.piBridge;
-        if (
-            view?.process_id !== intent.processId ||
-            view?.generation !== intent.generation
-        )
+        if (!intent || tabInfo?.coder !== 'pi')
             return;
-        if (view.reload_pending !== false) return;
+        if (!intent.requestId)
+            return;
+        const view = tabInfo.piBridge;
+        if (view?.process_id !== intent.processId ||
+            view?.generation !== intent.generation)
+            return;
+        if (!view || view.reload_pending !== false)
+            return;
         const water = view.reload_high_water;
-        if (typeof water !== 'string' || water === '') return;
+        if (typeof water !== 'string' || water === '')
+            return;
         try {
-            if (BigInt(water) < BigInt(intent.requestId)) return;
-        } catch {
+            if (BigInt(water) < BigInt(intent.requestId))
+                return;
+        }
+        catch {
             return;
         }
         this._piReloadClear(tabInfo);
     }
-
     // _invalidatePiBridgeReload drops the pane's pending native
     // Reload waiter when its tab is gone: closed, exited, or
     // restarting. Only the matching waiter is cleared — its timer is
@@ -12666,21 +12635,24 @@ export class TabManager {
     // dispatching or PTY-falling back.
     _invalidatePiBridgeReload(tabInfo) {
         const paneId = tabInfo?.paneId;
-        if (paneId == null) return;
+        if (paneId == null)
+            return;
         const op = this._piReloadPending?.get(paneId);
-        if (!op || op.tab !== tabInfo) return;
-        if (op.timer) clearTimeout(op.timer);
+        if (!op || op.tab !== tabInfo)
+            return;
+        if (op.timer)
+            clearTimeout(op.timer);
         op.timer = null;
         this._piReloadPending.delete(paneId);
         try {
             op.controller?.abort();
-        } catch (_abortError) {}
+        }
+        catch (_abortError) { }
         if (tabInfo._piReloadIntent?.id === op.intentId) {
             tabInfo._piReloadIntent.phase = 'unconfirmed';
             this._piReloadPersist(tabInfo);
         }
     }
-
     // Upgrade-or-block: a version response without terminal protocol 2
     // means a v1 server this client cannot replay. No response yet
     // means unknown, not old: connect, and let the late version close us.
@@ -12688,36 +12660,46 @@ export class TabManager {
         const v = this.app?.versionInfo;
         return Boolean(v && typeof v === 'object' && v.terminal_protocol !== '2');
     }
-
     onServerVersion(data) {
-        if (!data || typeof data !== 'object') return;
+        if (!data)
+            return;
         if (data.terminal_protocol === '2') {
-            if (!this._protocolBlockedTabs?.size) return;
+            if (!this._protocolBlockedTabs?.size)
+                return;
             for (const tabInfo of this._protocolBlockedTabs) {
                 tabInfo._protocolBlocked = false;
-                tabInfo.termContainer?.querySelector('.reconnect-overlay')?.remove();
+                tabInfo.termContainer
+                    ?.querySelector('.reconnect-overlay')
+                    ?.remove();
                 this.reconnectTab(tabInfo);
             }
             this._protocolBlockedTabs.clear();
             return;
         }
         for (const tabInfo of this.tabs.values()) {
-            if (tabInfo.isReview || tabInfo.isKanban || tabInfo.coder === 'pi-rpc') continue;
+            if (tabInfo.isReview ||
+                tabInfo.isKanban ||
+                tabInfo.coder === 'pi-rpc')
+                continue;
             tabInfo._protocolBlocked = true;
-            (this._protocolBlockedTabs ??= new Set()).add(tabInfo);
+            this._protocolBlockedTabs ??= new Set();
+            this._protocolBlockedTabs.add(tabInfo);
             this._showProtocolBlockedOverlay(tabInfo);
             // Quiet close: no disconnect overlay, no auto-reconnect spin.
             // The blocked overlay owns this tab until the server upgrades.
             if (tabInfo.ws) {
-                try { tabInfo.ws.close(); } catch (_e) {}
+                try {
+                    tabInfo.ws.close?.();
+                }
+                catch (_e) { }
                 tabInfo.ws = null;
             }
         }
     }
-
     _showProtocolBlockedOverlay(tabInfo) {
         const existing = tabInfo.termContainer?.querySelector('.reconnect-overlay');
-        if (existing) existing.remove();
+        if (existing)
+            existing.remove();
         const overlay = document.createElement('div');
         overlay.className = 'reconnect-overlay';
         overlay.innerHTML = `
@@ -12727,31 +12709,29 @@ export class TabManager {
                     <button class="restart-btn">&#10227; Reload page</button>
                 </div>
             </div>`;
-        overlay.querySelector('.restart-btn').addEventListener('click', () => window.location.reload());
+        overlay
+            .querySelector('.restart-btn')
+            ?.addEventListener('click', () => window.location.reload());
         tabInfo.termContainer?.appendChild(overlay);
     }
-
     _showReconnectOverlay(tabInfo) {
-        const existing =
-            tabInfo.termContainer.querySelector('.reconnect-overlay');
-        if (existing) existing.remove();
-
+        const existing = tabInfo.termContainer.querySelector('.reconnect-overlay');
+        if (existing)
+            existing.remove();
         const overlay = document.createElement('div');
         overlay.className = 'reconnect-overlay';
-
         let msg = 'Connection lost';
         let showReconnect = true;
-
         if (tabInfo.exitCode !== undefined && tabInfo.exitCode !== null) {
             if (tabInfo.exitCode === -1) {
                 msg = 'Session expired (PTY gone)';
                 showReconnect = false;
-            } else {
+            }
+            else {
                 msg = `process exited (code ${tabInfo.exitCode})`;
                 showReconnect = false;
             }
         }
-
         overlay.innerHTML = `
             <div class="reconnect-box">
                 <span class="reconnect-msg">${msg}</span>
@@ -12760,21 +12740,20 @@ export class TabManager {
                     <button class="restart-btn">⚡ Restart</button>
                 </div>
             </div>`;
-
         if (showReconnect) {
             overlay
                 .querySelector('.reconnect-btn')
-                .addEventListener('click', () => {
-                    this.reconnectTab(tabInfo);
-                });
+                ?.addEventListener('click', () => {
+                this.reconnectTab(tabInfo);
+            });
         }
-        overlay.querySelector('.restart-btn').addEventListener('click', () => {
+        overlay
+            .querySelector('.restart-btn')
+            ?.addEventListener('click', () => {
             this.restartTab(tabInfo);
         });
-
         tabInfo.termContainer.appendChild(overlay);
     }
-
     _setCurrentTabSocket(tabInfo, socket) {
         tabInfo._piTitleRevision = -1;
         tabInfo.ws = socket;
@@ -12785,120 +12764,113 @@ export class TabManager {
         // A swapped socket orphans the pending native Compact waiter:
         // drop it and report unknown once for the still-current tab.
         const pendingOp = this._piBridgeCompactPending?.get(tabInfo.paneId);
-        if (
-            pendingOp &&
+        if (pendingOp &&
             pendingOp.tab === tabInfo &&
-            pendingOp.ws !== tabInfo.ws
-        )
+            pendingOp.ws !== tabInfo.ws)
             this._invalidatePiBridgeCompact?.(tabInfo, true);
         // The pending Reload waiter survives a socket swap: its HTTP
         // receipt is transport-independent by design.
         this._refreshPiBridgeModels(tabInfo);
     }
-
     // _resetPiBridgeOrdered drops the per-tab publication floor and the
     // current-socket freshness mark. The next valid state re-baselines.
     _resetPiBridgeOrdered(tabInfo) {
-        if (!tabInfo) return;
+        if (!tabInfo)
+            return;
         tabInfo._piBridgeRev = null;
         tabInfo._piBridgeFresh = null;
     }
-
     // _piBridgeRevValue parses a telemetry revision: a valid positive
     // u64 decimal string yields a BigInt, anything else yields null.
     // Never compare revisions as floats: u64 exceeds safe integers.
     _piBridgeRevValue(raw) {
-        if (typeof raw !== 'string' || !/^\d+$/.test(raw)) return null;
+        if (typeof raw !== 'string' || !/^\d+$/.test(raw))
+            return null;
         try {
             const value = BigInt(raw);
-            if (value <= 0n || value > 18446744073709551615n) return null;
+            if (value <= 0n || value > 18446744073709551615n)
+                return null;
             return value;
-        } catch {
+        }
+        catch {
             return null;
         }
     }
-
     // _normalizePiBridgeView maps one HTTP or WS bridge view into the
     // stored shape. HTTP carries booleans/arrays, WS carries strings;
     // both land here so ordering compares one canonical form.
     _normalizePiBridgeView(raw) {
-        if (!raw || typeof raw !== 'object') return null;
+        if (!raw || typeof raw !== 'object')
+            return null;
+        const src = raw;
         const view = {
-            state: typeof raw.state === 'string' ? raw.state : 'plain',
+            state: typeof src.state === 'string' ? src.state : 'plain',
         };
-        if (typeof raw.reason === 'string' && raw.reason)
-            view.reason = raw.reason;
-        if (typeof raw.generation === 'string' && raw.generation)
-            view.generation = raw.generation;
-        if (
-            typeof raw.telemetry_revision === 'string' &&
-            raw.telemetry_revision
-        )
-            view.telemetry_revision = raw.telemetry_revision;
-        if (typeof raw.last_run === 'string' && raw.last_run)
-            view.last_run = raw.last_run;
-        if (typeof raw.last_outcome === 'string' && raw.last_outcome)
-            view.last_outcome = raw.last_outcome;
-        if (raw.running === true || raw.running === 'true')
+        if (typeof src.reason === 'string' && src.reason)
+            view.reason = src.reason;
+        if (typeof src.generation === 'string' && src.generation)
+            view.generation = src.generation;
+        if (typeof src.telemetry_revision === 'string' &&
+            src.telemetry_revision)
+            view.telemetry_revision = src.telemetry_revision;
+        if (typeof src.last_run === 'string' && src.last_run)
+            view.last_run = src.last_run;
+        if (typeof src.last_outcome === 'string' && src.last_outcome)
+            view.last_outcome = src.last_outcome;
+        if (src.running === true || src.running === 'true')
             view.running = true;
-        else if (raw.running === false || raw.running === 'false')
+        else if (src.running === false || src.running === 'false')
             view.running = false;
-        if (raw.connected === true || raw.connected === 'true')
+        if (src.connected === true || src.connected === 'true')
             view.connected = true;
-        else if (raw.connected === false || raw.connected === 'false')
+        else if (src.connected === false || src.connected === 'false')
             view.connected = false;
-        if (typeof raw.model === 'string' && raw.model)
-            view.model = raw.model;
-        view.thinking_level = PI_BRIDGE_THINKING_LEVELS.includes(
-            raw.thinking_level,
-        )
-            ? raw.thinking_level
-            : '';
-        const caps = raw.capabilities;
+        if (typeof src.model === 'string' && src.model)
+            view.model = src.model;
+        view.thinking_level =
+            typeof src.thinking_level === 'string' &&
+                PI_BRIDGE_THINKING_LEVELS.includes(src.thinking_level)
+                ? src.thinking_level
+                : '';
+        const caps = src.capabilities;
         if (typeof caps === 'string' && caps)
             view.capabilities = caps.split(',').filter(Boolean);
         else if (Array.isArray(caps))
-            view.capabilities = caps.filter(
-                (c) => typeof c === 'string' && c,
-            );
+            view.capabilities = caps.filter((c) => typeof c === 'string' && c);
         // Context telemetry: finite nonnegative safe magnitudes, a
         // positive window, and percent only with known tokens. Absent
         // or invalid fields stay unknown; nothing coerces to zero.
-        const contextTokens = piBridgeContextNumber(raw.context_tokens);
-        const contextWindow = piBridgeContextNumber(raw.context_window);
-        const contextPercent = piBridgeContextNumber(raw.context_percent);
-        const tokensKnown =
-            contextTokens !== null &&
+        const contextTokens = piBridgeContextNumber(src.context_tokens);
+        const contextWindow = piBridgeContextNumber(src.context_window);
+        const contextPercent = piBridgeContextNumber(src.context_percent);
+        const tokensKnown = contextTokens !== null &&
             contextTokens >= 0 &&
             contextTokens <= 9007199254740991;
-        const windowKnown =
-            contextWindow !== null &&
+        const windowKnown = contextWindow !== null &&
             contextWindow > 0 &&
             contextWindow <= 9007199254740991;
-        if (tokensKnown) view.context_tokens = contextTokens;
-        if (windowKnown) view.context_window = contextWindow;
-        if (
-            tokensKnown &&
+        if (tokensKnown)
+            view.context_tokens = contextTokens;
+        if (windowKnown)
+            view.context_window = contextWindow;
+        if (tokensKnown &&
             contextPercent !== null &&
             contextPercent >= 0 &&
-            contextPercent <= 9007199254740991
-        )
+            contextPercent <= 9007199254740991)
             view.context_percent = contextPercent;
         // The process nonce is nonsecret identity, fenced at dispatch.
-        if (typeof raw.process_id === 'string' && raw.process_id)
-            view.process_id = raw.process_id;
+        if (typeof src.process_id === 'string' && src.process_id)
+            view.process_id = src.process_id;
         // Compaction readiness arrives as a group: any missing or
         // invalid member leaves the whole sample unknown.
-        const compactIdle = piBridgeReadinessBool(raw.compact_idle);
-        const compactQueued = piBridgeReadinessBool(raw.compact_queued);
-        const compactActive = piBridgeReadinessBool(raw.compact_active);
-        const compactPending = piBridgeReadinessBool(raw.compact_pending);
-        if (
-            compactIdle !== null &&
+        const compactIdle = piBridgeReadinessBool(src.compact_idle);
+        const compactQueued = piBridgeReadinessBool(src.compact_queued);
+        const compactActive = piBridgeReadinessBool(src.compact_active);
+        const compactPending = piBridgeReadinessBool(src.compact_pending);
+        if (compactIdle !== null &&
             compactQueued !== null &&
             compactActive !== null &&
-            compactPending !== null
-        ) {
+            compactPending !== null) {
             view.compact_idle = compactIdle;
             view.compact_queued = compactQueued;
             view.compact_active = compactActive;
@@ -12909,31 +12881,22 @@ export class TabManager {
         // sample unknown, never idle. The high-water mark is
         // optional inside a complete sample; absence means no
         // recognized request yet, never zero.
-        const runId =
-            typeof raw.run_id === 'string' && raw.run_id
-                ? raw.run_id
-                : null;
-        const contextRevision =
-            typeof raw.context_revision === 'string' &&
-            raw.context_revision
-                ? raw.context_revision
-                : null;
-        const reloadIdle = piBridgeReadinessBool(raw.reload_idle);
-        const reloadQueued = piBridgeReadinessBool(raw.reload_queued);
-        const reloadActive = piBridgeReadinessBool(raw.reload_active);
-        const reloadCompactPending = piBridgeReadinessBool(
-            raw.reload_compact_pending,
-        );
-        const reloadPending = piBridgeReadinessBool(raw.reload_pending);
-        if (
-            runId !== null &&
+        const runId = typeof src.run_id === 'string' && src.run_id ? src.run_id : null;
+        const contextRevision = typeof src.context_revision === 'string' && src.context_revision
+            ? src.context_revision
+            : null;
+        const reloadIdle = piBridgeReadinessBool(src.reload_idle);
+        const reloadQueued = piBridgeReadinessBool(src.reload_queued);
+        const reloadActive = piBridgeReadinessBool(src.reload_active);
+        const reloadCompactPending = piBridgeReadinessBool(src.reload_compact_pending);
+        const reloadPending = piBridgeReadinessBool(src.reload_pending);
+        if (runId !== null &&
             contextRevision !== null &&
             reloadIdle !== null &&
             reloadQueued !== null &&
             reloadActive !== null &&
             reloadCompactPending !== null &&
-            reloadPending !== null
-        ) {
+            reloadPending !== null) {
             view.run_id = runId;
             view.context_revision = contextRevision;
             view.reload_idle = reloadIdle;
@@ -12941,15 +12904,12 @@ export class TabManager {
             view.reload_active = reloadActive;
             view.reload_compact_pending = reloadCompactPending;
             view.reload_pending = reloadPending;
-            if (
-                typeof raw.reload_high_water === 'string' &&
-                raw.reload_high_water
-            )
-                view.reload_high_water = raw.reload_high_water;
+            if (typeof src.reload_high_water === 'string' &&
+                src.reload_high_water)
+                view.reload_high_water = src.reload_high_water;
         }
         return view;
     }
-
     // _acceptOrderedBridgeView applies one HTTP (socket null) or WS
     // bridge view to the per-tab ordered state. A valid positive u64
     // baseline is accepted, then only newer revisions; an equal
@@ -12960,83 +12920,87 @@ export class TabManager {
     // known. HTTP seeds set the floor but never freshness: the model
     // shows only after current-socket state confirms it.
     _acceptOrderedBridgeView(tabInfo, raw, socket) {
-        if (!tabInfo || tabInfo.coder !== 'pi') return false;
-        if (this.tabs?.get(tabInfo.paneId) !== tabInfo) return false;
+        if (!tabInfo || tabInfo.coder !== 'pi')
+            return false;
+        if (this.tabs?.get(tabInfo.paneId) !== tabInfo)
+            return false;
         if (socket !== null && socket !== undefined) {
-            if (!socket || tabInfo.ws !== socket) return false;
-            if (
-                raw &&
+            if (!socket || tabInfo.ws !== socket)
+                return false;
+            if (raw &&
                 typeof raw === 'object' &&
                 raw.pane_id !== undefined &&
-                raw.pane_id !== tabInfo.paneId
-            )
+                raw.pane_id !== tabInfo.paneId)
                 return false;
         }
         const view = this._normalizePiBridgeView(raw);
-        if (!view) return false;
+        if (!view)
+            return false;
         if (view.state !== 'managed') {
-            if (tabInfo._piBridgeRev != null) return false;
+            if (tabInfo._piBridgeRev != null)
+                return false;
             tabInfo.piBridge = view;
-            if (socket) tabInfo._piBridgeFresh = socket;
+            if (socket)
+                tabInfo._piBridgeFresh = socket;
             return true;
         }
         const rev = this._piBridgeRevValue(view.telemetry_revision);
-        if (rev === null) return false;
+        if (rev === null)
+            return false;
         const floor = tabInfo._piBridgeRev;
         if (floor == null) {
             tabInfo._piBridgeRev = rev;
             tabInfo.piBridge = view;
-            if (socket) tabInfo._piBridgeFresh = socket;
+            if (socket)
+                tabInfo._piBridgeFresh = socket;
             return true;
         }
-        if (rev < floor) return false;
+        if (rev < floor)
+            return false;
         if (rev === floor) {
             // An equal revision must agree on every retained
             // identity/state field, including the new telemetry; a
             // conflicting equal revision refreshes nothing.
-            if (!piBridgeEqualRevAgrees(tabInfo.piBridge, view)) return false;
+            if (!piBridgeEqualRevAgrees(tabInfo.piBridge, view))
+                return false;
             const current = tabInfo.piBridge;
             // Availability rides the retained view without a new
             // revision: adopt a flipped connected at equal rev so
             // peer-down still lands.
-            if (
-                current &&
+            if (current &&
                 view.connected !== undefined &&
-                current.connected !== view.connected
-            ) {
+                current.connected !== view.connected) {
                 current.connected = view.connected;
             }
-            if (socket) tabInfo._piBridgeFresh = socket;
+            if (socket)
+                tabInfo._piBridgeFresh = socket;
             return true;
         }
         tabInfo._piBridgeRev = rev;
         tabInfo.piBridge = view;
-        if (socket) tabInfo._piBridgeFresh = socket;
+        if (socket)
+            tabInfo._piBridgeFresh = socket;
         return true;
     }
-
     // _seedHttpPiBridge applies one spawn/resume/restore/restart HTTP
     // bridge baseline through the same ordering check as live frames,
     // so a late HTTP response can never overwrite newer WS state.
     _seedHttpPiBridge(tabInfo, httpView) {
-        if (!tabInfo || tabInfo.coder !== 'pi') return false;
-        const accepted = this._acceptOrderedBridgeView(
-            tabInfo,
-            httpView,
-            null,
-        );
+        if (!tabInfo || tabInfo.coder !== 'pi')
+            return false;
+        const accepted = this._acceptOrderedBridgeView(tabInfo, httpView, undefined);
         // A baseline can move model or availability like a live frame, but it
         // never reaches _acceptPiBridgeState, so clean up Thinking here.
-        if (accepted) this._refreshPiBridgeModels(tabInfo);
+        if (accepted)
+            this._refreshPiBridgeModels(tabInfo);
         // A baseline can also carry release evidence for a
         // restored Reload marker.
-        if (accepted) this._piReloadRetire?.(tabInfo);
+        if (accepted)
+            this._piReloadRetire?.(tabInfo);
         return accepted;
     }
-
     _acceptPiSessionTitle(tabInfo, control, socket = tabInfo?.ws) {
-        if (
-            !tabInfo ||
+        if (!tabInfo ||
             !socket ||
             tabInfo.ws !== socket ||
             this.tabs.get(tabInfo.paneId) !== tabInfo ||
@@ -13050,47 +13014,58 @@ export class TabManager {
             typeof control.title !== 'string' ||
             control.title.length === 0 ||
             !Number.isSafeInteger(control.revision) ||
-            control.revision < 0
-        ) {
+            control.revision < 0) {
             return false;
         }
-        if (
-            Number.isSafeInteger(tabInfo._piTitleRevision) &&
-            control.revision < tabInfo._piTitleRevision
-        ) {
+        if (Number.isSafeInteger(tabInfo._piTitleRevision) &&
+            control.revision < tabInfo._piTitleRevision) {
             return false;
         }
         tabInfo._piTitleRevision = control.revision;
         this._setTabTitle(tabInfo, control.title);
         return true;
     }
-
     handleControlMessage(tabInfo, control, socket = tabInfo?.ws) {
-        if (!control) return;
+        if (!control)
+            return;
         if (control.type === 'session-title') {
             this._acceptPiSessionTitle(tabInfo, control, socket);
-        } else if (control.type === 'pi-bridge-state') {
+        }
+        else if (control.type === 'pi-bridge-state') {
             this._acceptPiBridgeState(tabInfo, control, socket);
-        } else if (control.type === 'pi-bridge-settled') {
+        }
+        else if (control.type === 'pi-bridge-settled') {
             this._acceptPiBridgeSettled(tabInfo, control);
-        } else if (control.type === 'pty-exited') {
-            if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing || socket !== tabInfo.ws) return;
-            for (const timer of ['autoReconnectTimer', 'reconnectWatchdogTimer', 'reconnectStableTimer']) {
-                clearTimeout(tabInfo[timer]);
+        }
+        else if (control.type === 'pty-exited') {
+            if (this.tabs.get(tabInfo.paneId) !== tabInfo ||
+                tabInfo.finalizing ||
+                socket !== tabInfo.ws)
+                return;
+            for (const timer of [
+                'autoReconnectTimer',
+                'reconnectWatchdogTimer',
+                'reconnectStableTimer',
+            ]) {
+                const handle = tabInfo[timer];
+                if (handle)
+                    clearTimeout(handle);
                 tabInfo[timer] = null;
             }
             tabInfo.autoReconnectPending = false;
             tabInfo.reconnectInFlight = false;
             if (socket?.mode === 'hot' && !tabInfo._exitDrain) {
-                const drain = this._drainReplayTail(tabInfo, socket).catch(error => {
-                    if (tabInfo.ws !== socket || tabInfo.finalizing) return;
+                const drain = this._drainReplayTail(tabInfo, socket).catch((error) => {
+                    if (tabInfo.ws !== socket || tabInfo.finalizing)
+                        return;
                     console.warn('[term] final output replay failed:', error);
-                    this.app?.showToast?.('Final terminal output could not be recovered. The missing tail was not skipped.', { type: 'warning', title: 'Terminal' });
+                    this.app?.showToast?.('Final terminal output could not be recovered. The missing tail was not skipped.', { type: 'error', title: 'Terminal' });
                 });
                 tabInfo._exitDrain = drain;
                 this._trackBootstrap(tabInfo, drain);
             }
-            tabInfo.exitCode = control.code;
+            tabInfo.exitCode =
+                typeof control.code === 'number' ? control.code : null;
             tabInfo.isDead = true;
             tabInfo.tabEl.classList.add('dead');
             this.updateDocumentTitle();
@@ -13104,36 +13079,41 @@ export class TabManager {
             this._invalidatePiBridgeCompact?.(tabInfo, true);
             this.updateDisconnectBanner();
             this._invalidatePiBridgeReload?.(tabInfo);
-        } else if (control.type === 'replay-complete') {
+        }
+        else if (control.type === 'replay-complete') {
             // An empty replay still ends here, so drop the pending reset or
             // the next live byte would clear the terminal underneath the user.
             tabInfo.awaitingReplay = false;
             if (localStorage.getItem('phi_replay_divider') === 'true') {
                 this._enqueueTerminalWrite(tabInfo, '\r\n\x1b[33m─── live ───\x1b[0m\r\n');
             }
-        } else if (control.type === 'terminal-geometry') {
+        }
+        else if (control.type === 'terminal-geometry') {
             this._adoptLiveGeometry(tabInfo, control, socket);
-        } else if (control.type === 'output-dropped') {
+        }
+        else if (control.type === 'output-dropped') {
             // Hot-v2 slow-client warning. Rendered locally —
             // not part of the byte stream, so seq accounting is untouched.
-            this.writeToTerminal(
-                tabInfo,
-                '\r\n\x1b[33m[phi: output dropped — slow client]\x1b[0m\r\n',
-            );
-        } else if (control.type === 'server-shutdown') {
+            this.writeToTerminal(tabInfo, '\r\n\x1b[33m[phi: output dropped — slow client]\x1b[0m\r\n');
+        }
+        else if (control.type === 'server-shutdown') {
             // Plan §3.1 / Phase 9: server announces restart/update/shutdown
             // and arms a client-side reload poller. The page reloads when
             // /api/version reports a different stamped version OR after 10s,
             // whichever comes first.
-            this.handleServerShutdown(control.reason || 'shutdown');
-        } else if (control.type === 'md-changed') {
+            this.handleServerShutdown(typeof control.reason === 'string'
+                ? control.reason
+                : 'shutdown');
+        }
+        else if (control.type === 'md-changed') {
             // fsnotify push: a watched markdown dir changed on disk. Every
             // open pane WS receives the broadcast, so MarkdownManager
             // debounces client-side.
             if (this.app.markdownManager) {
                 this.app.markdownManager.onExternalChange(control);
             }
-        } else if (control.type === 'sync-changed') {
+        }
+        else if (control.type === 'sync-changed') {
             // Real-time Sync Board push: a message was upserted or deleted.
             // Every open pane WS receives the broadcast; SyncManager
             // debounces client-side.
@@ -13142,44 +13122,33 @@ export class TabManager {
             }
         }
     }
-
     // _acceptPiBridgeState records the per-pane bridge view. The first
     // sight of a retained run establishes a silent baseline (a new browser
     // never bells for history); only a newer run after a baseline rings a
     // catch-up bell. Aborted runs never ring.
     _acceptPiBridgeState(tabInfo, control, socket = tabInfo?.ws) {
-        if (!tabInfo || tabInfo.coder !== 'pi') return;
+        if (!tabInfo || tabInfo.coder !== 'pi')
+            return;
         const prevKeys = this._piBridgeKeys(tabInfo);
-        const accepted = this._acceptOrderedBridgeView(
-            tabInfo,
-            control,
-            socket,
-        );
+        const accepted = this._acceptOrderedBridgeView(tabInfo, control, socket);
         // A retained view that no longer supports the pending native
         // Compact waiter — runtime generation moved, peer lost, or
         // capability revoked — orphans it silently; the late HTTP
         // reply then finalizes silently too. Inline reads only, so
         // partial harnesses without the waiter surface still pass.
         const pendingOp = this._piBridgeCompactPending?.get(tabInfo.paneId);
-        if (
-            pendingOp &&
+        if (pendingOp &&
             pendingOp.tab === tabInfo &&
             (tabInfo.ws !== pendingOp.ws ||
                 tabInfo.piBridge?.generation !== pendingOp.generation ||
                 tabInfo.piBridge?.connected !== true ||
-                !(tabInfo.piBridge?.capabilities || []).includes(
-                    'pi.compact.v1',
-                ))
-        )
+                !(tabInfo.piBridge?.capabilities || []).includes('pi.compact.v1')))
             // Peer-down or capability loss on the still-current
             // socket/runtime reports unknown once for the live
             // operation; a swapped socket or moved generation is a
             // stale waiter and stays silent.
-            this._invalidatePiBridgeCompact?.(
-                tabInfo,
-                tabInfo.ws === pendingOp.ws &&
-                    tabInfo.piBridge?.generation === pendingOp.generation,
-            );
+            this._invalidatePiBridgeCompact?.(tabInfo, tabInfo.ws === pendingOp.ws &&
+                tabInfo.piBridge?.generation === pendingOp.generation);
         // Release evidence retires a blocking Reload marker. The
         // pending waiter itself is never orphaned here: the receipt
         // survives the reload it caused.
@@ -13192,26 +13161,21 @@ export class TabManager {
         // Rejected (stale) frames move neither key.
         if (prevKeys.row !== nextKeys.row) {
             this._refreshPiBridgeModels(tabInfo);
-            if (
-                tabInfo.piBridge?.connected === true &&
-                (tabInfo.piBridge?.capabilities || []).includes('pi.attachments.v3')
-            ) {
-                void this._refreshAttachmentContext(
-                    tabInfo,
-                    this._captureAttachmentOwner(tabInfo),
-                    this.app?.scope,
-                );
+            if (tabInfo.piBridge?.connected === true &&
+                (tabInfo.piBridge?.capabilities || []).includes('pi.attachments.v3')) {
+                void this._refreshAttachmentContext(tabInfo, this._captureAttachmentOwner(tabInfo), this.app?.scope);
             }
-        } else if (prevKeys.bar !== nextKeys.bar && this.getActiveTab() === tabInfo)
+        }
+        else if (prevKeys.bar !== nextKeys.bar &&
+            this.getActiveTab() === tabInfo)
             this.renderPiRpcStatusBar?.();
         // A held Reload press flushes only from accepted
         // current-socket state; rejected frames move nothing.
-        if (accepted) this._flushPiBridgeReloadQueue?.(tabInfo);
-        if (
-            this._piRecall?.paneId === tabInfo.paneId &&
+        if (accepted)
+            this._flushPiBridgeReloadQueue?.(tabInfo);
+        if (this._piRecall?.paneId === tabInfo.paneId &&
             (!this._piRecallEligible(tabInfo) ||
-                tabInfo.piBridge.generation !== this._piRecall.gen)
-        ) {
+                tabInfo.piBridge?.generation !== this._piRecall.gen)) {
             this._resetPiRecall({ flush: true });
         }
         // running/last_run only arrive post-hello, so their first
@@ -13222,33 +13186,21 @@ export class TabManager {
         // Live state with no retained run establishes a zero baseline:
         // the tab was already observing, so a later reconnect snapshot
         // with run 1 must ring instead of silently baselining.
-        if (
-            !control.last_run &&
+        if (!control.last_run &&
             control.running !== undefined &&
-            !this._piBridgeHasBaseline(tabInfo)
-        ) {
+            !this._piBridgeHasBaseline(tabInfo)) {
             tabInfo._piBridgeLastRun = '0';
-            if (
-                typeof control.generation === 'string' &&
-                /^\d+$/.test(control.generation)
-            ) {
+            if (typeof control.generation === 'string' &&
+                /^\d+$/.test(control.generation)) {
                 tabInfo._piBridgeGeneration = control.generation;
             }
         }
-        if (
-            control.last_run &&
-            this._piBridgeRunIsNew(
-                tabInfo,
-                control.last_run,
-                control.generation,
-            )
-        ) {
+        if (control.last_run &&
+            this._piBridgeRunIsNew(tabInfo, control.last_run, control.generation)) {
             const hadBaseline = this._piBridgeHasBaseline(tabInfo);
             tabInfo._piBridgeLastRun = control.last_run;
-            if (
-                typeof control.generation === 'string' &&
-                /^\d+$/.test(control.generation)
-            ) {
+            if (typeof control.generation === 'string' &&
+                /^\d+$/.test(control.generation)) {
                 tabInfo._piBridgeGeneration = control.generation;
             }
             if (hadBaseline && control.last_outcome !== 'aborted') {
@@ -13256,67 +13208,64 @@ export class TabManager {
             }
         }
     }
-
     // _acceptPiBridgeSettled rings one bell per observed run. Duplicates
     // and aborted runs update the high-water mark without ringing.
     _acceptPiBridgeSettled(tabInfo, control) {
-        if (!tabInfo || tabInfo.coder !== 'pi') return;
-        if (!control.run) return;
+        if (!tabInfo || tabInfo.coder !== 'pi')
+            return;
+        if (!control.run)
+            return;
         // Settled frames only arrive post-hello: proof of liveness.
         tabInfo._piBridgeLive = true;
-        if (
-            !this._piBridgeRunIsNew(
-                tabInfo,
-                control.run,
-                control.generation,
-            )
-        )
+        if (!this._piBridgeRunIsNew(tabInfo, control.run, control.generation))
             return;
         tabInfo._piBridgeLastRun = control.run;
-        if (
-            typeof control.generation === 'string' &&
-            /^\d+$/.test(control.generation)
-        ) {
+        if (typeof control.generation === 'string' &&
+            /^\d+$/.test(control.generation)) {
             tabInfo._piBridgeGeneration = control.generation;
         }
         // A settlement ends the run, whatever the outcome.
-        if (tabInfo.piBridge) tabInfo.piBridge.running = false;
-        if (control.outcome === 'aborted') return;
+        if (tabInfo.piBridge)
+            tabInfo.piBridge.running = false;
+        if (control.outcome === 'aborted')
+            return;
         this._ringPiBridgeBell(tabInfo);
     }
-
     // Runs and generations are u64 decimal strings; compare numerically,
     // defensively. Ordering is generation-major: any run in a newer
     // generation is new, and any run in an older generation is stale.
     // Frames without a generation fall back to the legacy run-only
     // comparison.
     _piBridgeRunIsNew(tabInfo, run, generation) {
-        if (typeof run !== 'string' || !/^\d+$/.test(run)) return false;
+        if (typeof run !== 'string' || !/^\d+$/.test(run))
+            return false;
         const seen = tabInfo._piBridgeLastRun;
-        if (typeof seen !== 'string' || !/^\d+$/.test(seen)) return true;
+        if (typeof seen !== 'string' || !/^\d+$/.test(seen))
+            return true;
         const seenGen = tabInfo._piBridgeGeneration;
-        if (
-            typeof generation === 'string' &&
+        if (typeof generation === 'string' &&
             /^\d+$/.test(generation) &&
             typeof seenGen === 'string' &&
-            /^\d+$/.test(seenGen)
-        ) {
+            /^\d+$/.test(seenGen)) {
             try {
                 const gen = BigInt(generation);
                 const prev = BigInt(seenGen);
-                if (gen > prev) return true;
-                if (gen < prev) return false;
-            } catch (_e) {
+                if (gen > prev)
+                    return true;
+                if (gen < prev)
+                    return false;
+            }
+            catch (_e) {
                 // Fall through to the run comparison.
             }
         }
         try {
             return BigInt(run) > BigInt(seen);
-        } catch (_e) {
+        }
+        catch (_e) {
             return run !== seen;
         }
     }
-
     // _piBridgeHasBaseline reports whether this tab has observed bridge
     // run state before (a high-water mark exists). First sight is always
     // a silent baseline, never a catch-up bell.
@@ -13324,7 +13273,6 @@ export class TabManager {
         const seen = tabInfo._piBridgeLastRun;
         return typeof seen === 'string' && /^\d+$/.test(seen);
     }
-
     // _ringPiBridgeBell marks a settled run done and always raises
     // attention (marker, toast, chime, OS notification), even for the
     // active visible tab: a settlement is solid bridge signal, and
@@ -13339,26 +13287,23 @@ export class TabManager {
         // error or explicitly unknown.
         this.triggerAttentionNotification(tabInfo, true);
     }
-
     // handleServerShutdown is invoked when the WS control stream receives
     // a 0x05 frame. Polls /api/version every 1s; reloads the page when the
     // server is back (different commit or after a generous timeout).
     handleServerShutdown(reason) {
-        if (this._reloadArmed) return;
+        if (this._reloadArmed)
+            return;
         this._reloadArmed = true;
-
         // Show a one-time toast so the user knows what's happening.
         if (this.app?.showToast) {
             this.app.showToast(`phi is ${reason}… reloading when ready.`, {
                 type: 'info',
-                durationMs: 8000,
+                duration: 8000,
             });
         }
-
         const beforeCommit = this.app?.versionInfo?.commit || '';
         const startedAt = Date.now();
         const maxWaitMs = 10_000;
-
         const poll = async () => {
             // Bail out once we've waited long enough regardless.
             if (Date.now() - startedAt > maxWaitMs) {
@@ -13378,29 +13323,34 @@ export class TabManager {
                         return;
                     }
                 }
-            } catch (_) {
+            }
+            catch (_) {
                 // network blip while server is bouncing; keep polling
             }
             setTimeout(poll, 1000);
         };
         setTimeout(poll, 1000);
     }
-
     // Reload rebuilds the current terminal's connection/state. It never
     // restarts backend processes, deletes panes or fetches the whole archive.
     refreshConsole() {
         const tab = this.getActiveTab();
-        if (!tab?.term || tab.finalizing || ['pi-rpc', 'review', 'kanban'].includes(tab.coder)) return;
+        if (!tab?.term ||
+            tab.finalizing ||
+            ['pi-rpc', 'review', 'kanban'].includes(tab.coder))
+            return;
         tab.userFollowBottom = true;
         this._clearReaderAnchor(tab);
         this.reconnectTab(tab);
     }
-
     reconnectTab(tabInfo, { auto = false } = {}) {
-        if (!this._canReconnectTab(tabInfo)) return;
-        if (!auto) tabInfo.reconnectAttempts = 0;
+        if (!this._canReconnectTab(tabInfo))
+            return;
+        if (!auto)
+            tabInfo.reconnectAttempts = 0;
         if (tabInfo.reconnectInFlight) {
-            if (auto) return;
+            if (auto)
+                return;
             // Manual retry forces recovery from stalled in-flight attempt
             if (tabInfo.reconnectWatchdogTimer) {
                 clearTimeout(tabInfo.reconnectWatchdogTimer);
@@ -13408,13 +13358,15 @@ export class TabManager {
             }
             if (tabInfo.ws) {
                 try {
-                    tabInfo.ws.close();
-                } catch (_e) {}
+                    tabInfo.ws.close?.();
+                }
+                catch (_e) { }
                 tabInfo.ws = null;
             }
             tabInfo.reconnectInFlight = false;
         }
-        clearTimeout(tabInfo.reconnectStableTimer);
+        if (tabInfo.reconnectStableTimer)
+            clearTimeout(tabInfo.reconnectStableTimer);
         tabInfo.reconnectStableTimer = null;
         tabInfo.reconnectInFlight = true;
         if (tabInfo.autoReconnectTimer) {
@@ -13427,126 +13379,144 @@ export class TabManager {
         }
         tabInfo.autoReconnectPending = false;
         tabInfo.exitCode = null;
-
-        const overlay =
-            tabInfo.termContainer.querySelector('.reconnect-overlay');
+        const overlay = tabInfo.termContainer.querySelector('.reconnect-overlay');
         const msgEl = overlay?.querySelector('.reconnect-msg');
         const btnEl = overlay?.querySelector('.reconnect-btn');
         const restartBtn = overlay?.querySelector('.restart-btn');
-
-        if (msgEl) msgEl.innerText = auto ? 'reconnecting…' : 'connecting…';
-        if (btnEl) btnEl.disabled = true;
-        if (restartBtn) restartBtn.disabled = true;
-
+        if (msgEl)
+            msgEl.innerText = auto ? 'reconnecting…' : 'connecting…';
+        if (btnEl)
+            btnEl.disabled = true;
+        if (restartBtn)
+            restartBtn.disabled = true;
         if (tabInfo.ws) {
             try {
-                tabInfo.ws.close();
-            } catch (_e) {}
+                tabInfo.ws.close?.();
+            }
+            catch (_e) { }
             tabInfo.ws = null;
         }
-
         // Hot attach resumes the proven parser frontier through checkpoint/delta recovery.
         // Keep the visible screen until that recovery owns a replacement.
         tabInfo.awaitingReplay = true;
-
         let opened = false;
         try {
-            const newWs = new PTYWebSocket(
-                tabInfo.paneId,
-                (data) => {
-                    if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing || tabInfo.ws !== newWs) return;
-                    this._paneData(tabInfo, data);
-                },
-                (control) => {
-                    if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing || tabInfo.ws !== newWs) return;
-                    this.handleControlMessage(tabInfo, control, newWs);
-                },
-                () => {
-                    if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing || tabInfo.ws !== newWs) return;
-                    this._handleTerminalDisconnect(tabInfo, opened ? 'Connection lost' :
-                        'Connection failed. Retry or check your connection.');
-                },
-                () => {
-                    if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing ||
-                        tabInfo.exitCode != null || tabInfo.ws !== newWs) return;
-                    if (tabInfo.reconnectWatchdogTimer) {
-                        clearTimeout(tabInfo.reconnectWatchdogTimer);
-                        tabInfo.reconnectWatchdogTimer = null;
-                    }
-                    opened = true;
-                    tabInfo._perfAttachAt = performance.now();
-                    tabInfo._perfWrote = false;
-                    termPerfMark('ws-open');
-                    // Clearing the backoff here on open (rather than after the
-                    // connection survives) meant the counter could never climb:
-                    // open -> die -> retry reset it every cycle, so the
-                    // exponential backoff never engaged and the attempt cap was
-                    // unreachable. A flapping pane redialled forever at ~500ms.
+            const newWs = new PTYWebSocket(tabInfo.paneId, (data) => {
+                if (this.tabs.get(tabInfo.paneId) !== tabInfo ||
+                    tabInfo.finalizing ||
+                    tabInfo.ws !== newWs)
+                    return;
+                this._paneData(tabInfo, data);
+            }, (control) => {
+                if (this.tabs.get(tabInfo.paneId) !== tabInfo ||
+                    tabInfo.finalizing ||
+                    tabInfo.ws !== newWs)
+                    return;
+                this.handleControlMessage(tabInfo, control, newWs);
+            }, () => {
+                if (this.tabs.get(tabInfo.paneId) !== tabInfo ||
+                    tabInfo.finalizing ||
+                    tabInfo.ws !== newWs)
+                    return;
+                this._handleTerminalDisconnect(tabInfo, opened
+                    ? 'Connection lost'
+                    : 'Connection failed. Retry or check your connection.');
+            }, () => {
+                if (this.tabs.get(tabInfo.paneId) !== tabInfo ||
+                    tabInfo.finalizing ||
+                    tabInfo.exitCode != null ||
+                    tabInfo.ws !== newWs)
+                    return;
+                if (tabInfo.reconnectWatchdogTimer) {
+                    clearTimeout(tabInfo.reconnectWatchdogTimer);
+                    tabInfo.reconnectWatchdogTimer = null;
+                }
+                opened = true;
+                tabInfo._perfAttachAt = performance.now();
+                tabInfo._perfWrote = false;
+                termPerfMark('ws-open');
+                // Clearing the backoff here on open (rather than after the
+                // connection survives) meant the counter could never climb:
+                // open -> die -> retry reset it every cycle, so the
+                // exponential backoff never engaged and the attempt cap was
+                // unreachable. A flapping pane redialled forever at ~500ms.
+                if (tabInfo.reconnectStableTimer)
                     clearTimeout(tabInfo.reconnectStableTimer);
-                    const stableTimer = setTimeout(() => {
-                        if (this.tabs.get(tabInfo.paneId) !== tabInfo ||
-                            tabInfo.ws !== newWs || tabInfo.reconnectStableTimer !== stableTimer ||
-                            tabInfo.isDead || tabInfo.finalizing || tabInfo.exitCode != null) return;
-                        tabInfo.reconnectAttempts = 0;
-                        tabInfo.reconnectStableTimer = null;
-                    }, AUTO_RECONNECT_STABLE_MS);
-                    tabInfo.reconnectStableTimer = stableTimer;
-                    tabInfo.reconnectInFlight = false;
-                    tabInfo.isDead = false;
-                    // A reconnect starts quiet. Without this reset, a PTY
-                    // that disconnected while busy would revive the ϕ mark
-                    // before it had emitted any new output.
-                    tabInfo.isBusy = false;
-                    tabInfo.lastOutputAt = undefined;
-                    tabInfo.busyStartTime = null;
-                    tabInfo.userTaskActive = false;
-                    tabInfo.userTaskStartTime = null;
-                    tabInfo.tabEl.classList.remove('dead');
-                    this.updateDocumentTitle();
-                    if (overlay) overlay.remove();
-                    this.updateDisconnectBanner();
-                    if (this._canReconnectTab(tabInfo) && tabInfo === this.getActiveTab()) {
-                        if (auto) this._queuePanelFit(tabInfo, { forceResize: true });
-                        else this.activateTabViewport(tabInfo, {
+                const stableTimer = setTimeout(() => {
+                    if (this.tabs.get(tabInfo.paneId) !== tabInfo ||
+                        tabInfo.ws !== newWs ||
+                        tabInfo.reconnectStableTimer !== stableTimer ||
+                        tabInfo.isDead ||
+                        tabInfo.finalizing ||
+                        tabInfo.exitCode != null)
+                        return;
+                    tabInfo.reconnectAttempts = 0;
+                    tabInfo.reconnectStableTimer = null;
+                }, AUTO_RECONNECT_STABLE_MS);
+                tabInfo.reconnectStableTimer = stableTimer;
+                tabInfo.reconnectInFlight = false;
+                tabInfo.isDead = false;
+                // A reconnect starts quiet. Without this reset, a PTY
+                // that disconnected while busy would revive the ϕ mark
+                // before it had emitted any new output.
+                tabInfo.isBusy = false;
+                tabInfo.lastOutputAt = undefined;
+                tabInfo.busyStartTime = null;
+                tabInfo.userTaskActive = false;
+                tabInfo.userTaskStartTime = null;
+                tabInfo.tabEl.classList.remove('dead');
+                this.updateDocumentTitle();
+                if (overlay)
+                    overlay.remove();
+                this.updateDisconnectBanner();
+                if (this._canReconnectTab(tabInfo) &&
+                    tabInfo === this.getActiveTab()) {
+                    if (auto)
+                        this._queuePanelFit(tabInfo, { forceResize: true });
+                    else
+                        this.activateTabViewport(tabInfo, {
                             scrollToBottom: tabInfo.userFollowBottom !== false,
                             autoReconnect: false,
                         });
-                    }
-                },
-                this._hotOptions(tabInfo),
-            );
+                }
+            }, this._hotOptions(tabInfo));
             this._setCurrentTabSocket(tabInfo, newWs);
             const watchdog = setTimeout(() => {
-                if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing ||
-                    tabInfo.ws !== newWs || tabInfo.reconnectWatchdogTimer !== watchdog ||
-                    !tabInfo.reconnectInFlight) return;
+                if (this.tabs.get(tabInfo.paneId) !== tabInfo ||
+                    tabInfo.finalizing ||
+                    tabInfo.ws !== newWs ||
+                    tabInfo.reconnectWatchdogTimer !== watchdog ||
+                    !tabInfo.reconnectInFlight)
+                    return;
                 console.warn('[term] Reconnect attempt timed out after 10s');
                 newWs.close();
                 tabInfo.ws = null;
                 this._handleTerminalDisconnect(tabInfo, 'Connection timed out');
             }, 10_000);
             tabInfo.reconnectWatchdogTimer = watchdog;
-        } catch (e) {
+        }
+        catch (e) {
             this._handleTerminalDisconnect(tabInfo, 'Connection failed. Retry or check your connection.');
             console.error('[term] PTYWebSocket instantiation threw:', e);
         }
     }
-
     restartTab(tabInfo) {
-        if (tabInfo.coder === 'pi-rpc') return;
+        if (tabInfo.coder === 'pi-rpc')
+            return;
         // Restart drops the old pane: release Thinking ownership while the
         // pending operation still carries this pane id.
-        if (tabInfo.coder === 'pi') this._invalidatePiBridgeThinking(tabInfo, false);
-        const overlay =
-            tabInfo.termContainer.querySelector('.reconnect-overlay');
+        if (tabInfo.coder === 'pi')
+            this._invalidatePiBridgeThinking(tabInfo, false);
+        const overlay = tabInfo.termContainer.querySelector('.reconnect-overlay');
         const msgEl = overlay?.querySelector('.reconnect-msg');
         const reconnectBtn = overlay?.querySelector('.reconnect-btn');
         const restartBtn = overlay?.querySelector('.restart-btn');
-
-        if (msgEl) msgEl.innerText = 'restarting…';
-        if (reconnectBtn) reconnectBtn.disabled = true;
-        if (restartBtn) restartBtn.disabled = true;
-
+        if (msgEl)
+            msgEl.innerText = 'restarting…';
+        if (reconnectBtn)
+            reconnectBtn.disabled = true;
+        if (restartBtn)
+            restartBtn.disabled = true;
         if (tabInfo.reconnectWatchdogTimer) {
             clearTimeout(tabInfo.reconnectWatchdogTimer);
             tabInfo.reconnectWatchdogTimer = null;
@@ -13558,18 +13528,17 @@ export class TabManager {
         tabInfo.autoReconnectPending = false;
         tabInfo.reconnectInFlight = false;
         tabInfo.reconnectAttempts = 0;
-
         if (tabInfo.ws) {
             try {
-                tabInfo.ws.close();
-            } catch (_e) {}
+                tabInfo.ws.close?.();
+            }
+            catch (_e) { }
             tabInfo.ws = null;
         }
         // A restart orphans the pending native Compact waiter for the
         // old pane before the new lease is provisioned.
         this._invalidatePiBridgeCompact?.(tabInfo);
         this._invalidatePiBridgeReload?.(tabInfo);
-
         fetch('/api/terminals', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -13579,161 +13548,154 @@ export class TabManager {
                 session_id: tabInfo.sessionId || '',
                 title: tabInfo.title || '',
                 workspace: tabInfo.workspace || '',
-                ...(tabInfo.coder === 'opencode' ? { opencode_mini: isOpenCodeMini(tabInfo) } : {}),
-                ...(tabInfo.coder === 'pi' && tabInfo.piMode === 'psi' ? { pi_psi: true } : {}),
+                ...(tabInfo.coder === 'opencode'
+                    ? { opencode_mini: isOpenCodeMini(tabInfo) }
+                    : {}),
+                ...(tabInfo.coder === 'pi' && tabInfo.piMode === 'psi'
+                    ? { pi_psi: true }
+                    : {}),
             }),
         })
             .then((res) => {
-                if (!res.ok)
-                    throw new Error('failed to spawn restarted session');
-                return res.json();
-            })
+            if (!res.ok)
+                throw new Error('failed to spawn restarted session');
+            return res.json();
+        })
             .then((data) => {
-                const oldPaneId = tabInfo.paneId;
-
-                // Update paneId and sessionId
-                tabInfo.paneId = data.pane_id;
-                tabInfo.sessionId = data.session_id;
-                if (tabInfo.coder === 'opencode') {
-                    tabInfo.opencodeMode = openCodePaneMode(data.opencode_mode);
+            const oldPaneId = tabInfo.paneId;
+            // Update paneId and sessionId
+            tabInfo.paneId = data.pane_id;
+            tabInfo.sessionId = data.session_id;
+            if (tabInfo.coder === 'opencode') {
+                tabInfo.opencodeMode = openCodePaneMode(data.opencode_mode);
+            }
+            if (tabInfo.coder === 'pi') {
+                tabInfo.piMode = data.pi_mode || null;
+            }
+            // A restart provisions a fresh lease; drop bridge state.
+            // The HTTP baseline seeds below, after the new socket
+            // resets ordering.
+            tabInfo.piBridge = undefined;
+            this._resetPiBridgeOrdered(tabInfo);
+            // A restart provisions a fresh lease: drop recall state
+            // without flushing — the old pane is being reborn.
+            this._resetPiRecall();
+            tabInfo._piBridgeLastRun = undefined;
+            tabInfo._piBridgeGeneration = '';
+            tabInfo._piBridgeLive = undefined;
+            // The old lease is gone: hide its meter and controls now,
+            // before the new socket re-baselines.
+            this._refreshPiBridgeModels(tabInfo);
+            // Update DOM element references to synchronise new IDs
+            tabInfo.tabEl.setAttribute('data-pane-id', data.pane_id);
+            tabInfo.termContainer.id = `term-${data.pane_id}`;
+            // Update TabManager map tracking
+            this.tabs.delete(oldPaneId);
+            this.tabs.set(data.pane_id, tabInfo);
+            if (this.activePaneId === oldPaneId) {
+                this.activePaneId = data.pane_id;
+            }
+            // Report the restart outside the parser: a local banner
+            // would shift the raw replay away from its initial baseline.
+            tabInfo.term.reset();
+            this._clearReaderAnchor(tabInfo);
+            tabInfo._pendingRestartNotice = true;
+            let opened = false;
+            const newWs = new PTYWebSocket(tabInfo.paneId, (msg) => {
+                if (tabInfo.ws !== newWs)
+                    return;
+                this._paneData(tabInfo, msg);
+            }, (control) => {
+                if (tabInfo.ws !== newWs)
+                    return;
+                this.handleControlMessage(tabInfo, control, newWs);
+            }, () => {
+                if (tabInfo.ws !== newWs)
+                    return;
+                if (opened) {
+                    tabInfo.isDead = true;
+                    tabInfo.tabEl.classList.add('dead');
+                    this.updateDocumentTitle();
+                    this._showReconnectOverlay(tabInfo);
+                    this.updateDisconnectBanner();
                 }
-                if (tabInfo.coder === 'pi') {
-                    tabInfo.piMode = data.pi_mode || null;
+                else {
+                    tabInfo.isDead = true;
+                    if (msgEl)
+                        msgEl.innerText =
+                            'Connection failed. Retry or check your connection.';
+                    if (reconnectBtn)
+                        reconnectBtn.disabled = false;
+                    if (restartBtn)
+                        restartBtn.disabled = false;
+                    this.updateDisconnectBanner();
                 }
-                // A restart provisions a fresh lease; drop bridge state.
-                // The HTTP baseline seeds below, after the new socket
-                // resets ordering.
-                tabInfo.piBridge = undefined;
-                this._resetPiBridgeOrdered(tabInfo);
-                // A restart provisions a fresh lease: drop recall state
-                // without flushing — the old pane is being reborn.
-                this._resetPiRecall();
-                tabInfo._piBridgeLastRun = undefined;
-                tabInfo._piBridgeGeneration = undefined;
-                tabInfo._piBridgeLive = undefined;
-                // The old lease is gone: hide its meter and controls now,
-                // before the new socket re-baselines.
+                // A dead restart socket orphans the pending native
+                // Compact waiter, exactly like any other close.
+                this._invalidatePiBridgeCompact?.(tabInfo, true);
                 this._refreshPiBridgeModels(tabInfo);
-
-                // Update DOM element references to synchronise new IDs
-                tabInfo.tabEl.setAttribute('data-pane-id', data.pane_id);
-                tabInfo.termContainer.id = `term-${data.pane_id}`;
-
-                // Update TabManager map tracking
-                this.tabs.delete(oldPaneId);
-                this.tabs.set(data.pane_id, tabInfo);
-
-                if (this.activePaneId === oldPaneId) {
-                    this.activePaneId = data.pane_id;
-                }
-
-                // Report the restart outside the parser: a local banner
-                // would shift the raw replay away from its initial baseline.
-                tabInfo.term.reset();
-                this._clearReaderAnchor(tabInfo);
-                tabInfo._pendingRestartNotice = true;
-
-                let opened = false;
-                const newWs = new PTYWebSocket(
-                    tabInfo.paneId,
-                    (msg) => {
-                        if (tabInfo.ws !== newWs) return;
-                        this._paneData(tabInfo, msg);
-                    },
-                    (control) => {
-                        if (tabInfo.ws !== newWs) return;
-                        this.handleControlMessage(tabInfo, control, newWs);
-                    },
-                    () => {
-                        if (tabInfo.ws !== newWs) return;
-                        if (opened) {
-                            tabInfo.isDead = true;
-                            tabInfo.tabEl.classList.add('dead');
-                            this.updateDocumentTitle();
-                            this._showReconnectOverlay(tabInfo);
-                            this.updateDisconnectBanner();
-                        } else {
-                            tabInfo.isDead = true;
-                            if (msgEl)
-                                msgEl.innerText = 'Connection failed. Retry or check your connection.';
-                            if (reconnectBtn) reconnectBtn.disabled = false;
-                            if (restartBtn) restartBtn.disabled = false;
-                            this.updateDisconnectBanner();
-                        }
-                        // A dead restart socket orphans the pending native
-                        // Compact waiter, exactly like any other close.
-                        this._invalidatePiBridgeCompact?.(tabInfo, true);
-                        this._refreshPiBridgeModels(tabInfo);
-                    },
-                    () => {
-                        if (tabInfo.ws !== newWs) return;
-                        opened = true;
-                        tabInfo._perfAttachAt = performance.now();
-                        tabInfo._perfWrote = false;
-                        termPerfMark('ws-open');
-                        tabInfo.isDead = false;
-                        tabInfo.isBusy = false;
-                        tabInfo.lastOutputAt = undefined;
-                        tabInfo.busyStartTime = null;
-                        tabInfo.userTaskActive = false;
-                        tabInfo.userTaskStartTime = null;
-                        tabInfo.tabEl.classList.remove('dead');
-                        this.updateDocumentTitle();
-                        if (overlay) overlay.remove();
-                        this.updateDisconnectBanner();
-
-                        // Trigger terminal fit & backend resize to synchronise viewport
-                        setTimeout(() => {
-                            this.activateTabViewport(tabInfo, {
-                                scrollToBottom: true,
-                                autoReconnect: false,
-                            });
-                        }, 100);
-                    },
-                    this._hotOptions(tabInfo),
-                );
-                this._setCurrentTabSocket(tabInfo, newWs);
-                if (data.pi_bridge != null)
-                    this._seedHttpPiBridge(tabInfo, data.pi_bridge);
-
-                // Sync with session list in sidebar
-                if (this.app.sessionsManager) {
-                    this.app.sessionsManager.loadSessions();
-                }
-            })
+            }, () => {
+                if (tabInfo.ws !== newWs)
+                    return;
+                opened = true;
+                tabInfo._perfAttachAt = performance.now();
+                tabInfo._perfWrote = false;
+                termPerfMark('ws-open');
+                tabInfo.isDead = false;
+                tabInfo.isBusy = false;
+                tabInfo.lastOutputAt = undefined;
+                tabInfo.busyStartTime = null;
+                tabInfo.userTaskActive = false;
+                tabInfo.userTaskStartTime = null;
+                tabInfo.tabEl.classList.remove('dead');
+                this.updateDocumentTitle();
+                if (overlay)
+                    overlay.remove();
+                this.updateDisconnectBanner();
+                // Trigger terminal fit & backend resize to synchronise viewport
+                setTimeout(() => {
+                    this.activateTabViewport(tabInfo, {
+                        scrollToBottom: true,
+                        autoReconnect: false,
+                    });
+                }, 100);
+            }, this._hotOptions(tabInfo));
+            this._setCurrentTabSocket(tabInfo, newWs);
+            if (data.pi_bridge != null)
+                this._seedHttpPiBridge(tabInfo, data.pi_bridge);
+            // Sync with session list in sidebar
+            if (this.app.sessionsManager) {
+                this.app.sessionsManager.loadSessions();
+            }
+        })
             .catch((err) => {
-                console.error('[restart] Failed to restart tab:', err);
-                if (msgEl) msgEl.innerText = 'restart failed';
-                if (reconnectBtn) reconnectBtn.disabled = false;
-                if (restartBtn) restartBtn.disabled = false;
-            });
+            console.error('[restart] Failed to restart tab:', err);
+            if (msgEl)
+                msgEl.innerText = 'restart failed';
+            if (reconnectBtn)
+                reconnectBtn.disabled = false;
+            if (restartBtn)
+                restartBtn.disabled = false;
+        });
     }
-
     updateDisconnectBanner() {
         const banner = document.getElementById('disconnect-banner');
-        if (!banner) return;
-
+        if (!banner)
+            return;
         const autoReconnectConfig = this.app?.config?.auto_reconnect;
-        const autoReconnectActive =
-            autoReconnectConfig === 'visible' &&
+        const autoReconnectActive = autoReconnectConfig === 'visible' &&
             (typeof document === 'undefined' ||
                 document.visibilityState === 'visible');
-
         const deadTabs = [];
         for (const tabInfo of this.tabs.values()) {
-            if (
-                tabInfo.isDead && this._canReconnectTab(tabInfo)
-            ) {
-                if (
-                    autoReconnectActive &&
-                    (tabInfo.autoReconnectPending || tabInfo.reconnectInFlight)
-                ) {
+            if (tabInfo.isDead && this._canReconnectTab(tabInfo)) {
+                if (autoReconnectActive &&
+                    (tabInfo.autoReconnectPending || tabInfo.reconnectInFlight)) {
                     continue;
                 }
                 deadTabs.push(tabInfo);
             }
         }
-
         const currentCount = deadTabs.length;
         if (currentCount === 0) {
             banner.classList.add('hidden');
@@ -13741,12 +13703,10 @@ export class TabManager {
             this._dismissedCount = 0;
             return;
         }
-
         if (this._bannerDismissed && currentCount <= this._dismissedCount) {
             banner.classList.add('hidden');
             return;
         }
-
         this._bannerDismissed = false;
         banner.classList.remove('hidden');
         banner.innerHTML = `
@@ -13756,27 +13716,23 @@ export class TabManager {
                 <button class="disconnect-banner-btn dismiss-banner-btn" style="background:transparent;border-color:rgba(255,255,255,0.2);">Dismiss</button>
             </div>
         `;
-
         banner
             .querySelector('.reconnect-all-banner-btn')
-            .addEventListener('click', () => {
-                this.reconnectAllDead();
-            });
+            ?.addEventListener('click', () => {
+            this.reconnectAllDead();
+        });
         banner
             .querySelector('.dismiss-banner-btn')
-            .addEventListener('click', () => {
-                this._bannerDismissed = true;
-                this._dismissedCount = currentCount;
-                banner.classList.add('hidden');
-            });
+            ?.addEventListener('click', () => {
+            this._bannerDismissed = true;
+            this._dismissedCount = currentCount;
+            banner.classList.add('hidden');
+        });
     }
-
     reconnectAllDead() {
         let count = 0;
         for (const tabInfo of this.tabs.values()) {
-            if (
-                tabInfo.isDead && this._canReconnectTab(tabInfo)
-            ) {
+            if (tabInfo.isDead && this._canReconnectTab(tabInfo)) {
                 this.reconnectTab(tabInfo, { auto: false });
                 count++;
             }
@@ -13791,7 +13747,6 @@ export class TabManager {
         this.updateDisconnectBanner();
         return count;
     }
-
     reconnectAllTabsWithToast() {
         const deadCount = this.reconnectAllDead();
         const total = this.tabs.size;
@@ -13800,102 +13755,101 @@ export class TabManager {
         }
         if (this.app && typeof this.app.showToast === 'function') {
             if (deadCount > 0) {
-                this.app.showToast(
-                    'info',
-                    `Reconnected ${deadCount} disconnected tab${deadCount > 1 ? 's' : ''}`,
-                );
-            } else {
-                this.app.showToast(
-                    'info',
-                    `Refreshed ${total} tab${total === 1 ? '' : 's'}`,
-                );
+                this.app.showToast(`Reconnected ${deadCount} disconnected tab${deadCount > 1 ? 's' : ''}`, { type: 'info' });
+            }
+            else {
+                this.app.showToast(`Refreshed ${total} tab${total === 1 ? '' : 's'}`, { type: 'info' });
             }
         }
     }
-
     _canReconnectTab(tabInfo) {
-        return Boolean(tabInfo && this.tabs.get(tabInfo.paneId) === tabInfo &&
-            !tabInfo.finalizing && !tabInfo.softClosing && tabInfo.exitCode == null &&
-            !tabInfo.isReview && !tabInfo.isKanban &&
+        return Boolean(tabInfo &&
+            this.tabs.get(tabInfo.paneId) === tabInfo &&
+            !tabInfo.finalizing &&
+            !tabInfo.softClosing &&
+            tabInfo.exitCode == null &&
+            !tabInfo.isReview &&
+            !tabInfo.isKanban &&
             !['review', 'kanban', 'pi-rpc'].includes(tabInfo.coder));
     }
-
     // Wake hints start a fresh series only when the pane has no recovery work.
     _reviveActiveTabIfDead() {
         if (this.app?.config?.auto_reconnect !== 'visible' ||
-            document.visibilityState !== 'visible') return;
+            document.visibilityState !== 'visible')
+            return;
         for (const tabInfo of this.tabs.values()) {
-            if (!this._canReconnectTab(tabInfo) || !tabInfo.isDead ||
-                tabInfo.autoReconnectTimer || tabInfo.autoReconnectPending || tabInfo.reconnectInFlight) continue;
+            if (!this._canReconnectTab(tabInfo) ||
+                !tabInfo.isDead ||
+                tabInfo.autoReconnectTimer ||
+                tabInfo.autoReconnectPending ||
+                tabInfo.reconnectInFlight)
+                continue;
             tabInfo.reconnectAttempts = 0;
             this.maybeAutoReconnect(tabInfo);
         }
         this.updateDisconnectBanner();
     }
-
     maybeAutoReconnect(tabInfo) {
-        if (tabInfo._protocolBlocked) return false;
-        if (!this._canReconnectTab(tabInfo) || !tabInfo.isDead ||
-            tabInfo.autoReconnectTimer || tabInfo.autoReconnectPending || tabInfo.reconnectInFlight) return false;
-        const autoReconnect = this.app?.config?.auto_reconnect;
-        if (autoReconnect !== 'visible') return false;
-
-        if (
-            typeof document !== 'undefined' &&
-            document.visibilityState !== 'visible'
-        )
+        if (tabInfo._protocolBlocked)
             return false;
-        if (!tabInfo.reconnectAttempts) tabInfo.reconnectAttempts = 0;
+        if (!this._canReconnectTab(tabInfo) ||
+            !tabInfo.isDead ||
+            tabInfo.autoReconnectTimer ||
+            tabInfo.autoReconnectPending ||
+            tabInfo.reconnectInFlight)
+            return false;
+        const autoReconnect = this.app?.config?.auto_reconnect;
+        if (autoReconnect !== 'visible')
+            return false;
+        if (typeof document !== 'undefined' &&
+            document.visibilityState !== 'visible')
+            return false;
+        if (!tabInfo.reconnectAttempts)
+            tabInfo.reconnectAttempts = 0;
         if (tabInfo.reconnectAttempts >= AUTO_RECONNECT_MAX_ATTEMPTS) {
             tabInfo.autoReconnectPending = false;
-            const overlay =
-                tabInfo.termContainer?.querySelector('.reconnect-overlay');
+            const overlay = tabInfo.termContainer?.querySelector('.reconnect-overlay');
             const msgEl = overlay?.querySelector('.reconnect-msg');
             const btnEl = overlay?.querySelector('.reconnect-btn');
             const restartBtn = overlay?.querySelector('.restart-btn');
-            if (msgEl) msgEl.innerText = 'Auto-reconnect failed. Please retry manually.';
+            if (msgEl)
+                msgEl.innerText =
+                    'Auto-reconnect failed. Please retry manually.';
             if (btnEl) {
                 btnEl.disabled = false;
                 btnEl.innerText = '⟳ Retry';
             }
-            if (restartBtn) restartBtn.disabled = false;
+            if (restartBtn)
+                restartBtn.disabled = false;
             this.updateDisconnectBanner();
             return false;
         }
-
         tabInfo.reconnectAttempts++;
         tabInfo.autoReconnectPending = true;
-        const backoff = Math.min(
-            AUTO_RECONNECT_MAX_DELAY_MS,
-            2 ** (tabInfo.reconnectAttempts - 1) * 1000,
-        );
+        const backoff = Math.min(AUTO_RECONNECT_MAX_DELAY_MS, 2 ** (tabInfo.reconnectAttempts - 1) * 1000);
         const delay = AUTO_RECONNECT_GRACE_MS + Math.random() * backoff;
-
-        console.log(
-            `[term] Auto-reconnecting pane ${tabInfo.paneId} (attempt ${tabInfo.reconnectAttempts}) in ${delay}ms...`,
-        );
-
-        const overlay =
-            tabInfo.termContainer.querySelector('.reconnect-overlay');
+        console.log(`[term] Auto-reconnecting pane ${tabInfo.paneId} (attempt ${tabInfo.reconnectAttempts}) in ${delay}ms...`);
+        const overlay = tabInfo.termContainer.querySelector('.reconnect-overlay');
         const msgEl = overlay?.querySelector('.reconnect-msg');
         if (msgEl)
             msgEl.innerText = `auto-reconnecting (attempt ${tabInfo.reconnectAttempts}/${AUTO_RECONNECT_MAX_ATTEMPTS})...`;
-
         const timer = setTimeout(() => {
-            if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.autoReconnectTimer !== timer) return;
+            if (this.tabs.get(tabInfo.paneId) !== tabInfo ||
+                tabInfo.autoReconnectTimer !== timer)
+                return;
             tabInfo.autoReconnectTimer = null;
             tabInfo.autoReconnectPending = false;
             const redial = () => {
-                if (
-                    this._canReconnectTab(tabInfo) &&
+                if (this._canReconnectTab(tabInfo) &&
                     tabInfo.isDead &&
                     !tabInfo.reconnectInFlight &&
                     this.app?.config?.auto_reconnect === 'visible' &&
-                    document.visibilityState === 'visible'
-                ) {
+                    document.visibilityState === 'visible') {
                     this.reconnectTab(tabInfo, { auto: true });
-                } else {
-                    if (tabInfo.isDead && !tabInfo.finalizing) this._showReconnectOverlay(tabInfo);
+                }
+                else {
+                    if (tabInfo.isDead && !tabInfo.finalizing)
+                        this._showReconnectOverlay(tabInfo);
                     this.updateDisconnectBanner();
                 }
             };
@@ -13908,12 +13862,14 @@ export class TabManager {
             let refresh;
             try {
                 refresh = window.phiAccessAuth?.refreshAccessIfDue?.();
-            } catch (_e) {}
+            }
+            catch (_e) { }
             // No auth module (or a v1 session) keeps the redial synchronous:
             // bridge-free behavior must stay byte-identical.
             if (refresh && typeof refresh.then === 'function') {
-                void refresh.catch(() => {}).then(redial);
-            } else {
+                void refresh.catch(() => { }).then(redial);
+            }
+            else {
                 redial();
             }
         }, delay);
@@ -13921,21 +13877,22 @@ export class TabManager {
         this.updateDisconnectBanner();
         return true;
     }
-
     toggleFindBar(tabInfo, focusOrigin = document.activeElement) {
         const existing = tabInfo.termContainer.querySelector('.find-bar');
         if (existing) {
-            existing.querySelector('.find-input')?.focus({ preventScroll: true });
+            existing
+                .querySelector('.find-input')
+                ?.focus({ preventScroll: true });
             return;
         }
-
         const previousFocus = focusOrigin;
         const isRpc = tabInfo.coder === 'pi-rpc';
-        const transcriptAvailableAtOpen =
-            !isRpc && this._piBridgeTranscriptSearchEligible(tabInfo);
-        let activeSource = transcriptAvailableAtOpen ? 'transcript' : 'terminal';
+        const transcriptAvailableAtOpen = !isRpc && this._piBridgeTranscriptSearchEligible(tabInfo);
+        let activeSource = transcriptAvailableAtOpen
+            ? 'transcript'
+            : 'terminal';
         let searchBar = null;
-        let cancelRpcSearch = () => {};
+        let cancelRpcSearch = () => { };
         let transcriptGeneration = 0;
         let transcriptQuery = '';
         let transcriptResults = [];
@@ -13955,45 +13912,39 @@ export class TabManager {
         let rpcComplete = false;
         let rpcCapped = false;
         let pendingDirection = null;
-
         const restoreFocus = () => {
-            if (
-                this.tabs?.get(tabInfo.paneId) !== tabInfo ||
-                this.getActiveTab?.() !== tabInfo
-            )
+            if (this.tabs?.get(tabInfo.paneId) !== tabInfo ||
+                this.getActiveTab?.() !== tabInfo)
                 return;
-            if (
-                previousFocus instanceof HTMLElement &&
+            if (previousFocus instanceof HTMLElement &&
                 previousFocus.isConnected &&
                 (previousFocus === this.inputTextArea ||
-                    tabInfo.termContainer.contains(previousFocus))
-            ) {
+                    tabInfo.termContainer.contains(previousFocus))) {
                 previousFocus.focus({ preventScroll: true });
-            } else if (tabInfo.term) {
+            }
+            else if (tabInfo.term) {
                 tabInfo.term.focus();
-            } else {
+            }
+            else {
                 this.inputTextArea?.focus({ preventScroll: true });
             }
         };
-
         // A bounded delay that aborts with the search it belongs to.
-        const searchDelay = (delay, signal) =>
-            new Promise((resolve, reject) => {
-                if (signal.aborted) {
-                    reject(signal.reason || new Error('search canceled'));
-                    return;
-                }
-                const timer = setTimeout(() => {
-                    signal.removeEventListener('abort', abort);
-                    resolve();
-                }, delay);
-                const abort = () => {
-                    clearTimeout(timer);
-                    reject(signal.reason || new Error('search canceled'));
-                };
-                signal.addEventListener('abort', abort, { once: true });
-            });
-
+        const searchDelay = (delay, signal) => new Promise((resolve, reject) => {
+            if (signal.aborted) {
+                reject(signal.reason || new Error('search canceled'));
+                return;
+            }
+            const timer = setTimeout(() => {
+                signal.removeEventListener('abort', abort);
+                resolve();
+            }, delay);
+            const abort = () => {
+                clearTimeout(timer);
+                reject(signal.reason || new Error('search canceled'));
+            };
+            signal.addEventListener('abort', abort, { once: true });
+        });
         const searchTerminal = (direction, query) => {
             if (!query) {
                 searchBar?.setStatus('');
@@ -14005,29 +13956,26 @@ export class TabManager {
                 return;
             }
             const cursorColor = tabInfo.term?.options?.theme?.cursor;
-            const activeMatchBackground =
-                typeof cursorColor === 'string' &&
+            const activeMatchBackground = typeof cursorColor === 'string' &&
                 /^#[\da-f]{6}$/i.test(cursorColor)
-                    ? cursorColor
-                    : '#7c6af7';
+                ? cursorColor
+                : '#7c6af7';
+            // xterm types the ruler keys as required, but the reader only
+            // ever wanted the two; send exactly what the UI draws.
             const searchOptions = {
                 decorations: {
                     matchBackground: `${activeMatchBackground}40`,
                     activeMatchBackground,
                 },
             };
-            const found =
-                direction === 'previous'
-                    ? tabInfo.searchAddon.findPrevious(query, searchOptions)
-                    : tabInfo.searchAddon.findNext(query, searchOptions);
-            searchBar?.setStatus(
-                found ? '' : 'No match in loaded terminal output.',
-                !found,
-            );
+            const found = direction === 'previous'
+                ? tabInfo.searchAddon.findPrevious(query, searchOptions)
+                : tabInfo.searchAddon.findNext(query, searchOptions);
+            searchBar?.setStatus(found ? '' : 'No match in loaded terminal output.', !found);
         };
-
         const rpcStatus = () => {
-            if (!rpcQuery) return '';
+            if (!rpcQuery)
+                return '';
             if (rpcResults.length === 0)
                 return rpcComplete
                     ? 'No matches in Pi RPC transcript.'
@@ -14035,33 +13983,33 @@ export class TabManager {
             let summary = rpcCapped
                 ? '200 results shown; refine the search.'
                 : rpcComplete
-                  ? `${rpcResults.length} matches in Pi RPC transcript.`
-                  : `${rpcResults.length} matches so far; searching transcript…`;
+                    ? `${rpcResults.length} matches in Pi RPC transcript.`
+                    : `${rpcResults.length} matches so far; searching transcript…`;
             if (rpcIndex >= 0)
                 summary += ` ${rpcIndex + 1} of ${rpcResults.length}.`;
             return summary;
         };
-
         const navigateRpc = (direction) => {
-            if (!searchBar || !rpcQuery) return;
+            if (!searchBar || !rpcQuery)
+                return;
             if (rpcResults.length === 0) {
                 if (!rpcComplete) {
                     pendingDirection = direction;
                     searchBar.setStatus('Searching Pi RPC transcript…', false);
-                } else {
+                }
+                else {
                     searchBar.setStatus('No matches in Pi RPC transcript.', false);
                 }
                 return;
             }
-            const nextIndex =
-                rpcIndex < 0
-                    ? direction === 'next'
-                        ? 0
-                        : rpcResults.length - 1
-                    : (rpcIndex +
-                          (direction === 'next' ? 1 : -1) +
-                          rpcResults.length) %
-                      rpcResults.length;
+            const nextIndex = rpcIndex < 0
+                ? direction === 'next'
+                    ? 0
+                    : rpcResults.length - 1
+                : (rpcIndex +
+                    (direction === 'next' ? 1 : -1) +
+                    rpcResults.length) %
+                    rpcResults.length;
             const result = rpcResults[nextIndex];
             if (!rpcChatReveal(tabInfo.paneId, result)) {
                 rpcIndex = -1;
@@ -14074,13 +14022,10 @@ export class TabManager {
             searchBar.setPreview(result.snippet);
             searchBar.setStatus(rpcStatus(), false);
         };
-
         const receiveRpcUpdate = (generation, query, update) => {
-            if (
-                generation !== rpcGeneration ||
+            if (generation !== rpcGeneration ||
                 query !== rpcQuery ||
-                !searchBar?.root.isConnected
-            )
+                !searchBar?.root.isConnected)
                 return;
             if (rpcRevision !== null && rpcRevision !== update.revision) {
                 rpcIndex = -1;
@@ -14101,10 +14046,9 @@ export class TabManager {
                 navigateRpc(direction);
             }
         };
-
         const startRpcSearch = (query) => {
             cancelRpcSearch();
-            cancelRpcSearch = () => {};
+            cancelRpcSearch = () => { };
             const generation = ++rpcGeneration;
             rpcQuery = query;
             rpcResults = [];
@@ -14119,27 +14063,23 @@ export class TabManager {
                 return;
             }
             searchBar?.setStatus('Searching Pi RPC transcript…', false);
-            const cancel = rpcChatSearch(
-                tabInfo.paneId,
-                query,
-                (update) => receiveRpcUpdate(generation, query, update),
-            );
+            const cancel = rpcChatSearch(tabInfo.paneId, query, (update) => receiveRpcUpdate(generation, query, update));
             if (!cancel) {
                 searchBar?.setStatus('Pi RPC transcript search is unavailable.');
                 return;
             }
             cancelRpcSearch = cancel;
         };
-
         const cancelTranscriptRequest = () => {
             transcriptController?.abort();
             transcriptController = null;
-            if (transcriptDeadline) clearTimeout(transcriptDeadline);
+            if (transcriptDeadline)
+                clearTimeout(transcriptDeadline);
             transcriptDeadline = null;
         };
-
         const transcriptStatus = () => {
-            if (!transcriptQuery) return '';
+            if (!transcriptQuery)
+                return '';
             if (transcriptResults.length === 0)
                 return transcriptComplete
                     ? 'No matches in Pi transcript.'
@@ -14147,15 +14087,15 @@ export class TabManager {
             let summary = transcriptCapped
                 ? '200 results shown; refine the search.'
                 : transcriptComplete
-                  ? `${transcriptResults.length} matches in Pi transcript.`
-                  : `${transcriptResults.length} matches so far; searching transcript…`;
+                    ? `${transcriptResults.length} matches in Pi transcript.`
+                    : `${transcriptResults.length} matches so far; searching transcript…`;
             if (transcriptIndex >= 0)
                 summary += ` ${transcriptIndex + 1} of ${transcriptResults.length}.`;
             return summary;
         };
-
         const navigateTranscript = (direction) => {
-            if (!searchBar || !transcriptQuery) return;
+            if (!searchBar || !transcriptQuery)
+                return;
             if (!this._piBridgeTranscriptSearchEligible(tabInfo)) {
                 transcriptGeneration++;
                 cancelTranscriptRequest();
@@ -14163,16 +14103,12 @@ export class TabManager {
                 searchBar.setSource('terminal');
                 searchTerminal(direction, searchBar.input.value);
                 searchBar.setPreview(null);
-                searchBar.setStatus(
-                    'Pi transcript unavailable; showing loaded terminal output.',
-                    false,
-                );
+                searchBar.setStatus('Pi transcript unavailable; showing loaded terminal output.', false);
                 return;
             }
-            if (
-                tabInfo.ws !== transcriptSocket ||
-                String(tabInfo.piBridge?.generation || '') !== transcriptBridgeGeneration
-            ) {
+            if (tabInfo.ws !== transcriptSocket ||
+                String(tabInfo.piBridge?.generation || '') !==
+                    transcriptBridgeGeneration) {
                 startPiTranscriptSearch(searchBar.input.value);
                 pendingTranscriptDirection = direction;
                 return;
@@ -14181,7 +14117,8 @@ export class TabManager {
                 if (!transcriptComplete) {
                     pendingTranscriptDirection = direction;
                     searchBar.setStatus('Searching Pi transcript…', false);
-                } else {
+                }
+                else {
                     searchBar.setStatus('No matches in Pi transcript.', false);
                 }
                 return;
@@ -14192,16 +14129,15 @@ export class TabManager {
                         ? 0
                         : transcriptResults.length - 1
                     : (transcriptIndex +
-                          (direction === 'next' ? 1 : -1) +
-                          transcriptResults.length) %
-                      transcriptResults.length;
+                        (direction === 'next' ? 1 : -1) +
+                        transcriptResults.length) %
+                        transcriptResults.length;
             searchBar.setPreview(transcriptResults[transcriptIndex].snippet);
             searchBar.setStatus(transcriptStatus(), false);
             const cached = tabInfo._piTranscriptSearchCache;
             if (cached?.query === transcriptQuery)
                 cached.index = transcriptIndex;
         };
-
         const startPiTranscriptSearch = (query) => {
             cancelTranscriptRequest();
             const generation = ++transcriptGeneration;
@@ -14212,8 +14148,7 @@ export class TabManager {
             transcriptSocket = socket;
             transcriptBridgeGeneration = bridgeGeneration;
             const cached = tabInfo._piTranscriptSearchCache;
-            const cacheUsable =
-                !!query &&
+            const cacheUsable = !!query &&
                 cached?.query === query &&
                 cached.generation === bridgeGeneration &&
                 cached.socket === socket &&
@@ -14223,12 +14158,11 @@ export class TabManager {
                 transcriptIndex = cached.index;
                 transcriptComplete = cached.complete === true;
                 transcriptCapped = cached.capped === true;
-                searchBar?.setPreview(
-                    transcriptIndex >= 0
-                        ? transcriptResults[transcriptIndex]?.snippet || null
-                        : null,
-                );
-            } else {
+                searchBar?.setPreview(transcriptIndex >= 0
+                    ? transcriptResults[transcriptIndex]?.snippet || null
+                    : null);
+            }
+            else {
                 transcriptResults = [];
                 transcriptIndex = -1;
                 transcriptComplete = !query;
@@ -14247,29 +14181,23 @@ export class TabManager {
                 transcriptComplete = true;
                 transcriptCapped = false;
                 searchBar?.setPreview(null);
-                searchBar?.setStatus(
-                    'Pi transcript unavailable; showing loaded terminal output.',
-                    false,
-                );
+                searchBar?.setStatus('Pi transcript unavailable; showing loaded terminal output.', false);
                 return;
             }
-
             const controller = new AbortController();
             transcriptController = controller;
             transcriptDeadline = setTimeout(() => controller.abort(), 15000);
-            const isCurrent = () =>
-                transcriptGeneration === generation &&
+            const isCurrent = () => transcriptGeneration === generation &&
                 transcriptQuery === query &&
                 searchBar?.root.isConnected === true &&
                 this.tabs?.get(tabInfo.paneId) === tabInfo &&
                 tabInfo.ws === socket &&
                 String(tabInfo.piBridge?.generation || '') === bridgeGeneration;
-            const isReady = () =>
-                this._piBridgeTranscriptSearchEligible(tabInfo) &&
+            const isReady = () => this._piBridgeTranscriptSearchEligible(tabInfo) &&
                 String(tabInfo.piBridge?.generation || '') === bridgeGeneration;
             const readTranscriptPage = async (body) => {
                 const delays = [500, 1500];
-                for (let attempt = 0; ; attempt++) {
+                for (let attempt = 0;; attempt++) {
                     if (controller.signal.aborted || !isCurrent() || !isReady())
                         throw new Error('transcript search canceled');
                     try {
@@ -14279,27 +14207,24 @@ export class TabManager {
                             body: JSON.stringify(body),
                             signal: controller.signal,
                         });
-                        if (
-                            response.ok ||
-                            (response.status < 500 && response.status !== 429) ||
-                            attempt >= delays.length
-                        )
+                        if (response.ok ||
+                            (response.status < 500 &&
+                                response.status !== 429) ||
+                            attempt >= delays.length)
                             return response;
                         await response.body?.cancel();
-                    } catch (error) {
-                        if (controller.signal.aborted || attempt >= delays.length)
+                    }
+                    catch (error) {
+                        if (controller.signal.aborted ||
+                            attempt >= delays.length)
                             throw error;
                     }
                     await searchDelay(delays[attempt], controller.signal);
                 }
             };
-            searchBar?.setStatus(
-                cacheUsable
-                    ? 'Refreshing Pi transcript; cached matches remain available.'
-                    : 'Searching Pi transcript; loaded output remains available…',
-                false,
-            );
-
+            searchBar?.setStatus(cacheUsable
+                ? 'Refreshing Pi transcript; cached matches remain available.'
+                : 'Searching Pi transcript; loaded output remains available…', false);
             void (async () => {
                 let initial = true;
                 let startIndex = 0;
@@ -14307,18 +14232,17 @@ export class TabManager {
                 let sessionId = '';
                 let anchorLeafId = '';
                 const seenEntries = new Set();
-                const queryPattern = new RegExp(
-                    query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
-                    'iu',
-                );
+                const queryPattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
                 const freshResults = [];
                 let complete = false;
                 let capped = false;
                 try {
                     await searchDelay(250, controller.signal);
                     while (true) {
-                        if (!isCurrent()) return;
-                        if (!isReady()) throw new Error('bridge unavailable');
+                        if (!isCurrent())
+                            return;
+                        if (!isReady())
+                            throw new Error('bridge unavailable');
                         const body = {
                             pane: tabInfo.paneId,
                             query,
@@ -14334,10 +14258,10 @@ export class TabManager {
                             });
                         }
                         const response = await readTranscriptPage(body);
-                        if (!response.ok) throw new Error('search unavailable');
+                        if (!response.ok)
+                            throw new Error('search unavailable');
                         const page = await response.json();
-                        if (
-                            !isCurrent() ||
+                        if (!isCurrent() ||
                             page?.unavailable === true ||
                             typeof page?.session_id !== 'string' ||
                             !page.session_id ||
@@ -14350,42 +14274,41 @@ export class TabManager {
                             typeof page?.complete !== 'boolean' ||
                             page?.process_id === '' ||
                             typeof page?.process_id !== 'string' ||
-                            page?.generation !== bridgeGeneration
-                        )
+                            page?.generation !== bridgeGeneration)
                             throw new Error('invalid search page');
                         if (initial) {
                             processId = page.process_id;
                             sessionId = page.session_id;
                             anchorLeafId = page.anchor_leaf_id;
-                            if (
-                                anchorLeafId === '' &&
-                                !(page.complete && page.next_index === 0 && page.matches.length === 0)
-                            )
+                            if (anchorLeafId === '' &&
+                                !(page.complete &&
+                                    page.next_index === 0 &&
+                                    page.matches.length === 0))
                                 throw new Error('invalid empty transcript');
-                        } else if (
-                            page.process_id !== processId ||
+                        }
+                        else if (page.process_id !== processId ||
                             page.session_id !== sessionId ||
                             page.anchor_leaf_id !== anchorLeafId ||
-                            (!page.complete && page.next_index <= startIndex)
-                        ) {
+                            (!page.complete && page.next_index <= startIndex)) {
                             throw new Error('stale transcript page');
                         }
-                        if (page.unavailable || (!page.complete && page.next_index <= startIndex))
+                        if (page.unavailable ||
+                            (!page.complete && page.next_index <= startIndex))
                             throw new Error('incomplete transcript page');
                         for (const match of page.matches) {
-                            if (
-                                typeof match?.entry_id !== 'string' ||
+                            if (typeof match?.entry_id !== 'string' ||
                                 !match.entry_id ||
                                 !['user', 'assistant', 'toolResult'].includes(match.role) ||
                                 typeof match.snippet !== 'string' ||
-                                new TextEncoder().encode(match.snippet).byteLength > 2048 ||
+                                new TextEncoder().encode(match.snippet)
+                                    .byteLength > 2048 ||
                                 !queryPattern.test(match.snippet) ||
-                                seenEntries.has(match.entry_id)
-                            )
+                                seenEntries.has(match.entry_id))
                                 throw new Error('invalid transcript match');
                             seenEntries.add(match.entry_id);
                             freshResults.push(match);
-                            if (freshResults.length >= 200) break;
+                            if (freshResults.length >= 200)
+                                break;
                         }
                         if (freshResults.length >= 200) {
                             freshResults.length = 200;
@@ -14399,7 +14322,8 @@ export class TabManager {
                         startIndex = page.next_index;
                         initial = false;
                     }
-                    if (!isCurrent()) return;
+                    if (!isCurrent())
+                        return;
                     transcriptResults = freshResults;
                     transcriptIndex =
                         cacheUsable && transcriptResults.length
@@ -14407,11 +14331,10 @@ export class TabManager {
                             : -1;
                     transcriptComplete = complete;
                     transcriptCapped = capped;
-                    searchBar?.setPreview(
-                        transcriptIndex >= 0
-                            ? transcriptResults[transcriptIndex]?.snippet || null
-                            : null,
-                    );
+                    searchBar?.setPreview(transcriptIndex >= 0
+                        ? transcriptResults[transcriptIndex]?.snippet ||
+                            null
+                        : null);
                     const resultCache = {
                         query,
                         generation: bridgeGeneration,
@@ -14422,30 +14345,31 @@ export class TabManager {
                         index: transcriptIndex,
                     };
                     tabInfo._piTranscriptSearchCache = resultCache;
-                    if (pendingTranscriptDirection && transcriptResults.length) {
+                    if (pendingTranscriptDirection &&
+                        transcriptResults.length) {
                         const direction = pendingTranscriptDirection;
                         pendingTranscriptDirection = null;
                         navigateTranscript(direction);
-                    } else {
+                    }
+                    else {
                         searchBar?.setStatus(transcriptStatus(), false);
                     }
-                } catch {
-                    if (!isCurrent()) return;
+                }
+                catch {
+                    if (!isCurrent())
+                        return;
                     if (cacheUsable) {
                         transcriptResults = cached.results.slice(0, 200);
                         transcriptIndex = cached.index;
                         transcriptComplete = cached.complete === true;
                         transcriptCapped = cached.capped === true;
-                        searchBar?.setPreview(
-                            transcriptIndex >= 0
-                                ? transcriptResults[transcriptIndex]?.snippet || null
-                                : null,
-                        );
-                        searchBar?.setStatus(
-                            'Pi transcript refresh unavailable; showing cached matches.',
-                            false,
-                        );
-                    } else {
+                        searchBar?.setPreview(transcriptIndex >= 0
+                            ? transcriptResults[transcriptIndex]?.snippet ||
+                                null
+                            : null);
+                        searchBar?.setStatus('Pi transcript refresh unavailable; showing cached matches.', false);
+                    }
+                    else {
                         activeSource = 'terminal';
                         searchBar?.setSource('terminal');
                         transcriptResults = [];
@@ -14454,36 +14378,34 @@ export class TabManager {
                         transcriptCapped = false;
                         searchBar?.setPreview(null);
                         searchTerminal('next', query);
-                        searchBar?.setStatus(
-                            'Pi transcript unavailable; showing loaded terminal output.',
-                            false,
-                        );
+                        searchBar?.setStatus('Pi transcript unavailable; showing loaded terminal output.', false);
                     }
-                } finally {
+                }
+                finally {
                     if (transcriptGeneration === generation) {
-                        if (transcriptDeadline) clearTimeout(transcriptDeadline);
+                        if (transcriptDeadline)
+                            clearTimeout(transcriptDeadline);
                         transcriptDeadline = null;
                         transcriptController = null;
                     }
                 }
             })();
         };
-
         searchBar = createSessionSearchBar({
             container: tabInfo.termContainer,
             sourceLabel: isRpc ? 'Pi RPC transcript' : 'Loaded terminal output',
             sources: isRpc
                 ? undefined
                 : transcriptAvailableAtOpen
-                  ? [
+                    ? [
                         { value: 'terminal', label: 'Loaded output' },
                         { value: 'transcript', label: 'Pi transcript' },
                     ]
-                  : undefined,
+                    : undefined,
             selectedSource: activeSource,
             onSourceChange: (source) => {
                 activeSource = source;
-                const query = searchBar.input.value;
+                const query = searchBar?.input.value ?? '';
                 if (source === 'transcript') {
                     searchTerminal('next', query);
                     startPiTranscriptSearch(query);
@@ -14496,7 +14418,7 @@ export class TabManager {
                 transcriptIndex = -1;
                 transcriptComplete = false;
                 transcriptCapped = false;
-                searchBar.setPreview(null);
+                searchBar?.setPreview(null);
                 searchTerminal('next', query);
             },
             ariaLabel: isRpc
@@ -14513,37 +14435,41 @@ export class TabManager {
                     transcriptGeneration++;
                     cancelTranscriptRequest();
                     transcriptQuery = '';
-                    searchBar.setPreview(null);
+                    searchBar?.setPreview(null);
                 }
-                if (activeSource === 'transcript') startPiTranscriptSearch(query);
+                if (activeSource === 'transcript')
+                    startPiTranscriptSearch(query);
             },
             onNavigate: (direction) => {
                 if (isRpc) {
                     navigateRpc(direction);
                     return;
                 }
-                if (activeSource === 'transcript') navigateTranscript(direction);
-                else searchTerminal(direction, searchBar.input.value);
+                if (activeSource === 'transcript')
+                    navigateTranscript(direction);
+                else
+                    searchTerminal(direction, searchBar?.input.value ?? '');
             },
             onClose: () => {
                 rpcGeneration++;
                 cancelRpcSearch();
                 transcriptGeneration++;
                 cancelTranscriptRequest();
-                if (!isRpc) tabInfo.searchAddon?.clearDecorations();
+                if (!isRpc)
+                    tabInfo.searchAddon?.clearDecorations();
                 restoreFocus();
             },
         });
         searchBar.input.focus({ preventScroll: true });
         searchBar.search();
     }
-
     /**
      * Toggles visual tab shortcut badges (1..8, and 9 for last tab)
      * replacing the worktree hieroglyph when Alt/Option is held.
      */
     updateTabShortcutHints(show) {
-        if (typeof document === 'undefined') return;
+        if (typeof document === 'undefined')
+            return;
         if (!show) {
             document.body?.classList.remove('show-tab-shortcuts');
             return;
@@ -14556,12 +14482,14 @@ export class TabManager {
         const total = paneIds.length;
         for (let i = 0; i < total; i++) {
             const tabInfo = this.tabs.get(paneIds[i]);
-            if (!tabInfo?.tabEl) continue;
+            if (!tabInfo?.tabEl)
+                continue;
             const badge = tabInfo.tabEl.querySelector('.tab-shortcut-badge');
             let hint = '';
             if (i < 8) {
                 hint = String(i + 1);
-            } else if (i === total - 1) {
+            }
+            else if (i === total - 1) {
                 hint = '9';
             }
             if (badge) {
@@ -14569,67 +14497,54 @@ export class TabManager {
             }
             if (hint) {
                 tabInfo.tabEl.classList.add('has-shortcut');
-            } else {
+            }
+            else {
                 tabInfo.tabEl.classList.remove('has-shortcut');
             }
         }
         document.body?.classList.add('show-tab-shortcuts');
     }
-
     handleGlobalTabShortcuts(e) {
         if (this.handleInputToggleShortcut?.(e)) {
             return;
         }
-
         if (isTerminalFindShortcut(e) && !e.defaultPrevented) {
             const activeTab = this.getActiveTab();
             const target = e.target instanceof Element ? e.target : null;
-            const isEditable =
-                target?.isContentEditable ||
+            const isEditable = target?.isContentEditable ||
                 target?.closest('input, textarea, select, [contenteditable="true"]');
-            const allowedEditable =
-                !isEditable ||
+            const allowedEditable = !isEditable ||
                 target === this.inputTextArea ||
                 isFindBarTarget(target) ||
                 activeTab?.termContainer?.contains(target);
-            const modalOpen = document.querySelector(
-                '.modal-overlay:not(.hidden), .md-modal-overlay:not(.hidden)',
-            );
-            if (
-                (activeTab?.term || activeTab?.coder === 'pi-rpc') &&
+            const modalOpen = document.querySelector('.modal-overlay:not(.hidden), .md-modal-overlay:not(.hidden)');
+            if ((activeTab?.term || activeTab?.coder === 'pi-rpc') &&
                 allowedEditable &&
-                !modalOpen
-            ) {
+                !modalOpen) {
                 e.preventDefault();
                 this.toggleFindBar(activeTab);
             }
             return;
         }
-
         // Shift+F5 or Ctrl/Cmd+Shift+R: Reconnect / refresh all tabs in current workspace (Idea A)
-        if (
-            (e.shiftKey &&
-                !e.ctrlKey &&
-                !e.metaKey &&
-                !e.altKey &&
-                e.key === 'F5') ||
+        if ((e.shiftKey &&
+            !e.ctrlKey &&
+            !e.metaKey &&
+            !e.altKey &&
+            e.key === 'F5') ||
             ((e.ctrlKey || e.metaKey) &&
                 e.shiftKey &&
                 !e.altKey &&
-                (e.key === 'r' || e.key === 'R'))
-        ) {
+                (e.key === 'r' || e.key === 'R'))) {
             e.preventDefault();
             this.reconnectAllTabsWithToast();
             return;
         }
-
-        if (
-            e.ctrlKey &&
+        if (e.ctrlKey &&
             e.shiftKey &&
             !e.altKey &&
             !e.metaKey &&
-            e.key.toLowerCase() === 'f'
-        ) {
+            e.key.toLowerCase() === 'f') {
             const activeTab = this.getActiveTab();
             if (activeTab?.term || activeTab?.coder === 'pi-rpc') {
                 e.preventDefault();
@@ -14637,44 +14552,37 @@ export class TabManager {
             }
             return;
         }
-
         const isMac = isMacPlatform();
-        const isTabSwitchModifier =
-            !e.ctrlKey && !e.shiftKey && (e.altKey || (isMac && e.metaKey));
+        const isTabSwitchModifier = !e.ctrlKey && !e.shiftKey && (e.altKey || (isMac && e.metaKey));
         const digit = isTabSwitchModifier ? tabShortcutDigit(e) : null;
-
         if (digit !== null) {
             const num = digit;
             const paneIds = Array.from(this.tabs.keys());
-            if (paneIds.length === 0) return;
-
+            if (paneIds.length === 0)
+                return;
             e.preventDefault();
-
             let targetPaneId;
             if (num === 9) {
                 // Alt+9 / Cmd+9 switches to the last tab
                 targetPaneId = paneIds[paneIds.length - 1];
-            } else {
+            }
+            else {
                 // Alt+1..8 / Cmd+1..8 switch to corresponding index
                 const idx = num - 1;
                 if (idx < paneIds.length) {
                     targetPaneId = paneIds[idx];
                 }
             }
-
             if (targetPaneId !== undefined) {
                 this.switchTab(targetPaneId, { userInitiated: true });
             }
             return;
         }
-
-        if (
-            e.ctrlKey &&
+        if (e.ctrlKey &&
             e.shiftKey &&
             !e.altKey &&
             !e.metaKey &&
-            e.key === 'Enter'
-        ) {
+            e.key === 'Enter') {
             const activeTab = this.getActiveTab();
             if (activeTab && activeTab.coder !== 'pi-rpc') {
                 e.preventDefault();
@@ -14684,28 +14592,24 @@ export class TabManager {
                 }, 30);
             }
         }
-
         // Ctrl+P: capture it so the browser's print dialog never hijacks the key,
         // and forward it (\x10) to the active terminal — opencode and other TUIs
         // use Ctrl+P. Runs at document bubble phase, so if an earlier handler
         // already dealt with it (e.g. the empty staged-input box calls
         // preventDefault and sends \x10 itself, or xterm consumed it while the
         // terminal was focused) we bail via defaultPrevented to avoid double-send.
-        if (
-            e.ctrlKey &&
+        if (e.ctrlKey &&
             !e.altKey &&
             !e.metaKey &&
             !e.shiftKey &&
-            e.key.toLowerCase() === 'p'
-        ) {
-            if (e.defaultPrevented) return;
+            e.key.toLowerCase() === 'p') {
+            if (e.defaultPrevented)
+                return;
             const activeTab = this.getActiveTab();
-            if (
-                activeTab &&
+            if (activeTab &&
                 activeTab.coder !== 'review' &&
                 activeTab.coder !== 'kanban' &&
-                activeTab.coder !== 'pi-rpc'
-            ) {
+                activeTab.coder !== 'pi-rpc') {
                 e.preventDefault();
                 this.sendInput(activeTab, '\x10');
                 this._spamScrollToBottom(activeTab);
@@ -14713,9 +14617,9 @@ export class TabManager {
             return;
         }
     }
-
     adjustInputHeight() {
-        if (!this.inputTextArea) return;
+        if (!this.inputTextArea)
+            return;
         this.inputTextArea.style.height = 'auto';
         let newHeight = this.inputTextArea.scrollHeight;
         // If empty, prevent the placeholder wrap from making the textarea fat
@@ -14727,7 +14631,6 @@ export class TabManager {
         }
         this.inputTextArea.style.height = `${newHeight}px`;
     }
-
     // A wheel, touch, or native scrollbar-thumb gesture is an explicit user
     // choice. Cancel only the currently pending restore; `_spamScroll` itself
     // remains the established 10ms / 300ms mechanism for non-interrupted
@@ -14735,9 +14638,12 @@ export class TabManager {
     // userFollowBottom to false so PTY output arriving in this state
     // doesn't snap the viewport back to bottom.
     _cancelScrollFollowForUserScroll(tabInfo) {
-        if (!tabInfo) return;
-        clearInterval(tabInfo.spamInterval);
-        clearTimeout(tabInfo.stopSpamTimeout);
+        if (!tabInfo)
+            return;
+        if (tabInfo.spamInterval)
+            clearInterval(tabInfo.spamInterval);
+        if (tabInfo.stopSpamTimeout)
+            clearTimeout(tabInfo.stopSpamTimeout);
         tabInfo.spamInterval = null;
         tabInfo.stopSpamTimeout = null;
         tabInfo.isSpammingBottom = undefined;
@@ -14747,22 +14653,23 @@ export class TabManager {
         // not get to move the reader after this gesture.
         tabInfo._viewportIntentSeq = (tabInfo._viewportIntentSeq ?? 0) + 1;
     }
-
     // Reader anchor. xterm keeps a scrolled-up view steady by decrementing the
     // buffer offset once per recycled line; a large write backlog therefore
     // consumes the reader's whole offset and clamps them at the top of the
     // retained scrollback. Anchor the row instead of the offset.
     _clearReaderAnchor(tabInfo) {
         const term = tabInfo?.term;
-        const marker = term?._phiReaderAnchor?.marker;
+        const marker = internals(term)._phiReaderAnchor?.marker;
         try {
-            if (marker && !marker.isDisposed) marker.dispose();
-        } catch (_e) {
+            if (marker && !marker.isDisposed)
+                marker.dispose?.();
+        }
+        catch (_e) {
             /* already disposed with the buffer */
         }
-        if (term) term._phiReaderAnchor = null;
+        if (term)
+            internals(term)._phiReaderAnchor = null;
     }
-
     // Every buffer scroll lands here (wheel, key, scrollbar, touch, parser).
     // Parser scrolls move the anchored row and the viewport together, so they
     // leave the invariant below intact and never replace the anchor; a gesture
@@ -14770,50 +14677,60 @@ export class TabManager {
     // marker the parser recycled is gone (line -1), so it is left to the
     // restore's expiry branch instead of being replaced by the oldest row.
     _readerAnchorScroll(tabInfo) {
-        if (this._restoringReaderAnchor) return;
+        if (this._restoringReaderAnchor)
+            return;
         const buffer = tabInfo?.term?.buffer?.active;
-        if (!buffer || buffer.viewportY >= buffer.baseY) return;
-        const anchor = tabInfo.term._phiReaderAnchor;
+        if (!buffer || buffer.viewportY >= buffer.baseY)
+            return;
+        const anchor = internals(tabInfo.term)._phiReaderAnchor;
         if (anchor) {
             if (anchor.marker.isDisposed) {
                 // Recycled away. At the oldest retained row only the parser can
                 // put the view, and expiry must be reported; any move off that
                 // row came from a scroll this code did not schedule, so anchor
                 // where it landed.
-                if (buffer.viewportY <= 0) return;
-            } else if (anchor.marker.line === buffer.viewportY) {
+                if (buffer.viewportY <= 0)
+                    return;
+            }
+            else if (anchor.marker.line === buffer.viewportY) {
                 return;
             }
         }
         this._captureReaderAnchor(tabInfo);
     }
-
     _captureReaderAnchor(tabInfo) {
         const term = tabInfo?.term;
         const buffer = term?.buffer?.active;
-        if (!buffer || buffer.type !== 'normal' || tabInfo.isDead) return;
-        if (buffer.baseY <= 0) return;
-        if (typeof term.registerMarker !== 'function') return;
+        if (!buffer || buffer.type !== 'normal' || tabInfo.isDead)
+            return;
+        if (buffer.baseY <= 0)
+            return;
+        if (typeof term.registerMarker !== 'function')
+            return;
         const line = buffer.viewportY;
         // The oldest retained row cannot be held: the next trimmed line takes it
         // away, so anchoring there would report eviction for a move the app made.
-        if (line <= 0) return;
+        if (line <= 0)
+            return;
         const offset = line - (buffer.baseY + buffer.cursorY);
-        if (!Number.isFinite(offset)) return;
+        if (!Number.isFinite(offset))
+            return;
         const marker = term.registerMarker(offset);
-        if (!marker) return;
+        if (!marker)
+            return;
         this._clearReaderAnchor(tabInfo);
-        term._phiReaderAnchor = { marker };
+        internals(term)._phiReaderAnchor = { marker };
     }
-
     _restoreReaderAnchor(tabInfo) {
         const term = tabInfo?.term;
-        const anchor = term?._phiReaderAnchor;
+        const anchor = internals(term)._phiReaderAnchor;
         const buffer = term?.buffer?.active;
-        if (!anchor || !buffer) return;
+        if (!anchor || !buffer)
+            return;
         // A TUI owns the alternate screen; the normal buffer is not what is
         // shown, so leave the anchor alone.
-        if (buffer.type !== 'normal' || !this._terminalPanelVisible(tabInfo)) return;
+        if (buffer.type !== 'normal' || !this._terminalPanelVisible(tabInfo))
+            return;
         if (buffer.viewportY >= buffer.baseY) {
             this._clearReaderAnchor(tabInfo);
             return;
@@ -14827,13 +14744,11 @@ export class TabManager {
             this._restoringReaderAnchor = true;
             try {
                 term.scrollToTop();
-            } finally {
+            }
+            finally {
                 this._restoringReaderAnchor = false;
             }
-            this.app?.showToast?.(
-                'Reading position evicted; showing the oldest retained output.',
-                { type: 'info' },
-            );
+            this.app?.showToast?.('Reading position evicted; showing the oldest retained output.', { type: 'info' });
             return;
         }
         if (buffer.viewportY !== anchor.marker.line) {
@@ -14842,12 +14757,12 @@ export class TabManager {
             this._restoringReaderAnchor = true;
             try {
                 term.scrollToLine(anchor.marker.line);
-            } finally {
+            }
+            finally {
                 this._restoringReaderAnchor = false;
             }
         }
     }
-
     // xterm derives its scrollable position from buffer-level scroll
     // events (`Viewport._sync`). A bootstrap screen checkpoint resizes the
     // terminal while the buffer is still empty, which syncs that position
@@ -14862,35 +14777,36 @@ export class TabManager {
     _resyncViewportScroll(tabInfo, includeReader = false) {
         const term = tabInfo?.term;
         const buffer = term?.buffer?.active;
-        if (!term || !buffer) return;
+        if (!term || !buffer)
+            return;
         // Alternate-screen apps own the visible screen; normal scrollback is
         // not what their viewport is showing.
-        if (buffer.baseY <= 0 || (!includeReader && buffer.viewportY < buffer.baseY)) return;
+        if (buffer.baseY <= 0 ||
+            (!includeReader && buffer.viewportY < buffer.baseY))
+            return;
         try {
             term.scrollToTop();
             term.scrollToBottom();
-        } catch (_e) {
+        }
+        catch (_e) {
             /* xterm not open yet; a later fit resyncs */
         }
     }
-
     _spamScroll(tabInfo, isAtBottom, scrollY = null) {
-        if (!tabInfo || tabInfo.isDead) return;
-
+        if (!tabInfo || tabInfo.isDead)
+            return;
         // Following live output and holding a reading row are mutually
         // exclusive; the marker would otherwise win on the next parsed batch.
         if (isAtBottom && tabInfo.userFollowBottom !== false) {
             this._clearReaderAnchor(tabInfo);
         }
-
         this._resyncViewportScroll(tabInfo);
-
-        clearInterval(tabInfo.spamInterval);
-        clearTimeout(tabInfo.stopSpamTimeout);
-
+        if (tabInfo.spamInterval)
+            clearInterval(tabInfo.spamInterval);
+        if (tabInfo.stopSpamTimeout)
+            clearTimeout(tabInfo.stopSpamTimeout);
         tabInfo.isSpammingBottom = isAtBottom;
-        tabInfo.spamScrollY = scrollY;
-
+        tabInfo.spamScrollY = scrollY ?? undefined;
         tabInfo.spamInterval = setInterval(() => {
             if (isAtBottom) {
                 if (tabInfo.userFollowBottom === false) {
@@ -14898,7 +14814,8 @@ export class TabManager {
                     return;
                 }
                 tabInfo.term.scrollToBottom();
-            } else if (scrollY !== null) {
+            }
+            else if (scrollY !== null) {
                 if (tabInfo.userFollowBottom === false) {
                     this._cancelScrollFollowForUserScroll(tabInfo);
                     return;
@@ -14906,25 +14823,24 @@ export class TabManager {
                 tabInfo.term.scrollToLine(scrollY);
             }
         }, 10);
-
         tabInfo.stopSpamTimeout = setTimeout(() => {
-            clearInterval(tabInfo.spamInterval);
+            if (tabInfo.spamInterval)
+                clearInterval(tabInfo.spamInterval);
             tabInfo.spamInterval = null;
             tabInfo.stopSpamTimeout = null;
             tabInfo.isSpammingBottom = undefined;
             tabInfo.spamScrollY = undefined;
             if (isAtBottom && tabInfo.userFollowBottom !== false) {
                 tabInfo.term.scrollToBottom();
-            } else if (scrollY !== null && tabInfo.userFollowBottom !== false) {
+            }
+            else if (scrollY !== null && tabInfo.userFollowBottom !== false) {
                 tabInfo.term.scrollToLine(scrollY);
             }
         }, 300);
     }
-
     _spamScrollToBottom(tabInfo) {
         this._spamScroll(tabInfo, true);
     }
-
     // A client-side repaint of this pane's own buffer. The buffer change it
     // emits must not be read as the app leaving its full-screen TUI.
     _resetPaneBuffer(tabInfo) {
@@ -14932,11 +14848,11 @@ export class TabManager {
         tabInfo._ownBufferReset = true;
         try {
             resetTerminalState(tabInfo.term);
-        } finally {
+        }
+        finally {
             tabInfo._ownBufferReset = false;
         }
     }
-
     // The one user action that resumes follow: an accepted submit drops the
     // reading target and puts the view back on live output. Typing does not
     // call this; neither does anything the pane does to itself.
@@ -14944,44 +14860,52 @@ export class TabManager {
     // view only when the reader is actually holding it: a pane following live
     // output gains nothing from retention, and the caller's re-attach is the
     // cheaper repair.
-
     _setInputRestriction(text) {
         // Per pane: recovering a background tab must not clear the message an
         // active restricted tab is showing, and a tab switch must show the
         // restriction that this pane actually has.
         const tab = this.getActiveTab?.();
-        if (tab) tab._inputRestriction = text;
+        if (tab)
+            tab._inputRestriction = text;
         this._renderInputRestriction();
     }
-
     _renderInputRestriction() {
         const line = document.getElementById('input-restriction');
-        if (!line) return;
+        if (!line)
+            return;
         const tab = this.getActiveTab?.();
         const text = tab?._inputRestriction ?? '';
-        if (line.textContent !== text) line.textContent = text;
+        if (line.textContent !== text)
+            line.textContent = text;
         line.classList.toggle('hidden', !text);
     }
-
     _pasteRecoveryStatusText(tabInfo) {
         let base = '';
-        if (tabInfo.pasteRecovery === 'unconfirmed') base = 'Paste preserved; delivery unconfirmed. Check the terminal before sending.';
-        else if (tabInfo.pasteRecovery === 'not_sent') base = 'Paste saved locally, not sent.';
-        if (!base) return '';
-        if (tabInfo._pasteRecoveryUnsaved) base += ' Kept for this session only; copy it before reloading.';
+        if (tabInfo.pasteRecovery === 'unconfirmed')
+            base =
+                'Paste preserved; delivery unconfirmed. Check the terminal before sending.';
+        else if (tabInfo.pasteRecovery === 'not_sent')
+            base = 'Paste saved locally, not sent.';
+        if (!base)
+            return '';
+        if (tabInfo._pasteRecoveryUnsaved)
+            base += ' Kept for this session only; copy it before reloading.';
         return base;
     }
-
     _routeTerminalPaste(tabInfo, term, text) {
-        if (tabInfo.finalizing || this.tabs?.get(tabInfo.paneId) !== tabInfo ||
-            !tabInfo.ws || tabInfo.isDead || tabInfo.ws.ws?.readyState !== 1) {
+        if (tabInfo.finalizing ||
+            this.tabs?.get(tabInfo.paneId) !== tabInfo ||
+            !tabInfo.ws ||
+            tabInfo.isDead ||
+            tabInfo.ws.ws?.readyState !== 1) {
             this._preserveTerminalPaste(tabInfo, text, 'not_sent');
             return;
         }
         tabInfo._terminalPaste = { text, outcome: 'not_attempted' };
         try {
             term.paste(text);
-        } finally {
+        }
+        finally {
             const outcome = tabInfo._terminalPaste?.outcome;
             tabInfo._terminalPaste = null;
             if (outcome && outcome !== 'accepted') {
@@ -14989,23 +14913,31 @@ export class TabManager {
             }
         }
     }
-
     _preserveTerminalPaste(tabInfo, text, status) {
-        if (!tabInfo || tabInfo.finalizing) return false;
-        if (this.tabs?.get(tabInfo.paneId) !== tabInfo) return false;
-        if (!text) return false;
+        if (!tabInfo || tabInfo.finalizing)
+            return false;
+        if (this.tabs?.get(tabInfo.paneId) !== tabInfo)
+            return false;
+        if (!text)
+            return false;
         const normalized = String(text).replace(/\r\n?/g, '\n');
-        if (this.tabs.get(tabInfo.paneId) !== tabInfo) return false;
+        if (this.tabs.get(tabInfo.paneId) !== tabInfo)
+            return false;
         const isActive = this.getActiveTab?.() === tabInfo;
         if (isActive && this.inputTextArea) {
             this.inputTextArea.value += normalized;
             tabInfo.draft = this.inputTextArea.value;
             tabInfo.draftAttachments = this.stagedAttachments || [];
-            try { this.adjustInputHeight?.(); } catch {}
-        } else {
+            try {
+                this.adjustInputHeight?.();
+            }
+            catch { }
+        }
+        else {
             tabInfo.draft = (tabInfo.draft || '') + normalized;
         }
-        if (tabInfo.pasteRecovery !== 'unconfirmed') tabInfo.pasteRecovery = status;
+        if (tabInfo.pasteRecovery !== 'unconfirmed')
+            tabInfo.pasteRecovery = status;
         tabInfo.directMode = false;
         this.saveTabDraft(tabInfo);
         if (isActive) {
@@ -15013,32 +14945,31 @@ export class TabManager {
         }
         return true;
     }
-
     _resumeFollowOnSubmit(tabInfo) {
-        if (!tabInfo || tabInfo.isDead) return;
+        if (!tabInfo || tabInfo.isDead)
+            return;
         tabInfo.userFollowBottom = true;
         this._clearReaderAnchor(tabInfo);
         this._spamScrollToBottom(tabInfo);
     }
-
     copyTextRobustly(text, silent = false) {
         if (navigator.clipboard && window.isSecureContext) {
             navigator.clipboard
                 .writeText(text)
                 .then(() => {
-                    if (!silent) {
-                        this.app.showToast('Copied to clipboard', {
-                            type: 'info',
-                            title: 'Clipboard',
-                        });
-                    }
-                })
+                if (!silent) {
+                    this.app.showToast('Copied to clipboard', {
+                        type: 'info',
+                        title: 'Clipboard',
+                    });
+                }
+            })
                 .catch(() => this.fallbackCopy(text, silent));
-        } else {
+        }
+        else {
             this.fallbackCopy(text, silent);
         }
     }
-
     fallbackCopy(text, silent = false) {
         const ta = document.createElement('textarea');
         ta.value = text;
@@ -15055,7 +14986,8 @@ export class TabManager {
                     title: 'Clipboard',
                 });
             }
-        } catch (e) {
+        }
+        catch (e) {
             console.error('Fallback copy failed', e);
         }
         document.body.removeChild(ta);
@@ -15066,7 +14998,6 @@ export class TabManager {
             });
         }
     }
-
     // Synchronous execCommand('copy') via a hidden textarea. Returns whether it
     // succeeded. Works in insecure contexts (plain-HTTP LAN access) where the
     // async Clipboard API is unavailable, as long as it runs within a user
@@ -15084,19 +15015,18 @@ export class TabManager {
         let ok = false;
         try {
             ok = document.execCommand('copy');
-        } catch (_e) {
+        }
+        catch (_e) {
             ok = false;
         }
         document.body.removeChild(ta);
         return ok;
     }
-
     _installTerminalLinkProvider(term) {
         return installTerminalLinkProvider(term, (url) => {
             openExternalLink(url);
         });
     }
-
     // Copy text the agent emitted via OSC 52. phi is commonly served over plain
     // HTTP on a LAN address, where navigator.clipboard is undefined and calling
     // writeText throws synchronously — the previous inline handler let that
@@ -15106,57 +15036,50 @@ export class TabManager {
     // and if every automated attempt fails, surface a toast with a manual copy
     // button that runs inside the click's user-gesture. Returns a promise.
     _agentClipboardCopy(text) {
-        const okToast = () =>
-            this.app.showToast(
-                `Agent copied ${text.length} characters to clipboard`,
-                { type: 'info', title: 'Clipboard Sync' },
-            );
-        const manualToast = () =>
-            this.app.showToast(`Agent copied ${text.length} characters`, {
-                type: 'info',
-                title: 'Clipboard Sync',
-                duration: 15000,
-                action: {
-                    text: 'Copy to Clipboard',
-                    callback: () => {
-                        if (this._execCommandCopy(text)) {
-                            this.app.showToast('Copied to clipboard!', {
-                                type: 'info',
-                                title: 'Clipboard Sync',
-                            });
-                        } else {
-                            this.app.showToast(
-                                'Failed to copy. Please copy manually.',
-                                { type: 'error', title: 'Clipboard Sync' },
-                            );
-                        }
-                    },
+        const okToast = () => this.app.showToast(`Agent copied ${text.length} characters to clipboard`, { type: 'info', title: 'Clipboard Sync' });
+        const manualToast = () => this.app.showToast(`Agent copied ${text.length} characters`, {
+            type: 'info',
+            title: 'Clipboard Sync',
+            duration: 15000,
+            action: {
+                text: 'Copy to Clipboard',
+                callback: () => {
+                    if (this._execCommandCopy(text)) {
+                        this.app.showToast('Copied to clipboard!', {
+                            type: 'info',
+                            title: 'Clipboard Sync',
+                        });
+                    }
+                    else {
+                        this.app.showToast('Failed to copy. Please copy manually.', { type: 'error', title: 'Clipboard Sync' });
+                    }
                 },
-            });
-
-        if (
-            navigator.clipboard &&
+            },
+        });
+        if (navigator.clipboard &&
             window.isSecureContext &&
-            navigator.clipboard.writeText
-        ) {
+            navigator.clipboard.writeText) {
             return navigator.clipboard
                 .writeText(text)
                 .then(okToast)
                 .catch(() => {
-                    if (this._execCommandCopy(text)) okToast();
-                    else manualToast();
-                });
+                if (this._execCommandCopy(text))
+                    okToast();
+                else
+                    manualToast();
+            });
         }
         // Insecure context (e.g. http://host:port over LAN): no Clipboard API.
-        if (this._execCommandCopy(text)) okToast();
-        else manualToast();
+        if (this._execCommandCopy(text))
+            okToast();
+        else
+            manualToast();
         return Promise.resolve();
     }
-
     startResize() {
         const activeTab = this.getActiveTab();
-        if (!activeTab || activeTab.isDead) return;
-
+        if (!activeTab || activeTab.isDead)
+            return;
         // Save the correct, stable scroll state before the continuous resize begins
         if (activeTab.isAtBottom === undefined) {
             const buffer = activeTab.term.buffer.active;
@@ -15165,7 +15088,6 @@ export class TabManager {
         }
         this.isResizing = true;
     }
-
     endResize() {
         this.isResizing = false;
         const activeTab = this.getActiveTab();
@@ -15175,7 +15097,6 @@ export class TabManager {
             this._queuePanelFit?.(activeTab, { forceResize: true });
         }
     }
-
     // classifyGeometryChange distinguishes software-keyboard animation
     // (height moves at identical width) from real layout changes
     // (rotation, drawer, window drag). Pure over its inputs except for
@@ -15188,58 +15109,54 @@ export class TabManager {
         this._lastWindowH = h;
         return !widthChanged && heightChanged ? 'keyboard' : 'layout';
     }
-
     // handleWindowResize is the single choke point for window geometry.
     // Extracted as a method (not an inline closure) so the NEVER-keyboard
     // contract is unit-testable in test-js/keyboardFit.test.js.
     handleWindowResize() {
-        const kind = this.classifyGeometryChange(
-            window.innerWidth,
-            window.innerHeight,
-        );
-        if (kind === 'keyboard' && isCoarseViewport()) return;
+        const kind = this.classifyGeometryChange(window.innerWidth, window.innerHeight);
+        if (kind === 'keyboard' && isCoarseViewport())
+            return;
         // The picker row is built per layout (own row on desktop, one
         // swipe strip on compact). Crossing the breakpoint rebuilds it.
         const compact = isCompactViewport();
         if (compact !== this._presetsCompact) {
             this._presetsCompact = compact;
             const tab = this.getActiveTab();
-            if (tab && !tab.directMode) this.renderPresets(tab.coder);
+            if (tab && !tab.directMode)
+                this.renderPresets(tab.coder);
         }
         // The action row can rewrap without crossing the breakpoint.
         this._syncOpenDropups();
         this.startResize();
-        clearTimeout(this._windowResizeTimeout);
+        if (this._windowResizeTimeout)
+            clearTimeout(this._windowResizeTimeout);
         this._windowResizeTimeout = setTimeout(() => {
             this.fitActiveTerminal();
             this.endResize();
         }, 100);
     }
-
     fitActiveTerminal({ forceResize = false } = {}) {
         const activeTab = this.getActiveTab();
-        if (!activeTab || activeTab.isDead) return;
+        if (!activeTab || activeTab.isDead)
+            return;
         const visible = this._terminalPanelVisible(activeTab);
         if (activeTab._bootstrapGate || activeTab.writePending || !visible) {
             activeTab._pendingPanelFit = true;
             activeTab._pendingForceResize = Boolean(activeTab._pendingForceResize || forceResize || !visible);
             return;
         }
-
         try {
-            if (forceResize) activeTab.term._core?._charSizeService?.measure?.();
+            if (forceResize)
+                internals(activeTab.term)._core?._charSizeService?.measure?.();
             const oldCols = activeTab.term.cols, oldRows = activeTab.term.rows;
             // One DOM measurement per fit: the proposal feeds both font
             // resolution and the same-geometry skip check below.
             const proposed = activeTab.fitAddon?.proposeDimensions?.();
-            const size = this.resolveTerminalFontSize(
-                activeTab,
-                this.app?.terminalFontSize,
-                proposed,
-            );
+            const size = this.resolveTerminalFontSize(activeTab, this.app?.terminalFontSize, proposed);
             if (activeTab.term.options.fontSize !== size) {
                 activeTab.term.options.fontSize = size;
-            } else if (!this.isResizing) {
+            }
+            else if (!this.isResizing) {
                 // Same-geometry fits change nothing on screen (the addon
                 // itself early-returns before resize), but falling through
                 // would still run scroll capture, _spamScroll timers, and
@@ -15250,11 +15167,9 @@ export class TabManager {
                 // cleared after a non-resize fit). Skipping mid-resize
                 // would strand stale coordinates for a later genuine fit
                 // to restore as a viewport jump.
-                if (
-                    proposed &&
+                if (proposed &&
                     proposed.cols === activeTab.term.cols &&
-                    proposed.rows === activeTab.term.rows
-                ) {
+                    proposed.rows === activeTab.term.rows) {
                     // Gate tooling continuity: skipped fits cost ~one
                     // layout read, so they emit their own mark instead of
                     // silently absenting the `fit` measure.
@@ -15282,27 +15197,25 @@ export class TabManager {
                     return;
                 }
             }
-
             // Every fit reflows the live buffer; timing it
             // is how the tablet gate distinguishes "fit is slow" from
             // "network delivery is slow".
             const _fitT0 = performance.now();
-
             // Capture scroll state PRE-FIT
             const buffer = activeTab.term.buffer.active;
             // A reader's position is a row of content, not a buffer index: the
             // fit reflows the buffer, so a pre-fit index points at a different
             // row afterwards. The marker moves with the row, so it owns the
             // restore and the numeric capture below is skipped.
-            const readerAnchor = activeTab.term._phiReaderAnchor;
+            const readerAnchor = internals(activeTab.term)._phiReaderAnchor;
             let isAtBottom;
             let scrollY;
-
             // If we are resizing continuously, cache these stable coordinates on the tab
             if (readerAnchor) {
                 isAtBottom = false;
                 scrollY = null;
-            } else if (this.isResizing) {
+            }
+            else if (this.isResizing) {
                 isAtBottom =
                     activeTab.isAtBottom === undefined
                         ? buffer.viewportY >= buffer.baseY
@@ -15313,48 +15226,43 @@ export class TabManager {
                         : activeTab.lastScrollY;
                 activeTab.isAtBottom = isAtBottom;
                 activeTab.lastScrollY = scrollY;
-            } else if (
-                activeTab.spamInterval &&
-                activeTab.isSpammingBottom !== undefined
-            ) {
+            }
+            else if (activeTab.spamInterval &&
+                activeTab.isSpammingBottom !== undefined) {
                 // If a spam scroll is already trying to force the scroll position, respect its intended target
                 // instead of capturing a mid-flight coordinate.
                 isAtBottom = activeTab.isSpammingBottom;
                 scrollY = activeTab.spamScrollY;
-            } else {
+            }
+            else {
                 isAtBottom = buffer.viewportY >= buffer.baseY;
                 scrollY = buffer.viewportY;
             }
-
-            this._resizeWithReaderAnchor(activeTab, () => activeTab.fitAddon.fit());
+            this._resizeWithReaderAnchor(activeTab, () => activeTab.fitAddon?.fit());
             const fitMs = termPerfMeasureSince('fit', _fitT0);
-            termPerfLogSlowFit(
-                fitMs,
-                activeTab.term.cols,
-                activeTab.term.rows,
-                buffer.length,
-            );
-
+            termPerfLogSlowFit(fitMs, activeTab.term.cols, activeTab.term.rows, buffer.length);
             // Restore scroll state POST-FIT using the unified helper to synchronise viewport
             this._spamScroll(activeTab, isAtBottom, scrollY);
-
             // Clear temporary saved scroll state only if NOT in the middle of a continuous resize
             if (!this.isResizing) {
                 activeTab.isAtBottom = undefined;
                 activeTab.lastScrollY = undefined;
             }
-
             this._refreshTerminalScreen?.(activeTab);
             // Coalesce sub-cell drag movements; final settle/activation forces
             // a redraw even at the same grid without SIGWINCH on every pixel.
-            if ((forceResize || activeTab._sizedWs !== activeTab.ws || oldCols !== activeTab.term.cols || oldRows !== activeTab.term.rows) && this.sendResizeToBackend(activeTab)) {
+            if ((forceResize ||
+                activeTab._sizedWs !== activeTab.ws ||
+                oldCols !== activeTab.term.cols ||
+                oldRows !== activeTab.term.rows) &&
+                this.sendResizeToBackend(activeTab)) {
                 activeTab._sizedWs = activeTab.ws;
             }
-        } catch (e) {
+        }
+        catch (e) {
             console.error('[term] Fit error:', e);
         }
     }
-
     // WebGL renderer lifecycle.
     //
     // Each xterm WebglAddon owns a full-window GL framebuffer (about 11 MB of
@@ -15373,74 +15281,77 @@ export class TabManager {
     // slower, but correct.
     _attachTermWebgl(tabInfo) {
         const term = tabInfo?.term;
-        if (!term || term._phiWebgl || term._phiWebglUnsupported) return;
+        if (!term)
+            return;
+        const phi = internals(term);
+        if (phi._phiWebgl || phi._phiWebglUnsupported)
+            return;
         try {
             const webgl = new window.WebglAddon.WebglAddon();
             if (typeof webgl.onContextLoss === 'function') {
                 webgl.onContextLoss(() => {
-                    console.warn(
-                        '[term] WebGL context lost; falling back to the DOM renderer',
-                    );
-                    term._phiWebgl = null;
+                    console.warn('[term] WebGL context lost; falling back to the DOM renderer');
+                    phi._phiWebgl = null;
                     try {
                         webgl.dispose();
-                    } catch (e) {
+                    }
+                    catch (e) {
                         console.error('[term] WebGL dispose failed:', e);
                     }
                     requestAnimationFrame(() => {
                         const tab = this.tabs.get(tabInfo.paneId);
-                        if (tab) this._queuePanelFit(tab, { forceResize: true });
+                        if (tab)
+                            this._queuePanelFit(tab, { forceResize: true });
                     });
                 });
             }
             term.loadAddon(webgl);
-            term._phiWebgl = webgl;
-        } catch (_e) {
+            phi._phiWebgl = webgl;
+        }
+        catch (_e) {
             // One attempt per terminal: a browser without a usable GL context
             // must not log on every tab switch.
-            term._phiWebglUnsupported = true;
+            phi._phiWebglUnsupported = true;
             console.warn('[term] Falling back to standard canvas renderer');
         }
     }
-
     // Releases the GL context of a tab that is no longer visible. xterm falls
     // back to the DOM renderer, so only the framebuffer goes away.
     _detachTermWebgl(tabInfo) {
         const term = tabInfo?.term;
-        const webgl = term?._phiWebgl;
-        if (!webgl) return;
-        term._phiWebgl = null;
+        if (!term)
+            return;
+        const phi = internals(term);
+        const webgl = phi._phiWebgl;
+        if (!webgl)
+            return;
+        phi._phiWebgl = null;
         try {
-            webgl.dispose();
-        } catch (e) {
+            webgl.dispose?.();
+        }
+        catch (e) {
             console.error('[term] WebGL dispose failed:', e);
         }
     }
-
-    activateTabViewport(
-        tabInfo,
-        { scrollToBottom = true, autoReconnect = true, force = false } = {},
-    ) {
-        if (!tabInfo || this.tabs.get(tabInfo.paneId) !== tabInfo ||
-            tabInfo.finalizing || tabInfo.softClosing) return;
-
+    activateTabViewport(tabInfo, { scrollToBottom = true, autoReconnect = true, force = false } = {}) {
+        if (!tabInfo ||
+            this.tabs.get(tabInfo.paneId) !== tabInfo ||
+            tabInfo.finalizing ||
+            tabInfo.softClosing)
+            return;
         // Attach before the fit so the GL canvas is sized once, not twice.
         this._attachTermWebgl(tabInfo);
-
         // Fit after layout, not after a guessed 50ms settling interval.
         // Coalescing retains the force bit through bootstrap/history gates.
         this._queuePanelFit(tabInfo, { forceResize: true });
-
         // A tab shown again with no new output would otherwise never restore
         // the reader's row; the fit above may also skip unchanged geometry.
-        if (tabInfo.term?._phiReaderAnchor) {
+        if (internals(tabInfo.term)._phiReaderAnchor) {
             requestAnimationFrame(() => this._restoreReaderAnchor(tabInfo));
         }
-
         if (scrollToBottom && tabInfo.term && !tabInfo.isDead) {
             this._spamScrollToBottom(tabInfo);
         }
-
         // Mobile external-keyboard focus: when a tab becomes active on a
         // phone with an external keyboard attached, the user's typing
         // intent is unambiguous — they want to type into the staged
@@ -15450,40 +15361,43 @@ export class TabManager {
         // (focus on xterm) so terminal-internal tools still capture
         // keys normally. Direct mode still wins — if the tab is in
         // direct mode, the xterm is where the user is typing.
-        if (
-            prefersInputBarFocus() &&
+        if (prefersInputBarFocus() &&
             !tabInfo.directMode &&
             !tabInfo.isDead &&
             this.inputTextArea &&
             !this.inputBarContainer?.classList.contains('hidden') &&
-            !document.querySelector(
-                '.modal-overlay:not(.hidden), .md-modal-overlay:not(.hidden)',
-            )
-        ) {
+            !document.querySelector('.modal-overlay:not(.hidden), .md-modal-overlay:not(.hidden)')) {
             const ws = tabInfo.ws;
             const focused = document.activeElement;
             setTimeout(() => {
-                if (this._canReconnectTab(tabInfo) && tabInfo.ws === ws &&
-                    !tabInfo.isDead && tabInfo === this.getActiveTab() &&
-                    document.visibilityState === 'visible' && document.activeElement === focused &&
+                if (this._canReconnectTab(tabInfo) &&
+                    tabInfo.ws === ws &&
+                    !tabInfo.isDead &&
+                    tabInfo === this.getActiveTab() &&
+                    document.visibilityState === 'visible' &&
+                    document.activeElement === focused &&
                     !document.querySelector('.modal-overlay:not(.hidden), .md-modal-overlay:not(.hidden)')) {
                     this.inputTextArea.focus({ preventScroll: true });
                 }
             }, 80);
         }
-
         // force=true bypasses the passive auto_reconnect gate for explicit user actions.
-        if (autoReconnect && tabInfo.isDead && this._canReconnectTab(tabInfo) && !tabInfo.reconnectInFlight) {
-            if (force) this.reconnectTab(tabInfo, { auto: false });
-            else this.maybeAutoReconnect(tabInfo);
+        if (autoReconnect &&
+            tabInfo.isDead &&
+            this._canReconnectTab(tabInfo) &&
+            !tabInfo.reconnectInFlight) {
+            if (force)
+                this.reconnectTab(tabInfo, { auto: false });
+            else
+                this.maybeAutoReconnect(tabInfo);
         }
     }
-
     // Reports whether the resize went out so first-fit sync can retry
     // an unsent sizing later. Fakes returning undefined count as sent
     // (the historical assumption); only an explicit false means dropped.
     sendResizeToBackend(tab) {
-        if (!tab || tab.isDead || this._terminalPanelVisible?.(tab) === false) return false;
+        if (!tab || tab.isDead || this._terminalPanelVisible?.(tab) === false)
+            return false;
         if (tab.writePending) {
             tab._pendingPanelFit = true;
             tab._pendingForceResize = true;
@@ -15491,34 +15405,36 @@ export class TabManager {
         }
         const term = tab.term;
         if (term?.cols && term.rows && tab.ws) {
-            return tab.ws.sendResize(term.cols, term.rows) !== false;
+            return tab.ws.sendResize?.(term.cols, term.rows) !== false;
         }
         return false;
     }
-
     // Sit flush on the presets bar: it is one or two rows tall and its
     // height changes with the layout and the live picker labels.
     _syncDropupOffset(dropup) {
         // Dropups clear the presets row. A trigger that rides with the input
         // controls sits one row higher, so its menu clears the whole bar.
-        const lift =
-            dropup.dataset.lift === 'input-row' && isCompactViewport()
-                ? document.querySelector('#input-bar-container')?.offsetHeight ||
-                  0
-                : 0;
+        const lift = dropup.dataset.lift === 'input-row' && isCompactViewport()
+            ? document.querySelector('#input-bar-container')
+                ?.offsetHeight || 0
+            : 0;
         dropup.style.bottom = `${(this.presetsContainer?.offsetHeight || 40) + lift}px`;
     }
-
     _toggleDropup(dropupId, triggerBtn, renderFn) {
         const dropup = document.getElementById(dropupId);
-        if (!dropup) return;
+        if (!dropup)
+            return;
         const wasHidden = dropup.classList.contains('hidden');
         document.querySelectorAll('.model-presets-dropup').forEach((d) => {
             d.classList.add('hidden');
         });
         if (wasHidden) {
-            if (triggerBtn.closest('.input-actions')) dropup.dataset.lift = 'input-row';
-            else delete dropup.dataset.lift;
+            if (!triggerBtn)
+                return;
+            if (triggerBtn.closest('.input-actions'))
+                dropup.dataset.lift = 'input-row';
+            else
+                delete dropup.dataset.lift;
             const btnRect = triggerBtn.getBoundingClientRect();
             const container = document.querySelector('.terminal-content');
             const containerRect = container?.getBoundingClientRect?.() || {
@@ -15527,61 +15443,49 @@ export class TabManager {
             };
             let left = btnRect.left - containerRect.left;
             const dropupWidth = isCompactViewport()
-                ? Math.min(
-                      dropupId === 'pi-rpc-model-dropup'
-                          ? 480
-                          : dropupId === 'attachment-source-dropup'
-                            ? 320
-                            : 280,
-                      containerRect.width - 24,
-                      window.innerWidth - 24,
-                  )
+                ? Math.min(dropupId === 'pi-rpc-model-dropup'
+                    ? 480
+                    : dropupId === 'attachment-source-dropup'
+                        ? 320
+                        : 280, containerRect.width - 24, window.innerWidth - 24)
                 : dropupId === 'pi-rpc-model-dropup'
-                  ? 420
-                  : dropupId === 'pi-rpc-thinking-dropup'
-                    ? 280
-                    : dropupId === 'keys-presets-dropup'
-                      ? 300
-                      : 320;
-            left = Math.max(
-                12,
-                Math.min(left, containerRect.width - dropupWidth - 12),
-            );
+                    ? 420
+                    : dropupId === 'pi-rpc-thinking-dropup'
+                        ? 280
+                        : dropupId === 'keys-presets-dropup'
+                            ? 300
+                            : 320;
+            left = Math.max(12, Math.min(left, containerRect.width - dropupWidth - 12));
             dropup.style.left = `${left}px`;
             this._syncDropupOffset(dropup);
             dropup.classList.remove('hidden');
             renderFn();
         }
     }
-
     // Every bridge frame and coder switch rebuilds the preset row from
     // scratch, which used to drop keyboard focus to <body>: the focused button
     // was removed, so the next Enter went nowhere. Capture the focused
     // control before the rebuild and hand focus back to its replacement.
     _presetFocusKey() {
         const active = document.activeElement;
-        if (!active || !active.classList?.contains('preset-btn')) return null;
+        if (!active || !active.classList?.contains('preset-btn'))
+            return null;
         const signature = presetFocusSignature(active);
-        const peers = [...document.querySelectorAll('.preset-btn')].filter(
-            (el) => presetFocusSignature(el) === signature,
-        );
+        const peers = [...document.querySelectorAll('.preset-btn')].filter((el) => presetFocusSignature(el) === signature);
         const index = peers.indexOf(active);
         return index < 0 ? null : { signature, index };
     }
-
     _restorePresetFocus(key) {
-        if (!key) return;
+        if (!key)
+            return;
         // Only recover focus the rebuild actually lost. Focus that moved on to
         // a live element belongs to the user.
         if (document.activeElement && document.activeElement !== document.body)
             return;
-        const match = [...document.querySelectorAll('.preset-btn')].filter(
-            (el) => presetFocusSignature(el) === key.signature,
-        )[key.index];
+        const match = [...document.querySelectorAll('.preset-btn')].filter((el) => presetFocusSignature(el) === key.signature)[key.index];
         match?.focus({ preventScroll: true });
     }
-
-    renderPresets(coderId, { refreshQuickCommands = true } = {}) {
+    renderPresets(coderId, { refreshQuickCommands = true, } = {}) {
         const activeTab = this.getActiveTab();
         if (activeTab?.coder === 'pi') {
             this._bindThinkingPresetStore(this.app?.scope);
@@ -15594,7 +15498,8 @@ export class TabManager {
             this._renderPiRpcPresets();
             return;
         }
-        if (!this.presetsContainer) return;
+        if (!this.presetsContainer)
+            return;
         if (activeTab?.coder === 'pi') {
             if (!this._piBridgeModelsEligible(activeTab)) {
                 ++this._piRpcMenuRequest;
@@ -15613,11 +15518,9 @@ export class TabManager {
             // dispatch may still have landed, so its bounded reply
             // settles the outcome.
             const skillsContext = this._piBridgeSkillsContext;
-            if (
-                !this._piBridgeSkillsEligible(activeTab) ||
+            if (!this._piBridgeSkillsEligible(activeTab) ||
                 (skillsContext?.paneId === activeTab.paneId &&
-                    this._piBridgeSkillsContextStale(skillsContext))
-            )
+                    this._piBridgeSkillsContextStale(skillsContext)))
                 this._invalidatePiBridgeSkillsList();
             if (!this._piBridgeThinkingEligible(activeTab))
                 this._invalidatePiBridgeThinking(activeTab);
@@ -15627,45 +15530,32 @@ export class TabManager {
         // A previous compact render may have parked chips with the input
         // controls; drop them so this render owns the placement.
         this._placeCompactQuickChips([]);
-
         const coderPresetInfo = this._getCoderPresetInfo(coderId, activeTab);
         const presets = coderPresetInfo?.presets || [];
-        const visiblePresets = presets.filter(
-            (p) => !MOVED_PRESET_VALUES.has(p.value),
-        );
+        const visiblePresets = presets.filter((p) => !MOVED_PRESET_VALUES.has(p.value));
         const hasCoderPresets = visiblePresets.length > 0;
-
         // Reuse the original button so rerenders keep its picker handlers.
         const attachmentButton = coderId === 'pi' ? this.attachInputBtn : null;
         if (attachmentButton) {
             attachmentButton.classList.remove('input-quick-chip');
             this.presetsContainer.appendChild(attachmentButton);
         }
-
         // Collapsed input keeps only Interrupt and Expand visible.
         if (activeTab?.directMode) {
             this.presetsContainer.classList.add('hidden');
             return;
         }
-
         this.presetsContainer.classList.remove('hidden');
-
         const isMobile = isCompactViewport();
         // Compact keeps attachment, slash and control-key actions with the
         // composer, outside the scrolling picker row.
         const compactChips = attachmentButton ? [attachmentButton] : [];
-
         // 1. Render Static Coder Presets / Slash Menu
         if (hasCoderPresets) {
             if (isMobile) {
                 // Separate slash commands from utility shortcuts
-                const slashPresets = visiblePresets.filter((p) =>
-                    p.value.startsWith('/'),
-                );
-                const utilityPresets = visiblePresets.filter(
-                    (p) => !p.value.startsWith('/'),
-                );
-
+                const slashPresets = visiblePresets.filter((p) => p.value.startsWith('/'));
+                const utilityPresets = visiblePresets.filter((p) => !p.value.startsWith('/'));
                 // Render single Slash trigger button if slash commands exist
                 if (slashPresets.length > 0) {
                     const slashBtn = document.createElement('button');
@@ -15674,15 +15564,10 @@ export class TabManager {
                     slashBtn.title = 'Open slash commands';
                     slashBtn.addEventListener('click', (e) => {
                         e.stopPropagation();
-                        this._toggleDropup(
-                            'slash-presets-dropup',
-                            slashBtn,
-                            () => this.renderSlashDropup(slashPresets),
-                        );
+                        this._toggleDropup('slash-presets-dropup', slashBtn, () => this.renderSlashDropup(slashPresets));
                     });
                     compactChips.push(slashBtn);
                 }
-
                 // Render the remaining utility presets (ctrl+o, ...). ctrl+c
                 // is skipped: the ✕ cancel button already interrupts with the
                 // right key for the coder, so it stays the single one.
@@ -15690,31 +15575,28 @@ export class TabManager {
                     .filter((p) => p.value !== '\u0003')
                     .forEach((p) => {
                     const btn = this._buildPresetButton(p);
-                        btn.addEventListener('click', () => {
-                            this.sendRawInput(p.value, {
-                                focusInputOnMobile: false,
-                                submit: true,
-                            });
+                    btn.addEventListener('click', () => {
+                        this.sendRawInput(p.value, {
+                            focusInputOnMobile: false,
+                            submit: true,
                         });
-                        compactChips.push(btn);
                     });
-            } else {
+                    compactChips.push(btn);
+                });
+            }
+            else {
                 // Desktop: Render everything horizontally as before
                 visiblePresets.forEach((p) => {
                     const btn = this._buildPresetButton(p);
                     if (p.value === '/compact\r' && activeTab?.coder === 'pi') {
-                        const compactState =
-                            this._piBridgeCompactControlState(activeTab);
+                        const compactState = this._piBridgeCompactControlState(activeTab);
                         btn.disabled = compactState.disabled;
                         btn.classList.add('pi-compact-btn');
                         if (compactState.title)
                             btn.title = compactState.title;
                         if (compactState.label)
                             btn.innerText = compactState.label;
-                        btn.classList.toggle(
-                            'pi-compact-queued',
-                            compactState.queued === true,
-                        );
+                        btn.classList.toggle('pi-compact-queued', compactState.queued === true);
                     }
                     btn.addEventListener('click', () => {
                         this._sendCoderPreset(p.value);
@@ -15723,14 +15605,12 @@ export class TabManager {
                 });
             }
         }
-
         // 2. Render Divider if static presets exist
         if (hasCoderPresets && !isMobile) {
             const divider = document.createElement('div');
             divider.className = 'presets-divider';
             this.presetsContainer.appendChild(divider);
         }
-
         // 3. Render QuickCmds trigger button
         const quickCmdsTriggerBtn = document.createElement('button');
         quickCmdsTriggerBtn.className = 'preset-btn model-trigger-btn';
@@ -15738,13 +15618,8 @@ export class TabManager {
         quickCmdsTriggerBtn.title = 'Open quick commands';
         quickCmdsTriggerBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            this._toggleDropup(
-                'quick-commands-dropup',
-                quickCmdsTriggerBtn,
-                () => this.renderQuickCmdsDropup(),
-            );
+            this._toggleDropup('quick-commands-dropup', quickCmdsTriggerBtn, () => this.renderQuickCmdsDropup());
         });
-
         // Built-in shells and restored unknown tabs keep the original
         // Models control. New custom backends without a recipe remain
         // disabled rather than guessing a command they might not support.
@@ -15752,15 +15627,13 @@ export class TabManager {
         modelsTriggerBtn.className = 'preset-btn model-trigger-btn';
         modelsTriggerBtn.innerText = '🤖 Models ▾';
         modelsTriggerBtn.title = 'Select the model for this session';
-
         const modelCoder = activeTab?.coder;
-        const isCustomModelCoder =
-            modelCoder &&
+        const isCustomModelCoder = modelCoder &&
             getCoder(modelCoder) &&
-            !['opencode', 'claude', 'pi', 'agy', 'bash', 'pwsh'].includes(
-                modelCoder,
-            );
-        if (modelCoder === 'pi' && this._piBridgeModelsEligible(activeTab)) {
+            !['opencode', 'claude', 'pi', 'agy', 'bash', 'pwsh'].includes(modelCoder);
+        if (activeTab &&
+            modelCoder === 'pi' &&
+            this._piBridgeModelsEligible(activeTab)) {
             // Bridge-live Pi tabs share the Pi RPC model picker.
             // Anything else falls through to the legacy static list.
             modelsTriggerBtn.classList.add('pi-rpc-model-trigger');
@@ -15771,46 +15644,42 @@ export class TabManager {
             modelsTriggerBtn.title = 'Change the model for this session';
             modelsTriggerBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                this._toggleDropup(
-                    'pi-rpc-model-dropup',
-                    modelsTriggerBtn,
-                    () => this._renderPiRpcModelsDropup(),
-                );
+                this._toggleDropup('pi-rpc-model-dropup', modelsTriggerBtn, () => this._renderPiRpcModelsDropup());
             });
-        } else if (modelCoder === 'codex') {
+        }
+        else if (modelCoder === 'codex') {
             // /model has no inline model argument. Let Codex's live,
             // account-specific picker choose the model and reasoning effort.
             modelsTriggerBtn.innerText = '🤖 Models';
-            modelsTriggerBtn.title = 'Choose model and reasoning effort in Codex';
+            modelsTriggerBtn.title =
+                'Choose model and reasoning effort in Codex';
             modelsTriggerBtn.addEventListener('click', () => {
-                this.sendSlashCommand(activeTab, '/model');
+                if (activeTab)
+                    this.sendSlashCommand(activeTab, '/model');
             });
-        } else if (
-            modelCoder === 'agy' ||
-            (isCustomModelCoder && !hasModelSwitch(modelCoder))
-        ) {
+        }
+        else if (modelCoder === 'agy' ||
+            (isCustomModelCoder && !hasModelSwitch(modelCoder))) {
             modelsTriggerBtn.disabled = true;
             modelsTriggerBtn.classList.add('disabled');
             modelsTriggerBtn.title =
                 modelCoder === 'agy'
                     ? 'Model selection not supported for Antigravity'
                     : 'Model selection not supported for this coder';
-        } else {
+        }
+        else {
             modelsTriggerBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                this._toggleDropup(
-                    'model-presets-dropup',
-                    modelsTriggerBtn,
-                    () => this.renderModelDropup(),
-                );
+                this._toggleDropup('model-presets-dropup', modelsTriggerBtn, () => this.renderModelDropup());
             });
         }
-
         // Skills picker: only on bridge-live Pi tabs that negotiated
         // the skills capability. Without it the composer keeps exactly
         // the controls it had, so a missing bridge adds no dead button.
         let skillsTriggerBtn = null;
-        if (modelCoder === 'pi' && this._piBridgeSkillsEligible(activeTab)) {
+        if (activeTab &&
+            modelCoder === 'pi' &&
+            this._piBridgeSkillsEligible(activeTab)) {
             skillsTriggerBtn = document.createElement('button');
             skillsTriggerBtn.type = 'button';
             skillsTriggerBtn.className =
@@ -15818,31 +15687,25 @@ export class TabManager {
             skillsTriggerBtn.textContent = 'Skills ▾';
             skillsTriggerBtn.disabled =
                 activeTab.isDead === true ||
-                !activeTab.ws ||
-                activeTab.ws.readyState === 3;
+                    !activeTab.ws ||
+                    activeTab.ws.readyState === 3;
             skillsTriggerBtn.title = 'Send a Pi skill to the session';
-            skillsTriggerBtn.addEventListener('click', (event) => {
+            const skillsBtn = skillsTriggerBtn;
+            skillsBtn.addEventListener('click', (event) => {
                 event.stopPropagation();
-                if (
-                    skillsTriggerBtn.disabled ||
+                if (skillsBtn.disabled ||
                     this.getActiveTab() !== activeTab ||
-                    this.tabs?.get(activeTab.paneId) !== activeTab
-                )
+                    this.tabs?.get(activeTab.paneId) !== activeTab)
                     return;
                 if (!this._piBridgeSkillsEligible(activeTab)) {
                     this._closePiRpcDropups(true);
                     return;
                 }
-                this._toggleDropup(
-                    'pi-rpc-skills-dropup',
-                    skillsTriggerBtn,
-                    () => this._renderPiRpcSkillsDropup(),
-                );
+                this._toggleDropup('pi-rpc-skills-dropup', skillsBtn, () => this._renderPiRpcSkillsDropup());
             });
         }
-
         let thinkingTriggerBtn = null;
-        if (modelCoder === 'pi') {
+        if (activeTab && modelCoder === 'pi') {
             thinkingTriggerBtn = document.createElement('button');
             thinkingTriggerBtn.type = 'button';
             thinkingTriggerBtn.className =
@@ -15850,44 +15713,33 @@ export class TabManager {
             thinkingTriggerBtn.textContent = 'Thinking ▾';
             // The compact strip is width-bound: short label there.
             const thinkingLive = this._piBridgeThinkingEligible(activeTab);
+            const thinkingLevel = activeTab.piBridge?.thinking_level || '—';
             if (thinkingLive && !isCompactViewport())
-                thinkingTriggerBtn.textContent = `Thinking: ${activeTab.piBridge.thinking_level || '—'} ▾`;
+                thinkingTriggerBtn.textContent = `Thinking: ${thinkingLevel} ▾`;
             thinkingTriggerBtn.title = thinkingLive
-                ? `Thinking · ${activeTab.piBridge.thinking_level || '—'}`
+                ? `Thinking · ${thinkingLevel}`
                 : 'Thinking · saved options';
-            thinkingTriggerBtn.addEventListener('click', (event) => {
+            const thinkingBtn = thinkingTriggerBtn;
+            thinkingBtn.addEventListener('click', (event) => {
                 event.stopPropagation();
-                if (
-                    this.getActiveTab() !== activeTab ||
-                    this.tabs?.get(activeTab.paneId) !== activeTab
-                )
+                if (this.getActiveTab() !== activeTab ||
+                    this.tabs?.get(activeTab.paneId) !== activeTab)
                     return;
-                this.thinkingPresetStore.start();
-                this._toggleDropup(
-                    'pi-rpc-thinking-dropup',
-                    thinkingTriggerBtn,
-                    () => this._renderPiRpcThinkingDropup(),
-                );
+                this.thinkingPresetStore?.start();
+                this._toggleDropup('pi-rpc-thinking-dropup', thinkingBtn, () => this._renderPiRpcThinkingDropup());
             });
         }
-
         // 4b. Render Keys trigger button (keyboard icon only)
         const keysTriggerBtn = document.createElement('button');
         keysTriggerBtn.className =
             'preset-btn model-trigger-btn keys-trigger-btn';
         keysTriggerBtn.title = 'Virtual Keyboard & Shortcuts';
-        keysTriggerBtn.setAttribute(
-            'aria-label',
-            'Virtual Keyboard and Shortcuts',
-        );
+        keysTriggerBtn.setAttribute('aria-label', 'Virtual Keyboard and Shortcuts');
         keysTriggerBtn.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 14px; height: 14px; display: inline-block; vertical-align: middle;"><rect x="2" y="4" width="20" height="16" rx="2" ry="2"></rect><line x1="6" y1="8" x2="6" y2="8"></line><line x1="10" y1="8" x2="10" y2="8"></line><line x1="14" y1="8" x2="14" y2="8"></line><line x1="18" y1="8" x2="18" y2="8"></line><line x1="6" y1="12" x2="6" y2="12"></line><line x1="10" y1="12" x2="10" y2="12"></line><line x1="14" y1="12" x2="14" y2="12"></line><line x1="18" y1="12" x2="18" y2="12"></line><line x1="7" y1="16" x2="17" y2="16"></line></svg>`;
         keysTriggerBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            this._toggleDropup('keys-presets-dropup', keysTriggerBtn, () =>
-                this.renderKeysDropup(),
-            );
+            this._toggleDropup('keys-presets-dropup', keysTriggerBtn, () => this.renderKeysDropup());
         });
-
         // One explicit order for the row: the pickers, then the command
         // catalog, then the virtual keyboard.
         for (const button of [
@@ -15897,11 +15749,10 @@ export class TabManager {
             quickCmdsTriggerBtn,
             keysTriggerBtn,
         ]) {
-            if (button) this.presetsContainer.appendChild(button);
+            if (button)
+                this.presetsContainer.appendChild(button);
         }
-
         // Picker buttons keep their append order; the row scrolls sideways.
-
         // Auto-refresh dropup content if currently open
         const dropup = document.getElementById('model-presets-dropup');
         if (dropup && !dropup.classList.contains('hidden')) {
@@ -15916,18 +15767,16 @@ export class TabManager {
         if (coderId === 'pi') {
             const tDropup = document.getElementById('pi-rpc-thinking-dropup');
             if (tDropup && !tDropup.classList.contains('hidden')) {
-                if (this._piBridgeThinkingEligible(activeTab))
+                if (activeTab && this._piBridgeThinkingEligible(activeTab))
                     this._renderPiRpcThinkingDropup();
-                else
+                else if (activeTab)
                     this._renderPiPtyThinkingFallback(tDropup, activeTab);
             }
         }
         const qcDropup = document.getElementById('quick-commands-dropup');
-        if (
-            refreshQuickCommands &&
+        if (refreshQuickCommands &&
             qcDropup &&
-            !qcDropup.classList.contains('hidden')
-        ) {
+            !qcDropup.classList.contains('hidden')) {
             this.renderQuickCmdsDropup();
         }
         const keysDropup = document.getElementById('keys-presets-dropup');
@@ -15936,24 +15785,19 @@ export class TabManager {
         }
         const slashDropup = document.getElementById('slash-presets-dropup');
         if (slashDropup && !slashDropup.classList.contains('hidden')) {
-            this.renderSlashDropup(
-                visiblePresets.filter((p) => p.value.startsWith('/')),
-            );
+            this.renderSlashDropup(visiblePresets.filter((p) => p.value.startsWith('/')));
         }
-
         // 5. Render mobile virtual navigation keys (arrows) to compensate for touch keyboard limits
         if (isMobile) {
             const divider = document.createElement('div');
             divider.className = 'presets-divider';
             this.presetsContainer.appendChild(divider);
-
             const mobileNavs = [
                 { name: '▲', value: '\u001b[A' },
                 { name: '▼', value: '\u001b[B' },
                 { name: '◀', value: '\u001b[D' },
                 { name: '▶', value: '\u001b[C' },
             ];
-
             mobileNavs.forEach((nav) => {
                 const btn = document.createElement('button');
                 btn.className = 'preset-btn mobile-nav-btn';
@@ -15965,31 +15809,32 @@ export class TabManager {
                 this.presetsContainer.appendChild(btn);
             });
         }
-
-        if (isMobile) this._compactPickerRow({
-            models: modelsTriggerBtn,
-            thinking: thinkingTriggerBtn,
-            cmds: quickCmdsTriggerBtn,
-            skills: skillsTriggerBtn,
-            keys: keysTriggerBtn,
-        });
-        if (isMobile) this._placeCompactQuickChips(compactChips);
+        if (isMobile)
+            this._compactPickerRow({
+                models: modelsTriggerBtn,
+                thinking: thinkingTriggerBtn,
+                cmds: quickCmdsTriggerBtn,
+                skills: skillsTriggerBtn,
+                keys: keysTriggerBtn,
+            });
+        if (isMobile)
+            this._placeCompactQuickChips(compactChips);
         // Measured last: the chips above change the composer height, and an
         // open menu must clear the row it was opened over.
         this._syncOpenDropups();
         this._restorePresetFocus(presetFocus);
     }
-
     _syncOpenDropups() {
         document
             .querySelectorAll('.model-presets-dropup:not(.hidden)')
-            .forEach((d) => this._syncDropupOffset(d));
+            .forEach((d) => {
+            this._syncDropupOffset(d);
+        });
     }
-
     // Compact only: the strip is width-bound, so the pickers trade words for
     // icons and sit in the order the phone asks for. Desktop renders keep
     // their labels and their append order.
-    _compactPickerRow({ models, thinking, cmds, skills, keys }) {
+    _compactPickerRow({ models, thinking, cmds, skills, keys, }) {
         models.innerText = '🤖';
         // The emoji replaces the words, so the name has to move to the
         // accessibility tree (title alone does not name a button).
@@ -16005,31 +15850,28 @@ export class TabManager {
         // Inserting ahead of the divider leaves the arrow keys at the end.
         const anchor = this.presetsContainer.querySelector('.presets-divider');
         for (const btn of [models, thinking, skills, cmds, keys]) {
-            if (btn) this.presetsContainer.insertBefore(btn, anchor);
+            if (btn)
+                this.presetsContainer.insertBefore(btn, anchor);
         }
     }
-
     // Compact only: park attachment, slash and control-key actions at the
     // start of the input controls, so the bottom row keeps just the pickers.
     // Idempotent: chips from an earlier render are removed before the move.
     _placeCompactQuickChips(chips = []) {
         // Fall back to the presets row when the composer is not on the page,
         // so a chip is never built and thrown away.
-        const actions =
-            document.querySelector('#input-bar-container .input-actions') ||
+        const actions = document.querySelector('#input-bar-container .input-actions') ||
             this.presetsContainer;
-        if (!actions) return;
+        if (!actions)
+            return;
         for (const el of actions.querySelectorAll('.input-quick-chip'))
             el.remove();
         for (const chip of chips) {
             chip.classList.add('input-quick-chip');
-            actions.insertBefore(
-                chip,
-                actions.querySelector(':scope > :not(.input-quick-chip)'),
-            );
+            const before = actions.querySelector(':scope > :not(.input-quick-chip)');
+            actions.insertBefore(chip, before);
         }
     }
-
     // One preset chip. Control-key presets send a bare byte, so their text
     // label is the only clue to what the key does: those render as an icon
     // and keep the key name in the tooltip. Slash commands keep their text.
@@ -16043,66 +15885,60 @@ export class TabManager {
             btn.classList.add('btn-icon');
             btn.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`;
             btn.setAttribute('aria-label', preset.name);
-        } else {
+        }
+        else {
             btn.innerText = preset.name;
         }
         btn.title = `Send ${preset.name} to the terminal`;
         return btn;
     }
-
     _getCoderPresetInfo(coderId, activeTab = this.getActiveTab()) {
         const defaultPresetInfo = this.app?.codersPresetRegistry?.[coderId];
         const miniPresets = getCoder(coderId)?.opencode_mini_presets;
         return isOpenCodeMini(activeTab) && miniPresets?.length
-            ? { ...defaultPresetInfo, presets: miniPresets }
+            ? { ...(defaultPresetInfo ?? {}), presets: miniPresets }
             : defaultPresetInfo;
     }
-
     _sendCoderPreset(value, { focusInputOnMobile = true } = {}) {
         const activeTab = this.getActiveTab();
         if (!activeTab || activeTab.directMode || activeTab.coder === 'pi-rpc')
             return;
-
         const options = focusInputOnMobile
             ? undefined
             : { focusInputOnMobile: false };
-        if (
-            ['opencode', 'pi', 'codex'].includes(activeTab.coder) &&
+        if (['opencode', 'pi', 'codex'].includes(activeTab.coder) &&
             value.startsWith('/') &&
-            value.endsWith('\r')
-        ) {
+            value.endsWith('\r')) {
             const command = value.slice(0, -1);
-            if (options) this.sendSlashCommand(activeTab, command, options);
-            else this.sendSlashCommand(activeTab, command);
-        } else if (options) {
+            if (options)
+                this.sendSlashCommand(activeTab, command, options);
+            else
+                this.sendSlashCommand(activeTab, command);
+        }
+        else if (options) {
             this.sendRawInput(value, options);
-        } else {
+        }
+        else {
             this.sendRawInput(value);
         }
     }
-
     _sendBuiltInPreset(value, options) {
         const activeTab = this.getActiveTab();
         if (!activeTab || activeTab.directMode || activeTab.coder === 'pi-rpc')
             return;
-        const preset = this._getCoderPresetInfo(
-            activeTab.coder,
-            activeTab,
-        )?.presets?.find((p) => p.value === value);
+        const preset = this._getCoderPresetInfo(activeTab.coder, activeTab)?.presets?.find((p) => p.value === value);
         if (preset && MOVED_PRESET_VALUES.has(preset.value))
             this._sendCoderPreset(preset.value, options);
     }
-
     renderSlashDropup(slashPresets) {
         const dropup = document.getElementById('slash-presets-dropup');
-        if (!dropup) return;
+        if (!dropup)
+            return;
         dropup.innerHTML = '';
-
         const header = document.createElement('div');
         header.className = 'dropup-header';
         header.innerText = 'Slash Commands';
         dropup.appendChild(header);
-
         if (slashPresets.length === 0) {
             const row = document.createElement('div');
             row.className = 'dropup-row';
@@ -16113,29 +15949,22 @@ export class TabManager {
             dropup.appendChild(row);
             return;
         }
-
         slashPresets.forEach((p) => {
             const row = document.createElement('div');
             row.className = 'dropup-row';
-
             const btn = document.createElement('button');
             btn.className = 'dropup-model-btn';
             btn.innerText = p.name;
-            if (
-                p.value === '/compact\r' &&
-                this.getActiveTab()?.coder === 'pi'
-            ) {
-                const compactState = this._piBridgeCompactControlState(
-                    this.getActiveTab(),
-                );
+            if (p.value === '/compact\r' &&
+                this.getActiveTab()?.coder === 'pi') {
+                const compactState = this._piBridgeCompactControlState(this.getActiveTab() ?? null);
                 btn.disabled = compactState.disabled;
                 btn.classList.add('pi-compact-btn');
-                if (compactState.title) btn.title = compactState.title;
-                if (compactState.label) btn.innerText = compactState.label;
-                btn.classList.toggle(
-                    'pi-compact-queued',
-                    compactState.queued === true,
-                );
+                if (compactState.title)
+                    btn.title = compactState.title;
+                if (compactState.label)
+                    btn.innerText = compactState.label;
+                btn.classList.toggle('pi-compact-queued', compactState.queued === true);
             }
             btn.addEventListener('click', () => {
                 this._sendCoderPreset(p.value, {
@@ -16147,10 +15976,10 @@ export class TabManager {
             dropup.appendChild(row);
         });
     }
-
     _refreshHostnameTabsDropdown() {
         const dropdown = document.getElementById('hostname-tabs-dropdown');
-        if (!dropdown || dropdown.classList.contains('hidden')) return;
+        if (!dropdown || dropdown.classList.contains('hidden'))
+            return;
         // A live settlement rebuilds the list; keep the keyboard user's
         // place (row + control) and the scroll offset across the rebuild.
         const active = document.activeElement;
@@ -16158,10 +15987,9 @@ export class TabManager {
         const focusControl = focusRow?.contains(active)
             ? Array.from(focusRow.querySelectorAll('button')).indexOf(active)
             : -1;
-        const focusPaneId =
-            focusRow && dropdown.contains(focusRow)
-                ? focusRow.dataset.paneId
-                : null;
+        const focusPaneId = focusRow && dropdown.contains(focusRow)
+            ? focusRow.dataset.paneId
+            : null;
         const scrollTop = dropdown.scrollTop;
         this.renderHostnameTabsDropdown();
         dropdown.scrollTop = scrollTop;
@@ -16169,22 +15997,17 @@ export class TabManager {
             // Equality match, never an interpolated selector: pane IDs
             // can carry quotes or backslashes (e.g. review-${id}), which
             // would throw here and interrupt completion handling.
-            const row = Array.from(
-                dropdown.querySelectorAll('.hostname-dropdown-row'),
-            ).find(
-                (candidate) => candidate.dataset.paneId === focusPaneId,
-            );
+            const row = Array.from(dropdown.querySelectorAll('.hostname-dropdown-row')).find((candidate) => candidate.dataset.paneId === focusPaneId);
             row?.querySelectorAll('button')[focusControl]?.focus({
                 preventScroll: true,
             });
         }
     }
-
     renderHostnameTabsDropdown() {
         const dropdown = document.getElementById('hostname-tabs-dropdown');
-        if (!dropdown) return;
+        if (!dropdown)
+            return;
         dropdown.innerHTML = '';
-
         const header = document.createElement('div');
         header.className = 'dropup-header';
         header.style.borderBottom = '1px solid var(--bg-border)';
@@ -16192,7 +16015,6 @@ export class TabManager {
         header.style.color = 'var(--accent)';
         header.innerText = 'Active Sessions';
         dropdown.appendChild(header);
-
         if (this.tabs.size === 0) {
             const emptyItem = document.createElement('div');
             emptyItem.className = 'hostname-dropdown-item';
@@ -16201,12 +16023,10 @@ export class TabManager {
             dropdown.appendChild(emptyItem);
             return;
         }
-
         const tabEntries = Array.from(this.tabs.entries());
         // Unread (needing attention) first; existing tab order secondary.
         // Closing rows get no unread priority during the undo grace period.
-        const isListUnread = (tabInfo) =>
-            !tabInfo.softClosing && tabInfo.isAttention;
+        const isListUnread = (tabInfo) => !tabInfo.softClosing && tabInfo.isAttention;
         const orderedEntries = [
             ...tabEntries.filter(([, tabInfo]) => isListUnread(tabInfo)),
             ...tabEntries.filter(([, tabInfo]) => !isListUnread(tabInfo)),
@@ -16218,61 +16038,50 @@ export class TabManager {
             if (paneId === this.activePaneId) {
                 row.classList.add('active');
             }
-            if (isListUnread(tabInfo)) row.classList.add('has-attention');
-
+            if (isListUnread(tabInfo))
+                row.classList.add('has-attention');
             // Click target to switch tab
             const selectBtn = document.createElement('button');
             selectBtn.className = 'hostname-dropdown-select-btn';
-
             // Coder favicon (icon-only — the coder prefix text was redundant
             // since the favicon already identifies the coder)
             const faviconImg = document.createElement('img');
             faviconImg.className = 'hostname-dropdown-favicon';
             faviconImg.src =
                 logoFor(tabInfo.coder) ||
-                CODER_FAVICONS[tabInfo.coder] ||
-                'vendor/logos/bash.jpg';
+                    CODER_FAVICONS[tabInfo.coder] ||
+                    'vendor/logos/bash.jpg';
             faviconImg.alt = tabInfo.coder;
-
             // Worktree hieroglyph — same glyph shown on the tab itself.
             // Ties the dropdown row to its worktree group at a glance.
             const glyphSpan = document.createElement('span');
             glyphSpan.className = 'hostname-dropdown-glyph';
             glyphSpan.setAttribute('aria-hidden', 'true');
             glyphSpan.textContent = tabInfo.tabEl?.dataset.worktreeGlyph || '◆';
-
             const titleSpan = document.createElement('span');
             titleSpan.className = 'hostname-dropdown-title';
             if (tabInfo.marked) {
                 titleSpan.classList.add('marked');
             }
             titleSpan.innerText = tabInfo.title || 'Session';
-
             const metaSpan = document.createElement('span');
             metaSpan.className = 'hostname-dropdown-meta';
             // Show project/worktree path instead of redundant status
             metaSpan.innerText = this.getProjectWorktreeLabel(tabInfo.cwd);
             metaSpan.style.color = 'var(--text-muted)';
             metaSpan.style.fontSize = '10px';
-
             selectBtn.appendChild(faviconImg);
             selectBtn.appendChild(glyphSpan);
             selectBtn.appendChild(titleSpan);
             selectBtn.appendChild(metaSpan);
             if (isListUnread(tabInfo)) {
-                selectBtn.appendChild(
-                    this._makeAttentionMarker(
-                        'hostname-dropdown-attention',
-                        'Needs attention',
-                    ),
-                );
+                selectBtn.appendChild(this._makeAttentionMarker('hostname-dropdown-attention', 'Needs attention'));
             }
             selectBtn.addEventListener('click', () => {
                 this.switchTab(paneId, { userInitiated: true });
                 dropdown.classList.add('hidden');
             });
             row.appendChild(selectBtn);
-
             // Marker button (toggles glow on session name)
             const markerBtn = document.createElement('button');
             markerBtn.className = 'hostname-dropdown-marker-btn';
@@ -16288,7 +16097,6 @@ export class TabManager {
                 this.renderHostnameTabsDropdown(); // refresh to show updated state
             });
             row.appendChild(markerBtn);
-
             // Pin button
             const pinBtn = document.createElement('button');
             pinBtn.className = 'hostname-dropdown-pin-btn';
@@ -16303,7 +16111,6 @@ export class TabManager {
                 this.renderHostnameTabsDropdown(); // refresh dropdown layout
             });
             row.appendChild(pinBtn);
-
             // Close button
             const closeBtn = document.createElement('button');
             closeBtn.className = 'hostname-dropdown-close-btn';
@@ -16317,15 +16124,12 @@ export class TabManager {
                 }
             });
             row.appendChild(closeBtn);
-
             dropdown.appendChild(row);
         }
     }
-
     getProjectWorktreeLabel(cwd) {
         return projectWorktreeLabel(cwd);
     }
-
     async addModelPreset(backend) {
         const values = await this.app.openConfigEditor({
             title: 'Add Model Preset',
@@ -16339,8 +16143,8 @@ export class TabManager {
             ],
             submitLabel: 'Add Model',
         });
-        if (!values) return;
-
+        if (!values)
+            return;
         try {
             const res = await fetch('/api/config/models', {
                 method: 'POST',
@@ -16348,21 +16152,19 @@ export class TabManager {
                 body: JSON.stringify({ model: values.model, coder: backend }),
             });
             if (!res.ok)
-                throw new Error(
-                    (await res.text()) || 'Failed to add model preset',
-                );
+                throw new Error((await res.text()) || 'Failed to add model preset');
             await this.app.sessionsManager.loadConfig();
             this.renderModelDropup();
             this.app.showToast(`Added model preset "${values.model}"`, {
                 type: 'info',
                 title: 'Models',
             });
-        } catch (err) {
+        }
+        catch (err) {
             console.error('Failed to add model preset:', err);
-            this.app.showToast(err.message, { type: 'error', title: 'Models' });
+            this.app.showToast(err instanceof Error ? err.message : String(err), { type: 'error', title: 'Models' });
         }
     }
-
     async editModelPreset(backend, model) {
         const values = await this.app.openConfigEditor({
             title: 'Edit Model Preset',
@@ -16377,8 +16179,8 @@ export class TabManager {
             ],
             submitLabel: 'Save Model',
         });
-        if (!values || values.model === model) return;
-
+        if (!values || values.model === model)
+            return;
         try {
             const res = await fetch('/api/config/models', {
                 method: 'POST',
@@ -16390,26 +16192,23 @@ export class TabManager {
                 }),
             });
             if (!res.ok)
-                throw new Error(
-                    (await res.text()) || 'Failed to edit model preset',
-                );
+                throw new Error((await res.text()) || 'Failed to edit model preset');
             await this.app.sessionsManager.loadConfig();
             this.renderModelDropup();
             this.app.showToast(`Updated model preset "${values.model}"`, {
                 type: 'info',
                 title: 'Models',
             });
-        } catch (err) {
+        }
+        catch (err) {
             console.error('Failed to edit model preset:', err);
-            this.app.showToast(err.message, { type: 'error', title: 'Models' });
+            this.app.showToast(err instanceof Error ? err.message : String(err), { type: 'error', title: 'Models' });
         }
     }
-
     async addQuickCommand() {
         const values = await this.app.openConfigEditor({
             title: 'Add Quick Command',
-            subtitle:
-                'Quick commands run in the active terminal. Use {} as a placeholder for selected input text.',
+            subtitle: 'Quick commands run in the active terminal. Use {} as a placeholder for selected input text.',
             fields: [
                 {
                     id: 'name',
@@ -16426,8 +16225,8 @@ export class TabManager {
             ],
             submitLabel: 'Add Command',
         });
-        if (!values) return;
-
+        if (!values)
+            return;
         try {
             const res = await fetch('/api/config/quick-commands', {
                 method: 'POST',
@@ -16438,29 +16237,26 @@ export class TabManager {
                 }),
             });
             if (!res.ok)
-                throw new Error(
-                    (await res.text()) || 'Failed to add quick command',
-                );
+                throw new Error((await res.text()) || 'Failed to add quick command');
             await this.app.sessionsManager.loadConfig();
             this.renderQuickCmdsDropup();
             this.app.showToast(`Added quick command "${values.name}"`, {
                 type: 'info',
                 title: 'Commands',
             });
-        } catch (err) {
+        }
+        catch (err) {
             console.error('Failed to add quick command:', err);
-            this.app.showToast(err.message, {
+            this.app.showToast(err instanceof Error ? err.message : String(err), {
                 type: 'error',
                 title: 'Commands',
             });
         }
     }
-
     async editQuickCommand(cmd) {
         const values = await this.app.openConfigEditor({
             title: 'Edit Quick Command',
-            subtitle:
-                'Rename the action or change the text sent to the active terminal.',
+            subtitle: 'Rename the action or change the text sent to the active terminal.',
             fields: [
                 {
                     id: 'name',
@@ -16477,12 +16273,9 @@ export class TabManager {
             ],
             submitLabel: 'Save Command',
         });
-        if (
-            !values ||
-            (values.name === cmd.name && values.command === cmd.command)
-        )
+        if (!values ||
+            (values.name === cmd.name && values.command === cmd.command))
             return;
-
         try {
             const res = await fetch('/api/config/quick-commands', {
                 method: 'POST',
@@ -16494,49 +16287,42 @@ export class TabManager {
                 }),
             });
             if (!res.ok)
-                throw new Error(
-                    (await res.text()) || 'Failed to edit quick command',
-                );
+                throw new Error((await res.text()) || 'Failed to edit quick command');
             await this.app.sessionsManager.loadConfig();
             this.renderQuickCmdsDropup();
             this.app.showToast(`Updated quick command "${values.name}"`, {
                 type: 'info',
                 title: 'Commands',
             });
-        } catch (err) {
+        }
+        catch (err) {
             console.error('Failed to edit quick command:', err);
-            this.app.showToast(err.message, {
+            this.app.showToast(err instanceof Error ? err.message : String(err), {
                 type: 'error',
                 title: 'Commands',
             });
         }
     }
-
     renderModelDropup() {
         const dropup = document.getElementById('model-presets-dropup');
-        if (!dropup) return;
+        if (!dropup)
+            return;
         dropup.innerHTML = '';
-
         const activeTab = this.getActiveTab();
-        if (!activeTab) return;
-
+        if (!activeTab)
+            return;
         const backend = activeTab.coder;
         const allPresets = this.app.modelPresets || {};
-        const modelPresets = [...(allPresets[backend] || [])].sort((a, b) =>
-            a.localeCompare(b),
-        );
-
+        const modelPresets = [...(allPresets[backend] || [])].sort((a, b) => a.localeCompare(b));
         // 1. Header
         const header = document.createElement('div');
         header.className = 'dropup-header';
         header.innerText = 'Model Presets';
         dropup.appendChild(header);
-
         // 2. Render preset rows
         modelPresets.forEach((model) => {
             const row = document.createElement('div');
             row.className = 'dropup-row';
-
             const btn = document.createElement('button');
             btn.className = 'dropup-model-btn';
             btn.innerText = model;
@@ -16553,25 +16339,34 @@ export class TabManager {
                 if (isOpenCodeMini(activeTab)) {
                     try {
                         recipe = opencodeMiniRecipe(model);
-                    } catch (err) {
-                        this.app.showToast(err.message, { type: 'error', title: 'Models' });
+                    }
+                    catch (err) {
+                        this.app.showToast(err instanceof Error ? err.message : String(err), {
+                            type: 'error',
+                            title: 'Models',
+                        });
                         return;
                     }
                 }
                 if (recipe) {
-                    const paneId =
-                        activeTab.paneId || activeTab.tabId || activeTab.id;
+                    const paneId = activeTab.paneId ||
+                        activeTab.tabId ||
+                        activeTab.id ||
+                        '';
                     executeRecipe({
                         paneId,
                         recipe,
                         model,
                         sendFn: (id, payload) => {
                             const tab = this.app.tabManager?.tabs?.get?.(id);
-                            return tab ? this.sendToTab(tab, payload, { submit: true }) : false;
+                            return tab
+                                ? this.sendToTab(tab, payload, { submit: true })
+                                : false;
                         },
                         isAliveFn: (id) => {
                             const tab = this.app.tabManager?.tabs?.get?.(id);
-                            if (!tab?.term) return false;
+                            if (!tab?.term)
+                                return false;
                             return !tab.isDead;
                         },
                     }).catch((err) => {
@@ -16590,11 +16385,14 @@ export class TabManager {
                         setTimeout(() => {
                             this.sendToTab(activeTab, model, { submit: true });
                             setTimeout(() => {
-                                this.sendToTab(activeTab, '\r', { submit: true });
+                                this.sendToTab(activeTab, '\r', {
+                                    submit: true,
+                                });
                             }, 350);
                         }, 350);
                     }, 350);
-                } else if (backend === 'pi') {
+                }
+                else if (backend === 'pi') {
                     // /model <id> [PAUSE] <Esc> [PAUSE] <Enter>, every send
                     // pinned to the tab clicked above.
                     //
@@ -16625,7 +16423,8 @@ export class TabManager {
                             this.sendToTab(activeTab, '\r', { submit: true });
                         }, PI_MODEL_STEP_MS);
                     }, PI_MODEL_STEP_MS);
-                } else if (backend === 'claude') {
+                }
+                else if (backend === 'claude') {
                     // Claude may show a model-switch cache warning after the
                     // command resolves. The second Enter acknowledges it.
                     // Pin it to the clicked tab just like the other delayed
@@ -16636,11 +16435,10 @@ export class TabManager {
                     setTimeout(() => {
                         this.sendToTab(activeTab, '\r', { submit: true });
                     }, 500);
-                } else if (
-                    backend === 'bash' ||
+                }
+                else if (backend === 'bash' ||
                     backend === 'pwsh' ||
-                    !getCoder(backend)
-                ) {
+                    !getCoder(backend)) {
                     // Preserve the legacy shell/unknown-tab behavior;
                     // never guess a command for a registered custom backend.
                     this.sendRawInput(`/model ${model}\r`, { submit: true });
@@ -16648,10 +16446,8 @@ export class TabManager {
                 dropup.classList.add('hidden');
             });
             row.appendChild(btn);
-
             const actionsContainer = document.createElement('div');
             actionsContainer.className = 'dropup-row-actions';
-
             const editBtn = document.createElement('button');
             editBtn.className = 'dropup-action-btn dropup-edit-btn';
             editBtn.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>`;
@@ -16661,7 +16457,6 @@ export class TabManager {
                 await this.editModelPreset(backend, model);
             });
             actionsContainer.appendChild(editBtn);
-
             const delBtn = document.createElement('button');
             delBtn.className = 'dropup-action-btn dropup-del-btn';
             delBtn.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>`;
@@ -16676,7 +16471,8 @@ export class TabManager {
                             body: JSON.stringify({ model, coder: backend }),
                         });
                         await this.app.sessionsManager.loadConfig();
-                    } catch (err) {
+                    }
+                    catch (err) {
                         console.error('Failed to delete model preset:', err);
                     }
                 }
@@ -16685,11 +16481,9 @@ export class TabManager {
             row.appendChild(actionsContainer);
             dropup.appendChild(row);
         });
-
         // 3. Add Preset Action Row
         const addRow = document.createElement('div');
         addRow.className = 'dropup-add-row';
-
         const addBtn = document.createElement('button');
         addBtn.className = 'dropup-add-btn';
         addBtn.innerText = '+ Add Model Preset...';
@@ -16698,30 +16492,25 @@ export class TabManager {
         });
         addRow.appendChild(addBtn);
         dropup.appendChild(addRow);
-
         // 4. Config Copy/Paste Footer
         this._appendConfigFooter(dropup, 'models');
     }
-
     renderQuickCmdsDropup() {
         const dropup = document.getElementById('quick-commands-dropup');
-        if (!dropup) return;
+        if (!dropup)
+            return;
         dropup.innerHTML = '';
-
         const quickCmds = this.app.quickCommands || [];
         const activeTab = this.getActiveTab();
-        const builtInPresets =
-            activeTab && !activeTab.directMode && activeTab.coder !== 'pi-rpc'
-                ? (this._getCoderPresetInfo(activeTab.coder, activeTab)?.presets ||
-                      []).filter((p) => MOVED_PRESET_VALUES.has(p.value))
-                : [];
-
+        const builtInPresets = activeTab && !activeTab.directMode && activeTab.coder !== 'pi-rpc'
+            ? (this._getCoderPresetInfo(activeTab.coder, activeTab)
+                ?.presets || []).filter((p) => MOVED_PRESET_VALUES.has(p.value))
+            : [];
         if (builtInPresets.length > 0) {
             const builtInHeader = document.createElement('div');
             builtInHeader.className = 'dropup-header';
             builtInHeader.innerText = 'Built-in Commands';
             dropup.appendChild(builtInHeader);
-
             builtInPresets.forEach((preset) => {
                 const row = document.createElement('div');
                 row.className = 'dropup-row';
@@ -16729,22 +16518,14 @@ export class TabManager {
                 btn.className = 'dropup-model-btn';
                 btn.innerText = preset.name;
                 let reloadState = null;
-                if (
-                    preset.value === '/reload\r' &&
-                    activeTab?.coder === 'pi'
-                ) {
+                if (preset.value === '/reload\r' && activeTab?.coder === 'pi') {
                     reloadState = this._piReloadControlState(activeTab);
                     btn.classList.add('pi-reload-btn');
-                    if (reloadState.title) btn.title = reloadState.title;
-                    btn.classList.toggle(
-                        'pi-reload-queued',
-                        reloadState.queued === true,
-                    );
+                    if (reloadState.title)
+                        btn.title = reloadState.title;
+                    btn.classList.toggle('pi-reload-queued', reloadState.queued === true);
                     if (reloadState.dismiss)
-                        btn.setAttribute(
-                            'aria-describedby',
-                            'pi-reload-status',
-                        );
+                        btn.setAttribute('aria-describedby', 'pi-reload-status');
                 }
                 btn.addEventListener('click', () => {
                     this._sendBuiltInPreset(preset.value, {
@@ -16764,56 +16545,52 @@ export class TabManager {
                 dropup.appendChild(row);
             });
         }
-
         const header = document.createElement('div');
         header.className = 'dropup-header';
         header.innerText = 'Quick Commands';
         dropup.appendChild(header);
-
         quickCmds.forEach((cmd) => {
             const row = document.createElement('div');
             row.className = 'dropup-row';
-
             const btn = document.createElement('button');
             btn.className = 'dropup-model-btn';
-            btn.innerText = cmd.name;
-            btn.title = cmd.command;
+            btn.innerText = cmd.name ?? '';
+            const command = cmd.command ?? '';
+            btn.title = command;
             btn.addEventListener('click', () => {
                 const activeTab = this.getActiveTab();
-                if (!activeTab || activeTab.coder === 'pi-rpc') return;
+                if (!activeTab || activeTab.coder === 'pi-rpc')
+                    return;
                 const prefix = this.inputTextArea.value.trim();
-                const combined =
-                    prefix && cmd.command.includes('{}')
-                        ? cmd.command.replace('{}', prefix)
-                        : prefix
-                          ? `${prefix} ${cmd.command}`
-                          : cmd.command;
+                const combined = prefix && command.includes('{}')
+                    ? command.replace('{}', prefix)
+                    : prefix
+                        ? `${prefix} ${command}`
+                        : command;
                 let payload = combined;
-                if (
-                    activeTab.coder === 'codex' ||
+                if (activeTab.coder === 'codex' ||
                     combined.length > 16 ||
-                    combined.includes('\n')
-                ) {
+                    combined.includes('\n')) {
                     payload = `\x1b[200~${combined}\x1b[201~`;
                 }
-                if (this.sendInput(activeTab, `${payload}\r`) === false) return;
+                if (this.sendInput(activeTab, `${payload}\r`) === false)
+                    return;
                 this.inputTextArea.value = '';
                 this.lastInputValue = '';
                 this.saveActiveDraft();
                 this.adjustInputHeight();
                 if (prefersInputBarFocus()) {
                     this.inputTextArea.blur();
-                } else {
+                }
+                else {
                     this.inputTextArea.focus({ preventScroll: true });
                 }
                 this._spamScrollToBottom(activeTab);
                 dropup.classList.add('hidden');
             });
             row.appendChild(btn);
-
             const actionsContainer = document.createElement('div');
             actionsContainer.className = 'dropup-row-actions';
-
             const editBtn = document.createElement('button');
             editBtn.className = 'dropup-action-btn dropup-edit-btn';
             editBtn.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>`;
@@ -16823,7 +16600,6 @@ export class TabManager {
                 await this.editQuickCommand(cmd);
             });
             actionsContainer.appendChild(editBtn);
-
             const delBtn = document.createElement('button');
             delBtn.className = 'dropup-action-btn dropup-del-btn';
             delBtn.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>`;
@@ -16838,7 +16614,8 @@ export class TabManager {
                             body: JSON.stringify({ name: cmd.name }),
                         });
                         await this.app.sessionsManager.loadConfig();
-                    } catch (err) {
+                    }
+                    catch (err) {
                         console.error('Failed to delete quick command:', err);
                     }
                 }
@@ -16847,10 +16624,8 @@ export class TabManager {
             row.appendChild(actionsContainer);
             dropup.appendChild(row);
         });
-
         const addRow = document.createElement('div');
         addRow.className = 'dropup-add-row';
-
         const addBtn = document.createElement('button');
         addBtn.className = 'dropup-add-btn';
         addBtn.innerText = '+ Add Command...';
@@ -16859,23 +16634,19 @@ export class TabManager {
         });
         addRow.appendChild(addBtn);
         dropup.appendChild(addRow);
-
         // Config Copy/Paste Footer
         this._appendConfigFooter(dropup, 'cmds');
     }
-
     renderKeysDropup() {
         const dropup = document.getElementById('keys-presets-dropup');
-        if (!dropup) return;
+        if (!dropup)
+            return;
         dropup.innerHTML = '';
-
         const header = document.createElement('div');
         header.className = 'dropup-header kb-dropup-header';
-
         const titleSpan = document.createElement('span');
         titleSpan.innerText = 'Virtual Keys';
         header.appendChild(titleSpan);
-
         const closeBtn = document.createElement('button');
         closeBtn.type = 'button';
         closeBtn.className = 'kb-dropup-close-btn';
@@ -16887,10 +16658,8 @@ export class TabManager {
         });
         header.appendChild(closeBtn);
         dropup.appendChild(header);
-
         const body = document.createElement('div');
         body.className = 'kb-dropup-body';
-
         const groups = [
             {
                 title: 'Navigation',
@@ -16968,19 +16737,15 @@ export class TabManager {
                 ],
             },
         ];
-
         groups.forEach((group) => {
             const groupEl = document.createElement('div');
             groupEl.className = 'kb-group';
-
             const groupTitle = document.createElement('div');
             groupTitle.className = 'kb-group-title';
             groupTitle.innerText = group.title;
             groupEl.appendChild(groupTitle);
-
             const grid = document.createElement('div');
             grid.className = 'kb-grid';
-
             group.keys.forEach((k) => {
                 const btn = document.createElement('button');
                 btn.type = 'button';
@@ -16990,7 +16755,8 @@ export class TabManager {
                 btn.addEventListener('click', (e) => {
                     e.stopPropagation();
                     const activeTab = this.getActiveTab();
-                    if (!activeTab || activeTab.coder === 'pi-rpc') return;
+                    if (!activeTab || activeTab.coder === 'pi-rpc')
+                        return;
                     this.sendRawInput(k.value, {
                         focusInputOnMobile: false,
                         submit: k.value === '\r',
@@ -17000,18 +16766,14 @@ export class TabManager {
                 });
                 grid.appendChild(btn);
             });
-
             groupEl.appendChild(grid);
             body.appendChild(groupEl);
         });
-
         dropup.appendChild(body);
     }
-
     _appendConfigFooter(dropup, mode = 'models') {
         const footer = document.createElement('div');
         footer.className = 'dropup-config-footer';
-
         const copyBtn = document.createElement('button');
         copyBtn.className = 'dropup-config-btn';
         copyBtn.title =
@@ -17023,12 +16785,12 @@ export class TabManager {
             e.stopPropagation();
             if (mode === 'cmds') {
                 // Right-side cmds = quick commands (sent to the active PTY).
-                this.app.exportQuickCommandsConfig(copyBtn);
-            } else {
-                this.app.exportModelsConfig(copyBtn);
+                this.app.exportQuickCommandsConfig?.(copyBtn);
+            }
+            else {
+                this.app.exportModelsConfig?.(copyBtn);
             }
         });
-
         const pasteBtn = document.createElement('button');
         pasteBtn.className = 'dropup-config-btn';
         pasteBtn.title =
@@ -17039,9 +16801,10 @@ export class TabManager {
         pasteBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
             if (mode === 'cmds') {
-                await this.app.importCmdsConfig(pasteBtn);
-            } else {
-                await this.app.importModelsConfig(pasteBtn);
+                await this.app.importCmdsConfig?.(pasteBtn);
+            }
+            else {
+                await this.app.importModelsConfig?.(pasteBtn);
             }
             document.querySelectorAll('.model-presets-dropup').forEach((d) => {
                 d.classList.add('hidden');
@@ -17051,73 +16814,54 @@ export class TabManager {
                 this.renderPresets(activeTab.coder);
             }
         });
-
         footer.appendChild(copyBtn);
         footer.appendChild(pasteBtn);
         dropup.appendChild(footer);
     }
-
     getTerminalTheme(coder, accentColorKeyOrHex) {
         return getTerminalTheme(coder, accentColorKeyOrHex, this.app?.config);
     }
-
     applyThemeToAllActiveTerminals(color) {
-        const activeColor =
-            color ||
+        const activeColor = color ||
             (typeof document !== 'undefined' &&
-                document.documentElement?.style?.getPropertyValue(
-                    '--accent',
-                )) ||
+                document.documentElement?.style?.getPropertyValue('--accent')) ||
             '#7c6af7';
         for (const tab of this.tabs.values()) {
             if (tab.term) {
-                tab.term.options.theme = this.getTerminalTheme(
-                    tab.coder,
-                    activeColor,
-                );
+                tab.term.options.theme = this.getTerminalTheme(tab.coder, activeColor);
             }
         }
     }
-
     // Resolve a preferred reading scale against FitAddon's actual grid.
     // This is deliberately separate from fitting/scroll restoration: it only
     // chooses options.fontSize before the existing fit path runs, leaving the
     // hard-won _spamScroll timing behavior untouched.
-    resolveTerminalFontSize(
-        tab,
-        preference = this.app?.terminalFontSize,
-        proposed,
-    ) {
+    resolveTerminalFontSize(tab, preference = this.app?.terminalFontSize, proposed) {
         // The caller may pass pre-measured proposeDimensions so the fit
         // path measures the DOM once and reuses it for the skip check.
         const dims = proposed ?? tab?.fitAddon?.proposeDimensions?.();
-        return responsiveTerminalFontSize(
-            terminalPreferredFontSize(preference),
-            Number(tab?.term?.options?.fontSize),
-            dims?.cols,
-            TERMINAL_TARGET_COLUMNS,
-        );
+        return responsiveTerminalFontSize(terminalPreferredFontSize(preference), Number(tab?.term?.options?.fontSize), dims?.cols, TERMINAL_TARGET_COLUMNS);
     }
-
     // applyFontToAllActiveTerminals sets a new fontFamily on every
     // live xterm. Hidden viewport fits wait until activation.
     // Empty/invalid input falls back to 'JetBrains Mono, monospace'.
     // Deliberately does NOT touch any scroll / _spamScroll timing
     // (see AGENTS.md hard-won-stabilization rule).
     applyFontToAllActiveTerminals(family) {
-        const safe =
-            (family && String(family).trim()) || 'JetBrains Mono, monospace';
+        const safe = (family && String(family).trim()) || 'JetBrains Mono, monospace';
         for (const tab of this.tabs.values()) {
             if (tab.term) {
                 tab.term.options.fontFamily = safe;
                 if (tab.fitAddon && typeof tab.fitAddon.fit === 'function') {
                     try {
                         this._fitVisibleTerminal(tab);
-                    } catch (_e) {
+                    }
+                    catch (_e) {
                         /* tolerate closed term */
                     }
                 }
-            } else if (tab.coder === 'pi-rpc' && tab.termContainer) {
+            }
+            else if (tab.coder === 'pi-rpc' && tab.termContainer) {
                 tab.termContainer.style.fontFamily = safe;
             }
         }
@@ -17126,7 +16870,6 @@ export class TabManager {
         // hook so the diff screen honors the family picker alongside size.
         this.app.diffController?.applyFontFamily?.(safe);
     }
-
     // applyTerminalFontSizeToAll sets a new fontSize on every live xterm,
     // then fits visible panels and sends their geometry to the backend PTY.
     // Hidden fits wait until activation. Deliberately does NOT touch any
@@ -17142,17 +16885,18 @@ export class TabManager {
             }
             // A hidden xterm has no meaningful proposed dimensions. Keep its
             // preferred scale; activation resolves it once it has a viewport.
-            const resolved =
-                tab === activeTab && this._terminalPanelVisible(tab)
-                    ? this.resolveTerminalFontSize(tab, preferred)
-                    : preferred;
-            if (tab.term.options.fontSize === resolved) continue;
+            const resolved = tab === activeTab && this._terminalPanelVisible(tab)
+                ? this.resolveTerminalFontSize(tab, preferred)
+                : preferred;
+            if (tab.term.options.fontSize === resolved)
+                continue;
             tab.term.options.fontSize = resolved;
             if (tab.fitAddon && typeof tab.fitAddon.fit === 'function') {
                 try {
                     this._fitVisibleTerminal(tab);
                     this.sendResizeToBackend(tab);
-                } catch (_e) {
+                }
+                catch (_e) {
                     /* tolerate closed term */
                 }
             }
@@ -17161,17 +16905,13 @@ export class TabManager {
         // preference-as-scale policy against its own measured grid.
         this.app.diffController?.applyFontSize?.();
     }
-
     pollTerminalIdleAndNotifications() {
         const isTabVisible = !document.hidden;
         let statusChanged = false;
-
         for (const tab of this.tabs.values()) {
-            if (tab.isDead) continue;
-
-            const isActiveAndVisible =
-                tab.paneId === this.activePaneId && isTabVisible;
-
+            if (tab.isDead)
+                continue;
+            const isActiveAndVisible = tab.paneId === this.activePaneId && isTabVisible;
             // If the tab is currently focused and visible, clear attention states immediately.
             if (isActiveAndVisible) {
                 if (tab.isAttention) {
@@ -17187,7 +16927,6 @@ export class TabManager {
                     }
                 }
             }
-
             // Track busy-to-idle transition for active terminal connections.
             if (tab.isBusy && tab.lastOutputAt !== undefined) {
                 const idleTime = Date.now() - tab.lastOutputAt;
@@ -17195,23 +16934,18 @@ export class TabManager {
                     // Output has stopped for 3 seconds. The PTY transitioned to idle!
                     tab.isBusy = false;
                     statusChanged = true;
-
                     // Release backend pin if NOT manually pinned by the user.
                     if (!tab.pinned) {
                         this.syncBackendPin(tab.paneId, false);
                     }
-
                     // Calculate total execution duration
-                    const totalDuration =
-                        Date.now() -
+                    const totalDuration = Date.now() -
                         (tab.busyStartTime ||
                             tab.userTaskStartTime ||
                             Date.now());
                     const isLongTask = totalDuration > 4000;
-
                     // Only notify if this tab is NOT currently active and focused, was a running task, and is NOT a shell tab.
-                    const isShellTab =
-                        isShell(tab.coder) ||
+                    const isShellTab = isShell(tab.coder) ||
                         tab.coder === 'bash' ||
                         tab.coder === 'pwsh';
                     // Bridge-managed Pi panes ring only on explicit
@@ -17221,55 +16955,35 @@ export class TabManager {
                     // install missing, Pi crashed pre-hello) keep the
                     // heuristic as a fallback, so a silent bridge never
                     // means no signal at all. Unavailable panes likewise.
-                    const isBridgeActive =
-                        tab.piBridge?.state === 'managed' &&
+                    const isBridgeActive = tab.piBridge?.state === 'managed' &&
                         tab._piBridgeLive === true;
-
-                    if (
-                        !isActiveAndVisible &&
-                        !isShellTab &&
-                        !isBridgeActive
-                    ) {
-                        const taskWasRunning =
-                            tab.userTaskActive === true ||
+                    if (!isActiveAndVisible && !isShellTab && !isBridgeActive) {
+                        const taskWasRunning = tab.userTaskActive === true ||
                             (tab.userTaskActive === undefined && isLongTask);
-
                         if (taskWasRunning) {
-                            const bufferState = detectTerminalBufferState(
-                                tab.term,
-                            );
-
+                            const bufferState = detectTerminalBufferState(tab.term);
                             if (bufferState.hasSpinner) {
                                 // Coding agent is still spinning / actively working despite output pause!
                                 // Do not mark as done. Keep userTaskActive = true so completion can be
                                 // caught once the spinner disappears and prompt arrives.
-                            } else {
+                            }
+                            else {
                                 const promptDetected = bufferState.hasPrompt;
-                                const processExited =
-                                    tab.exitCode !== undefined &&
+                                const processExited = tab.exitCode !== undefined &&
                                     tab.exitCode !== null;
-                                const isTestMockWithoutTerm =
-                                    !tab.term?.buffer?.active;
-
-                                if (
-                                    promptDetected ||
+                                const isTestMockWithoutTerm = !tab.term?.buffer?.active;
+                                if (promptDetected ||
                                     processExited ||
-                                    (isTestMockWithoutTerm && isLongTask)
-                                ) {
+                                    (isTestMockWithoutTerm && isLongTask)) {
                                     this._setTabAttention(tab, true);
                                     tab.userTaskActive = false;
                                     tab.busyStartTime = null;
                                     statusChanged = true;
-
-                                    this.triggerAttentionNotification(
-                                        tab,
-                                        promptDetected,
-                                    );
+                                    this.triggerAttentionNotification(tab, promptDetected);
                                 }
                             }
                         }
                     }
-
                     // Reset busyStartTime once quiescent if not retained by an active spinner task
                     if (!tab.userTaskActive) {
                         tab.busyStartTime = null;
@@ -17277,17 +16991,15 @@ export class TabManager {
                 }
             }
         }
-
         // A single render after the scan covers both the ϕ → Φ quiet
         // transition and any completion attention marker without title churn.
-        if (statusChanged) this.updateDocumentTitle();
+        if (statusChanged)
+            this.updateDocumentTitle();
     }
-
     triggerAttentionNotification(tab, promptDetected) {
         const message = promptDetected
             ? `Session "${tab.title}" is waiting at a prompt.`
             : `Session "${tab.title}" completed execution.`;
-
         // 1. Show in-app toast notification.
         if (this.app && typeof this.app.showToast === 'function') {
             this.app.showToast(message, {
@@ -17297,26 +17009,21 @@ export class TabManager {
                 readyPaneId: tab.paneId,
                 action: {
                     text: 'Go to tab',
-                    callback: () =>
-                        this.switchTab(tab.paneId, { userInitiated: true }),
+                    callback: () => this.switchTab(tab.paneId, { userInitiated: true }),
                 },
             });
         }
-
         // 2. Play subtle chime if backgrounded.
         if (!doneChimeAudio) {
             doneChimeAudio = new Audio('vendor/bell.wav');
             doneChimeAudio.volume = 0.2;
         }
         doneChimeAudio.currentTime = 0;
-        doneChimeAudio.play().catch(() => {});
-
+        doneChimeAudio.play().catch(() => { });
         // 3. Show OS-level notification if tab is hidden / not active.
-        if (
-            document.hidden &&
+        if (document.hidden &&
             typeof Notification !== 'undefined' &&
-            Notification.permission === 'granted'
-        ) {
+            Notification.permission === 'granted') {
             try {
                 const n = new Notification('Phi Session Done', {
                     body: message,
@@ -17329,34 +17036,28 @@ export class TabManager {
                     this.switchTab(tab.paneId, { userInitiated: true });
                     n.close();
                 };
-            } catch (e) {
-                console.error(
-                    '[notification] Failed to show OS notification:',
-                    e,
-                );
+            }
+            catch (e) {
+                console.error('[notification] Failed to show OS notification:', e);
             }
         }
     }
-
     _setTabAttention(tab, attention) {
-        if (Boolean(tab.isAttention) === attention) return false;
+        if (Boolean(tab.isAttention) === attention)
+            return false;
         tab.isAttention = attention;
         if (tab.tabEl) {
             tab.tabEl.classList.toggle('has-attention', attention);
-            const indicator = tab.tabEl.querySelector(
-                '.tab-attention-indicator',
-            );
+            const indicator = tab.tabEl.querySelector('.tab-attention-indicator');
             if (attention && !indicator) {
                 const status = document.createElement('span');
                 status.className = 'tab-attention-indicator';
                 status.setAttribute('role', 'img');
                 status.setAttribute('aria-label', 'Needs attention');
                 status.textContent = '●';
-                tab.tabEl.insertBefore(
-                    status,
-                    tab.tabEl.querySelector('.tab-title'),
-                );
-            } else if (!attention) {
+                tab.tabEl.insertBefore(status, tab.tabEl.querySelector('.tab-title'));
+            }
+            else if (!attention) {
                 indicator?.remove();
             }
         }
@@ -17364,17 +17065,17 @@ export class TabManager {
         this._refreshHostnameTabsDropdown?.();
         return true;
     }
-
     clearAttentionIndicators() {
         // Clear the completion/attention layer, then recompose the title.
         // This intentionally preserves ϕ when another tab is still emitting.
         let cleared = false;
         for (const tab of this.tabs.values()) {
-            if (this._setTabAttention(tab, false)) cleared = true;
+            if (this._setTabAttention(tab, false))
+                cleared = true;
         }
-        if (cleared) this.updateDocumentTitle();
+        if (cleared)
+            this.updateDocumentTitle();
     }
-
     // _cyclePromptHistory advances/retreats through the user's previously
     // sent prompts for the active cwd. direction is 'older' (Alt+Up) or
     // 'newer' (Alt+Down). On first call for a cwd, fetches from the
@@ -17387,8 +17088,8 @@ export class TabManager {
     // (older). Pressing Alt+Down decrements; reaching -1 restores the
     // pre-cycle value (saved in _historyPreCycleValue).
     async _cyclePromptHistory(direction) {
-        if (!this.inputTextArea) return;
-
+        if (!this.inputTextArea)
+            return;
         // Capture the value before any cycle starts so Alt+Down can
         // return to it.
         if (this._historyCursor === -1 && direction === 'newer') {
@@ -17397,29 +17098,24 @@ export class TabManager {
         // An Alt-history cycle replaces the textarea, so it abandons
         // any Pi recall cycle (flushing a deferred arrow first).
         this._resetPiRecall({ flush: true });
-        if (
-            this._historyPreCycleValue === undefined &&
-            this._historyCursor === -1
-        ) {
+        if (this._historyPreCycleValue === undefined &&
+            this._historyCursor === -1) {
             this._historyPreCycleValue = this.inputTextArea.value;
         }
-
         const cwd = this.app.sessionsManager?.activeCWD || '';
         if (cwd !== this._historyCwd || !this._historyLoaded) {
             // Lazy-load the cache for this cwd.
             const ok = await this._loadPromptHistory(cwd);
-            if (!ok) return;
+            if (!ok)
+                return;
         }
         if (this._historyCache.length === 0) {
             return; // nothing to cycle through
         }
-
         if (direction === 'older') {
-            this._historyCursor = Math.min(
-                this._historyCursor < 0 ? 0 : this._historyCursor + 1,
-                this._historyCache.length - 1,
-            );
-        } else {
+            this._historyCursor = Math.min(this._historyCursor < 0 ? 0 : this._historyCursor + 1, this._historyCache.length - 1);
+        }
+        else {
             // 'newer' (Alt+Down)
             if (this._historyCursor <= 0) {
                 // Past the newest — restore pre-cycle value.
@@ -17432,7 +17128,6 @@ export class TabManager {
             }
             this._historyCursor -= 1;
         }
-
         const entry = this._historyCache[this._historyCursor];
         if (entry) {
             // The local-history fetch may have overlapped a Pi read.
@@ -17442,25 +17137,24 @@ export class TabManager {
             this.adjustInputHeight();
         }
     }
-
     // _caretOnFirstLine / _caretOnLastLine gate per-chat history cycling so
     // plain arrows still move the caret inside multiline drafts. True when no
     // newline sits before (after) the caret; the caller guarantees a
     // collapsed selection.
     _caretOnFirstLine() {
-        if (!this.inputTextArea) return false;
+        if (!this.inputTextArea)
+            return false;
         return !this.inputTextArea.value
             .slice(0, this.inputTextArea.selectionStart)
             .includes('\n');
     }
-
     _caretOnLastLine() {
-        if (!this.inputTextArea) return false;
+        if (!this.inputTextArea)
+            return false;
         return !this.inputTextArea.value
             .slice(this.inputTextArea.selectionEnd)
             .includes('\n');
     }
-
     // _cycleChatHistory walks the active Pi RPC tab's per-chat prompt history
     // (recorded in sendStagedInput). Mirrors _cyclePromptHistory's cursor
     // semantics — -1 = free-form draft, non-negative = index into
@@ -17468,25 +17162,25 @@ export class TabManager {
     // tab.chatHistoryPreCycleValue and 'newer' past 0 restores it — minus the
     // async server load.
     _cycleChatHistory(direction, tab) {
-        if (!this.inputTextArea || !tab) return false;
+        if (!this.inputTextArea || !tab)
+            return false;
         const history = Array.isArray(tab.promptHistory)
             ? tab.promptHistory
             : [];
-        if (history.length === 0) return false;
-        if (tab.chatHistoryCursor === undefined) tab.chatHistoryCursor = -1;
-        if (direction === 'newer' && tab.chatHistoryCursor === -1) return false;
-        if (
-            tab.chatHistoryPreCycleValue === undefined &&
-            tab.chatHistoryCursor === -1
-        ) {
+        if (history.length === 0)
+            return false;
+        if (tab.chatHistoryCursor === undefined)
+            tab.chatHistoryCursor = -1;
+        if (direction === 'newer' && tab.chatHistoryCursor === -1)
+            return false;
+        if (tab.chatHistoryPreCycleValue === undefined &&
+            tab.chatHistoryCursor === -1) {
             tab.chatHistoryPreCycleValue = this.inputTextArea.value;
         }
         if (direction === 'older') {
-            tab.chatHistoryCursor = Math.min(
-                tab.chatHistoryCursor < 0 ? 0 : tab.chatHistoryCursor + 1,
-                history.length - 1,
-            );
-        } else {
+            tab.chatHistoryCursor = Math.min(tab.chatHistoryCursor < 0 ? 0 : tab.chatHistoryCursor + 1, history.length - 1);
+        }
+        else {
             if (tab.chatHistoryCursor <= 0) {
                 this.inputTextArea.value = tab.chatHistoryPreCycleValue || '';
                 tab.chatHistoryCursor = -1;
@@ -17498,29 +17192,31 @@ export class TabManager {
             tab.chatHistoryCursor -= 1;
         }
         const entry = history[tab.chatHistoryCursor];
-        if (entry === undefined) return false;
+        if (entry === undefined)
+            return false;
         this.inputTextArea.value = entry;
         this._placeCursorAtEnd();
         this.adjustInputHeight();
         return true;
     }
-
     _placeCursorAtEnd() {
-        if (!this.inputTextArea) return;
+        if (!this.inputTextArea)
+            return;
         const len = this.inputTextArea.value.length;
         this.inputTextArea.setSelectionRange(len, len);
     }
-
     async _loadPromptHistory(cwd) {
         try {
-            const res = await fetch(
-                `/api/prompt-history/recent?cwd=${encodeURIComponent(cwd)}&n=50`,
-            );
-            if (!res.ok) return false;
+            const res = await fetch(`/api/prompt-history/recent?cwd=${encodeURIComponent(cwd)}&n=50`);
+            if (!res.ok)
+                return false;
             const entries = await res.json();
-            if (!Array.isArray(entries)) return false;
+            if (!Array.isArray(entries))
+                return false;
             // Server returns newest-first; cache as-is.
-            this._historyCache = entries;
+            this._historyCache = entries.filter((entry) => !!entry &&
+                typeof entry === 'object' &&
+                typeof entry.text === 'string');
             this._historyCwd = cwd;
             this._historyLoaded = true;
             // Do NOT touch _historyCursor / _historyPreCycleValue here:
@@ -17529,66 +17225,62 @@ export class TabManager {
             // load can run mid-cycle. Clobbering either field here
             // would drop the user's draft on the first Alt+Up.
             return true;
-        } catch (err) {
+        }
+        catch (err) {
             console.warn('[prompt_history] load failed', err);
             return false;
         }
     }
-
     _piRecallEligible(tab) {
-        return (
-            tab?.coder === 'pi' && !tab.isDead &&
+        return (tab?.coder === 'pi' &&
+            !tab.isDead &&
             tab.piBridge?.state === 'managed' &&
             tab.piBridge.connected === true &&
             Array.isArray(tab.piBridge.capabilities) &&
-            tab.piBridge.capabilities.includes('pi.history.v1')
-        );
+            tab.piBridge.capabilities.includes('pi.history.v1'));
     }
-
     // The shared model picker needs the models capability; anything
     // else keeps the legacy static presets exactly.
     _piBridgeModelsEligible(tab) {
-        return (
-            tab?.coder === 'pi' && !tab.isDead &&
-            !!tab.ws && tab._piBridgeFresh === tab.ws &&
+        return (tab?.coder === 'pi' &&
+            !tab.isDead &&
+            !!tab.ws &&
+            tab._piBridgeFresh === tab.ws &&
             tab.piBridge?.state === 'managed' &&
             tab.piBridge.connected === true &&
             Array.isArray(tab.piBridge.capabilities) &&
-            tab.piBridge.capabilities.includes('pi.models.v1')
-        );
+            tab.piBridge.capabilities.includes('pi.models.v1'));
     }
-
     _piBridgeThinkingEligible(tab) {
-        return (
-            tab?.coder === 'pi' && !tab.isDead &&
-            !!tab.ws && tab._piBridgeFresh === tab.ws &&
+        return (tab?.coder === 'pi' &&
+            !tab.isDead &&
+            !!tab.ws &&
+            tab._piBridgeFresh === tab.ws &&
             tab.piBridge?.state === 'managed' &&
             tab.piBridge.connected === true &&
             Array.isArray(tab.piBridge.capabilities) &&
-            tab.piBridge.capabilities.includes('pi.thinking.v1')
-        );
+            tab.piBridge.capabilities.includes('pi.thinking.v1'));
     }
-
     // Transcript search is an optional source; the terminal search remains
     // available when the pane is unmanaged, disconnected, or missing the cap.
     _piBridgeTranscriptSearchEligible(tab) {
-        return tab?.coder === 'pi' && !tab.isDead &&
+        return (tab?.coder === 'pi' &&
+            !tab.isDead &&
             piBridgeCapable(tab, 'pi.transcript-search.v2') &&
-            /^[1-9]\d*$/.test(String(tab.piBridge?.generation || ''));
+            /^[1-9]\d*$/.test(String(tab.piBridge?.generation || '')));
     }
-
     // The skills picker needs the skills capability; anything else
     // keeps the composer exactly as it was, without a dead control.
     _piBridgeSkillsEligible(tab) {
         return piBridgeCapable(tab, 'pi.skills.v1');
     }
-
     // _piBridgeSkillsContext pins a skills request to the runtime that
     // owns it: the pane and its socket. The answer names the peer that
     // served it, and the browser's generation view only decides
     // staleness: a view that moved on drops the retained rows.
     _piBridgeSkillsContextFor(tab) {
-        if (!this._piBridgeSkillsEligible(tab)) return null;
+        if (!this._piBridgeSkillsEligible(tab))
+            return null;
         return {
             paneId: tab.paneId,
             tab,
@@ -17598,46 +17290,43 @@ export class TabManager {
             origin: null,
         };
     }
-
     // _piBridgeSkillsContextBound reports whether a skills request
     // still belongs to the tab, socket, and capability it was made
     // for. A replaced tab, a swapped socket, or a revoked capability
     // invalidates the request at once.
     _piBridgeSkillsContextBound(context) {
-        return (
-            !!context &&
+        return (!!context &&
             this.tabs?.get(context.paneId) === context.tab &&
             context.tab.ws === context.socket &&
-            this._piBridgeSkillsEligible(context.tab)
-        );
+            this._piBridgeSkillsEligible(context.tab));
     }
-
     _piBridgeSkillsContextValid(context) {
-        if (!this._piBridgeSkillsContextBound(context)) return false;
+        if (!context)
+            return false;
+        if (!this._piBridgeSkillsContextBound(context))
+            return false;
         const view = context.tab.piBridge?.generation ?? '';
-        if (view === context.seen) return true;
+        if (view === context.seen)
+            return true;
         // The view moved on. The rows stay usable only when the answer
         // already belongs to the runtime the browser now sees: the
         // view can lag behind the answer, and a generation counter
         // alone cannot tell one lease from the next.
         return !!context.origin && context.origin.generation === view;
     }
-
     // _piBridgeSkillsContextStale reports whether a retained skills
     // request must be dropped. A generation view that moved on decides
     // only once the answer landed and named a different runtime: an
     // answer still in flight may belong to the runtime the browser
     // now sees, so it is judged when it arrives.
     _piBridgeSkillsContextStale(context) {
-        if (this._piBridgeSkillsContextValid(context)) return false;
-        if (
-            context?.origin === null &&
-            this._piBridgeSkillsContextBound(context)
-        )
+        if (this._piBridgeSkillsContextValid(context))
+            return false;
+        if (context?.origin === null &&
+            this._piBridgeSkillsContextBound(context))
             return false;
         return true;
     }
-
     // _piBridgeSkillsOriginMatches reports whether a dispatch and a
     // list belong to the same runtime. The server's answer owns the
     // identity: the browser's generation view can lag behind it, so
@@ -17645,30 +17334,21 @@ export class TabManager {
     _piBridgeSkillsOriginMatches(operation, context) {
         const sent = operation?.origin;
         const listed = context?.origin;
-        return (
-            !!sent &&
+        return (!!sent &&
             !!listed &&
             sent.processId === listed.processId &&
-            sent.generation === listed.generation
-        );
+            sent.generation === listed.generation);
     }
-
     // _piBridgeSkillsRuntimeCurrent reports whether a started
     // invocation still belongs to the runtime that received it. A
     // swapped socket or a different answering runtime makes the waiter
     // stale; a lost peer does not, because the dispatch may still have
     // landed in the session that is gone.
     _piBridgeSkillsRuntimeCurrent(operation) {
-        return (
-            !!operation &&
+        return (!!operation &&
             operation.tab?.ws === operation.socket &&
-            this._piBridgeSkillsOriginMatches(
-                operation,
-                this._piBridgeSkillsContext,
-            )
-        );
+            this._piBridgeSkillsOriginMatches(operation, this._piBridgeSkillsContext));
     }
-
     // _invalidatePiBridgeSkillsList drops the retained skill list and
     // closes the picker. A late reply must not repopulate a picker
     // the user can no longer use. A started invocation keeps its
@@ -17685,37 +17365,37 @@ export class TabManager {
         dropup?.classList.add('hidden');
         dropup?.replaceChildren();
     }
-
     _piBridgeThinkingContext(tab) {
-        if (!this._piBridgeThinkingEligible(tab)) return null;
+        if (!this._piBridgeThinkingEligible(tab))
+            return null;
+        const bridge = tab.piBridge;
         // The display model stays the comparison key; provider and model are
         // never split here because either identity may contain '/'.
-        const model = tab.piBridge.model || '';
-        if (!model) return null;
+        const model = bridge?.model || '';
+        if (!model)
+            return null;
         return {
             tab,
             paneId: tab.paneId,
             socket: tab.ws,
-            generation: tab.piBridge.generation,
+            generation: bridge?.generation,
             model,
         };
     }
-
     _piBridgeThinkingContextValid(context) {
-        return (
-            !!context &&
+        return (!!context &&
             this.tabs?.get(context.paneId) === context.tab &&
             this.getActiveTab() === context.tab &&
             context.tab.ws === context.socket &&
             context.tab.piBridge?.generation === context.generation &&
             context.tab.piBridge?.model === context.model &&
-            this._piBridgeThinkingEligible(context.tab)
-        );
+            this._piBridgeThinkingEligible(context.tab));
     }
-
     _piBridgeThinkingOriginMatches(context, result) {
-        return (
-            this._piBridgeThinkingContextValid(context) &&
+        if (!context)
+            return false;
+        const levels = result?.levels;
+        return (this._piBridgeThinkingContextValid(context) &&
             typeof result?.provider === 'string' &&
             result.provider.length > 0 &&
             typeof result?.model === 'string' &&
@@ -17725,40 +17405,36 @@ export class TabManager {
             typeof result?.process_id === 'string' &&
             result.process_id.length > 0 &&
             result.unavailable !== true &&
-            Array.isArray(result.levels) &&
-            result.levels.length > 0 &&
-            result.levels.length <= 7 &&
-            result.levels.every(
-                (level, index) =>
-                    PI_BRIDGE_THINKING_LEVELS.includes(level) &&
-                    result.levels.indexOf(level) === index,
-            )
-        );
+            Array.isArray(levels) &&
+            levels.length > 0 &&
+            levels.length <= 7 &&
+            levels.every((level, index) => typeof level === 'string' &&
+                PI_BRIDGE_THINKING_LEVELS.includes(level) &&
+                levels.indexOf(level) === index));
     }
-
     async _piBridgeThinkingLevels(paneId) {
         const controller = new AbortController();
         // Short by design: failure falls back to Pi's own /thinking picker,
         // which is local and works offline.
         const timer = setTimeout(() => controller.abort(), 1000);
         try {
-            const response = await fetch(
-                `/api/pi-bridge/thinking-levels?pane=${encodeURIComponent(paneId)}`,
-                { signal: controller.signal },
-            );
+            const response = await fetch(`/api/pi-bridge/thinking-levels?pane=${encodeURIComponent(paneId)}`, { signal: controller.signal });
             if (!response.ok)
                 throw new Error(`Pi thinking levels unavailable (${response.status})`);
             return await response.json();
-        } catch (error) {
-            if (error?.name === 'AbortError')
+        }
+        catch (error) {
+            if (isAbortError(error))
                 throw new Error('Pi thinking levels unavailable (request timed out)');
             throw error;
-        } finally {
+        }
+        finally {
             clearTimeout(timer);
         }
     }
-
     async _piBridgeThinkingSet(context, level, origin) {
+        if (!context || !origin)
+            throw new Error('unknown — reopen the picker');
         const controller = new AbortController();
         // The menu closes on click; this only bounds the reconciliation.
         const timer = setTimeout(() => controller.abort(), 15000);
@@ -17772,72 +17448,68 @@ export class TabManager {
                     level,
                     provider: origin.provider,
                     model: origin.model,
-                    process_id: origin.process_id,
+                    process_id: origin.process_id ?? origin.processId,
                     generation: origin.generation,
                 }),
                 signal: controller.signal,
             });
-            if (!response.ok) throw new Error('unknown');
+            if (!response.ok)
+                throw new Error('unknown');
             result = await response.json();
-        } catch {
+        }
+        catch {
             // A lost or truncated reply may still have been applied by Pi.
             throw new Error('unknown — reopen the picker');
-        } finally {
+        }
+        finally {
             clearTimeout(timer);
         }
-        if (result?.ok === true) return;
+        if (result?.ok === true)
+            return;
         if (result?.reason === 'unsupported-level')
             throw new Error('Thinking level is no longer supported');
         if (result?.reason === 'model-changed')
             throw new Error('Model changed — reopen the picker');
         throw new Error('unknown — reopen the picker');
     }
-
     _invalidatePiBridgeThinking(tab, preserveFallback = true) {
         if (this._piRpcThinkingPending?.paneId === tab?.paneId)
             this._piRpcThinkingPending = null;
-        if (this.getActiveTab() !== tab) return;
+        if (!tab || this.getActiveTab() !== tab)
+            return;
         this._piBridgeThinkingMenuRequest =
             (this._piBridgeThinkingMenuRequest || 0) + 1;
         const dropup = document.getElementById('pi-rpc-thinking-dropup');
-        if (
-            preserveFallback &&
+        if (preserveFallback &&
             dropup &&
             !dropup.classList.contains('hidden') &&
             dropup.dataset.thinkingFallbackPaneId === String(tab.paneId) &&
-            this.tabs?.get(tab.paneId) === tab
-        )
+            this.tabs?.get(tab.paneId) === tab)
             return;
         dropup?.classList.add('hidden');
         dropup?.replaceChildren();
-        if (dropup) delete dropup.dataset.thinkingFallbackPaneId;
+        if (dropup)
+            delete dropup.dataset.thinkingFallbackPaneId;
     }
-
     // Socket changes and bridge views share the same picker invalidation.
-
     // _piBridgeCapable delegates to the module predicate: point-of-use
     // capability checks stay identical between renders and the
     // ordered-view refresh key.
     _piBridgeCapable(tab, capability) {
         return piBridgeCapable(tab, capability);
     }
-
-
     // Point-of-use capability checks read the module predicate
     // directly, so renders and the ordered-view refresh key cannot
     // disagree about a pane's capabilities.
     _piBridgeContextEligible(tab) {
         return piBridgeCapable(tab, 'pi.context.v1');
     }
-
     _piBridgeCompactEligible(tab) {
         return piBridgeCapable(tab, 'pi.compact.v1');
     }
-
     _piBridgeReloadEligible(tab) {
         return piBridgeCapable(tab, 'pi.reload.v1');
     }
-
     // _piReloadControlState derives the Cmds Reload row from the
     // live intent. A marker for a replaced target reads as no
     // state; the next press spends it. The command name never
@@ -17848,16 +17520,14 @@ export class TabManager {
             tab._piReloadIntent = this._piReloadRestore(tab);
         this._piReloadRetire(tab);
         const intent = tab?._piReloadIntent;
-        if (!intent) return none;
-        if (
-            tab.piBridge?.process_id !== intent.processId ||
-            tab.piBridge?.generation !== intent.generation
-        )
+        if (!intent)
+            return none;
+        if (tab.piBridge?.process_id !== intent.processId ||
+            tab.piBridge?.generation !== intent.generation)
             return none;
         switch (intent.phase) {
             case 'queued': {
-                const waitingTurn =
-                    this._piBridgeReloadEligible(tab) &&
+                const waitingTurn = this._piBridgeReloadEligible(tab) &&
                     tab.piBridge?.running === true;
                 return {
                     title: waitingTurn
@@ -17895,7 +17565,6 @@ export class TabManager {
                 return none;
         }
     }
-
     // _piReloadDismissActions builds the sibling dismiss control
     // for a settled Reload status. Never nested in the command.
     _piReloadDismissActions() {
@@ -17910,7 +17579,8 @@ export class TabManager {
             const tab = this.getActiveTab();
             // Dismissal clears browser status only: native work,
             // if any, is untouched, and nothing resends.
-            if (tab) this._piReloadClear(tab);
+            if (tab)
+                this._piReloadClear(tab);
             this.renderQuickCmdsDropup();
             document
                 .querySelector('#quick-commands-dropup .pi-reload-btn')
@@ -17919,26 +17589,31 @@ export class TabManager {
         actions.appendChild(dismiss);
         return actions;
     }
-
     // _refreshPiReloadRow patches the open Cmds Reload row in place
     // during background changes. Attributes and the dismiss sibling
     // update; the focused command button is never replaced.
     _refreshPiReloadRow(tabInfo) {
-        if (!tabInfo || this.getActiveTab?.() !== tabInfo) return;
+        if (!tabInfo || this.getActiveTab?.() !== tabInfo)
+            return;
         const dropup = document.getElementById('quick-commands-dropup');
-        if (!dropup || dropup.classList.contains('hidden')) return;
+        if (!dropup || dropup.classList.contains('hidden'))
+            return;
         const btn = dropup.querySelector('.pi-reload-btn');
-        if (!btn) return;
+        if (!btn)
+            return;
         const state = this._piReloadControlState(tabInfo);
-        if (state.title) btn.title = state.title;
-        else btn.removeAttribute('title');
+        if (state.title)
+            btn.title = state.title;
+        else
+            btn.removeAttribute('title');
         btn.classList.toggle('pi-reload-queued', state.queued === true);
         const row = btn.closest('.dropup-row');
         const actions = row?.querySelector('.dropup-row-actions');
         const status = row?.querySelector('#pi-reload-status');
         if (state.dismiss) {
             btn.setAttribute('aria-describedby', 'pi-reload-status');
-            if (status) status.textContent = state.title;
+            if (status)
+                status.textContent = state.title;
             else if (row) {
                 const described = document.createElement('span');
                 described.id = 'pi-reload-status';
@@ -17946,8 +17621,10 @@ export class TabManager {
                 described.textContent = state.title;
                 row.appendChild(described);
             }
-            if (!actions) row?.appendChild(this._piReloadDismissActions());
-        } else {
+            if (!actions)
+                row?.appendChild(this._piReloadDismissActions());
+        }
+        else {
             status?.remove();
             btn.removeAttribute('aria-describedby');
             if (actions) {
@@ -17957,7 +17634,6 @@ export class TabManager {
             }
         }
     }
-
     // _piBridgeStatusFor adapts bridge context telemetry into the
     // shared status-bar input. Only real cwd/model/tokens/window are
     // carried; RPC totals, cache, cost, and thinking stay unknown.
@@ -17969,27 +17645,24 @@ export class TabManager {
             thinking: null,
             inputTokens: null,
             outputTokens: null,
-            contextUsedTokens:
-                typeof view?.context_tokens === 'number'
-                    ? view.context_tokens
-                    : null,
-            contextWindowTokens:
-                typeof view?.context_window === 'number'
-                    ? view.context_window
-                    : null,
+            contextUsedTokens: typeof view?.context_tokens === 'number'
+                ? view.context_tokens
+                : null,
+            contextWindowTokens: typeof view?.context_window === 'number'
+                ? view.context_window
+                : null,
             cacheReadTokens: null,
             cacheWriteTokens: null,
             skills: null,
         };
     }
-
     // _piBridgeCompactControlState keeps the /compact control actionable
     // for capable Pi PTY tabs: a press during a turn queues, an unknown
     // or queued-message press explains itself, and only a compaction
     // already in flight (native pending or a running compaction) is
     // disabled. Incapable tabs keep legacy buttons.
     _piBridgeCompactControlState(tab) {
-        if (!this._piBridgeCompactEligible(tab))
+        if (!tab || !this._piBridgeCompactEligible(tab))
             return { disabled: false, title: '' };
         if (this._piBridgeCompactPending?.get(tab.paneId))
             return {
@@ -18004,45 +17677,45 @@ export class TabManager {
                 title: 'Compact queued — press to cancel',
             };
         const { ready, reason } = piBridgeCompactReady(tab.piBridge);
-        if (ready) return { disabled: false, title: reason };
+        if (ready)
+            return { disabled: false, title: reason };
         // A compaction already running is a status, not a dead
         // action. Everything else stays pressable so the control can
         // queue a run (busy) or explain itself (unknown/queued).
-        if (
-            tab.piBridge?.compact_active === true ||
-            tab.piBridge?.compact_pending === true
-        )
+        if (tab.piBridge?.compact_active === true ||
+            tab.piBridge?.compact_pending === true)
             return { disabled: true, title: reason, label: 'Compacting…' };
         if (this._piBridgeCompactQueueable(tab))
             return { disabled: false, title: 'Compact after this turn' };
         return { disabled: false, title: reason };
     }
-
     // _piBridgeKeys splits one retained view into the two refresh keys.
     // The row key covers what the presets row renders (Models trigger,
     // slash presets, Compact readiness); the bar key adds the context
     // occupancy only the status-bar meter renders.
     _piBridgeKeys(tab, view = tab.piBridge) {
-        if (!view) return { row: '', bar: '' };
+        if (!view)
+            return { row: '', bar: '' };
         const row = `${this._piBridgeModelsEligible(tab)}|${this._piBridgeThinkingEligible(tab)}|${piBridgeCapable(tab, 'pi.skills.v1')}|${piBridgeCapable(tab, 'pi.context.v1')}|${piBridgeCapable(tab, 'pi.compact.v1')}|${piBridgeCapable(tab, 'pi.reload.v1')}|${view.state}|${view.generation || ''}|${view.model || ''}|${view.thinking_level || ''}|${view.connected}|${view.running}|${view.last_run || ''}|${(view.capabilities || []).join(',')}|${view.compact_idle}/${view.compact_queued}/${view.compact_active}/${view.compact_pending}|${view.process_id || ''}|${view.run_id || ''}|${view.context_revision || ''}|${view.reload_idle}/${view.reload_queued}/${view.reload_active}/${view.reload_compact_pending}/${view.reload_pending}|${view.reload_high_water || ''}`;
         return {
             row,
             bar: `${row}|${view.context_tokens ?? ''},${view.context_window ?? ''},${view.context_percent ?? ''}`,
         };
     }
-
     // Socket changes and bridge views share the same row/bar
     // invalidation: the models picker, the context meter, and the
     // Compact controls all re-derive from the retained view.
     _refreshPiBridgeModels(tab) {
-        if (tab?.coder !== 'pi') return;
+        if (tab?.coder !== 'pi')
+            return;
         const eligible = this._piBridgeModelsEligible(tab);
         // Per pane, not through the last-started pointer: another pane's
         // request must not keep this one's dead slot alive.
         if (!eligible && this._piRpcModelInflight?.has(tab.paneId))
             this._dropPiRpcModelInflight(tab.paneId);
         // A pick the user made while the bridge was away goes out now.
-        if (eligible) this._flushPiRpcModelNext(tab.paneId);
+        if (eligible)
+            this._flushPiRpcModelNext(tab.paneId);
         // A Compact press made during a turn goes out on the settle
         // frame, before the row repaints with its queued state gone.
         this._flushPiBridgeCompactQueue?.(tab);
@@ -18055,69 +17728,60 @@ export class TabManager {
             this.renderPresets('pi', { refreshQuickCommands: false });
             this._refreshPiReloadRow(tab);
         }
-        if (
-            this.getActiveTab() === tab &&
-            typeof this.renderPiRpcStatusBar === 'function'
-        )
+        if (this.getActiveTab() === tab &&
+            typeof this.renderPiRpcStatusBar === 'function')
             this.renderPiRpcStatusBar();
     }
-
     // Cleanup only; the open-picker re-render is owned by renderPresets
     // (via _refreshPiBridgeModels), one levels fetch per frame.
     _refreshPiBridgeThinking(tab) {
-        if (tab?.coder !== 'pi') return;
+        if (tab?.coder !== 'pi')
+            return;
         const pending = this._piRpcThinkingPending;
-        if (
-            pending?.paneId === tab.paneId &&
+        if (pending?.paneId === tab.paneId &&
             pending.context?.tab === tab &&
             (tab.ws !== pending.context.socket ||
                 tab.piBridge?.generation !== pending.context.generation ||
                 tab.piBridge?.model !== pending.context.model ||
-                !this._piBridgeThinkingEligible(tab))
-        )
+                !this._piBridgeThinkingEligible(tab)))
             this._piRpcThinkingPending = null;
         if (!this._piBridgeThinkingEligible(tab)) {
             this._invalidatePiBridgeThinking(tab);
             return;
         }
     }
-
     // Both replies and fallback keys belong to the original runtime/socket.
     _piRecallContextValid(recall) {
-        return (
-            this.tabs?.get(recall.paneId) === recall.tab &&
-            recall.tab.paneId === recall.paneId && !recall.tab.isDead &&
+        if (!recall)
+            return false;
+        return (this.tabs?.get(recall.paneId) === recall.tab &&
+            recall.tab.paneId === recall.paneId &&
+            !recall.tab.isDead &&
             recall.tab.ws === recall.socket &&
-            recall.tab.piBridge?.generation === recall.gen
-        );
+            recall.tab.piBridge?.generation === recall.gen);
     }
-
     _piRecallCycleValid(tab) {
         const recall = this._piRecall;
-        return (
-            !!recall && recall.tab === tab &&
+        return (!!recall &&
+            recall.tab === tab &&
             this._piRecallContextValid(recall) &&
-            recall.cache?.[recall.cursor] === this.inputTextArea.value
-        );
+            recall.cache?.[recall.cursor] === this.inputTextArea.value);
     }
-
     _resetPiRecall({ flush = false } = {}) {
         const recall = this._piRecall;
         this._piRecall = null;
-        if (!recall?.pending) return;
-        clearTimeout(recall.pending.timer);
+        if (!recall?.pending)
+            return;
+        if (recall.pending.timer)
+            clearTimeout(recall.pending.timer);
         recall.pending.controller.abort();
-        if (
-            flush && recall.pending.deferKey &&
-            this._piRecallContextValid(recall)
-        ) {
+        if (flush &&
+            recall.pending.deferKey &&
+            this._piRecallContextValid(recall)) {
             // No toast on a system fallback, even if the socket just closed.
-            recall.socket?.sendInput(
-                recall.pending.deferKey === 'ArrowDown' ? '\x1b[B' : '\x1b[A',
-            );
+            recall.socket?.sendInput(recall.pending.deferKey === 'ArrowDown' ? '\x1b[B' : '\x1b[A');
         }
     }
-
     // Empty input defers a PTY arrow; nonempty input keeps native movement.
     async _fetchPiRecall(direction, tab, deferKey) {
         this._resetPiRecall({ flush: true });
@@ -18133,46 +17797,51 @@ export class TabManager {
         };
         this._piRecall = recall;
         const fail = () => {
-            if (this._piRecall === recall) this._resetPiRecall({ flush: true });
+            if (this._piRecall === recall)
+                this._resetPiRecall({ flush: true });
         };
         // Bound the browser too: an HTTP request can stall before reaching Phi.
-        recall.pending.timer = setTimeout(fail, 1000);
+        if (recall.pending)
+            recall.pending.timer = setTimeout(fail, 1000);
         try {
-            const res = await fetch(
-                `/api/pi-history?pane=${encodeURIComponent(recall.paneId)}`,
-                { signal: controller.signal, cache: 'no-store' },
-            );
+            const res = await fetch(`/api/pi-history?pane=${encodeURIComponent(recall.paneId)}`, { signal: controller.signal, cache: 'no-store' });
             if (!res.ok) {
                 fail();
                 return;
             }
             const body = await res.json();
-            if (this._piRecall !== recall) return;
-            if (
-                body?.unavailable || !Array.isArray(body?.entries) ||
+            if (this._piRecall !== recall)
+                return;
+            if (body?.unavailable ||
+                !Array.isArray(body?.entries) ||
                 body.entries.length === 0 ||
                 !body.entries.every((entry) => typeof entry === 'string') ||
                 !this._piRecallContextValid(recall) ||
-                this.getActiveTab() !== tab || !this._piRecallEligible(tab) ||
-                this.inputTextArea.value !== recall.preCycleValue
-            ) {
+                this.getActiveTab() !== tab ||
+                !this._piRecallEligible(tab) ||
+                this.inputTextArea.value !== recall.preCycleValue) {
                 fail();
                 return;
             }
-            clearTimeout(recall.pending.timer);
-            const deferred = recall.pending.deferKey;
+            if (recall.pending?.timer)
+                clearTimeout(recall.pending.timer);
+            const deferred = recall.pending?.deferKey ?? null;
             recall.pending = undefined;
             recall.cache = body.entries;
             if (!this._cyclePiRecallCached(direction)) {
                 // A fresh Down has no cache position to advance from.
-                recall.pending = { controller, deferKey: deferred };
+                recall.pending = {
+                    controller,
+                    deferKey: deferred,
+                    timer: null,
+                };
                 fail();
             }
-        } catch {
+        }
+        catch {
             fail();
         }
     }
-
     // _cyclePiRecallCached walks the fetched Pi snapshot. Mirrors
     // _cycleChatHistory's cursor semantics — -1 = free-form draft,
     // non-negative = index into the newest-first cache, the first
@@ -18182,28 +17851,30 @@ export class TabManager {
         const recall = this._piRecall;
         if (!this.inputTextArea || !recall || !Array.isArray(recall.cache))
             return false;
-        if (recall.cache.length === 0) return false;
-        if (direction === 'newer' && recall.cursor === -1) return false;
+        if (recall.cache.length === 0)
+            return false;
+        if (direction === 'newer' && recall.cursor === -1)
+            return false;
         if (recall.preCycleValue === undefined && recall.cursor === -1) {
             recall.preCycleValue = this.inputTextArea.value;
         }
         if (direction === 'older') {
-            recall.cursor = Math.min(
-                recall.cursor < 0 ? 0 : recall.cursor + 1,
-                recall.cache.length - 1,
-            );
-        } else if (recall.cursor <= 0) {
+            recall.cursor = Math.min(recall.cursor < 0 ? 0 : recall.cursor + 1, recall.cache.length - 1);
+        }
+        else if (recall.cursor <= 0) {
             this.inputTextArea.value = recall.preCycleValue || '';
             // Full exit: the next cycle fetches a fresh snapshot.
             this._piRecall = null;
             this._placeCursorAtEnd();
             this.adjustInputHeight();
             return true;
-        } else {
+        }
+        else {
             recall.cursor -= 1;
         }
         const entry = recall.cache[recall.cursor];
-        if (entry === undefined) return false;
+        if (entry === undefined)
+            return false;
         this.inputTextArea.value = entry;
         this._placeCursorAtEnd();
         this.adjustInputHeight();

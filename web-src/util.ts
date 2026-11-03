@@ -2,7 +2,7 @@
 
 // The hostname LABEL is server state: it rides the config payload as
 // hostname_override and every display surface reads it from there (see
-// web/config.js). Socket dialing always uses the real page origin, so the
+// config.ts). Socket dialing always uses the real page origin, so the
 // client keeps no copy of the label.
 
 let embeddedProfileId = '';

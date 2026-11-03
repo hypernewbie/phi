@@ -14,12 +14,10 @@ import { pbkdf2Async } from './vendor/noble-hashes/pbkdf2.js';
 import { hmac } from './vendor/noble-hashes/hmac.js';
 import { sha256 } from './vendor/noble-hashes/sha2.js';
 import { serverKey } from './util.js';
-
 const CREDENTIAL_KEY = 'phi_access_credential_v1';
 // Legacy browser storage for the v2 bearer. Tokens now live only in memory;
 // the refresh handle stays in its HttpOnly cookie.
 const LEGACY_BEARER_KEY = 'phi_access_bearer_v1';
-
 // The desktop's embedded page serves EVERY server from one page, so one
 // localStorage holds every server's credential. A single shared key made
 // each server overwrite the previous one's credential: the next server
@@ -30,25 +28,23 @@ const LEGACY_BEARER_KEY = 'phi_access_bearer_v1';
 function credentialKey(context) {
     return context?.credentialKey || serverKey(CREDENTIAL_KEY);
 }
-
 function bearerKey(context) {
-    if (!context?.credentialKey) return serverKey(LEGACY_BEARER_KEY);
+    if (!context?.credentialKey)
+        return serverKey(LEGACY_BEARER_KEY);
     const key = context.credentialKey;
     return key.startsWith(CREDENTIAL_KEY)
         ? `${LEGACY_BEARER_KEY}${key.slice(CREDENTIAL_KEY.length)}`
         : `${LEGACY_BEARER_KEY}:${key}`;
 }
-
 function discardLegacyBearer(context) {
     try {
         localStorage.removeItem(bearerKey(context));
-    } catch {
+    }
+    catch {
         // Storage is blocked, so there is no value to migrate.
     }
 }
-
 discardLegacyBearer();
-
 function authFetch(context, url, init) {
     return (context?.fetch || fetch)(url, init);
 }
@@ -56,51 +52,47 @@ const PASSWORD_MIN_LENGTH = 8;
 // Module-owned auth requests must not hold bootstrap or a submit button open
 // forever. The deadline covers headers and response-body consumption.
 const AUTH_TIMEOUT_MS = 30000;
-
 function bytesToBase64URL(bytes) {
     let binary = '';
-    for (const byte of bytes) binary += String.fromCharCode(byte);
+    for (const byte of bytes)
+        binary += String.fromCharCode(byte);
     return btoa(binary)
         .replace(/\+/g, '-')
         .replace(/\//g, '_')
         .replace(/=+$/g, '');
 }
-
 function base64URLToBytes(value) {
     if (typeof value !== 'string' || !/^[A-Za-z0-9_-]+$/.test(value)) {
         throw new Error('Invalid saved access credential');
     }
-    const padded =
-        value.replace(/-/g, '+').replace(/_/g, '/') +
+    const padded = value.replace(/-/g, '+').replace(/_/g, '/') +
         '='.repeat((4 - (value.length % 4)) % 4);
     const binary = atob(padded);
     return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
-
 function validStatus(status) {
-    return (
-        !!status &&
-        status.enabled === true &&
-        status.version === 'v1' &&
-        status.algorithm === 'pbkdf2-sha256' &&
-        Number.isInteger(status.iterations) &&
-        status.iterations > 0 &&
-        typeof status.salt === 'string' &&
-        typeof status.challenge === 'string'
-    );
+    const raw = status;
+    return (!!raw &&
+        raw.enabled === true &&
+        raw.version === 'v1' &&
+        raw.algorithm === 'pbkdf2-sha256' &&
+        Number.isInteger(raw.iterations) &&
+        raw.iterations > 0 &&
+        typeof raw.salt === 'string' &&
+        typeof raw.challenge === 'string');
 }
-
 function invalidStatusError() {
     return new Error('Phi returned invalid access protection settings');
 }
-
 // parseProtocols maps the capability field to the protocols this client can
 // speak. An absent field is the legacy v1-only response. A present field must
 // be a nonempty array of unique nonempty names, and unknown names are only
 // tolerated beside a supported protocol.
 function parseProtocols(value) {
-    if (value === undefined) return ['v1'];
-    if (!Array.isArray(value) || value.length === 0) throw invalidStatusError();
+    if (value === undefined)
+        return ['v1'];
+    if (!Array.isArray(value) || value.length === 0)
+        throw invalidStatusError();
     const seen = new Set();
     for (const protocol of value) {
         if (typeof protocol !== 'string' || !protocol || seen.has(protocol))
@@ -108,43 +100,41 @@ function parseProtocols(value) {
         seen.add(protocol);
     }
     const supported = value.filter((p) => p === 'v1' || p === 'v2');
-    if (supported.length === 0) throw invalidStatusError();
+    if (supported.length === 0)
+        throw invalidStatusError();
     return supported;
 }
-
 // parseAccessStatus validates the status contract shared by both protocols.
 function parseAccessStatus(payload) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload))
         throw invalidStatusError();
-    if (typeof payload.enabled !== 'boolean') throw invalidStatusError();
-    const protocols = parseProtocols(payload.protocols);
-    if (payload.enabled && typeof payload.authenticated !== 'boolean')
+    const raw = payload;
+    if (typeof raw.enabled !== 'boolean')
+        throw invalidStatusError();
+    const protocols = parseProtocols(raw.protocols);
+    if (raw.enabled && typeof raw.authenticated !== 'boolean')
         throw invalidStatusError();
     return {
-        enabled: payload.enabled,
-        authenticated: payload.authenticated === true,
+        enabled: raw.enabled,
+        authenticated: raw.authenticated === true,
         protocols,
-        raw: payload,
+        raw,
     };
 }
-
 function preferredProtocol(protocols) {
     return protocols.includes('v2') ? 'v2' : 'v1';
 }
-
 // v1 KDF metadata is only required before using the v1 path; a v2 status must
 // not be rejected by v1-only bounds.
 function hasV1Metadata(status) {
-    return (
-        status.raw.version === 'v1' &&
+    return (status.raw.version === 'v1' &&
         status.raw.algorithm === 'pbkdf2-sha256' &&
+        typeof status.raw.iterations === 'number' &&
         Number.isInteger(status.raw.iterations) &&
         status.raw.iterations > 0 &&
         typeof status.raw.salt === 'string' &&
-        typeof status.raw.challenge === 'string'
-    );
+        typeof status.raw.challenge === 'string');
 }
-
 async function getStatus(context) {
     return withAuthDeadline(async (signal) => {
         const res = await authFetch(context, '/api/auth/status', {
@@ -157,45 +147,32 @@ async function getStatus(context) {
         let payload;
         try {
             payload = await res.json();
-        } catch {
+        }
+        catch {
             throw invalidStatusError();
         }
         return parseAccessStatus(payload);
     });
 }
-
 async function deriveVerifierNative(subtle, password, salt, iterations) {
-    const key = await subtle.importKey(
-        'raw',
-        password,
-        { name: 'PBKDF2' },
-        false,
-        ['deriveBits'],
-    );
-    const bits = await subtle.deriveBits(
-        {
-            name: 'PBKDF2',
-            hash: 'SHA-256',
-            salt,
-            iterations,
-        },
-        key,
-        256,
-    );
+    const key = await subtle.importKey('raw', password, { name: 'PBKDF2' }, false, ['deriveBits']);
+    const bits = await subtle.deriveBits({
+        name: 'PBKDF2',
+        hash: 'SHA-256',
+        salt: salt,
+        iterations,
+    }, key, 256);
     return new Uint8Array(bits);
 }
-
 // Resolves to a native derive function, or false when only noble is
 // usable. Memoized as a promise so concurrent callers share one probe.
 // The probe derives a 1-iteration verifier through BOTH implementations
 // (microseconds) and only trusts the native path on a byte-for-byte match.
 async function probeNativeDerive() {
     const subtle = globalThis.crypto?.subtle;
-    if (
-        !subtle ||
+    if (!subtle ||
         typeof subtle.importKey !== 'function' ||
-        typeof subtle.deriveBits !== 'function'
-    ) {
+        typeof subtle.deriveBits !== 'function') {
         return false;
     }
     try {
@@ -205,49 +182,34 @@ async function probeNativeDerive() {
             c: 1,
             dkLen: 32,
         });
-        const actual = await deriveVerifierNative(
-            subtle,
-            katPassword,
-            katSalt,
-            1,
-        );
-        if (
-            actual.length !== expected.length ||
-            !expected.every((byte, i) => byte === actual[i])
-        ) {
+        const actual = await deriveVerifierNative(subtle, katPassword, katSalt, 1);
+        if (actual.length !== expected.length ||
+            !expected.every((byte, i) => byte === actual[i])) {
             return false;
         }
-        return (password, salt, iterations) =>
-            deriveVerifierNative(subtle, password, salt, iterations);
-    } catch {
+        return (password, salt, iterations) => deriveVerifierNative(subtle, password, salt, iterations);
+    }
+    catch {
         return false;
     }
 }
-
 let nativeDerivePromise;
 function nativeDerive() {
-    if (!nativeDerivePromise) nativeDerivePromise = probeNativeDerive();
+    if (!nativeDerivePromise)
+        nativeDerivePromise = probeNativeDerive();
     return nativeDerivePromise;
 }
-
 function resetNativeDerive() {
     nativeDerivePromise = undefined;
 }
-
 async function deriveVerifier(password, status) {
     if (typeof password !== 'string' || password.length < PASSWORD_MIN_LENGTH) {
-        throw new Error(
-            `Password must be at least ${PASSWORD_MIN_LENGTH} characters`,
-        );
+        throw new Error(`Password must be at least ${PASSWORD_MIN_LENGTH} characters`);
     }
     const salt = base64URLToBytes(status.salt);
     const native = await nativeDerive();
     if (native) {
-        return native(
-            new TextEncoder().encode(password),
-            salt,
-            status.iterations,
-        );
+        return native(new TextEncoder().encode(password), salt, status.iterations);
     }
     return pbkdf2Async(sha256, password, salt, {
         c: status.iterations,
@@ -255,70 +217,59 @@ async function deriveVerifier(password, status) {
         asyncTick: 10,
     });
 }
-
 function storeCredential(status, verifier, context) {
     try {
-        localStorage.setItem(
-            credentialKey(context),
-            JSON.stringify({
-                version: status.version,
-                algorithm: status.algorithm,
-                iterations: status.iterations,
-                salt: status.salt,
-                verifier: bytesToBase64URL(verifier),
-            }),
-        );
-    } catch {
+        localStorage.setItem(credentialKey(context), JSON.stringify({
+            version: status.version,
+            algorithm: status.algorithm,
+            iterations: status.iterations,
+            salt: status.salt,
+            verifier: bytesToBase64URL(verifier),
+        }));
+    }
+    catch {
         // A cookie session still works when localStorage is blocked. The user
         // will only need to type the password after that session expires.
     }
 }
-
 function clearCredential(context) {
     try {
         localStorage.removeItem(credentialKey(context));
-    } catch {
+    }
+    catch {
         /* ignored */
     }
 }
-
 function savedVerifier(status, context) {
     try {
-        const saved = JSON.parse(
-            localStorage.getItem(credentialKey(context)) || 'null',
-        );
-        if (
-            !saved ||
+        const saved = JSON.parse(localStorage.getItem(credentialKey(context)) || 'null');
+        if (!saved ||
             saved.version !== status.version ||
             saved.algorithm !== status.algorithm ||
             saved.iterations !== status.iterations ||
-            saved.salt !== status.salt
-        ) {
+            saved.salt !== status.salt) {
             clearCredential(context);
             return null;
         }
         const verifier = base64URLToBytes(saved.verifier);
         return verifier.length === 32 ? verifier : null;
-    } catch {
+    }
+    catch {
         clearCredential(context);
         return null;
     }
 }
-
 // The challenge is single-use and expires five minutes after it is issued
 // (accessChallengeTTL in auth.go). Re-deriving on a slow device can outlast
 // that window, so a status older than this threshold is refreshed.
 const challengeRefreshAfterMs = 4 * 60 * 1000;
 const challengeLifetimeMs = 5 * 60 * 1000;
 const statusFetchTimeoutMs = 15000;
-
 // login reports 'ok', 'rejected', 'rate-limited', or 'transient'. Only an
 // explicit 401 rejects the credential; a 429, 5xx, or transport failure must
 // not destroy it, change the selected protocol, or prompt for another password.
 async function login(status, verifier, context) {
-    const proof = bytesToBase64URL(
-        hmac(sha256, verifier, new TextEncoder().encode(status.challenge)),
-    );
+    const proof = bytesToBase64URL(hmac(sha256, verifier, new TextEncoder().encode(status.challenge)));
     try {
         return await withAuthDeadline(async (signal) => {
             const res = await authFetch(context, '/api/auth/login', {
@@ -328,25 +279,29 @@ async function login(status, verifier, context) {
                 redirect: 'error',
                 signal,
             });
-            if (res.ok) return 'ok';
-            if (res.status === 401) return 'rejected';
-            if (res.status === 429) return 'rate-limited';
+            if (res.ok)
+                return 'ok';
+            if (res.status === 401)
+                return 'rejected';
+            if (res.status === 429)
+                return 'rate-limited';
             return 'transient';
         });
-    } catch {
+    }
+    catch {
         // A timeout, redirect, or transport failure is transient: it must not
         // discard the credential or change the selected protocol.
         return 'transient';
     }
 }
-
 // Replaces a challenge that the derivation may have outlived. The fetch is
 // bounded. On failure the original status is still usable unless it is old
 // enough to have expired, in which case there is no challenge to post and
 // the caller must not send the login at all. Age is measured at the moment of
 // the decision, so time spent refreshing counts against the lifetime too.
 async function freshStatus(fallback, startedAt, context) {
-    if (performance.now() - startedAt < challengeRefreshAfterMs) return fallback;
+    if (performance.now() - startedAt < challengeRefreshAfterMs)
+        return fallback;
     try {
         const status = await withAuthDeadline(async (signal) => {
             const res = await authFetch(context, '/api/auth/status', {
@@ -358,17 +313,17 @@ async function freshStatus(fallback, startedAt, context) {
                 throw new Error('Unable to refresh access challenge');
             return await res.json();
         }, statusFetchTimeoutMs);
-        if (validStatus(status)) return status;
-    } catch {
+        if (validStatus(status))
+            return status;
+    }
+    catch {
         // Fall through to the expiry check below.
     }
     return performance.now() - startedAt < challengeLifetimeMs
         ? fallback
         : null;
 }
-
 // --- v2 bearer client ----------------------------------------------------
-
 const authStates = new Map();
 const HOST_INSTALL = Symbol('host install');
 const HOST_SESSION_TOKEN = Symbol('phi-host-session');
@@ -379,34 +334,37 @@ const MAX_TIMEOUT_MS = 2_147_483_647;
 const REFRESH_LOCK_PREFIX = 'phi-access-refresh:';
 let activeAuthKey = null;
 let activeAuthContext = null;
-
 const AUTH_CHANNEL = 'phi-access-auth';
 let invalidation = null;
-
 function invalidationChannel() {
-    if (invalidation) return invalidation;
-    if (typeof BroadcastChannel !== 'function') return null;
+    if (invalidation)
+        return invalidation;
+    if (typeof BroadcastChannel !== 'function')
+        return null;
     try {
         const channel = new BroadcastChannel(AUTH_CHANNEL);
         channel.addEventListener('message', (event) => {
-            if (!event.data) return;
+            if (!event.data)
+                return;
             if (event.data.kind === 'logout') {
                 receiveLogout(event.data);
                 return;
             }
-            if (event.data.kind === 'bundle') receiveBundle(event.data);
+            if (event.data.kind === 'bundle')
+                receiveBundle(event.data);
         });
         invalidation = channel;
-    } catch {
+    }
+    catch {
         // No channel support: this page still clears its own credential.
         invalidation = null;
     }
     return invalidation;
 }
-
 function broadcastInvalidation(ownerKey, family = 0, disabled = false) {
     const channel = invalidationChannel();
-    if (!channel) return;
+    if (!channel)
+        return;
     channel.postMessage({
         kind: 'logout',
         origin: location.origin,
@@ -415,37 +373,40 @@ function broadcastInvalidation(ownerKey, family = 0, disabled = false) {
         disabled,
     });
 }
-
 function receiveLogout(message) {
     if (message.origin !== undefined && message.origin !== location.origin)
         return;
-    const ownerKey =
-        typeof message.ownerKey === 'string'
-            ? message.ownerKey
-            : (activeAuthKey ?? credentialKey());
+    const ownerKey = typeof message.ownerKey === 'string'
+        ? message.ownerKey
+        : (activeAuthKey ?? credentialKey());
     const state = authStates.get(ownerKey);
-    if (!state) return;
+    if (!state)
+        return;
     const family = Number.isInteger(message.family) ? message.family : 0;
     const currentFamily = state.refreshAbsoluteExpiresAt;
-    if (family && currentFamily && family !== currentFamily) return;
+    if (family && currentFamily && family !== currentFamily)
+        return;
     const hasPrompt = pendingOverlay?.ownerKey === ownerKey;
     state.loggedOut = true;
     dropCredential(state);
     if (message.disabled === true) {
-        if (hasPrompt) pendingOverlay.finish({ enabled: false });
+        if (hasPrompt)
+            pendingOverlay?.finish({ enabled: false });
         if (activeAuthKey === ownerKey) {
-            void bootstrapAccessAuth(activeAuthContext).catch(() => {});
+            void bootstrapAccessAuth(activeAuthContext).catch(() => { });
         }
-    } else if (activeAuthKey === ownerKey && !hasPrompt) {
+    }
+    else if (activeAuthKey === ownerKey && !hasPrompt) {
         if (hostAuthenticatedMode())
-            void bootstrapAccessAuth(activeAuthContext).catch(() => {});
-        else void requestReauth(contextForKey(ownerKey));
+            void bootstrapAccessAuth(activeAuthContext).catch(() => { });
+        else
+            void requestReauth(contextForKey(ownerKey));
     }
 }
-
 function broadcastBundle(context, state) {
     const channel = invalidationChannel();
-    if (!channel || !state.accessToken) return;
+    if (!channel || !state.accessToken)
+        return;
     channel.postMessage({
         kind: 'bundle',
         origin: location.origin,
@@ -459,53 +420,66 @@ function broadcastBundle(context, state) {
         },
     });
 }
-
 function remainingDurationSeconds(state) {
-    if (!state.accessRenewAt) return 0;
-    const remainingMs =
-        state.accessRenewAt - performance.now() + REFRESH_LEAD_MS;
+    if (!state.accessRenewAt)
+        return 0;
+    const remainingMs = state.accessRenewAt - performance.now() + REFRESH_LEAD_MS;
     return Math.max(1, Math.round(remainingMs / 1000));
 }
-
 function receiveBundle(message) {
-    if (hostAuthenticatedMode()) return;
-    const ownerKey =
-        typeof message.ownerKey === 'string'
-            ? message.ownerKey
-            : (activeAuthKey ?? credentialKey());
-    if (message.origin !== location.origin) return;
+    if (hostAuthenticatedMode())
+        return;
+    const ownerKey = typeof message.ownerKey === 'string'
+        ? message.ownerKey
+        : (activeAuthKey ?? credentialKey());
+    if (message.origin !== location.origin)
+        return;
     const state = stateForKey(ownerKey);
+    // Cross-tab messages are untrusted input: check each number before it can
+    // reach the token state, exactly as the fetch path does.
     const bundle = message.bundle;
-    if (!bundle || typeof bundle.token !== 'string' || !bundle.token) return;
-    if (!Number.isInteger(bundle.expiresAt) || bundle.expiresAt <= 0) return;
-    if (!Number.isInteger(bundle.expiresIn) || bundle.expiresIn <= 0) return;
-    if (
-        !Number.isInteger(bundle.refreshIdleExpiresAt) ||
-        !Number.isInteger(bundle.refreshAbsoluteExpiresAt) ||
-        bundle.refreshIdleExpiresAt <= 0 ||
-        bundle.refreshAbsoluteExpiresAt < bundle.refreshIdleExpiresAt
-    )
+    if (!bundle || typeof bundle.token !== 'string' || !bundle.token)
         return;
-    if (state.memoryOnly || state.hostSession || state.loggedOut) return;
-    if (state.selectedProtocol === 'v1') return;
-    const family = bundle.refreshAbsoluteExpiresAt;
-    if (
-        family &&
+    const { expiresAt, expiresIn, refreshIdleExpiresAt, refreshAbsoluteExpiresAt, } = bundle;
+    if (typeof expiresAt !== 'number' ||
+        !Number.isInteger(expiresAt) ||
+        expiresAt <= 0)
+        return;
+    if (typeof expiresIn !== 'number' ||
+        !Number.isInteger(expiresIn) ||
+        expiresIn <= 0)
+        return;
+    if (typeof refreshIdleExpiresAt !== 'number' ||
+        typeof refreshAbsoluteExpiresAt !== 'number' ||
+        !Number.isInteger(refreshIdleExpiresAt) ||
+        !Number.isInteger(refreshAbsoluteExpiresAt) ||
+        refreshIdleExpiresAt <= 0 ||
+        refreshAbsoluteExpiresAt < refreshIdleExpiresAt)
+        return;
+    if (state.memoryOnly || state.hostSession || state.loggedOut)
+        return;
+    if (state.selectedProtocol === 'v1')
+        return;
+    const family = refreshAbsoluteExpiresAt;
+    if (family &&
         state.refreshAbsoluteExpiresAt &&
-        family !== state.refreshAbsoluteExpiresAt
-    )
+        family !== state.refreshAbsoluteExpiresAt)
         return;
-    if (state.accessToken && bundle.expiresAt <= state.accessExpiresAt) return;
-    adoptToken(bundle.token, bundle, contextForKey(ownerKey), {
-        broadcast: false,
-    });
+    if (state.accessToken && expiresAt <= state.accessExpiresAt)
+        return;
+    adoptToken(bundle.token, {
+        token: bundle.token,
+        expiresAt,
+        expiresIn,
+        refreshIdleExpiresAt,
+        refreshAbsoluteExpiresAt,
+    }, contextForKey(ownerKey), { broadcast: false });
 }
-
 function contextForKey(ownerKey) {
-    if (ownerKey === activeAuthKey) return activeAuthContext;
+    if (ownerKey === activeAuthKey)
+        return activeAuthContext;
     return { credentialKey: ownerKey };
 }
-
 function newAuthState() {
     return {
         selectedProtocol: null,
@@ -528,7 +502,6 @@ function newAuthState() {
         pendingBootstrapRelease: null,
     };
 }
-
 function stateForKey(key) {
     let state = authStates.get(key);
     if (!state) {
@@ -537,38 +510,33 @@ function stateForKey(key) {
     }
     return state;
 }
-
 function stateFor(context) {
     return stateForKey(credentialKey(context));
 }
-
 function activateAuthContext(context) {
     activeAuthContext = context || null;
     activeAuthKey = credentialKey(context);
     return stateForKey(activeAuthKey);
 }
-
 function activeAuthState() {
-    if (activeAuthKey === null) activateAuthContext();
+    if (activeAuthKey === null)
+        return activateAuthContext();
     return stateForKey(activeAuthKey);
 }
-
 function hostAuthenticatedMode() {
     try {
         return location.protocol === 'phi-app:' && location.host === 'app';
-    } catch {
+    }
+    catch {
         return false;
     }
 }
-
 function utf8Length(value) {
     return new TextEncoder().encode(value).length;
 }
-
 function authTimeoutError() {
     return new Error('Phi did not respond. Try again.');
 }
-
 // Race the deadline as well as aborting: some fetch implementations ignore
 // AbortSignal and would otherwise keep auth UI pending forever.
 async function withAuthDeadline(run, timeoutMs = AUTH_TIMEOUT_MS) {
@@ -581,109 +549,110 @@ async function withAuthDeadline(run, timeoutMs = AUTH_TIMEOUT_MS) {
         }, timeoutMs);
     });
     try {
-        return await Promise.race([run(controller.signal), deadline]);
-    } finally {
-        clearTimeout(timer);
+        return (await Promise.race([run(controller.signal), deadline]));
+    }
+    finally {
+        if (timer !== undefined)
+            clearTimeout(timer);
     }
 }
-
 function parseCredentialBundle(payload) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload))
         return null;
-    const {
-        token,
-        expires_at: expiresAt,
-        expires_in: expiresIn,
-        refresh_idle_expires_at: refreshIdle,
-        refresh_absolute_expires_at: refreshAbsolute,
-    } = payload;
-    if (typeof token !== 'string' || !token) return null;
+    const { token, expires_at: expiresAt, expires_in: expiresIn, refresh_idle_expires_at: refreshIdle, refresh_absolute_expires_at: refreshAbsolute, } = payload;
+    if (typeof token !== 'string' || !token)
+        return null;
     for (const value of [expiresAt, expiresIn, refreshIdle, refreshAbsolute]) {
-        if (!Number.isInteger(value)) return null;
+        if (typeof value !== 'number' || !Number.isInteger(value))
+            return null;
     }
-    if (expiresAt <= 0 || refreshIdle <= 0 || refreshAbsolute <= 0) return null;
-    if (refreshIdle > refreshAbsolute) return null;
-    return {
-        token,
+    const expires = [
         expiresAt,
         expiresIn,
-        refreshIdleExpiresAt: refreshIdle,
-        refreshAbsoluteExpiresAt: refreshAbsolute,
+        refreshIdle,
+        refreshAbsolute,
+    ];
+    if (expires[0] <= 0 || expires[2] <= 0 || expires[3] <= 0)
+        return null;
+    if (expires[2] > expires[3])
+        return null;
+    return {
+        token,
+        expiresAt: expires[0],
+        expiresIn: expires[1],
+        refreshIdleExpiresAt: expires[2],
+        refreshAbsoluteExpiresAt: expires[3],
     };
 }
-
 const REFRESH_INSTALLED = 'installed';
 const REFRESH_NONE = 'none';
 const REFRESH_SUPERSEDED = 'superseded';
-
 function refreshDue(context) {
     const state = stateFor(context);
-    if (!state.accessToken) return true;
-    if (!state.accessRenewAt) return false;
+    if (!state.accessToken)
+        return true;
+    if (!state.accessRenewAt)
+        return false;
     return performance.now() >= state.accessRenewAt;
 }
-
 function withRefreshLock(origin, run) {
     const locks = typeof navigator !== 'undefined' ? navigator.locks : null;
     if (!locks || typeof locks.request !== 'function')
         return Promise.resolve().then(run);
     return withAuthDeadline((signal) => {
         try {
-            return Promise.resolve(
-                locks.request(
-                    REFRESH_LOCK_PREFIX + origin,
-                    { signal },
-                    () =>
-                        signal.aborted ? REFRESH_SUPERSEDED : run(),
-                ),
-            );
-        } catch {
+            // The DOM typing for locks.request is Promise<any>; the callback
+            // above is the only producer of this value.
+            return Promise.resolve(locks.request(REFRESH_LOCK_PREFIX + origin, { signal }, () => signal.aborted ? REFRESH_SUPERSEDED : run()));
+        }
+        catch {
             return Promise.resolve().then(run);
         }
     });
 }
-
 function refreshSession({ ifDue = false } = {}, context) {
     const state = stateFor(context);
-    if (state.refreshInFlight) return state.refreshInFlight;
+    if (state.refreshInFlight)
+        return state.refreshInFlight;
     if (state.memoryOnly || state.hostSession)
         return Promise.resolve(REFRESH_NONE);
     const origin = location.origin;
     const epoch = state.epoch;
     const attempt = withRefreshLock(origin, () => {
-        if (epoch !== state.epoch) return REFRESH_SUPERSEDED;
+        if (epoch !== state.epoch)
+            return REFRESH_SUPERSEDED;
         if (state.memoryOnly || state.hostSession)
             return REFRESH_SUPERSEDED;
-        if (location.origin !== origin) return REFRESH_SUPERSEDED;
-        if (ifDue && !refreshDue(context)) return REFRESH_INSTALLED;
+        if (location.origin !== origin)
+            return REFRESH_SUPERSEDED;
+        if (ifDue && !refreshDue(context))
+            return REFRESH_INSTALLED;
         return runRefresh(context, state, origin, epoch);
     });
     state.refreshInFlight = attempt;
     void attempt
-        .catch(() => {})
+        .catch(() => { })
         .then(() => {
-            if (state.refreshInFlight === attempt)
-                state.refreshInFlight = null;
-        });
+        if (state.refreshInFlight === attempt)
+            state.refreshInFlight = null;
+    });
     return attempt;
 }
-
 function retryAfterMs(res) {
-    const raw =
-        res.headers && typeof res.headers.get === 'function'
-            ? res.headers.get('Retry-After')
-            : null;
-    const seconds = Number.parseInt(raw, 10);
-    if (!Number.isInteger(seconds) || seconds <= 0) return 0;
+    const raw = res.headers && typeof res.headers.get === 'function'
+        ? res.headers.get('Retry-After')
+        : null;
+    const seconds = raw === null ? Number.NaN : Number.parseInt(raw, 10);
+    if (!Number.isInteger(seconds) || seconds <= 0)
+        return 0;
     return Math.min(seconds, 300) * 1000;
 }
-
 function refreshFailure(message, waitMs) {
     const err = new Error(message);
-    if (waitMs > 0) err.retryAfterMs = waitMs;
+    if (waitMs > 0)
+        err.retryAfterMs = waitMs;
     return err;
 }
-
 async function runRefresh(context, state, origin, epoch) {
     let result;
     try {
@@ -703,27 +672,27 @@ async function runRefresh(context, state, origin, epoch) {
                 return { status: res.status, retryAfterMs: retryAfterMs(res) };
             try {
                 return { status: res.status, payload: await res.json() };
-            } catch {
+            }
+            catch {
                 return { status: res.status, invalid: true };
             }
         });
-    } catch (err) {
-        if (
-            err instanceof Error &&
-            err.message === 'Phi returned invalid access protection settings'
-        )
+    }
+    catch (err) {
+        if (err instanceof Error &&
+            err.message === 'Phi returned invalid access protection settings')
             throw err;
         throw new Error('Unable to reach Phi. Try again.');
     }
-    if (result.status === 401) return REFRESH_NONE;
+    if (result.status === 401)
+        return REFRESH_NONE;
     if (result.status !== 200)
-        throw refreshFailure(
-            'Unable to refresh access session',
-            result.retryAfterMs,
-        );
-    if (result.invalid) throw invalidStatusError();
+        throw refreshFailure('Unable to refresh access session', result.retryAfterMs ?? 0);
+    if (result.invalid)
+        throw invalidStatusError();
     const bundle = parseCredentialBundle(result.payload);
-    if (!bundle) throw invalidStatusError();
+    if (!bundle)
+        throw invalidStatusError();
     if (bundle.expiresIn <= 0)
         throw new Error('Unable to refresh access session');
     if (epoch !== state.epoch || location.origin !== origin)
@@ -731,7 +700,6 @@ async function runRefresh(context, state, origin, epoch) {
     adoptToken(bundle.token, bundle, context);
     return REFRESH_INSTALLED;
 }
-
 // Tokens obtained from password login or the refresh cookie stay in memory.
 // Browser storage holds neither an access token nor a refresh handle.
 function adoptToken(token, bundle, context, { broadcast = true } = {}) {
@@ -746,27 +714,30 @@ function adoptToken(token, bundle, context, { broadcast = true } = {}) {
     state.memoryOnly = false;
     if (bundle) {
         state.accessExpiresAt = bundle.expiresAt;
-        state.accessRenewAt = bundle.expiresIn > 0
-            ? performance.now() + bundle.expiresIn * 1000 - REFRESH_LEAD_MS
-            : 0;
+        state.accessRenewAt =
+            bundle.expiresIn > 0
+                ? performance.now() + bundle.expiresIn * 1000 - REFRESH_LEAD_MS
+                : 0;
         state.refreshIdleExpiresAt = bundle.refreshIdleExpiresAt;
         state.refreshAbsoluteExpiresAt = bundle.refreshAbsoluteExpiresAt;
-    } else if (!sameToken) {
+    }
+    else if (!sameToken) {
         state.accessExpiresAt = 0;
         state.accessRenewAt = 0;
         state.refreshIdleExpiresAt = 0;
         state.refreshAbsoluteExpiresAt = 0;
     }
     state.retryDelayMs = 0;
-    clearTimeout(state.retryTimer);
+    if (state.retryTimer !== null)
+        clearTimeout(state.retryTimer);
     state.retryTimer = null;
     state.epoch++;
     scheduleRenewal(context, state);
-    if (broadcast) broadcastBundle(context, state);
+    if (broadcast)
+        broadcastBundle(context, state);
     if (pendingOverlay?.ownerKey === credentialKey(context))
-        pendingOverlay.finish({ enabled: true });
+        pendingOverlay?.finish({ enabled: true });
 }
-
 function clearTokenState(state) {
     state.accessToken = null;
     state.persistedToken = null;
@@ -775,68 +746,72 @@ function clearTokenState(state) {
     state.accessRenewAt = 0;
     state.refreshIdleExpiresAt = 0;
     state.refreshAbsoluteExpiresAt = 0;
-    clearTimeout(state.renewalTimer);
-    clearTimeout(state.retryTimer);
+    if (state.renewalTimer !== null)
+        clearTimeout(state.renewalTimer);
+    if (state.retryTimer !== null)
+        clearTimeout(state.retryTimer);
     state.renewalTimer = null;
     state.retryTimer = null;
     state.retryDelayMs = 0;
 }
-
 function dropCredential(state) {
     clearTokenState(state);
     state.loggedOut = true;
     state.selectedProtocol = 'v2';
     state.epoch++;
 }
-
 // A delayed rejection for token A must not clear token B installed after it.
 function rejectToken(token, context) {
     const state = stateFor(context);
-    if (!token || state.accessToken !== token) return;
+    if (!token || state.accessToken !== token)
+        return;
     clearTokenState(state);
     state.loggedOut = true;
     state.selectedProtocol = 'v2';
 }
-
 function scheduleRenewal(context, state = stateFor(context)) {
-    clearTimeout(state.renewalTimer);
+    if (state.renewalTimer !== null)
+        clearTimeout(state.renewalTimer);
     state.renewalTimer = null;
-    if (!state.accessToken || state.memoryOnly || !state.accessRenewAt) return;
+    if (!state.accessToken || state.memoryOnly || !state.accessRenewAt)
+        return;
     const epoch = state.epoch;
-    const delay = Math.min(
-        MAX_TIMEOUT_MS,
-        Math.max(0, state.accessRenewAt - performance.now()),
-    );
+    const delay = Math.min(MAX_TIMEOUT_MS, Math.max(0, state.accessRenewAt - performance.now()));
     state.renewalTimer = setTimeout(() => {
         state.renewalTimer = null;
-        if (epoch !== state.epoch) return;
+        if (epoch !== state.epoch)
+            return;
         void renewIfDue({}, context);
     }, delay);
 }
-
 function scheduleRetry(err, context, state = stateFor(context)) {
-    clearTimeout(state.retryTimer);
+    if (state.retryTimer !== null)
+        clearTimeout(state.retryTimer);
     state.retryTimer = null;
-    if (!state.accessToken || state.memoryOnly) return;
+    if (!state.accessToken || state.memoryOnly)
+        return;
     const epoch = state.epoch;
     state.retryDelayMs = state.retryDelayMs
         ? Math.min(RETRY_MAX_MS, state.retryDelayMs * 2)
         : RETRY_BASE_MS;
     const jitter = state.retryDelayMs * 0.2 * Math.random();
-    const honored =
-        err && Number.isFinite(err.retryAfterMs) ? err.retryAfterMs : 0;
+    const retryAfterMs = err
+        ?.retryAfterMs;
+    const honored = Number.isFinite(retryAfterMs) ? Number(retryAfterMs) : 0;
     const delay = Math.max(honored, state.retryDelayMs + jitter);
     state.retryTimer = setTimeout(() => {
         state.retryTimer = null;
-        if (epoch !== state.epoch) return;
+        if (epoch !== state.epoch)
+            return;
         void renewIfDue({ ifDue: false }, context);
     }, delay);
 }
-
 async function renewIfDue({ ifDue = true } = {}, context) {
     const state = stateFor(context);
-    if (!state.accessToken || state.memoryOnly || state.hostSession) return;
-    if (state.retryTimer !== null) return;
+    if (!state.accessToken || state.memoryOnly || state.hostSession)
+        return;
+    if (state.retryTimer !== null)
+        return;
     if (ifDue && !refreshDue(context)) {
         scheduleRenewal(context, state);
         return;
@@ -845,13 +820,17 @@ async function renewIfDue({ ifDue = true } = {}, context) {
     let outcome;
     try {
         outcome = await refreshSession({ ifDue }, context);
-    } catch (err) {
-        if (epoch !== state.epoch) return;
+    }
+    catch (err) {
+        if (epoch !== state.epoch)
+            return;
         scheduleRetry(err, context, state);
         return;
     }
-    if (epoch !== state.epoch) return;
-    if (outcome === REFRESH_INSTALLED) return;
+    if (epoch !== state.epoch)
+        return;
+    if (outcome === REFRESH_INSTALLED)
+        return;
     if (outcome === REFRESH_NONE) {
         dropCredential(state);
         void requestReauth(context);
@@ -859,7 +838,6 @@ async function renewIfDue({ ifDue = true } = {}, context) {
     }
     scheduleRenewal(context, state);
 }
-
 // refreshAccessIfDue lets a reconnecting socket bring the credential up to date
 // without a request when the in-memory token is still fresh. It returns
 // undefined synchronously when nothing is due, so a redial is not deferred by a
@@ -867,50 +845,54 @@ async function renewIfDue({ ifDue = true } = {}, context) {
 export function refreshAccessIfDue(context) {
     const ownerContext = context ?? activeAuthContext;
     const state = stateFor(ownerContext);
-    if (!state.accessToken || state.memoryOnly) return undefined;
-    if (state.retryTimer !== null) return undefined;
+    if (!state.accessToken || state.memoryOnly)
+        return undefined;
+    if (state.retryTimer !== null)
+        return undefined;
     if (!refreshDue(ownerContext)) {
         scheduleRenewal(ownerContext, state);
         return undefined;
     }
     return renewIfDue({}, ownerContext);
 }
-
 // checkV2Token reports whether the server still accepts token. A rejected
 // token is 'invalid'; transport errors and 429/5xx throw, so a transient
 // failure never destroys a saved credential or changes protocol.
 async function checkV2Token(token, context) {
     return withAuthDeadline(async (signal) => {
         // The embedded host proxy supplies its own bearer; the page sends none.
-        const headers = token ? { Authorization: `Bearer ${token}` } : {};
+        const headers = token
+            ? { Authorization: `Bearer ${token}` }
+            : {};
         const res = await authFetch(context, '/api/auth/v2/status', {
             headers,
             cache: 'no-store',
             redirect: 'error',
             signal,
         });
-        if (res.status === 401) return 'invalid';
+        if (res.status === 401)
+            return 'invalid';
         if (res.status !== 200)
             throw new Error('Unable to check Phi access protection');
         let payload;
         try {
             payload = await res.json();
-        } catch {
+        }
+        catch {
             throw invalidStatusError();
         }
-        if (
-            !payload ||
-            typeof payload.enabled !== 'boolean' ||
-            typeof payload.authenticated !== 'boolean'
-        )
+        const body = payload;
+        if (!body ||
+            typeof body.enabled !== 'boolean' ||
+            typeof body.authenticated !== 'boolean')
             throw invalidStatusError();
-        if (!payload.enabled) return 'invalid';
-        if (payload.owned === false)
+        if (!body.enabled)
+            return 'invalid';
+        if (body.owned === false)
             throw new Error('Another Phi instance owns access state');
-        return payload.authenticated ? 'valid' : 'invalid';
+        return body.authenticated ? 'valid' : 'invalid';
     });
 }
-
 async function v2Login(password, context) {
     return withAuthDeadline(async (signal) => {
         const res = await authFetch(context, '/api/auth/v2/login', {
@@ -924,18 +906,22 @@ async function v2Login(password, context) {
             redirect: 'error',
             signal,
         });
-        if (res.status === 401) throw new Error('Wrong password');
+        if (res.status === 401)
+            throw new Error('Wrong password');
         if (res.status === 429)
             throw new Error('Too many attempts. Try again in a moment.');
-        if (!res.ok) throw new Error('Unable to sign in');
+        if (!res.ok)
+            throw new Error('Unable to sign in');
         let payload;
         try {
             payload = await res.json();
-        } catch {
+        }
+        catch {
             throw new Error('Unable to sign in');
         }
         if (hostAuthenticatedMode()) {
-            if (payload && payload.ok === true) return HOST_SESSION_TOKEN;
+            if (payload?.ok === true)
+                return HOST_SESSION_TOKEN;
             throw new Error('Unable to sign in');
         }
         const bundle = parseCredentialBundle(payload);
@@ -944,25 +930,22 @@ async function v2Login(password, context) {
         return bundle;
     });
 }
-
 function v2PasswordError(res) {
-    if (res.status === 401) return new Error('Sign in to change Phi access');
+    if (res.status === 401)
+        return new Error('Sign in to change Phi access');
     if (res.status === 429)
         return new Error('Too many attempts. Try again in a moment.');
     return new Error('Unable to save access password');
 }
-
 function validateV2Password(password) {
     if (typeof password !== 'string')
         throw new Error('Enter a password to continue');
     const bytes = utf8Length(password);
     if (bytes < PASSWORD_MIN_LENGTH)
-        throw new Error(
-            `Password must be at least ${PASSWORD_MIN_LENGTH} characters`,
-        );
-    if (bytes > 1024) throw new Error('Password must be at most 1024 bytes');
+        throw new Error(`Password must be at least ${PASSWORD_MIN_LENGTH} characters`);
+    if (bytes > 1024)
+        throw new Error('Password must be at most 1024 bytes');
 }
-
 async function saveV2Password(password, context) {
     validateV2Password(password);
     const state = stateFor(context);
@@ -971,7 +954,8 @@ async function saveV2Password(password, context) {
         'Content-Type': 'application/json',
         'X-Phi-Auth': 'v2',
     };
-    if (state.accessToken) headers.Authorization = `Bearer ${state.accessToken}`;
+    if (state.accessToken)
+        headers.Authorization = `Bearer ${state.accessToken}`;
     const payload = await withAuthDeadline(async (signal) => {
         const res = await authFetch(context, '/api/auth/v2/password', {
             method: 'POST',
@@ -981,10 +965,12 @@ async function saveV2Password(password, context) {
             redirect: 'error',
             signal,
         });
-        if (!res.ok) throw v2PasswordError(res);
+        if (!res.ok)
+            throw v2PasswordError(res);
         try {
             return await res.json();
-        } catch {
+        }
+        catch {
             throw new Error('Unable to save access password');
         }
     });
@@ -1001,12 +987,15 @@ async function saveV2Password(password, context) {
         return { enabled: true };
     }
     const bundle = parseCredentialBundle(payload);
-    if (!payload || payload.enabled !== true || !bundle || bundle.expiresIn <= 0)
+    if (!payload ||
+        payload.enabled !== true ||
+        !bundle ||
+        bundle.expiresIn <= 0)
         throw new Error('Unable to save access password');
-    if (epoch === state.epoch) adoptToken(bundle.token, bundle, context);
+    if (epoch === state.epoch)
+        adoptToken(bundle.token, bundle, context);
     return { enabled: true };
 }
-
 async function clearV2Password(context) {
     const state = stateFor(context);
     if (!state.accessEnabled && !state.accessToken && !state.hostSession)
@@ -1017,7 +1006,8 @@ async function clearV2Password(context) {
         'Content-Type': 'application/json',
         'X-Phi-Auth': 'v2',
     };
-    if (token) headers.Authorization = `Bearer ${token}`;
+    if (token)
+        headers.Authorization = `Bearer ${token}`;
     const payload = await withAuthDeadline(async (signal) => {
         const res = await authFetch(context, '/api/auth/v2/password', {
             method: 'POST',
@@ -1027,10 +1017,12 @@ async function clearV2Password(context) {
             redirect: 'error',
             signal,
         });
-        if (!res.ok) throw v2PasswordError(res);
+        if (!res.ok)
+            throw v2PasswordError(res);
         try {
             return await res.json();
-        } catch {
+        }
+        catch {
             throw new Error('Unable to clear access password');
         }
     });
@@ -1041,7 +1033,8 @@ async function clearV2Password(context) {
     if (hostAuthenticatedMode()) {
         if (payload.ok !== true)
             throw new Error('Unable to clear access password');
-        if (state.epoch !== epoch) return { enabled: false };
+        if (state.epoch !== epoch)
+            return { enabled: false };
         state.loggedOut = true;
         clearTokenState(state);
         state.accessEnabled = false;
@@ -1049,12 +1042,13 @@ async function clearV2Password(context) {
         state.epoch++;
         broadcastInvalidation(credentialKey(context), family, true);
         if (pendingOverlay?.ownerKey === credentialKey(context))
-            pendingOverlay.finish({ enabled: false });
+            pendingOverlay?.finish({ enabled: false });
         return { enabled: false };
     }
     // A credential installed while the clear was in flight is newer than
     // this response; never clear it.
-    if (state.epoch !== epoch) return { enabled: false };
+    if (state.epoch !== epoch)
+        return { enabled: false };
     state.loggedOut = true;
     clearTokenState(state);
     state.accessEnabled = false;
@@ -1062,54 +1056,48 @@ async function clearV2Password(context) {
     state.epoch++;
     broadcastInvalidation(credentialKey(context), family, true);
     if (pendingOverlay?.ownerKey === credentialKey(context))
-        pendingOverlay.finish({ enabled: false });
+        pendingOverlay?.finish({ enabled: false });
     return { enabled: false };
 }
-
 // --- protected fetch wrapper --------------------------------------------
-
 const WRAPPED_FETCH = Symbol.for('phi.accessFetch');
 let reloadPage = () => location.reload();
-
 function isSyncMessagePath(path) {
-    return path === '/api/sync/messages' || path.startsWith('/api/sync/messages/');
+    return (path === '/api/sync/messages' || path.startsWith('/api/sync/messages/'));
 }
-
 // isProtectedAPIPath is the wrapper and asset scope: same-origin API data that
 // needs a credential, excluding the public auth routes and the sync exemption.
 function isProtectedAPIPath(pathname) {
-    return (
-        pathname.startsWith('/api/') &&
+    return (pathname.startsWith('/api/') &&
         !pathname.startsWith('/api/auth/') &&
-        !isSyncMessagePath(pathname)
-    );
+        !isSyncMessagePath(pathname));
 }
-
 function requestURL(input) {
     try {
         if (typeof input === 'string' || input instanceof URL)
             return new URL(input, location.href);
         if (input && typeof input.url === 'string')
             return new URL(input.url, location.href);
-    } catch {
+    }
+    catch {
         /* not a URL this wrapper can scope */
     }
     return null;
 }
-
 function requestHeaders(input, init) {
-    if (init && init.headers) return new Headers(init.headers);
+    if (init && init.headers)
+        return new Headers(init.headers);
     if (typeof Request !== 'undefined' && input instanceof Request)
         return new Headers(input.headers);
     return new Headers();
 }
-
 // installAccessFetch wraps fetch once so same-origin protected API calls carry
 // the in-memory bearer. A stale-token 401 refreshes once and retries only GET
 // or HEAD; mutations are never replayed. Route-specific 403 responses pass on.
 export function installAccessFetch() {
     const baseFetch = globalThis.fetch;
-    if (!baseFetch || baseFetch[WRAPPED_FETCH]) return;
+    if (!baseFetch || baseFetch[WRAPPED_FETCH])
+        return;
     const wrapped = async (input, init) => {
         const url = requestURL(input);
         const ownerKey = activeAuthKey ?? credentialKey();
@@ -1120,24 +1108,24 @@ export function installAccessFetch() {
             // stale tokens itself. Only a terminal 401 from a protected path
             // means that its host-owned session ended; mutations are not replayed.
             const answer = await baseFetch(input, init);
-            if (
-                answer.status === 401 &&
+            if (answer.status === 401 &&
                 url &&
                 url.protocol === location.protocol &&
                 url.host === location.host &&
-                isProtectedAPIPath(url.pathname)
-            )
+                isProtectedAPIPath(url.pathname))
                 requestReauth(context);
             return answer;
         }
         const token = state.accessToken;
         if (!url || !token || url.origin !== location.origin)
             return baseFetch(input, init);
-        if (!isProtectedAPIPath(url.pathname)) return baseFetch(input, init);
+        if (!isProtectedAPIPath(url.pathname))
+            return baseFetch(input, init);
         const headers = requestHeaders(input, init);
         // A caller-supplied Authorization is the caller's business: keep it,
         // and never treat its failure as this module's token being rejected.
-        if (headers.has('Authorization')) return baseFetch(input, init);
+        if (headers.has('Authorization'))
+            return baseFetch(input, init);
         headers.set('Authorization', `Bearer ${token}`);
         const requestInit = init ? { ...init, headers } : { headers };
         const response = await baseFetch(input, requestInit);
@@ -1146,56 +1134,58 @@ export function installAccessFetch() {
         let outcome;
         try {
             outcome = await refreshSession({}, context);
-        } catch (err) {
+        }
+        catch (err) {
             scheduleRetry(err, context, state);
             return response;
         }
         if (outcome === REFRESH_NONE) {
             rejectToken(token, context);
-            if (activeAuthKey === ownerKey) requestReauth(context);
+            if (activeAuthKey === ownerKey)
+                requestReauth(context);
             return response;
         }
-        const method = (
-            (init && init.method) ||
-            (input && typeof input.method === 'string' ? input.method : 'GET')
-        ).toUpperCase();
+        const inputMethod = input instanceof Request ? input.method : undefined;
+        const method = ((init && init.method) ||
+            inputMethod ||
+            'GET').toUpperCase();
         const renewed = state.accessToken;
-        const installed =
-            outcome === REFRESH_INSTALLED ||
+        const installed = outcome === REFRESH_INSTALLED ||
             (outcome === REFRESH_SUPERSEDED && !!renewed && renewed !== token);
         if (!installed || !renewed || (method !== 'GET' && method !== 'HEAD'))
             return response;
         const retryHeaders = requestHeaders(input, init);
         retryHeaders.set('Authorization', `Bearer ${renewed}`);
-        return baseFetch(
-            input,
-            init ? { ...init, headers: retryHeaders } : { headers: retryHeaders },
-        );
+        return baseFetch(input, init
+            ? { ...init, headers: retryHeaders }
+            : { headers: retryHeaders });
     };
     wrapped[WRAPPED_FETCH] = true;
     globalThis.fetch = wrapped;
 }
-
 // requestReauth coalesces every rejected request into one overlay, then reloads
 // once after a successful sign-in.
 function requestReauth(context) {
     const key = credentialKey(context);
     const state = stateForKey(key);
-    if (state.reauthInFlight) return state.reauthInFlight;
+    if (state.reauthInFlight)
+        return state.reauthInFlight;
     state.reauthInFlight = (async () => {
         try {
             const protocol = state.selectedProtocol === 'v1' ? 'v1' : 'v2';
             const result = await showUnlockPrompt(context, protocol);
-            if (result.enabled && activeAuthKey === key) reloadPage();
-        } catch {
+            if (result.enabled && activeAuthKey === key)
+                reloadPage();
+        }
+        catch {
             /* the overlay reports its own failure */
-        } finally {
+        }
+        finally {
             state.reauthInFlight = null;
         }
     })();
     return state.reauthInFlight;
 }
-
 async function discoverAccessStatus(context) {
     return withAuthDeadline(async (signal) => {
         const res = await authFetch(context, '/api/auth/status', {
@@ -1208,7 +1198,8 @@ async function discoverAccessStatus(context) {
         let payload;
         try {
             payload = await res.json();
-        } catch {
+        }
+        catch {
             throw invalidStatusError();
         }
         const status = parseAccessStatus(payload);
@@ -1220,15 +1211,14 @@ async function discoverAccessStatus(context) {
         return status;
     });
 }
-
 let pendingOverlay = null;
-
 function showUnlockPrompt(context, protocol) {
     const state = stateFor(context);
     return new Promise((resolve) => {
         let settled = false;
         const finish = (value) => {
-            if (settled) return;
+            if (settled)
+                return;
             settled = true;
             if (pendingOverlay && pendingOverlay.finish === finish)
                 pendingOverlay = null;
@@ -1240,44 +1230,36 @@ function showUnlockPrompt(context, protocol) {
         overlay.setAttribute('role', 'dialog');
         overlay.setAttribute('aria-modal', 'true');
         overlay.setAttribute('aria-labelledby', 'access-auth-title');
-
         const dialog = document.createElement('form');
         dialog.className = 'access-auth-dialog';
         dialog.noValidate = true;
-
         const title = document.createElement('h1');
         title.id = 'access-auth-title';
         title.textContent = 'Sign in to Phi';
         dialog.appendChild(title);
-
         const subtitle = document.createElement('p');
         subtitle.className = 'access-auth-subtitle';
         subtitle.textContent = 'Enter your password to continue.';
         dialog.appendChild(subtitle);
-
         const label = document.createElement('label');
         label.htmlFor = 'access-auth-password';
         label.textContent = 'Password';
         dialog.appendChild(label);
-
         const input = document.createElement('input');
         input.id = 'access-auth-password';
         input.type = 'password';
         input.autocomplete = 'current-password';
         input.required = true;
         dialog.appendChild(input);
-
         const error = document.createElement('div');
         error.className = 'access-auth-error';
         error.setAttribute('role', 'alert');
         dialog.appendChild(error);
-
         const submit = document.createElement('button');
         submit.className = 'btn btn-accent';
         submit.type = 'submit';
         submit.textContent = 'Sign in';
         dialog.appendChild(submit);
-
         dialog.addEventListener('submit', async (event) => {
             event.preventDefault();
             error.textContent = '';
@@ -1305,7 +1287,8 @@ function showUnlockPrompt(context, protocol) {
             try {
                 if (protocol === 'v2') {
                     const bundle = await v2Login(input.value, context);
-                    if (epoch !== state.epoch) return;
+                    if (epoch !== state.epoch)
+                        return;
                     if (bundle === HOST_SESSION_TOKEN) {
                         state.hostSession = true;
                         state.loggedOut = false;
@@ -1323,15 +1306,20 @@ function showUnlockPrompt(context, protocol) {
                     return;
                 }
                 const status = await getStatus(context);
-                if (epoch !== state.epoch) return;
+                if (epoch !== state.epoch)
+                    return;
                 if (!status.enabled) {
                     finish({ enabled: false });
                     return;
                 }
+                if (!hasV1Metadata(status))
+                    throw invalidStatusError();
                 const verifier = await deriveVerifier(input.value, status.raw);
-                if (epoch !== state.epoch) return;
+                if (epoch !== state.epoch)
+                    return;
                 const challenge = await freshStatus(status.raw, started, context);
-                if (epoch !== state.epoch) return;
+                if (epoch !== state.epoch)
+                    return;
                 if (!challenge) {
                     // The derivation outlived the challenge and the refresh
                     // failed. Posting it would count as a failed attempt and
@@ -1341,7 +1329,8 @@ function showUnlockPrompt(context, protocol) {
                     return;
                 }
                 const verdict = await login(challenge, verifier, context);
-                if (epoch !== state.epoch) return;
+                if (epoch !== state.epoch)
+                    return;
                 if (verdict === 'rate-limited') {
                     // Rate limited, not a wrong password: the server refuses
                     // every attempt until its backoff ends, so saying "Wrong
@@ -1371,25 +1360,26 @@ function showUnlockPrompt(context, protocol) {
                 }
                 input.value = '';
                 finish({ enabled: true });
-            } catch (err) {
-                if (epoch !== state.epoch) return;
+            }
+            catch (err) {
+                if (epoch !== state.epoch)
+                    return;
                 error.textContent =
                     err instanceof Error ? err.message : 'Unable to unlock Phi';
                 input.select();
-            } finally {
+            }
+            finally {
                 cancelAnimationFrame(ticker);
                 submit.disabled = false;
                 submit.textContent = 'Sign in';
             }
         });
-
         overlay.appendChild(dialog);
         document.body.appendChild(overlay);
         pendingOverlay = { finish, ownerKey: credentialKey(context) };
         requestAnimationFrame(() => input.focus());
     });
 }
-
 // The embedded shell owns the v2 bundle in the main process. The page sees
 // only the host's token-free status and login answers.
 async function bootstrapHostAuthenticated(context, wait) {
@@ -1400,12 +1390,13 @@ async function bootstrapHostAuthenticated(context, wait) {
     state.hostSession = false;
     const epoch = ++state.epoch;
     const current = () => state.epoch === epoch;
-
     let status;
     try {
         status = await wait(discoverAccessStatus(context));
-    } catch (err) {
-        if (!current()) return { enabled: state.accessEnabled };
+    }
+    catch (err) {
+        if (!current())
+            return { enabled: state.accessEnabled };
         throw err;
     }
     if (status === HOST_INSTALL || !current())
@@ -1413,15 +1404,15 @@ async function bootstrapHostAuthenticated(context, wait) {
     state.accessEnabled = status.enabled;
     // The host's selected credential wins over capability preference. Older
     // hosts without this metadata retain capability-based negotiation.
-    const protocol = status.protocols.includes(status.hostProtocol)
-        ? status.hostProtocol
+    const hostProtocol = status.hostProtocol;
+    const protocol = hostProtocol && status.protocols.includes(hostProtocol)
+        ? hostProtocol
         : preferredProtocol(status.protocols);
     state.selectedProtocol = protocol;
     if (!status.enabled) {
         state.hostSession = false;
         return { enabled: false };
     }
-
     if (protocol === 'v1') {
         if (status.authenticated) {
             state.hostSession = true;
@@ -1431,12 +1422,13 @@ async function bootstrapHostAuthenticated(context, wait) {
         state.hostSession = false;
         return showUnlockPrompt(context, 'v1');
     }
-
     let verdict;
     try {
         verdict = await wait(checkV2Token(null, context));
-    } catch (err) {
-        if (!current()) return { enabled: state.accessEnabled };
+    }
+    catch (err) {
+        if (!current())
+            return { enabled: state.accessEnabled };
         throw err;
     }
     if (verdict === HOST_INSTALL || !current())
@@ -1449,7 +1441,6 @@ async function bootstrapHostAuthenticated(context, wait) {
     state.hostSession = false;
     return showUnlockPrompt(context, 'v2');
 }
-
 // Called before App.init() so the normal UI never starts fetching protected
 // data until either the bearer, the session cookie, or a remembered derived
 // credential works. The selection is fixed for the rest of the page load: a
@@ -1460,36 +1451,34 @@ export async function bootstrapAccessAuth(context) {
     installAccessFetch();
     const ownerKey = activeAuthKey;
     let epoch = state.epoch;
-    const superseded = () =>
-        state.epoch !== epoch || activeAuthKey !== ownerKey;
-    let releaseHost = () => {};
+    const superseded = () => state.epoch !== epoch || activeAuthKey !== ownerKey;
+    let releaseHost = () => { };
     const hostInstall = new Promise((resolve) => {
         releaseHost = () => resolve(HOST_INSTALL);
     });
     state.pendingBootstrapRelease = releaseHost;
     const wait = (promise) => Promise.race([promise, hostInstall]);
-
     try {
         if (hostAuthenticatedMode())
             return await bootstrapHostAuthenticated(context, wait);
         let status;
         try {
             status = await wait(discoverAccessStatus(context));
-        } catch (err) {
+        }
+        catch (err) {
             // A host token installed during discovery supersedes its failure.
-            if (superseded()) return { enabled: state.accessEnabled };
+            if (superseded())
+                return { enabled: state.accessEnabled };
             throw err;
         }
         if (status === HOST_INSTALL || superseded())
             return { enabled: state.accessEnabled };
-
         // Keep v2 selected across re-bootstrap unless the server is now v1-only.
         const advertised = preferredProtocol(status.protocols);
         const hadV2Selection = state.selectedProtocol === 'v2';
-        const protocol =
-            hadV2Selection && advertised === 'v1'
-                ? 'v1'
-                : state.selectedProtocol || advertised;
+        const protocol = hadV2Selection && advertised === 'v1'
+            ? 'v1'
+            : state.selectedProtocol || advertised;
         state.accessEnabled = status.enabled;
         // Fix the protocol before any login attempt; only an authenticated
         // session or a successful saved-v1 login may select v1.
@@ -1508,27 +1497,32 @@ export async function bootstrapAccessAuth(context) {
             }
             return { enabled: false };
         }
-
         if (protocol === 'v2' && state.accessToken) {
             const token = state.accessToken;
             let verdict;
             try {
                 verdict = await wait(checkV2Token(token, context));
-            } catch (err) {
-                if (superseded()) return { enabled: state.accessEnabled };
+            }
+            catch (err) {
+                if (superseded())
+                    return { enabled: state.accessEnabled };
                 throw err;
             }
             if (verdict === HOST_INSTALL || superseded())
                 return { enabled: state.accessEnabled };
-            if (verdict === 'valid') return { enabled: true };
+            if (verdict === 'valid')
+                return { enabled: true };
             let outcome;
             try {
                 outcome = await wait(refreshSession({}, context));
-            } catch (err) {
-                if (superseded()) return { enabled: state.accessEnabled };
+            }
+            catch (err) {
+                if (superseded())
+                    return { enabled: state.accessEnabled };
                 throw err;
             }
-            if (outcome === REFRESH_INSTALLED) return { enabled: true };
+            if (outcome === REFRESH_INSTALLED)
+                return { enabled: true };
             if (outcome === HOST_INSTALL || superseded())
                 return { enabled: state.accessEnabled };
             if (outcome === REFRESH_SUPERSEDED && state.accessToken)
@@ -1537,13 +1531,11 @@ export async function bootstrapAccessAuth(context) {
             // No cookie fallback: an explicit v2 credential decides alone.
             return showUnlockPrompt(context, 'v2');
         }
-
         if (protocol === 'v1' || !hadV2Selection) {
             if (status.authenticated) {
                 state.selectedProtocol = 'v1';
                 return { enabled: true };
             }
-
             // A saved v1 verifier is only usable when the status still carries
             // v1 KDF metadata; a v2-only status must not be rejected by those bounds.
             if (hasV1Metadata(status)) {
@@ -1561,16 +1553,18 @@ export async function bootstrapAccessAuth(context) {
                 }
             }
         }
-
         if (protocol === 'v2') {
             let outcome;
             try {
                 outcome = await wait(refreshSession({}, context));
-            } catch (err) {
-                if (superseded()) return { enabled: state.accessEnabled };
+            }
+            catch (err) {
+                if (superseded())
+                    return { enabled: state.accessEnabled };
                 throw err;
             }
-            if (outcome === REFRESH_INSTALLED) return { enabled: true };
+            if (outcome === REFRESH_INSTALLED)
+                return { enabled: true };
             if (outcome === HOST_INSTALL || superseded())
                 return { enabled: state.accessEnabled };
             if (outcome === REFRESH_SUPERSEDED && state.accessToken)
@@ -1578,36 +1572,33 @@ export async function bootstrapAccessAuth(context) {
             return showUnlockPrompt(context, 'v2');
         }
         return showUnlockPrompt(context, 'v1');
-    } finally {
+    }
+    finally {
         if (state.pendingBootstrapRelease === releaseHost)
             state.pendingBootstrapRelease = null;
     }
 }
-
-async function createPasswordRecord(
-    password,
-    { iterations = 600000, salt } = {},
-) {
+async function createPasswordRecord(password, { iterations = 600000, salt, } = {}) {
     if (typeof password !== 'string' || password.length < PASSWORD_MIN_LENGTH) {
-        throw new Error(
-            `Password must be at least ${PASSWORD_MIN_LENGTH} characters`,
-        );
+        throw new Error(`Password must be at least ${PASSWORD_MIN_LENGTH} characters`);
     }
     if (!salt) {
         if (!globalThis.crypto?.getRandomValues) {
-            throw new Error(
-                'This browser cannot securely generate a password salt',
-            );
+            throw new Error('This browser cannot securely generate a password salt');
         }
-        salt = new Uint8Array(16);
-        globalThis.crypto.getRandomValues(salt);
+        const generated = new Uint8Array(16);
+        globalThis.crypto.getRandomValues(generated);
+        salt = generated;
     }
+    // The challenge is added by the caller; a local record only derives a
+    // verifier, so an empty placeholder keeps the status type honest.
     const status = {
         enabled: true,
         version: 'v1',
         algorithm: 'pbkdf2-sha256',
         iterations,
         salt: bytesToBase64URL(salt),
+        challenge: '',
     };
     const verifier = await deriveVerifier(password, status);
     return {
@@ -1622,7 +1613,6 @@ async function createPasswordRecord(
         ].join('.'),
     };
 }
-
 // Called from the existing Config modal. The returned password record is the
 // only thing written to config.toml; the raw password is discarded immediately.
 export async function setAccessPassword(password, context) {
@@ -1630,8 +1620,7 @@ export async function setAccessPassword(password, context) {
     if (state.selectedProtocol === 'v2')
         return saveV2Password(password, context);
     const epoch = state.epoch;
-    const { passwordHash, status, verifier } =
-        await createPasswordRecord(password);
+    const { passwordHash, status, verifier } = await createPasswordRecord(password);
     if (epoch !== state.epoch)
         throw new Error('Phi access changed; try again');
     await withAuthDeadline(async (signal) => {
@@ -1643,9 +1632,7 @@ export async function setAccessPassword(password, context) {
             signal,
         });
         if (!res.ok)
-            throw new Error(
-                (await res.text()) || 'Unable to save access password',
-            );
+            throw new Error((await res.text()) || 'Unable to save access password');
     });
     if (epoch === state.epoch) {
         storeCredential(status, verifier, context);
@@ -1653,7 +1640,6 @@ export async function setAccessPassword(password, context) {
     }
     return { enabled: true };
 }
-
 export async function clearAccessPassword(context) {
     const state = stateFor(context);
     if (state.selectedProtocol === 'v2')
@@ -1668,9 +1654,7 @@ export async function clearAccessPassword(context) {
             signal,
         });
         if (!res.ok)
-            throw new Error(
-                (await res.text()) || 'Unable to clear access password',
-            );
+            throw new Error((await res.text()) || 'Unable to clear access password');
     });
     if (epoch === state.epoch) {
         clearCredential(context);
@@ -1678,20 +1662,21 @@ export async function clearAccessPassword(context) {
     }
     return { enabled: false };
 }
-
 // getAccessToken returns the selected v2 bearer, or null in v1 mode.
 export function getAccessToken() {
     return activeAuthState().accessToken;
 }
-
 // installToken is the host bridge: it installs a memory-only v2 credential
 // (never localStorage), releases a pending unlock overlay, and lets a loaded
 // body continue bootstrap. The host renews its token, so this page does not.
 export function installToken(token) {
-    if (typeof token !== 'string' || !token) return false;
+    if (typeof token !== 'string' || !token)
+        return false;
     const state = activeAuthState();
-    clearTimeout(state.renewalTimer);
-    clearTimeout(state.retryTimer);
+    if (state.renewalTimer !== null)
+        clearTimeout(state.renewalTimer);
+    if (state.retryTimer !== null)
+        clearTimeout(state.retryTimer);
     state.renewalTimer = null;
     state.retryTimer = null;
     state.accessToken = token;
@@ -1708,20 +1693,22 @@ export function installToken(token) {
     state.refreshAbsoluteExpiresAt = 0;
     const releaseBootstrap = state.pendingBootstrapRelease;
     state.pendingBootstrapRelease = null;
-    if (releaseBootstrap) releaseBootstrap();
+    if (releaseBootstrap)
+        releaseBootstrap();
     if (pendingOverlay?.ownerKey === activeAuthKey)
         pendingOverlay.finish({ enabled: true });
     return true;
 }
-
 // A native v2 login owns the credential, but this page may still be waiting
 // at its prompt. Verify through the host proxy before releasing bootstrap.
 export async function completeHostSession(context) {
-    if (!hostAuthenticatedMode()) return false;
+    if (!hostAuthenticatedMode())
+        return false;
     const state = stateFor(context);
     const epoch = state.epoch;
     const verdict = await checkV2Token(null, context);
-    if (epoch !== state.epoch || verdict !== 'valid') return false;
+    if (epoch !== state.epoch || verdict !== 'valid')
+        return false;
     state.hostSession = true;
     state.accessEnabled = true;
     state.selectedProtocol = 'v2';
@@ -1729,12 +1716,12 @@ export async function completeHostSession(context) {
     state.epoch++;
     const releaseBootstrap = state.pendingBootstrapRelease;
     state.pendingBootstrapRelease = null;
-    if (releaseBootstrap) releaseBootstrap();
+    if (releaseBootstrap)
+        releaseBootstrap();
     if (pendingOverlay?.ownerKey === credentialKey(context))
         pendingOverlay.finish({ enabled: true });
     return true;
 }
-
 export async function logoutAccess(all = false, context) {
     const state = stateFor(context);
     if (state.hostSession) {
@@ -1753,22 +1740,21 @@ export async function logoutAccess(all = false, context) {
             });
             return res.ok;
         });
-        if (!answerOK) throw new Error('Unable to logout');
+        if (!answerOK)
+            throw new Error('Unable to logout');
         if (epoch === state.epoch) {
             state.hostSession = false;
             state.loggedOut = true;
             state.epoch++;
-            broadcastInvalidation(
-                credentialKey(context),
-                state.refreshAbsoluteExpiresAt,
-            );
+            broadcastInvalidation(credentialKey(context), state.refreshAbsoluteExpiresAt);
         }
         if (pendingOverlay?.ownerKey === credentialKey(context))
             pendingOverlay.finish({ enabled: false });
         return { ok: true };
     }
     const token = state.accessToken;
-    if (!token) throw new Error('Sign in to continue');
+    if (!token)
+        throw new Error('Sign in to continue');
     const epoch = state.epoch;
     const result = await withAuthDeadline(async (signal) => {
         const res = await authFetch(context, '/api/auth/v2/logout', {
@@ -1783,10 +1769,12 @@ export async function logoutAccess(all = false, context) {
             redirect: 'error',
             signal,
         });
-        if (!res.ok) return { ok: false };
+        if (!res.ok)
+            return { ok: false };
         try {
             return { ok: true, payload: await res.json() };
-        } catch {
+        }
+        catch {
             return { ok: false };
         }
     });
@@ -1803,29 +1791,34 @@ export async function logoutAccess(all = false, context) {
         pendingOverlay.finish({ enabled: false });
     return { ok: true };
 }
-
 // webSocketURL clones a socket URL and, in v2 mode, appends the bearer as one
 // encoded query parameter. The token only travels to the page's own origin.
 export function webSocketURL(url) {
     const target = new URL(url instanceof URL ? url.href : String(url));
     const state = activeAuthState();
-    if (state.selectedProtocol !== 'v2' || !state.accessToken) return target;
+    if (state.selectedProtocol !== 'v2' || !state.accessToken)
+        return target;
     const httpOrigin = target.origin
         .replace(/^ws:/, 'http:')
         .replace(/^wss:/, 'https:');
-    if (httpOrigin !== location.origin) return target;
+    if (httpOrigin !== location.origin)
+        return target;
     target.searchParams.set('token', state.accessToken);
     return target;
 }
-
 if (typeof document !== 'undefined' && document.addEventListener) {
     document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState !== 'visible') return;
+        if (document.visibilityState !== 'visible')
+            return;
         void renewIfDue({}, activeAuthContext);
     });
 }
 if (typeof window !== 'undefined') {
-    const bridge = window.phiAccessAuth || {};
+    const bridge = window.phiAccessAuth || {
+        installToken,
+        getAccessToken,
+        webSocketURL,
+    };
     bridge.installToken = installToken;
     bridge.completeHostSession = completeHostSession;
     bridge.getAccessToken = getAccessToken;
@@ -1833,7 +1826,6 @@ if (typeof window !== 'undefined') {
     bridge.refreshAccessIfDue = refreshAccessIfDue;
     window.phiAccessAuth = bridge;
 }
-
 export const __test__ = {
     bytesToBase64URL,
     base64URLToBytes,
@@ -1858,7 +1850,6 @@ export const __test__ = {
     setReload,
     getAccessState,
 };
-
 // resetAccessState restores the module to its pre-bootstrap state. Tests call
 // it between cases; nothing in the app calls it.
 function resetAccessState() {
@@ -1868,7 +1859,8 @@ function resetAccessState() {
         state.refreshInFlight = null;
         const releaseBootstrap = state.pendingBootstrapRelease;
         state.pendingBootstrapRelease = null;
-        if (releaseBootstrap) releaseBootstrap();
+        if (releaseBootstrap)
+            releaseBootstrap();
     }
     authStates.clear();
     activeAuthContext = null;
@@ -1876,27 +1868,17 @@ function resetAccessState() {
     authStates.set(activeAuthKey, newAuthState());
     pendingOverlay = null;
     if (invalidation) {
-        if (typeof invalidation.close === 'function') invalidation.close();
+        if (typeof invalidation.close === 'function')
+            invalidation.close();
         invalidation = null;
     }
     reloadPage = () => location.reload();
 }
-
 function setReload(fn) {
     reloadPage = fn;
 }
-
 function getAccessState() {
-    const {
-        selectedProtocol,
-        accessEnabled,
-        accessToken,
-        persistedToken,
-        memoryOnly,
-        hostSession,
-        accessExpiresAt,
-        loggedOut,
-    } = activeAuthState();
+    const { selectedProtocol, accessEnabled, accessToken, persistedToken, memoryOnly, hostSession, accessExpiresAt, loggedOut, } = activeAuthState();
     return {
         selectedProtocol,
         accessEnabled,

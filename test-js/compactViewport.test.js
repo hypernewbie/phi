@@ -33,7 +33,7 @@ import {
 
 const CSS = readFileSync('web/style.css', 'utf8');
 const UTIL_JS = readFileSync('web/util.js', 'utf8');
-const APP_JS = readFileSync('web/app.js', 'utf8');
+const APP_JS = readFileSync('web-src/app.ts', 'utf8');
 
 // ── JS helpers: modality ≠ geometry ──────────────────────────────────────
 

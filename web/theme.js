@@ -1,11 +1,6 @@
 /* Φ phi — Accent Theme & Prepaint Utilities */
-
 import { serverKey } from './util.js';
-import {
-    captureAppearanceScope, currentAppearanceProfile, readAppearanceCache,
-    readDesktopAppearance, readInheritanceCache, effectiveAppearance, EMPTY_MOBILE, applyAppearanceFonts,
-} from './mobile-appearance.js';
-
+import { captureAppearanceScope, currentAppearanceProfile, readAppearanceCache, readDesktopAppearance, readInheritanceCache, effectiveAppearance, EMPTY_MOBILE, applyAppearanceFonts, } from './mobile-appearance.js';
 export const ACCENT_COLORS = {
     purple: {
         accent: '#7c6af7',
@@ -182,10 +177,14 @@ export const ACCENT_COLORS = {
         accentBright: '#bccbab',
     },
 };
-
 export function applyThemeTokens(colorKey) {
-    const key = colorKey || 'purple';
-    const theme = ACCENT_COLORS[key] || ACCENT_COLORS.purple;
+    const requested = colorKey || 'purple';
+    // Own keys only: a crafted `data-theme-color` such as "constructor"
+    // must fall back to purple, not read a prototype member.
+    const key = Object.hasOwn(ACCENT_COLORS, requested)
+        ? requested
+        : 'purple';
+    const theme = ACCENT_COLORS[key];
     const root = document.documentElement;
     root.style.setProperty('--accent', theme.accent);
     root.style.setProperty('--accent-glow', theme.accentGlow);
@@ -194,17 +193,16 @@ export function applyThemeTokens(colorKey) {
     root.setAttribute('data-theme-color', key);
     return theme;
 }
-
 export function applyPrepaintAppearance() {
     try {
         const scope = captureAppearanceScope();
         const profile = currentAppearanceProfile();
         applyAppearanceFonts(profile, effectiveAppearance(profile, readDesktopAppearance(scope), readAppearanceCache(scope) || EMPTY_MOBILE, readInheritanceCache(scope) || {}));
-    } catch {
+    }
+    catch {
         /* ignore */
     }
 }
-
 export function applyPrepaintFavicon(accent, accentDim) {
     try {
         const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><defs><radialGradient id="glow" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="${accent}"/><stop offset="100%" stop-color="${accentDim}"/></radialGradient></defs><rect width="32" height="32" rx="8" fill="url(#glow)"/><text x="50%" y="60%" font-family="system-ui, -apple-system, sans-serif" font-size="20" font-weight="bold" fill="#ffffff" text-anchor="middle">Φ</text></svg>`;
@@ -216,27 +214,26 @@ export function applyPrepaintFavicon(accent, accentDim) {
             document.head.appendChild(link);
         }
         link.href = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-    } catch {
+    }
+    catch {
         /* ignore */
     }
 }
-
 export function runPrepaint() {
     try {
-        const urlProfile =
-            typeof window !== 'undefined' && window.location?.search
-                ? new URLSearchParams(window.location.search).get('profile')
-                : null;
+        const urlProfile = typeof window !== 'undefined' && window.location?.search
+            ? new URLSearchParams(window.location.search).get('profile')
+            : null;
         const scopedKey = urlProfile
             ? `phi_theme_color:${urlProfile}`
             : serverKey('phi_theme_color');
-        const colorKey =
-            localStorage.getItem(scopedKey) ||
+        const colorKey = localStorage.getItem(scopedKey) ||
             localStorage.getItem('phi_theme_color') ||
             'purple';
         const theme = applyThemeTokens(colorKey);
         applyPrepaintFavicon(theme.accent, theme.accentDim);
-    } catch {
+    }
+    catch {
         /* ignore */
     }
     applyPrepaintAppearance();

@@ -131,3 +131,81 @@ describe('SyncManager coordinator', () => {
         },
     );
 });
+
+describe('SyncManager refresh resilience', () => {
+    // Constructing a manager starts a poll. Let that first poll land before
+    // the test installs its own fetch, or its late render races the test.
+    async function ready() {
+        document.body.innerHTML = '<div id="sync-panel"></div>';
+        const initial = mockFetch(() => []);
+        manager = new SyncManager({
+            sessionsManager: { config: {} },
+            showToast: vi.fn(),
+        });
+        await vi.waitFor(() => expect(initial).toHaveBeenCalled());
+        // Wait for the poll to render, not just to start: a late render would
+        // wipe the cards the test is about to assert on.
+        await vi.waitFor(() =>
+            expect(
+                manager.messagesList.querySelector('.sync-empty-state'),
+            ).not.toBeNull(),
+        );
+    }
+
+    it('keeps the rendered board when a refresh fails', async () => {
+        await ready();
+        manager.renderMessages([
+            {
+                key: 'keep',
+                value: 'still here',
+                updated_at: new Date().toISOString(),
+            },
+        ]);
+        expect(
+            manager.messagesList.querySelectorAll('.sync-card'),
+        ).toHaveLength(1);
+
+        mockFetch(() => {
+            throw new TypeError('Failed to fetch');
+        });
+        await manager.refreshMessages();
+
+        expect(
+            manager.messagesList.querySelectorAll('.sync-card'),
+        ).toHaveLength(1);
+        const note = manager.messagesList.querySelector('.sync-error-state');
+        expect(note.textContent).toContain('Showing the last board');
+    });
+
+    it('reports a failed or unexpected response as offline instead of throwing', async () => {
+        await ready();
+        mockFetch(() => ({ ok: false, status: 502, json: async () => ({}) }));
+        await manager.refreshMessages();
+        expect(
+            manager.messagesList.querySelector('.sync-error-state').textContent,
+        ).toContain('HTTP 502');
+
+        mockFetch(() => ({ ok: true, json: async () => ({ not: 'a list' }) }));
+        await manager.refreshMessages();
+        expect(
+            manager.messagesList.querySelector('.sync-error-state').textContent,
+        ).toContain('Unexpected board response');
+    });
+
+    it('clears the note once a refresh succeeds', async () => {
+        await ready();
+        mockFetch(() => {
+            throw new TypeError('Failed to fetch');
+        });
+        await manager.refreshMessages();
+        expect(
+            manager.messagesList.querySelector('.sync-error-state'),
+        ).not.toBeNull();
+
+        mockFetch(() => []);
+        await manager.refreshMessages();
+        expect(
+            manager.messagesList.querySelector('.sync-error-state'),
+        ).toBeNull();
+    });
+});

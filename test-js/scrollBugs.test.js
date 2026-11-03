@@ -109,7 +109,7 @@ describe('scroll-related source contracts', () => {
             'web/kanban.js',
             'web/sync.js',
             'web/markdown.js',
-            'web/terminal.js',
+            'web-src/terminal.ts',
         ];
         const offenders = [];
         const NON_INPUT_FOCUS_RE =
@@ -135,7 +135,7 @@ describe('scroll-related source contracts', () => {
 
     it('input-bar focus/blur setTimeout in web/terminal.js does NOT contain redundant window.scrollTo', async () => {
         const fs = await import('node:fs');
-        const src = fs.readFileSync('web/terminal.js', 'utf8');
+        const src = fs.readFileSync('web-src/terminal.ts', 'utf8');
 
         // Slice from the focus listener to (just before) the input listener.
         const focusStart = src.indexOf(
@@ -202,13 +202,13 @@ describe('user scroll interrupts stale restore, not the follow loop', () => {
 describe('bottom and document-scroll contracts', () => {
     it('treats only the exact xterm baseY as bottom', async () => {
         const fs = await import('node:fs');
-        const src = fs.readFileSync('web/terminal.js', 'utf8');
+        const src = fs.readFileSync('web-src/terminal.ts', 'utf8');
         expect(src).not.toContain('baseY - 1');
     });
 
     it('never resets document scroll from a generic window scroll event', async () => {
         const fs = await import('node:fs');
-        const src = fs.readFileSync('web/app.js', 'utf8');
+        const src = fs.readFileSync('web-src/app.ts', 'utf8');
         expect(src).not.toContain("window.addEventListener('scroll'");
         // visualViewport is optional on old Chromium; when present its
         // resize/scroll wiring retains the iOS-proven behavior. The

@@ -64,7 +64,7 @@ describe('front-end ES modules parse cleanly', () => {
 // `const tabInfo` declaration (the original TDZ trap).
 describe('no TDZ trap between term.open() and the next const tabInfo in createTab()', () => {
     it('terminal.js: createTab defers term.open to _openTermAndViewport', () => {
-        const src = fs.readFileSync('web/terminal.js', 'utf8');
+        const src = fs.readFileSync('web-src/terminal.ts', 'utf8');
         const startMatch = src.match(/\n {4}createTab\(/);
         expect(startMatch, 'createTab() not found').toBeTruthy();
         const createStart = startMatch.index + 1;
@@ -105,7 +105,7 @@ describe('no TDZ trap between term.open() and the next const tabInfo in createTa
     });
 
     it('terminal.js: _openTermAndViewport performs the open and the textarea focus patch', () => {
-        const src = fs.readFileSync('web/terminal.js', 'utf8');
+        const src = fs.readFileSync('web-src/terminal.ts', 'utf8');
         const startMatch = src.match(/\n {4}_openTermAndViewport\(/);
         expect(startMatch, '_openTermAndViewport() not found').toBeTruthy();
         const createStart = startMatch.index + 1;

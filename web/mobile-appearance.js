@@ -120,7 +120,8 @@ export function validMobileAppearance(value) {
     return (value &&
         typeof value === 'object' &&
         !Array.isArray(value) &&
-        Object.keys(value).length === 5 &&
+        // Extra fields are ignored, not fatal: a newer server may add one,
+        // and rejecting the whole payload would reset every saved setting.
         Number.isSafeInteger(value.revision) &&
         value.revision >= 0 &&
         KEYS.every((key) => {
@@ -160,7 +161,7 @@ export function effectiveAppearance(profile, desktop, mobile, inheritance = desk
 }
 export function appearanceRequestContext(scope) {
     return {
-        fetch: (url, init) => ownerFetch(scope, url, init),
+        fetch: (url, init) => ownerFetch(scope, String(url), init),
         credentialKey: scope.profileId
             ? `phi_access_credential_v1:${scope.profileId}`
             : 'phi_access_credential_v1',
