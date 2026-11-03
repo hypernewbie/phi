@@ -47,13 +47,13 @@ func (app *Server) spawnTerminal(ctx context.Context, c coders.Coder, req SpawnR
 	var bridgeEnv map[string]string
 	var bridgeExtArgs []string
 	bridge := app.bridgeOrNil()
-	managedPane := bridge != nil && piapp.ForCoder(c.ID) && c.PiMode != "psi"
+	managedPane := bridge != nil && piapp.ForCoder(c.ID)
 	if managedPane {
 		if opts.ID == "" {
 			opts.ID = pty.GenerateID()
 		}
 		var managed bool
-		bridgeEnv, bridgeExtArgs, managed = bridge.Provision(opts.ID, !cfg.PiBridgeNoInject)
+		bridgeEnv, bridgeExtArgs, managed = bridge.Provision(opts.ID, !cfg.PiBridgeNoInject && piBridgeInjectsExtension(c))
 		_ = managed // recorded; the launch proceeds on either path
 	}
 	revokeBridge := func() {
@@ -278,3 +278,8 @@ func (app *Server) restoreSavedTab(tab pty.SavedTab) {
 		log.Printf("[tabs] %s: Shell unavailable; continuing startup: %v", tab.ID, err)
 	}
 }
+
+// piBridgeInjectsExtension reports whether a coder receives the bundled Phi
+// bridge extension argument. Native psi speaks the protocol itself, so it
+// gets the environment but never --extension.
+func piBridgeInjectsExtension(c coders.Coder) bool { return c.PiMode != "psi" }

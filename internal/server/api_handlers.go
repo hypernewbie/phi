@@ -386,7 +386,7 @@ func (app *Server) handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 			snapshot.OpenCodeMode = app.terminalOpenCodeMode(inst)
 			snapshot.PiMode = app.terminalPiMode(inst)
 			view := terminalView{PTYInstanceSnapshot: snapshot, ActiveWS: snapshot.ActiveWS, ActiveWSCount: snapshot.ActiveWSCount}
-			if piapp.ForCoder(snapshot.Coder) && snapshot.PiMode != "psi" {
+			if piapp.ForCoder(snapshot.Coder) {
 				state := app.bridgeOrNil().PaneSnapshot(snapshot.ID)
 				view.PiBridge = &state
 			}
@@ -453,7 +453,7 @@ func (app *Server) handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 				if piMode != "" {
 					payload["pi_mode"] = piMode
 				}
-				if piapp.ForCoder(snapshot.Coder) && piMode != "psi" {
+				if piapp.ForCoder(snapshot.Coder) {
 					payload["pi_bridge"] = app.bridgeOrNil().PaneSnapshot(snapshot.ID)
 				}
 				_ = json.NewEncoder(w).Encode(payload)
@@ -491,7 +491,7 @@ func (app *Server) handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 	if c.PiMode != "" {
 		payload["pi_mode"] = c.PiMode
 	}
-	if piapp.ForCoder(inst.Coder) && inst.PiMode != "psi" {
+	if piapp.ForCoder(inst.Coder) {
 		payload["pi_bridge"] = app.bridgeOrNil().PaneSnapshot(inst.ID)
 	}
 	_ = json.NewEncoder(w).Encode(payload)
