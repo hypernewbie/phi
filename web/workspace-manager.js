@@ -412,7 +412,7 @@ export class WorkspaceManager {
         if (this.pendingState === 'unconfirmed') {
             const check = document.createElement('button');
             check.type = 'button';
-            check.className = 'btn btn-primary ws-manager-check-btn';
+            check.className = 'ws-manager-link ws-manager-check-btn';
             check.disabled = this.checking;
             check.textContent = 'Check status';
             check.addEventListener('click', () => void this.checkStatus());
@@ -525,7 +525,7 @@ export class WorkspaceManager {
             count.textContent = `(${visible.length})`;
             title.appendChild(count);
             const head = document.createElement('div');
-            head.className = 'ws-manager-section-head';
+            head.className = 'ws-manager-group-head';
             head.appendChild(title);
             const allLabel = document.createElement('label');
             allLabel.className = 'ws-manager-all';
@@ -583,7 +583,7 @@ export class WorkspaceManager {
                 note.textContent = section.error;
                 const retry = document.createElement('button');
                 retry.type = 'button';
-                retry.className = 'btn btn-primary ws-manager-retry-btn';
+                retry.className = 'ws-manager-link ws-manager-retry-btn';
                 retry.textContent = 'Retry';
                 retry.addEventListener('click', () => void this.loadRoot(path, this.generation));
                 note.appendChild(retry);
@@ -597,12 +597,11 @@ export class WorkspaceManager {
                 element.appendChild(note);
             }
             const actions = document.createElement('div');
-            actions.className = 'ws-manager-actions';
-            // Section-level removal belongs beside the section-level add, not
-            // in the heading where it competes with the title and All.
+            actions.className = 'ws-manager-group-actions';
             const removeRoot = document.createElement('button');
             removeRoot.type = 'button';
-            removeRoot.className = 'btn btn-primary ws-manager-root-remove';
+            removeRoot.className =
+                'ws-manager-link ws-manager-link-danger ws-manager-root-remove';
             removeRoot.textContent = 'Remove root';
             removeRoot.disabled = this.isPending();
             removeRoot.addEventListener('click', () => void this.removeRoot(path));
