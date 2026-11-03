@@ -448,9 +448,13 @@ const BURST_PAINT_SKIP_WINDOW_MS = 400;
 // A stream that outlives this window reveals and paints normally: no pane may
 // stay blank long enough to look hung.
 const BURST_PAINT_SKIP_MAX_MS = 5000;
-// Output that stops for this long means the burst is over; reveal then, so a
-// stream that pauses mid-flight does not flash the pane on every gap.
-const BURST_PAINT_SKIP_REVEAL_MS = 120;
+// A burst is over once its queue stays empty this long. Shorter pauses are
+// chunking (a script writing in steps, a coalescing link), not the end.
+const BURST_PAINT_SKIP_SETTLE_MS = 400;
+// Once revealed, the pane stays readable for at least this long. A chunked
+// producer (a script writing in steps, a coalescing link) looks quiet between
+// chunks, and re-skipping on the next one would blank the pane in pulses.
+const BURST_PAINT_SKIP_MIN_VISIBLE_MS = 1200;
 // Full live scrollback, desktop and unset-mobile alike. The mobile lane
 // below references this — never a second literal.
 const LIVE_SCROLLBACK_ROWS = 10000;
@@ -4131,6 +4135,11 @@ export class TabManager {
         // not let one long stream flash the pane every window.
         if (tabInfo._burstPaintSkipCooldown)
             return false;
+        // A chunked stream is not a new burst just because it paused once.
+        const revealedAt = tabInfo._burstRevealedAt;
+        if (revealedAt !== undefined &&
+            performance.now() - revealedAt < BURST_PAINT_SKIP_MIN_VISIBLE_MS)
+            return false;
         // A replay already owns the pane: it lands on the tail in one jump and
         // shows its own progress pill, so a second skip would only fight it.
         if (tabInfo._bootstrapGate)
@@ -4182,7 +4191,7 @@ export class TabManager {
             tabInfo._burstRevealTimer = null;
             tabInfo._burstPaintSkipCooldown = false;
             this._endBurstPaintSkip(tabInfo, true);
-        }, BURST_PAINT_SKIP_REVEAL_MS);
+        }, BURST_PAINT_SKIP_SETTLE_MS);
     }
     _cancelBurstSettle(tabInfo) {
         if (!tabInfo._burstRevealTimer)
@@ -4198,6 +4207,7 @@ export class TabManager {
         if (tabInfo._burstPaintSkip === undefined)
             return;
         tabInfo._burstPaintSkip = undefined;
+        tabInfo._burstRevealedAt = performance.now();
         tabInfo.termContainer?.classList?.remove('burst-paint-skip');
         tabInfo._burstPaintSkipEl?.remove();
         tabInfo._burstPaintSkipEl = undefined;

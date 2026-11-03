@@ -60,7 +60,7 @@ async function drain() {
 
 async function settle() {
     await drain();
-    await vi.advanceTimersByTimeAsync(120);
+    await vi.advanceTimersByTimeAsync(400);
 }
 
 function hidden(tab) {
@@ -90,7 +90,7 @@ describe('burst paint skip', () => {
             burst,
         );
         expect(tab.term.scrollToBottom).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(119);
+        await vi.advanceTimersByTimeAsync(399);
         expect(hidden(tab)).toBe(true);
         await vi.advanceTimersByTimeAsync(1);
         expect(hidden(tab)).toBe(false);
@@ -167,7 +167,8 @@ describe('burst paint skip', () => {
         expect(tab.term.write.mock.calls.map(([data]) => data).join('')).toBe(
             burst + burst,
         );
-        // A later stream can engage after the parser really catches up.
+        // A later stream can engage after the pane has been readable a moment.
+        await vi.advanceTimersByTimeAsync(1200);
         tm.writeToTerminal(tab, burst);
         expect(hidden(tab)).toBe(true);
         await settle();
@@ -207,6 +208,25 @@ describe('burst paint skip', () => {
         expect(hidden(tab)).toBe(false);
     });
 
+    it('does not pulse: a chunked stream stays readable between chunks', async () => {
+        const tm = makeTm();
+        const tab = makeTab();
+        tm.writeToTerminal(tab, burst);
+        await settle();
+        expect(hidden(tab)).toBe(false);
+        // Same stream, next chunk after a pause too short to read anything.
+        await vi.advanceTimersByTimeAsync(600);
+        tm.writeToTerminal(tab, burst);
+        await drain();
+        expect(hidden(tab)).toBe(false);
+        // A pause long enough to read is treated as a new burst.
+        await vi.advanceTimersByTimeAsync(1200);
+        tm.writeToTerminal(tab, burst);
+        expect(hidden(tab)).toBe(true);
+        await settle();
+        expect(hidden(tab)).toBe(false);
+    });
+
     it('a gesture after drain reveals without snapping back or muting the next burst', async () => {
         const tm = makeTm();
         const tab = makeTab();
@@ -217,6 +237,7 @@ describe('burst paint skip', () => {
         expect(tab.userFollowBottom).toBe(false);
         await vi.advanceTimersByTimeAsync(500);
         expect(tab.term.scrollToBottom).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(800); // past the readable window
         tab.userFollowBottom = true;
         tm.writeToTerminal(tab, burst);
         expect(hidden(tab)).toBe(true);
