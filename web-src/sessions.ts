@@ -1029,22 +1029,6 @@ export class SessionsManager {
         this.loadWorktrees();
     }
 
-    async removeWorkspace(path: string): Promise<void> {
-        try {
-            const res = await fetch('/api/config/workspaces', {
-                method: 'DELETE',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ path }),
-            });
-            if (res.ok) {
-                await this.loadConfig();
-                this.updateWorkspaceSelectWidth();
-            }
-        } catch (e) {
-            console.error('[config] Failed to remove workspace:', e);
-        }
-    }
-
     private setSessionRefreshStatus(message: string): void {
         const status = document.getElementById('session-refresh-status');
         if (status) status.textContent = message;
