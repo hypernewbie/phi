@@ -1,0 +1,151 @@
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { expect, test, type Page } from '@playwright/test';
+import { startPhi } from './_server.js';
+
+// Workspace manager: one dialog for registered projects plus live root
+// folders. These specs cover the two behaviors that can silently corrupt the
+// workspace list: the two-section add/remove flow against a real server, and a
+// change made while the browser is offline (never sent, flushed once).
+
+const FILTER = '#ws-manager-filter';
+const STATUS = '#ws-manager-status';
+
+async function openManager(page: Page): Promise<void> {
+    await page.click('#remove-workspace-btn');
+    await expect(page.locator('#ws-manager-modal')).toBeVisible();
+}
+
+function rootSection(page: Page) {
+    return page.locator('#ws-manager-roots .ws-manager-section').first();
+}
+
+function projectRow(page: Page, name: string) {
+    return page
+        .locator('#ws-manager-projects .ws-manager-row')
+        .filter({ hasText: name });
+}
+
+function restRow(page: Page, name: string) {
+    return rootSection(page)
+        .locator('.ws-manager-row')
+        .filter({ hasText: name });
+}
+
+test('adds and removes projects through a live root folder', async ({
+    page,
+}) => {
+    const server = await startPhi({
+        setup: (dir) => {
+            for (const name of ['alpha', 'beta', 'gamma']) {
+                mkdirSync(join(dir, 'code', name), { recursive: true });
+            }
+        },
+    });
+    try {
+        const rootPath = join(server.dir, 'code');
+        await page.goto(server.url);
+        await openManager(page);
+
+        await page.fill('#ws-manager-root-input', rootPath);
+        await page.click('#ws-manager-root-add');
+
+        await expect(rootSection(page)).toContainText('Rest of code');
+        await expect(rootSection(page).locator('.ws-manager-row')).toHaveCount(
+            3,
+        );
+        // The root itself is never a project.
+        await expect(projectRow(page, rootPath)).toHaveCount(0);
+
+        await restRow(page, 'alpha').locator('input').check();
+        await restRow(page, 'beta').locator('input').check();
+        await rootSection(page)
+            .locator('.ws-manager-actions .btn-accent')
+            .click();
+
+        await expect(projectRow(page, 'alpha')).toHaveCount(1);
+        await expect(projectRow(page, 'beta')).toHaveCount(1);
+        await expect(rootSection(page).locator('.ws-manager-row')).toHaveCount(
+            1,
+        );
+        await expect(
+            page.locator('#workspace-select option', { hasText: 'alpha' }),
+        ).toHaveCount(1);
+
+        await projectRow(page, 'alpha').locator('input').check();
+        await page.click('#ws-manager-remove');
+
+        await expect(projectRow(page, 'alpha')).toHaveCount(0);
+        await expect(restRow(page, 'alpha')).toHaveCount(1);
+
+        // The server kept the same list; a reload shows the same two sections.
+        await page.reload();
+        await openManager(page);
+        await expect(projectRow(page, 'beta')).toHaveCount(1);
+        await expect(restRow(page, 'alpha')).toHaveCount(1);
+        await expect(restRow(page, 'gamma')).toHaveCount(1);
+    } finally {
+        await server.stop();
+    }
+});
+
+test('keeps an offline change locally and sends it once on reconnect', async ({
+    page,
+    context,
+}) => {
+    const server = await startPhi({
+        setup: (dir) => {
+            mkdirSync(join(dir, 'code', 'alpha'), { recursive: true });
+        },
+    });
+    try {
+        const rootPath = join(server.dir, 'code');
+        const writes: string[] = [];
+        page.on('request', (request) => {
+            if (
+                request.method() !== 'GET' &&
+                request.url().includes('/api/config/workspace')
+            ) {
+                writes.push(request.url());
+            }
+        });
+
+        await page.goto(server.url);
+        await openManager(page);
+
+        await page.fill('#ws-manager-root-input', rootPath);
+        await page.click('#ws-manager-root-add');
+        await expect(restRow(page, 'alpha')).toHaveCount(1);
+        writes.length = 0;
+
+        await context.setOffline(true);
+        await restRow(page, 'alpha').locator('input').check();
+        await rootSection(page)
+            .locator('.ws-manager-actions .btn-accent')
+            .click();
+
+        await expect(page.locator(STATUS)).toContainText(
+            'Saved in this browser',
+        );
+        // Visible locally, but nothing left the browser yet.
+        await expect(projectRow(page, 'alpha')).toHaveCount(1);
+        expect(writes).toHaveLength(0);
+
+        await context.setOffline(false);
+        await expect
+            .poll(() => writes.length, { timeout: 10_000 })
+            .toBe(1);
+        await expect(page.locator(STATUS)).not.toContainText(
+            'Saved in this browser',
+        );
+
+        await page.reload();
+        await openManager(page);
+        await expect(projectRow(page, 'alpha')).toHaveCount(1);
+        await expect(rootSection(page)).toContainText(
+            'Every project in this folder is already added.',
+        );
+    } finally {
+        await server.stop();
+    }
+});
