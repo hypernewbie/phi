@@ -60,25 +60,32 @@ export interface SyncActionPayload {
     auto_open?: boolean;
 }
 
-/** Trim a bounded, control-character-free string; anything else is absent. */
-function payloadText(value: unknown, max = 4096): string | undefined {
-    if (typeof value !== 'string') return undefined;
-    const trimmed = value.trim();
-    if (trimmed === '' || trimmed.length > max) return undefined;
-    return trimmed;
+function asString(value: unknown): string | undefined {
+    return typeof value === 'string' ? value : undefined;
 }
 
-function payloadObject<T extends object>(
-    value: unknown,
-    keys: readonly string[],
-): T | undefined {
+function asObject<T extends object>(value: unknown): T | undefined {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
         return undefined;
     }
-    const record = value as Record<string, unknown>;
-    if (!keys.some((key) => key in record)) return undefined;
-    return record as T;
+    return value as T;
 }
+
+/** Scalar card fields whose only requirement is that they are strings. */
+const STRING_FIELDS = [
+    'done',
+    'machine',
+    'title',
+    'description',
+    'desc',
+    'text',
+    'toast',
+    'preview',
+    'image',
+    'file',
+    'url',
+    'link',
+] as const satisfies readonly (keyof SyncActionPayload)[];
 
 /**
  * Reads one Sync Board value into the shape the cards render. Another
@@ -105,50 +112,29 @@ export function parseActionPayload(val: unknown): SyncActionPayload | null {
     const raw = obj as Record<string, unknown>;
 
     const payload: SyncActionPayload = {};
-    const done = payloadText(raw.done);
-    if (done !== undefined) payload.done = done;
-    const machine = payloadText(raw.machine, 256);
-    if (machine !== undefined) payload.machine = machine;
-    const title = payloadText(raw.title, 512);
-    if (title !== undefined) payload.title = title;
-    const description = payloadText(raw.description);
-    if (description !== undefined) payload.description = description;
-    const desc = payloadText(raw.desc);
-    if (desc !== undefined) payload.desc = desc;
-    const text = payloadText(raw.text);
-    if (text !== undefined) payload.text = text;
-    const toast = payloadText(raw.toast, 512);
-    if (toast !== undefined) payload.toast = toast;
-    const preview = payloadText(raw.preview);
-    if (preview !== undefined) payload.preview = preview;
-    const image = payloadText(raw.image);
-    if (image !== undefined) payload.image = image;
-    const file = payloadText(raw.file);
-    if (file !== undefined) payload.file = file;
-    const url = payloadText(raw.url, 2048);
-    if (url !== undefined) payload.url = url;
-    const link = payloadText(raw.link, 2048);
-    if (link !== undefined) payload.link = link;
+    for (const key of STRING_FIELDS) {
+        const text = asString(raw[key]);
+        if (text !== undefined) payload[key] = text;
+    }
+    if (typeof raw.auto_open === 'boolean') payload.auto_open = raw.auto_open;
     if (typeof raw.diff === 'boolean' || typeof raw.diff === 'string') {
         payload.diff = raw.diff;
     } else {
-        const diffTarget = payloadObject<SyncDiffTarget>(raw.diff, [
-            'commit',
-            'target',
-            'files',
-            'modal',
-        ]);
+        const diffTarget = asObject<SyncDiffTarget>(raw.diff);
         if (diffTarget) payload.diff = diffTarget;
     }
     if (Array.isArray(raw.checklist)) {
+        // A null entry used to throw inside the card renderer, which took
+        // the whole board down; drop the unusable rows instead.
         const items = raw.checklist.filter(
             (item): item is string | SyncChecklistItem =>
                 typeof item === 'string' ||
-                (typeof item === 'object' && item !== null),
+                (typeof item === 'object' &&
+                    item !== null &&
+                    !Array.isArray(item)),
         );
         if (items.length > 0) payload.checklist = items;
     }
-    if (typeof raw.auto_open === 'boolean') payload.auto_open = raw.auto_open;
     if (Array.isArray(raw.actions)) {
         const actions = raw.actions.filter(
             (act): act is SyncActionItem =>

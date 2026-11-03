@@ -107,6 +107,19 @@ describe('parseActionPayload helper', () => {
         expect(parsed?.actions).toEqual([{ label: 'Run', command: 'ls' }]);
     });
 
+    it('keeps an empty done string a completion card, not a fallback to raw JSON', () => {
+        const parsed = parseActionPayload({ done: '', machine: 'JUPITER' });
+        expect(parsed?.done).toBe('');
+        expect(parsed?.machine).toBe('JUPITER');
+    });
+
+    it('keeps a diff target the viewer may still resolve', () => {
+        // The card asks getSyncDiffCommit() for a commit; an object without
+        // recognized keys still renders the plain Review Diff chip.
+        expect(parseActionPayload({ diff: {} })?.diff).toEqual({});
+        expect(parseActionPayload({ diff: ['a'] })?.diff).toBeUndefined();
+    });
+
     it('keeps a payload whose only rich field is unusable out of the card path', () => {
         expect(parseActionPayload({ actions: 'nope' })).toBeNull();
         expect(parseActionPayload({ checklist: [] })).toBeNull();
