@@ -1322,6 +1322,8 @@ export interface TabInfo {
     _burstWindowBytes?: number;
     /** Deferred settle: a burst reveals once the queue stays empty. */
     _burstRevealTimer?: ReturnType<typeof setTimeout> | null;
+    /** Independent deadline: a stalled parser must not leave the pane hidden. */
+    _burstMaxTimer?: ReturnType<typeof setTimeout> | null;
     _ckptWaitingSince: number | undefined;
     _drainWaiters: Array<() => void>;
     _gapInFlight: boolean;
@@ -5261,9 +5263,9 @@ export class TabManager {
         if (tab) this._queuePanelFit(tab, { forceResize: true });
     }
 
-    _refreshTerminalScreen(tabInfo: TabInfo) {
+    _refreshTerminalScreen(tabInfo: TabInfo, { resync = true } = {}) {
         internals(tabInfo.term)._core?.viewport?.syncScrollArea(true);
-        this._resyncViewportScroll(tabInfo);
+        if (resync) this._resyncViewportScroll(tabInfo);
         try {
             tabInfo.term?.refresh?.(0, Math.max(0, tabInfo.term.rows - 1));
         } catch (error) {
@@ -5376,6 +5378,7 @@ export class TabManager {
     // activity or advancing source-sequence accounting.
     _enqueueTerminalWrite(tabInfo: TabInfo, data: string, frontier?: number) {
         if (tabInfo.finalizing) return;
+        this._cancelBurstSettle(tabInfo);
         this._pushWriteRun(tabInfo, data.length, frontier);
         tabInfo.writeBuffer += data;
         if (!tabInfo.writePending) this._flushTerminalWrite(tabInfo);
@@ -5463,8 +5466,6 @@ export class TabManager {
     // millisecond, so a 6 MB repaint never leaves a deep queue behind. Arrival
     // rate is the signal — live output does not deliver 256 KB inside 400 ms.
     _noteBurstBytes(tabInfo: TabInfo, bytes: number) {
-        // Output is still arriving: nothing has settled.
-        this._cancelBurstSettle(tabInfo);
         const now = performance.now();
         const start = tabInfo._burstWindowStart;
         if (start === undefined || now - start > BURST_PAINT_SKIP_WINDOW_MS) {
@@ -5489,9 +5490,20 @@ export class TabManager {
         // Only a reader on the live tail is watching the burst. A scrolled-up
         // reader keeps their anchored row and the normal paint path.
         const buffer = tabInfo.term?.buffer?.active;
-        if (!buffer || buffer.viewportY < buffer.baseY) return false;
+        if (
+            !buffer ||
+            buffer.type === 'alternate' ||
+            buffer.viewportY < buffer.baseY
+        )
+            return false;
         if (tabInfo.userFollowBottom === false) return false;
         tabInfo._burstPaintSkip = performance.now();
+        tabInfo._burstMaxTimer = setTimeout(() => {
+            tabInfo._burstPaintSkipCooldown = true;
+            this._endBurstPaintSkip(tabInfo, true);
+            if (!tabInfo.writePending && !tabInfo.writeBuffer.length)
+                this._settleBurst(tabInfo);
+        }, BURST_PAINT_SKIP_MAX_MS);
         tabInfo.termContainer?.classList?.add('burst-paint-skip');
         // Same pill the replay path uses: the pane is busy, not broken. A
         // replay that still owns the pane keeps its own pill and cancel
@@ -5499,25 +5511,13 @@ export class TabManager {
         if (!tabInfo._replayProgressEl?.isConnected) {
             const hint = document.createElement('div');
             hint.className = 'replay-progress';
+            hint.setAttribute('role', 'status');
             hint.innerHTML =
                 '<span class="replay-progress-text">Loading output…</span>';
             tabInfo.termContainer?.appendChild(hint);
             tabInfo._burstPaintSkipEl = hint;
         }
         return true;
-    }
-
-    // True while a burst still owns the pane. Expiry reveals and paints
-    // normally for the rest of that burst: a blank pane forever is worse than
-    // a scroll, so the window is bounded. The muting lifts only once output
-    // actually stops, so one burst cannot flash the pane every few seconds.
-    _burstPaintSkipActive(tabInfo: TabInfo): boolean {
-        const started = tabInfo._burstPaintSkip;
-        if (started === undefined) return false;
-        if (performance.now() - started < BURST_PAINT_SKIP_MAX_MS) return true;
-        tabInfo._burstPaintSkipCooldown = true;
-        this._endBurstPaintSkip(tabInfo, false);
-        return false;
     }
 
     // The parser caught up and nothing has arrived since: the burst is over.
@@ -5529,7 +5529,13 @@ export class TabManager {
             !tabInfo._burstPaintSkipCooldown
         )
             return;
-        if (tabInfo._burstRevealTimer) return;
+        if (
+            tabInfo.finalizing ||
+            tabInfo.writePending ||
+            tabInfo.writeBuffer.length ||
+            tabInfo._burstRevealTimer
+        )
+            return;
         tabInfo._burstRevealTimer = setTimeout(() => {
             tabInfo._burstRevealTimer = null;
             tabInfo._burstPaintSkipCooldown = false;
@@ -5546,16 +5552,23 @@ export class TabManager {
     // Reveal: one paint, then follow the tail if the reader still wants it.
     _endBurstPaintSkip(tabInfo: TabInfo, follow: boolean) {
         this._cancelBurstSettle(tabInfo);
+        clearTimeout(tabInfo._burstMaxTimer ?? undefined);
+        tabInfo._burstMaxTimer = null;
         if (tabInfo._burstPaintSkip === undefined) return;
         tabInfo._burstPaintSkip = undefined;
         tabInfo.termContainer?.classList?.remove('burst-paint-skip');
         tabInfo._burstPaintSkipEl?.remove();
         tabInfo._burstPaintSkipEl = undefined;
+        if (tabInfo.finalizing) return;
         if (follow && tabInfo.userFollowBottom !== false) {
             tabInfo.term?.scrollToBottom?.();
             this._clearReaderAnchor(tabInfo);
         }
-        this._refreshTerminalScreen(tabInfo);
+        // The resync's top/bottom round trip emits onScroll, which would
+        // otherwise re-enable follow immediately after a reader's gesture.
+        this._refreshTerminalScreen(tabInfo, {
+            resync: tabInfo.userFollowBottom !== false,
+        });
     }
 
     _flushTerminalWrite(tabInfo: TabInfo) {
@@ -5628,9 +5641,7 @@ export class TabManager {
                         // The check runs whatever the follow state: a burst
                         // that engaged must always end, or the pane stays
                         // blank.
-                        const skipping =
-                            tabInfo._burstPaintSkip !== undefined &&
-                            this._burstPaintSkipActive(tabInfo);
+                        const skipping = tabInfo._burstPaintSkip !== undefined;
                         if (!skipping) {
                             if (
                                 followBottom &&
@@ -10496,7 +10507,8 @@ export class TabManager {
         if (
             tab._burstPaintSkip !== undefined ||
             tab._burstPaintSkipEl ||
-            tab._burstRevealTimer
+            tab._burstRevealTimer ||
+            tab._burstMaxTimer
         ) {
             this._endBurstPaintSkip(tab, false);
         }
@@ -17652,8 +17664,11 @@ export class TabManager {
         tabInfo.userFollowBottom = false;
         // A gesture is the reader taking the view back: reveal now instead of
         // holding the pane hidden until the burst drains.
-        this._endBurstPaintSkip(tabInfo, false);
-        tabInfo._burstPaintSkipCooldown = true;
+        if (tabInfo._burstPaintSkip !== undefined) {
+            tabInfo._burstPaintSkipCooldown = true;
+            this._endBurstPaintSkip(tabInfo, false);
+            this._settleBurst(tabInfo);
+        }
         // A newer viewport intent: a deferred send may still fire, but it does
         // not get to move the reader after this gesture.
         tabInfo._viewportIntentSeq = (tabInfo._viewportIntentSeq ?? 0) + 1;
