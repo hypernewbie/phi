@@ -84,6 +84,7 @@ Runtime identity binds `(generation, runtime_id, session_id)`:
 | `pi.attachments.v3` | Explicit user-triggered attachment prompt dispatch |
 | `pi.state.v2` | Read-only live identity and readiness refresh |
 | `pi.transcript-search.v2` | Read-only visible-text search on the active Pi branch |
+| `pi.syncboard.push.v1` | Reserved. Addressed Syncboard message injection. Contract only; no runtime implements or advertises it yet |
 
 Context, Compact, and Reload negotiate independently on every Hello
 from checked host availability: `pi.context.v1` needs `getContextUsage`;

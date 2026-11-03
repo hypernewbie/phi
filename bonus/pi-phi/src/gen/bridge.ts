@@ -149,6 +149,7 @@ export interface PiToPhi {
     | { $case: "syncboardRequest"; value: SyncboardRequest }
     | { $case: "attachmentPromptAck"; value: AttachmentPromptAck }
     | { $case: "transcriptSearchResponse"; value: TranscriptSearchResponse }
+    | { $case: "syncboardPushAck"; value: SyncboardPushAck }
     | undefined;
 }
 
@@ -173,6 +174,7 @@ export interface PhiToPi {
     | { $case: "attachmentPromptRequest"; value: AttachmentPromptRequest }
     | { $case: "stateRequest"; value: StateRequest }
     | { $case: "transcriptSearchRequest"; value: TranscriptSearchRequest }
+    | { $case: "syncboardNotification"; value: SyncboardNotification }
     | undefined;
 }
 
@@ -690,6 +692,32 @@ export interface SyncboardResponse {
 }
 
 /**
+ * SyncboardNotification delivers one addressed message for injection into
+ * the receiving runtime. It is the only unsolicited Phi → Pi payload; every
+ * other Phi → Pi message answers a Pi request. seq is per publisher, so
+ * acknowledgements key on message_id instead. Phi retains an unacknowledged
+ * entry and resends it after a reconnect.
+ */
+export interface SyncboardNotification {
+  seq: bigint;
+  sender: string;
+  recipient: string;
+  value: Buffer;
+  updatedAtUnixMs: bigint;
+  messageId: string;
+}
+
+/**
+ * SyncboardPushAck confirms one SyncboardNotification. A missing ack keeps
+ * the entry pending; a duplicate message_id is acked without a second
+ * injection.
+ */
+export interface SyncboardPushAck {
+  seq: bigint;
+  messageId: string;
+}
+
+/**
  * TranscriptSearchRequest searches one frozen active-branch snapshot.
  * Initial requests use start_index 0 and an empty anchor; the extension
  * captures the live leaf. Continuations echo the returned session and
@@ -805,6 +833,9 @@ export const PiToPhi: MessageFns<PiToPhi> = {
         break;
       case "transcriptSearchResponse":
         TranscriptSearchResponse.encode(message.payload.value, writer.uint32(226).fork()).join();
+        break;
+      case "syncboardPushAck":
+        SyncboardPushAck.encode(message.payload.value, writer.uint32(234).fork()).join();
         break;
     }
     return writer;
@@ -984,6 +1015,14 @@ export const PiToPhi: MessageFns<PiToPhi> = {
             };
             continue;
           }
+          case 29: {
+            if (tag !== 234) {
+              break;
+            }
+
+            message.payload = { $case: "syncboardPushAck", value: SyncboardPushAck.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1112,6 +1151,12 @@ export const PiToPhi: MessageFns<PiToPhi> = {
         }
         break;
       }
+      case "syncboardPushAck": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = { $case: "syncboardPushAck", value: SyncboardPushAck.fromPartial(object.payload.value) };
+        }
+        break;
+      }
     }
     return message;
   },
@@ -1180,6 +1225,9 @@ export const PhiToPi: MessageFns<PhiToPi> = {
         break;
       case "transcriptSearchRequest":
         TranscriptSearchRequest.encode(message.payload.value, writer.uint32(210).fork()).join();
+        break;
+      case "syncboardNotification":
+        SyncboardNotification.encode(message.payload.value, writer.uint32(218).fork()).join();
         break;
     }
     return writer;
@@ -1357,6 +1405,17 @@ export const PhiToPi: MessageFns<PhiToPi> = {
             };
             continue;
           }
+          case 27: {
+            if (tag !== 218) {
+              break;
+            }
+
+            message.payload = {
+              $case: "syncboardNotification",
+              value: SyncboardNotification.decode(reader, reader.uint32()),
+            };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1481,6 +1540,15 @@ export const PhiToPi: MessageFns<PhiToPi> = {
           message.payload = {
             $case: "transcriptSearchRequest",
             value: TranscriptSearchRequest.fromPartial(object.payload.value),
+          };
+        }
+        break;
+      }
+      case "syncboardNotification": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = {
+            $case: "syncboardNotification",
+            value: SyncboardNotification.fromPartial(object.payload.value),
           };
         }
         break;
@@ -4861,6 +4929,199 @@ export const SyncboardResponse: MessageFns<SyncboardResponse> = {
     message.httpStatus = object.httpStatus ?? 0;
     message.bodyJson = object.bodyJson ?? Buffer.alloc(0);
     message.reason = object.reason ?? "";
+    return message;
+  },
+};
+
+function createBaseSyncboardNotification(): SyncboardNotification {
+  return { seq: 0n, sender: "", recipient: "", value: Buffer.alloc(0), updatedAtUnixMs: 0n, messageId: "" };
+}
+
+export const SyncboardNotification: MessageFns<SyncboardNotification> = {
+  encode(message: SyncboardNotification, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.seq !== 0n) {
+      if (BigInt.asUintN(64, message.seq) !== message.seq) {
+        throw new globalThis.Error("value provided for field message.seq of type uint64 too large");
+      }
+      writer.uint32(8).uint64(message.seq);
+    }
+    if (message.sender !== "") {
+      writer.uint32(18).string(message.sender);
+    }
+    if (message.recipient !== "") {
+      writer.uint32(26).string(message.recipient);
+    }
+    if (message.value.length !== 0) {
+      writer.uint32(34).bytes(message.value);
+    }
+    if (message.updatedAtUnixMs !== 0n) {
+      if (BigInt.asIntN(64, message.updatedAtUnixMs) !== message.updatedAtUnixMs) {
+        throw new globalThis.Error("value provided for field message.updatedAtUnixMs of type int64 too large");
+      }
+      writer.uint32(40).int64(message.updatedAtUnixMs);
+    }
+    if (message.messageId !== "") {
+      writer.uint32(50).string(message.messageId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SyncboardNotification {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSyncboardNotification();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.seq = reader.uint64() as bigint;
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.sender = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.recipient = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.value = Buffer.from(reader.bytes());
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.updatedAtUnixMs = reader.int64() as bigint;
+            continue;
+          }
+          case 6: {
+            if (tag !== 50) {
+              break;
+            }
+
+            message.messageId = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<SyncboardNotification>, I>>(base?: I): SyncboardNotification {
+    return SyncboardNotification.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SyncboardNotification>, I>>(object: I): SyncboardNotification {
+    const message = createBaseSyncboardNotification();
+    message.seq = (object.seq !== undefined && object.seq !== null) ? BigInt(object.seq) : 0n;
+    message.sender = object.sender ?? "";
+    message.recipient = object.recipient ?? "";
+    message.value = object.value ?? Buffer.alloc(0);
+    message.updatedAtUnixMs = (object.updatedAtUnixMs !== undefined && object.updatedAtUnixMs !== null)
+      ? BigInt(object.updatedAtUnixMs)
+      : 0n;
+    message.messageId = object.messageId ?? "";
+    return message;
+  },
+};
+
+function createBaseSyncboardPushAck(): SyncboardPushAck {
+  return { seq: 0n, messageId: "" };
+}
+
+export const SyncboardPushAck: MessageFns<SyncboardPushAck> = {
+  encode(message: SyncboardPushAck, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.seq !== 0n) {
+      if (BigInt.asUintN(64, message.seq) !== message.seq) {
+        throw new globalThis.Error("value provided for field message.seq of type uint64 too large");
+      }
+      writer.uint32(8).uint64(message.seq);
+    }
+    if (message.messageId !== "") {
+      writer.uint32(18).string(message.messageId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SyncboardPushAck {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSyncboardPushAck();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.seq = reader.uint64() as bigint;
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.messageId = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<SyncboardPushAck>, I>>(base?: I): SyncboardPushAck {
+    return SyncboardPushAck.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SyncboardPushAck>, I>>(object: I): SyncboardPushAck {
+    const message = createBaseSyncboardPushAck();
+    message.seq = (object.seq !== undefined && object.seq !== null) ? BigInt(object.seq) : 0n;
+    message.messageId = object.messageId ?? "";
     return message;
   },
 };

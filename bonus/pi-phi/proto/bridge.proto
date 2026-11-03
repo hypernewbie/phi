@@ -48,6 +48,7 @@ message PiToPhi {
     SyncboardRequest syncboard_request = 26;
     AttachmentPromptAck attachment_prompt_ack = 27;
     TranscriptSearchResponse transcript_search_response = 28;
+    SyncboardPushAck syncboard_push_ack = 29;
   }
 }
 
@@ -74,6 +75,7 @@ message PhiToPi {
     AttachmentPromptRequest attachment_prompt_request = 24;
     StateRequest state_request = 25;
     TranscriptSearchRequest transcript_search_request = 26;
+    SyncboardNotification syncboard_notification = 27;
   }
 }
 
@@ -586,6 +588,28 @@ message SyncboardResponse {
   uint32 http_status = 3;
   bytes body_json = 4;
   string reason = 5;
+}
+
+// SyncboardNotification delivers one addressed message for injection into
+// the receiving runtime. It is the only unsolicited Phi → Pi payload; every
+// other Phi → Pi message answers a Pi request. seq is per publisher, so
+// acknowledgements key on message_id instead. Phi retains an unacknowledged
+// entry and resends it after a reconnect.
+message SyncboardNotification {
+  uint64 seq = 1;
+  string sender = 2;
+  string recipient = 3;
+  bytes value = 4;
+  int64 updated_at_unix_ms = 5;
+  string message_id = 6;
+}
+
+// SyncboardPushAck confirms one SyncboardNotification. A missing ack keeps
+// the entry pending; a duplicate message_id is acked without a second
+// injection.
+message SyncboardPushAck {
+  uint64 seq = 1;
+  string message_id = 2;
 }
 
 // ---------------------------------------------------------------------------
