@@ -38,7 +38,7 @@ func settledMessage(traceparent string) *pibridgepb.PiToPhi {
 	return &pibridgepb.PiToPhi{
 		PaneId:      "pane-trace",
 		ProcessId:   "proc-trace",
-		Traceparent: traceparent,
+		Traceparent: &traceparent,
 	}
 }
 

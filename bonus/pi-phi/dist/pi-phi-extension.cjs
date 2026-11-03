@@ -25917,7 +25917,7 @@ function assertFloat32(arg) {
 // src/gen/bridge.ts
 var import_grpc_js = __toESM(require_src3(), 1);
 function createBasePiToPhi() {
-  return { paneId: "", processId: "", runtimeGeneration: 0n, traceparent: "", payload: void 0 };
+  return { paneId: "", processId: "", runtimeGeneration: 0n, traceparent: void 0, payload: void 0 };
 }
 var PiToPhi = {
   encode(message, writer = new BinaryWriter()) {
@@ -25933,7 +25933,7 @@ var PiToPhi = {
       }
       writer.uint32(24).uint64(message.runtimeGeneration);
     }
-    if (message.traceparent !== "") {
+    if (message.traceparent !== void 0) {
       writer.uint32(34).string(message.traceparent);
     }
     switch (message.payload?.$case) {
@@ -26179,7 +26179,7 @@ var PiToPhi = {
     message.paneId = object.paneId ?? "";
     message.processId = object.processId ?? "";
     message.runtimeGeneration = object.runtimeGeneration !== void 0 && object.runtimeGeneration !== null ? BigInt(object.runtimeGeneration) : 0n;
-    message.traceparent = object.traceparent ?? "";
+    message.traceparent = object.traceparent ?? void 0;
     switch (object.payload?.$case) {
       case "hello": {
         if (object.payload?.value !== void 0 && object.payload?.value !== null) {
@@ -26297,7 +26297,7 @@ var PiToPhi = {
   }
 };
 function createBasePhiToPi() {
-  return { paneId: "", processId: "", runtimeGeneration: 0n, traceparent: "", payload: void 0 };
+  return { paneId: "", processId: "", runtimeGeneration: 0n, traceparent: void 0, payload: void 0 };
 }
 var PhiToPi = {
   encode(message, writer = new BinaryWriter()) {
@@ -26313,7 +26313,7 @@ var PhiToPi = {
       }
       writer.uint32(24).uint64(message.runtimeGeneration);
     }
-    if (message.traceparent !== "") {
+    if (message.traceparent !== void 0) {
       writer.uint32(34).string(message.traceparent);
     }
     switch (message.payload?.$case) {
@@ -26558,7 +26558,7 @@ var PhiToPi = {
     message.paneId = object.paneId ?? "";
     message.processId = object.processId ?? "";
     message.runtimeGeneration = object.runtimeGeneration !== void 0 && object.runtimeGeneration !== null ? BigInt(object.runtimeGeneration) : 0n;
-    message.traceparent = object.traceparent ?? "";
+    message.traceparent = object.traceparent ?? void 0;
     switch (object.payload?.$case) {
       case "accepted": {
         if (object.payload?.value !== void 0 && object.payload?.value !== null) {
