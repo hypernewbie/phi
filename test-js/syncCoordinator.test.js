@@ -9,6 +9,14 @@ setupDomHarness();
 let manager;
 afterEach(() => clearInterval(manager?.pollInterval));
 
+/** Requests that hit the board; the panel now also fetches addressed messages. */
+const boardCalls = (mock) =>
+    mock.mock.calls.filter((call) =>
+        // The proxy embeds the target in a query parameter, so compare the
+        // decoded URL rather than the encoded request.
+        decodeURIComponent(String(call[0])).includes('/api/sync/messages'),
+    );
+
 async function startSync(config) {
     document.body.innerHTML = '<div id="sync-panel"></div>';
     const fetchMock = mockFetch(() => []);
@@ -16,9 +24,9 @@ async function startSync(config) {
         sessionsManager: { config },
         showToast: vi.fn(),
     });
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(boardCalls(fetchMock).length).toBe(1));
     const target = new URL(
-        fetchMock.mock.calls[0][0],
+        boardCalls(fetchMock)[0][0],
         window.location.origin,
     ).searchParams.get('url');
     return target;
@@ -96,10 +104,10 @@ describe('SyncManager coordinator', () => {
                 sync_coordinator: 'http://127.0.0.1:17170',
             };
             await manager.refreshMessages();
-            expect(fetchMock).toHaveBeenCalledOnce();
+            expect(boardCalls(fetchMock)).toHaveLength(1);
             expect(
                 new URL(
-                    fetchMock.mock.calls[0][0],
+                    boardCalls(fetchMock)[0][0],
                     'http://127.0.0.1:17170',
                 ).searchParams.get('url'),
             ).toBe('http://127.0.0.1:17170/api/sync/messages');
