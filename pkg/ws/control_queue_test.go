@@ -3,6 +3,7 @@ package ws
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -53,6 +54,35 @@ func queueSessionEpoch(t *testing.T, c *websocket.Conn, sid string) string {
 		t.Fatal("hydrate did not publish a queue session epoch")
 	}
 	return epoch
+}
+
+// queueWaitPiOwned waits until the item's ledger state is one only Pi can
+// produce. The fake child answers asynchronously, so reading the state straight
+// after submit races the dispatcher and reads "sending" instead of "accepted".
+func queueWaitPiOwned(t *testing.T, c *websocket.Conn, sid, itemID string) {
+	t.Helper()
+	owned := map[string]bool{
+		string(rpc.QueueAccepted): true,
+		string(rpc.QueuePromoted): true,
+		string(rpc.QueueConsumed): true,
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		res := mustCall(t, c, &wspb.ControlCall{
+			Id:   "queue-wait-" + itemID,
+			Call: &wspb.ControlCall_Hydrate{Hydrate: &wspb.HydrateCall{Sid: sid}},
+		})
+		for _, item := range res.GetHydrate().GetQueue().GetItems() {
+			if item.GetId() == itemID && owned[item.GetState()] {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("item %q never reached a Pi-owned state; last queue = %+v",
+				itemID, res.GetHydrate().GetQueue().GetItems())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // TestControlQueueSubmitReturnsTypedItem covers the queue_submit variant: the
@@ -116,6 +146,7 @@ func TestControlQueueRestoreShape(t *testing.T) {
 			Delivery:     string(rpc.QueuePrompt),
 		}},
 	})
+	queueWaitPiOwned(t, c, sid, "restore-me")
 
 	restored := mustCall(t, c, &wspb.ControlCall{
 		Id: "queue-restore",
