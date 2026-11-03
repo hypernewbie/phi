@@ -801,3 +801,69 @@ function readToolResults(messages: unknown): string[] {
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
+
+export interface SyncboardPushProvider {
+    port: number;
+    requestCount: () => number;
+    /** Every request body the provider has seen, as text. */
+    bodies: () => string[];
+    /** Resolves once some request body contains the needle. */
+    waitForContent: (needle: string, timeoutMs?: number) => Promise<void>;
+    close: () => Promise<void>;
+}
+
+/**
+ * Provider for the push path. It answers every turn with plain text and keeps
+ * the raw request bodies, so a spec can prove an injected message actually
+ * reached the model input instead of only the UI.
+ */
+export async function startPushProvider(): Promise<SyncboardPushProvider> {
+    let requests = 0;
+    const bodies: string[] = [];
+    const server: Server = createServer((req, res) => {
+        const chunks: Buffer[] = [];
+        req.on('data', (chunk: Buffer) => chunks.push(chunk));
+        req.on('end', () => {
+            const path = req.url ?? '';
+            if (path.includes('/count_tokens')) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ input_tokens: 20 }));
+                return;
+            }
+            if (!path.includes('/v1/messages')) {
+                res.writeHead(404).end();
+                return;
+            }
+            requests += 1;
+            bodies.push(Buffer.concat(chunks).toString('utf8'));
+            res.writeHead(200, SSE_HEADERS);
+            res.end(events(SYNCBOARD_MODEL, { type: 'text' }));
+        });
+    });
+    await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(0, '127.0.0.1', resolve);
+    });
+    const address = server.address();
+    const port =
+        typeof address === 'object' && address !== null ? address.port : 0;
+    return {
+        port,
+        requestCount: () => requests,
+        bodies: () => [...bodies],
+        async waitForContent(needle: string, timeoutMs = 30_000) {
+            const deadline = Date.now() + timeoutMs;
+            while (Date.now() < deadline) {
+                if (bodies.some((body) => body.includes(needle))) return;
+                await new Promise((resolve) => setTimeout(resolve, 100));
+            }
+            throw new Error(
+                `provider never received ${JSON.stringify(needle)}; ${requests} request(s) seen`,
+            );
+        },
+        close: () =>
+            new Promise<void>((resolve, reject) => {
+                server.close((error) => (error ? reject(error) : resolve()));
+            }),
+    };
+}

@@ -16,7 +16,9 @@ import (
 
 	"github.com/hypernewbie/phi/internal/attachments"
 	"github.com/hypernewbie/phi/internal/piapp"
+	"github.com/hypernewbie/phi/internal/pibridge"
 	"github.com/hypernewbie/phi/internal/syncmesh"
+	syncmeshb "github.com/hypernewbie/phi/internal/syncmesh/pb"
 	"github.com/hypernewbie/phi/internal/webassets"
 	"github.com/hypernewbie/phi/pkg/bindaddr"
 	"github.com/hypernewbie/phi/pkg/coders"
@@ -222,6 +224,10 @@ func (app *Server) Run(ctx context.Context) error {
 	// the process keeps exactly its previous network face.
 	if cfg.SyncMesh {
 		app.syncMesh = syncmesh.New()
+		// Route addressed messages from the mesh into the pane runtimes. The
+		// subscriber is local: a follower dials out, so no inbound
+		// reachability is needed to receive a push.
+		app.startSyncboardPush()
 	}
 
 	// Start update checker (release builds only; dev builds hide the badge anyway).
@@ -333,7 +339,7 @@ func (app *Server) Run(ctx context.Context) error {
 	remaining := len(servers)
 	// The mesh listener joins the same error channel so a mesh failure shuts
 	// the process down instead of failing silently behind a healthy HTTP face.
-	if false && app.syncMesh != nil {
+	if app.syncMesh != nil {
 		remaining++
 		mesh := app.syncMesh
 		go func() {
@@ -390,7 +396,9 @@ func (app *Server) runGatedUpdateCheck(checker *update.Checker, label string) {
 func (app *Server) serveAll(listeners []net.Listener) ([]*http.Server, chan error) {
 	handler := app.Handler()
 	servers := make([]*http.Server, len(listeners))
-	errCh := make(chan error, len(listeners))
+	// One slot per HTTP listener plus one for the optional mesh producer, so
+	// no producer blocks on a send during shutdown.
+	errCh := make(chan error, len(listeners)+1)
 	for i, ln := range listeners {
 		srv := &http.Server{Handler: handler}
 		servers[i] = srv
@@ -508,4 +516,42 @@ func (app *Server) gracefulShutdown(servers []*http.Server, drainDelay, ptyGrace
 		}(srv)
 	}
 	wg.Wait()
+}
+
+// startSyncboardPush subscribes to the local mesh hub and delivers each
+// addressed message to the pane named by its recipient. A recipient that names
+// no managed pane is ignored: the message was addressed elsewhere, and a push
+// must never reach a runtime it was not meant for.
+func (app *Server) startSyncboardPush() {
+	if app.syncMesh == nil {
+		return
+	}
+	events, cancel := app.syncMesh.SubscribePush()
+	app.syncPushCancel = cancel
+	go func() {
+		for ev := range events {
+			app.deliverSyncboardPush(ev)
+		}
+	}()
+}
+
+// deliverSyncboardPush hands one event to the owning pane runtime and keeps it
+// pending there until the runtime acknowledges it.
+func (app *Server) deliverSyncboardPush(ev *syncmeshb.SyncEvent) {
+	if ev == nil || ev.GetGap() || app.bridge == nil {
+		// A gap marker carries no content; the sender resynchronizes.
+		return
+	}
+	err := app.bridge.PushSyncboard(ev.GetRecipient(), pibridge.SyncboardPush{
+		Seq:             ev.GetSeq(),
+		Sender:          ev.GetSender(),
+		Recipient:       ev.GetRecipient(),
+		Value:           ev.GetValue(),
+		UpdatedAtUnixMs: ev.GetUpdatedAtUnixMs(),
+		MessageID:       ev.GetMessageId(),
+	})
+	if err != nil {
+		slog.Debug("syncboard push deferred",
+			"recipient", ev.GetRecipient(), "message_id", ev.GetMessageId(), "err", err)
+	}
 }

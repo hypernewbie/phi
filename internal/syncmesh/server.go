@@ -165,3 +165,15 @@ func peerSender(ctx context.Context) string {
 	}
 	return p.Addr.String()
 }
+
+// SubscribePush registers a local subscriber for every addressed message this
+// Phi publishes. It is the seam the process uses to route mesh traffic into
+// pane runtimes; the returned cancel stops delivery.
+func (s *Server) SubscribePush() (<-chan *syncmeshb.SyncEvent, func()) {
+	if s == nil || s.hub == nil {
+		ch := make(chan *syncmeshb.SyncEvent)
+		close(ch)
+		return ch, func() {}
+	}
+	return s.hub.Subscribe(WildcardRecipient)
+}

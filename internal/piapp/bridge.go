@@ -188,6 +188,9 @@ func StartBridge(hub *ws.Hub, runtime func() ([]byte, error), version string, st
 	b.server.SetOnState(b.onState)
 	b.server.SetOnPeerDown(b.onPeerDown)
 	b.server.SetSyncboardHandler(b.handleSyncboard)
+	// Push delivery is opt-in per server; a runtime that never advertises
+	// pi.syncboard.push.v1 simply never receives one.
+	b.server.EnableSyncboardPush(true)
 	hub.SetBridgeAttach(b.encodeAttach)
 	hub.SetOnPaneExit(func(inst *pty.PTYInstance, _ int) { b.handlePaneExit(inst) })
 	go func() {
@@ -1228,4 +1231,40 @@ func (b *Bridge) syncConfig() (config.Config, error) {
 // receive credentials or extension args.
 func ForCoder(coderID string) bool {
 	return coderID == "pi"
+}
+
+// PushSyncboard delivers one addressed mesh message to a pane's runtime.
+// It reports pibridge.ErrPushUnavailable when the pane has no live lease with
+// the push capability; the caller keeps the message and retries later.
+func (b *Bridge) PushSyncboard(paneID string, push pibridge.SyncboardPush) error {
+	if b == nil {
+		return pibridge.ErrPushUnavailable
+	}
+	b.mu.Lock()
+	pane, ok := b.panes[paneID]
+	managed := ok && pane.managed
+	b.mu.Unlock()
+	if !managed {
+		// An unmanaged pane has no bridge at all, so a push is not a failure
+		// of this feature: it is simply not addressable here.
+		return pibridge.ErrPushUnavailable
+	}
+	return b.server.SendSyncboardPush(paneID, push)
+}
+
+// ManagedPaneIDs lists panes that currently run under the bridge. The mesh
+// subscriber uses it to decide which pane a recipient names.
+func (b *Bridge) ManagedPaneIDs() []string {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]string, 0, len(b.panes))
+	for id, pane := range b.panes {
+		if pane.managed {
+			out = append(out, id)
+		}
+	}
+	return out
 }

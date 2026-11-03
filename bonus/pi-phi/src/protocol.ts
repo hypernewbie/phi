@@ -16,6 +16,12 @@ export const CAPABILITY_COMPACT = 'pi.compact.v1';
 export const CAPABILITY_RELOAD = 'pi.reload.v1';
 export const CAPABILITY_SKILLS = 'pi.skills.v1';
 export const CAPABILITY_SYNCBOARD = 'pi.syncboard.v1';
+/**
+ * Push delivery: this runtime can accept an unsolicited addressed message and
+ * inject it. Advertised separately from CAPABILITY_SYNCBOARD because reading
+ * the board and being injected into are different hazards.
+ */
+export const CAPABILITY_SYNCBOARD_PUSH = 'pi.syncboard.push.v1';
 /** Bounds and deadlines for native Syncboard calls. */
 export const MAX_SYNCBOARD_VALUE_BYTES = 64 * 1024;
 export const MAX_SYNCBOARD_RESPONSE_BYTES = 192 * 1024;
