@@ -395,6 +395,7 @@ export class SessionsManager {
     wsModalOpener: HTMLElement | null;
     wsModalTrap: ModalFocusTrap | null;
     workspaceManager: WorkspaceManager;
+    private configRequestId = 0;
     worktreeDirtyRequestId: number;
     worktreeLoadRequestId: number;
     worktreeRootGeneration: number;
@@ -876,7 +877,7 @@ export class SessionsManager {
         }
         if (lastChosen && this.workspaces.includes(lastChosen)) {
             this.activeWorkspace = lastChosen;
-        } else {
+        } else if (!this.workspaces.includes(this.activeWorkspace)) {
             this.activeWorkspace = activeCwd || this.workspaces[0] || '';
         }
         this.workspaceSelect.value = this.activeWorkspace;
@@ -899,6 +900,7 @@ export class SessionsManager {
         if (Array.isArray(data.workspaces)) {
             this.applyWorkspaceList(data.workspaces, data.active_cwd);
         }
+        this.workspaceManager?.onConfigApplied();
 
         if (data.theme_color && this.app) {
             // applyAccentTheme sets data-theme-color on <html>;
@@ -958,19 +960,27 @@ export class SessionsManager {
 
     /** Reloads /api/config. Returns false when the config could not be read, so
      *  callers can tell a confirmed write from a failed reconcile. */
-    async loadConfig(): Promise<boolean> {
+    async loadConfig({ refreshPanels = true } = {}): Promise<boolean> {
+        const scope = this.app?.scope;
+        this.configRequestId = (this.configRequestId || 0) + 1;
+        const requestId = this.configRequestId;
+        const current = () =>
+            this.app?.scope === scope &&
+            !scope?.aborted &&
+            requestId === this.configRequestId;
         try {
             await loadCoderRegistry();
+            if (!current()) return false;
             const fetchFn =
-                this.app?.scope && typeof this.app.scope.fetch === 'function'
-                    ? (url: string, opts?: any) =>
-                          this.app.scope.fetch(url, opts)
+                scope && typeof scope.fetch === 'function'
+                    ? (url: string, opts?: any) => scope.fetch(url, opts)
                     : fetch;
             const res = await fetchFn('/api/config');
             if (res.ok === false) {
                 throw new Error(`HTTP ${res.status}`);
             }
             const data = await res.json();
+            if (!current()) return false;
             const store = (this.app as any)?.getActiveStore?.();
             if (store) {
                 store.responses.set('/api/config', JSON.stringify(data));
@@ -980,10 +990,14 @@ export class SessionsManager {
                     ? this.applyConfigData
                     : SessionsManager.prototype.applyConfigData;
             applyConfig.call(this, data, { stale: false });
-            await this.app?.loadCustomFont?.();
-            await this.app?.loadCustomBg?.();
-            await this.loadSessions();
-            return true;
+            if (refreshPanels) {
+                await this.app?.loadCustomFont?.();
+                if (!current()) return false;
+                await this.app?.loadCustomBg?.();
+                if (!current()) return false;
+                await this.loadSessions();
+            }
+            return current();
         } catch (e: any) {
             if (e?.name === 'AbortError' || this.app?.scope?.aborted)
                 return false;
@@ -1050,6 +1064,7 @@ export class SessionsManager {
     }
 
     resetSessionRootForBackendSwitch(): void {
+        this.workspaceManager?.resetForBackend();
         this.onSessionContextChange();
         this.worktreeLoadRequestId++;
         this.worktreeDirtyRequestId++;

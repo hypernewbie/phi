@@ -1560,12 +1560,14 @@ eager to avoid a first-open unstyled flash. -->
                             Root folder
                         </label>
                         <div class="path-input-row">
-                            <input
-                                type="text"
-                                id="ws-manager-root-input"
-                                placeholder="Absolute path or ~ path"
-                                autocomplete="off"
-                            >
+                            <div class="input-autocomplete-wrapper">
+                                <input
+                                    type="text"
+                                    id="ws-manager-root-input"
+                                    placeholder="Absolute path or ~ path"
+                                    autocomplete="off"
+                                >
+                            </div>
                             <button
                                 id="ws-manager-root-add"
                                 class="btn btn-accent"

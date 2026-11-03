@@ -80,30 +80,32 @@ func (app *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 // workspaceMutationPaths decodes the two accepted request forms: the legacy
 // single {path} and the manager's batch {paths}. Mixing both is ambiguous, so
-// it is rejected rather than guessed. Every path is expanded and trimmed here
-// so a blank element fails the whole request before anything is written.
+// it is rejected rather than guessed. Blank elements fail the whole request.
+// Preserve nonblank paths exactly: trailing spaces can be part of a directory name.
 func workspaceMutationPaths(body io.Reader) ([]string, error) {
 	var req struct {
-		Path  string   `json:"path"`
-		Paths []string `json:"paths"`
+		Path  *string   `json:"path"`
+		Paths *[]string `json:"paths"`
 	}
 	if err := json.NewDecoder(body).Decode(&req); err != nil {
 		return nil, err
 	}
-	if req.Path != "" && len(req.Paths) > 0 {
+	if req.Path != nil && req.Paths != nil {
 		return nil, errors.New("Provide path or paths, not both")
 	}
-	raw := req.Paths
-	if len(raw) == 0 && req.Path != "" {
-		raw = []string{req.Path}
+	var raw []string
+	if req.Paths != nil {
+		raw = *req.Paths
+	} else if req.Path != nil {
+		raw = []string{*req.Path}
 	}
 	if len(raw) == 0 {
 		return nil, errors.New("Missing path")
 	}
 	paths := make([]string, 0, len(raw))
 	for _, candidate := range raw {
-		expanded := expandHome(strings.TrimSpace(candidate))
-		if expanded == "" {
+		expanded := expandHome(candidate)
+		if strings.TrimSpace(expanded) == "" {
 			return nil, errors.New("Missing path")
 		}
 		paths = append(paths, expanded)

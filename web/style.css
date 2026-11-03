@@ -4662,12 +4662,17 @@ body.has-terminal-bg
 .ws-manager-filter {
     width: 100%;
     padding: 7px 10px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--bg-border);
     border-radius: 6px;
     background-color: var(--bg-base);
     color: var(--text-primary);
     font-family: inherit;
     font-size: calc(13px * var(--ui-scale));
+}
+
+.ws-manager-filter:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
 }
 
 .ws-manager-check-btn {
@@ -4798,8 +4803,8 @@ body.has-terminal-bg
     padding: 0 14px;
 }
 
-/* Shared .btn has no disabled style, so a disabled action here would look live. */
-.ws-manager-actions .btn:disabled {
+/* Keep all mutation controls visibly disabled while a write is pending. */
+.ws-manager-modal .btn:disabled {
     opacity: 0.45;
     cursor: not-allowed;
 }
@@ -4824,17 +4829,38 @@ body.has-terminal-bg
     gap: 6px;
 }
 
-/* Touch targets: a row is the control, so it must clear the 44px floor. */
 @media (max-width: 480px) {
-    /* No room for both: the name is the identity, the path only repeats the
-       root prefix and stays available as the row title. */
-    .ws-manager-row .ws-manager-path {
-        display: none;
+    /* Keep the path visible on touch: names alone cannot distinguish projects
+       with the same basename, and a hover title is not available. */
+    .ws-manager-row {
+        display: grid;
+        grid-template-columns: 16px minmax(0, 1fr);
+        gap: 3px 8px;
+    }
+
+    .ws-manager-check {
+        grid-row: 1 / 3;
     }
 
     .ws-manager-name {
-        flex: 1 1 auto;
         max-width: 100%;
+    }
+
+    .ws-manager-path {
+        grid-column: 2;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+}
+
+/* Touch usability depends on input mode, not the chosen appearance profile. */
+@media (pointer: coarse) {
+    .ws-manager-modal :is(.btn, .modal-close-btn, .ws-manager-row, .ws-manager-all, input[type="text"]) {
+        min-height: 44px;
+    }
+
+    .ws-manager-modal .modal-close-btn {
+        min-width: 44px;
     }
 }
 
