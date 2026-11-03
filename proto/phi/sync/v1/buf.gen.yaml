@@ -1,0 +1,10 @@
+version: v2
+inputs:
+  - directory: .
+plugins:
+  - local: protoc-gen-go
+    out: ../../../../internal/syncmesh/pb
+    opt: paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: ../../../../internal/syncmesh/pb
+    opt: paths=source_relative
