@@ -94,13 +94,13 @@ func (c *Client) writePump() {
 // for this connection — called from the defer below so every teardown
 // path (client-initiated close, PTY write error, read error) ends it
 // exactly once.
-func (c *Client) ReadPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub, endSpan func(error)) {
+func (c *Client) ReadPump(ctx context.Context, inst *pty.PTYInstance, manager *pty.Manager, hub *Hub, endSpan func(error)) {
 	obs.DoFeature("terminal", func(_ context.Context) {
-		c.readPump(inst, manager, hub, endSpan)
+		c.readPump(ctx, inst, manager, hub, endSpan)
 	})
 }
 
-func (c *Client) readPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub, endSpan func(error)) {
+func (c *Client) readPump(ctx context.Context, inst *pty.PTYInstance, manager *pty.Manager, hub *Hub, endSpan func(error)) {
 	logger := c.logger()
 	defer func() {
 		hub.Unregister(inst.ID, c)
@@ -172,6 +172,12 @@ func (c *Client) readPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub,
 				return
 			}
 			if inst.Pty != nil {
+				// Resize is rare and does real work (PTY ioctl plus hub
+				// staging), so it earns a span. Keystrokes do not: they are
+				// throughput, and one span per byte would drown the trace.
+				resizeCtx, endResize := obs.Span(ctx, "ws.resize", "pane", inst.ID,
+					"cols", int(cols), "rows", int(rows))
+				_ = resizeCtx
 				// Stage the resize marker at the pane's current output
 				// head so replay can order it against output. Staged
 				// before the PTY takes the new size, committed only
@@ -179,6 +185,7 @@ func (c *Client) readPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub,
 				resizeErr := inst.Pty.ResizeRecorded(uint16(cols), uint16(rows), func() (func() error, func(), error) {
 					return hub.StagePaneResize(inst.ID, uint16(cols), uint16(rows))
 				})
+				endResize(resizeErr)
 				if resizeErr != nil {
 					logger.Error("ws pty resize error", "err", resizeErr)
 					// A refused geometry/refresh is not success. Reattach with
@@ -354,7 +361,12 @@ func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, man
 		return
 	}
 
-	_, endSpan := obs.Span(r.Context(), "ws.connection", "pane", inst.ID)
+	// The span context is kept, not discarded: per-frame work below must parent
+	// to this connection, or each frame starts an unrelated root trace.
+	ctx, endSpan := obs.Span(r.Context(), "ws.connection", "pane", inst.ID)
+	if id := obs.TraceIDFromContext(ctx); id != "" {
+		logger = logger.With("trace_id", id)
+	}
 
 	client := &Client{
 		Ws:     conn,
@@ -409,5 +421,5 @@ func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, man
 		return
 	}
 
-	client.ReadPump(inst, manager, hub, endSpan)
+	client.ReadPump(ctx, inst, manager, hub, endSpan)
 }
