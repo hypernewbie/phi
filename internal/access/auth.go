@@ -169,6 +169,13 @@ func deriveAccessVerifier(password string, salt []byte, iterations int) ([]byte,
 	return pbkdf2.Key(sha256.New, password, salt, iterations, accessPasswordVerifierBytes)
 }
 
+// accessPasswordDerive derives a password verifier. Production code calls this,
+// never deriveAccessVerifier directly: the test binary swaps it for a
+// one-iteration variant, so a direct call would both cost the full 600k
+// iterations and disagree with every fixture a test built. The record format,
+// the iteration counts, and the rehash rule keep their production values.
+var accessPasswordDerive = deriveAccessVerifier
+
 // newAccessPasswordRecord builds a record at the current parameters from a raw
 // password. The salt is fresh, so an identical password yields a new verifier.
 func newAccessPasswordRecord(password string) (*accessPasswordRecord, error) {
@@ -176,7 +183,7 @@ func newAccessPasswordRecord(password string) (*accessPasswordRecord, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return nil, err
 	}
-	verifier, err := deriveAccessVerifier(password, salt, accessPasswordHashIterations)
+	verifier, err := accessPasswordDerive(password, salt, accessPasswordHashIterations)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +193,7 @@ func newAccessPasswordRecord(password string) (*accessPasswordRecord, error) {
 // matchesPassword compares a raw password with the stored verifier at the
 // record's iteration count in constant time.
 func (r accessPasswordRecord) matchesPassword(password string) (bool, error) {
-	candidate, err := deriveAccessVerifier(password, r.Salt, r.Iterations)
+	candidate, err := accessPasswordDerive(password, r.Salt, r.Iterations)
 	if err != nil {
 		return false, err
 	}

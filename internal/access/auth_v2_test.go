@@ -168,6 +168,7 @@ func TestParserRejectsInvalidSaltAndVerifierLengths(t *testing.T) {
 }
 
 func TestAccessPasswordDerivationMatchesFixture(t *testing.T) {
+	useRealAccessHash(t)
 	salt := bytes.Repeat([]byte{0x11}, accessPasswordSaltBytes)
 	cases := []struct {
 		iterations int
@@ -219,7 +220,7 @@ func TestAccessPasswordRecordCreationUsesCurrentParameters(t *testing.T) {
 
 func TestAccessPasswordRehashOnlyForStaleRecords(t *testing.T) {
 	salt := bytes.Repeat([]byte{0x11}, accessPasswordSaltBytes)
-	staleVerifier, err := deriveAccessVerifier(testAccessPassword, salt, accessPasswordMinIterations)
+	staleVerifier, err := accessPasswordDerive(testAccessPassword, salt, accessPasswordMinIterations)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1449,7 +1450,7 @@ func TestAccessRestartAfterV2Change(t *testing.T) {
 func testAccessStaleHash(t *testing.T) string {
 	t.Helper()
 	salt := bytes.Repeat([]byte{0x11}, accessPasswordSaltBytes)
-	verifier, err := deriveAccessVerifier(testAccessPassword, salt, accessPasswordMinIterations)
+	verifier, err := accessPasswordDerive(testAccessPassword, salt, accessPasswordMinIterations)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1569,7 +1570,7 @@ func testAccessV1Login(t *testing.T) (*httptest.ResponseRecorder, int) {
 	if err != nil {
 		t.Fatalf("decode salt: %v", err)
 	}
-	verifier, err := deriveAccessVerifier(testAccessPassword, salt, iterations)
+	verifier, err := accessPasswordDerive(testAccessPassword, salt, iterations)
 	if err != nil {
 		t.Fatalf("derive verifier at %d: %v", iterations, err)
 	}
