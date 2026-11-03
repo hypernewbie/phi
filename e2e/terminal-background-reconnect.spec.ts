@@ -149,11 +149,12 @@ async function sendUI(page: Page, command: string) {
     await page.locator('#input-textarea').fill(command);
     await page.locator('#send-input-btn').click();
 }
+// recorded returns the pane's replay as text, not as lines: the shell echo of
+// a command and its output can arrive in one chunk and land on the same line,
+// so every caller here asks whether the text contains something.
 async function recorded(request: APIRequestContext, url: string, pane: string) {
     const { data } = await readReplay(url, pane);
-    return stripVTControlCharacters(data.toString('utf8'))
-        .replaceAll('\r', '')
-        .split('\n');
+    return stripVTControlCharacters(data.toString('utf8')).replaceAll('\r', '');
 }
 async function visibility(page: Page, hidden: boolean) {
     await page.evaluate((value) => {
@@ -364,7 +365,7 @@ for (const mobile of [false, true]) {
                     await pair.backend!.close();
                     await pair.client.close();
                 }
-                const recordings: string[][] = [];
+                const recordings: string[] = [];
                 for (let i = 0; i < 2; i++) {
                     const response = await context.request.post(
                         `${phi.url}/api/terminals/${panes[i]}/input`,
@@ -492,9 +493,7 @@ for (const mobile of [false, true]) {
                         ),
                     );
                 expect(
-                    (await recorded(context.request, phi.url, panes[0])).join(
-                        '\n',
-                    ),
+                    await recorded(context.request, phi.url, panes[0]),
                 ).not.toContain(before.draft);
                 for (let i = 0; i < 2; i++) {
                     await selectPane(page, panes[i]);
