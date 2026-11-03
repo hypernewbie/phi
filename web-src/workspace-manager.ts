@@ -127,7 +127,10 @@ export class WorkspaceManager {
 
         this.closeBtn?.addEventListener('click', () => this.close());
         this.doneBtn?.addEventListener('click', () => this.close());
-        this.removeBtn?.addEventListener('click', () => void this.removeSelected());
+        this.removeBtn?.addEventListener(
+            'click',
+            () => void this.removeSelected(),
+        );
         this.projectsAll?.addEventListener('change', () => {
             this.projectSelection.clear();
             const rows = this.sessions.workspaces;
@@ -152,9 +155,7 @@ export class WorkspaceManager {
     }
 
     isOpen(): boolean {
-        return (
-            !!this.overlay && !this.overlay.classList.contains('hidden')
-        );
+        return !!this.overlay && !this.overlay.classList.contains('hidden');
     }
 
     /** Opens the dialog from local state, then refreshes behind it. */
@@ -356,9 +357,7 @@ export class WorkspaceManager {
             if (!workspaces.includes(path)) this.projectSelection.delete(path);
         }
         if (workspaces.length === 0) {
-            this.projectsList.appendChild(
-                this.emptyNote('No workspaces yet.'),
-            );
+            this.projectsList.appendChild(this.emptyNote('No workspaces yet.'));
         } else if (this.visibleProjects().length === 0) {
             this.projectsList.appendChild(
                 this.emptyNote('No projects match the filter.'),
@@ -473,8 +472,9 @@ export class WorkspaceManager {
             removeRoot.className = 'btn ws-manager-root-remove';
             removeRoot.textContent = 'Remove root';
             removeRoot.disabled = this.isPending();
-            removeRoot.addEventListener('click', () =>
-                void this.removeRoot(path),
+            removeRoot.addEventListener(
+                'click',
+                () => void this.removeRoot(path),
             );
             head.appendChild(removeRoot);
             element.appendChild(head);
@@ -523,8 +523,9 @@ export class WorkspaceManager {
                 retry.type = 'button';
                 retry.className = 'btn ws-manager-retry-btn';
                 retry.textContent = 'Retry';
-                retry.addEventListener('click', () =>
-                    void this.loadRoot(path, this.generation),
+                retry.addEventListener(
+                    'click',
+                    () => void this.loadRoot(path, this.generation),
                 );
                 note.appendChild(retry);
                 element.appendChild(note);
@@ -557,9 +558,7 @@ export class WorkspaceManager {
         element: HTMLElement,
     ): void {
         const visible = this.visibleRows(section);
-        const selected = visible.filter((path) =>
-            section.selection.has(path),
-        );
+        const selected = visible.filter((path) => section.selection.has(path));
         for (const box of element.querySelectorAll<HTMLInputElement>(
             '.ws-manager-check',
         )) {
@@ -641,10 +640,6 @@ export class WorkspaceManager {
             new Set([...this.sessions.workspaces, ...this.rootPaths]),
         );
         return formatWorkspaceLabel(path, all);
-    }
-
-    private isBusy(): boolean {
-        return this.pendingState === 'sending';
     }
 
     /**
@@ -730,9 +725,7 @@ export class WorkspaceManager {
             this.pendingState = 'idle';
             this.writeOutbox(null);
             this.syncFromConfig();
-            this.setStatus(
-                message.trim() || 'The server rejected the change.',
-            );
+            this.setStatus(message.trim() || 'The server rejected the change.');
             return;
         }
 
@@ -795,7 +788,8 @@ export class WorkspaceManager {
     }
 
     private async send(mutation: Mutation): Promise<Response> {
-        const isRoot = mutation.kind === 'addRoot' || mutation.kind === 'removeRoot';
+        const isRoot =
+            mutation.kind === 'addRoot' || mutation.kind === 'removeRoot';
         const method =
             mutation.kind === 'add' || mutation.kind === 'addRoot'
                 ? 'POST'

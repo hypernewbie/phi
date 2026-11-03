@@ -98,7 +98,11 @@ function installFetch(handlers = {}) {
             throw new Error(`Unexpected browse: ${path}`);
         }
         if (request.pathname.startsWith('/api/config/workspace')) {
-            calls.push({ url: request.pathname, method: options.method, body: JSON.parse(options.body) });
+            calls.push({
+                url: request.pathname,
+                method: options.method,
+                body: JSON.parse(options.body),
+            });
             if (handlers.write) {
                 const result = handlers.write(request.pathname, options);
                 if (result instanceof Error) throw result;
@@ -127,18 +131,22 @@ function projects() {
 }
 
 function rootRows() {
-    return [...document.querySelectorAll('#ws-manager-roots .ws-manager-row')].map(
-        (row) => ({
-            path: row.querySelector('.ws-manager-path').textContent,
-            checked: row.querySelector('input').checked,
-        }),
-    );
+    return [
+        ...document.querySelectorAll('#ws-manager-roots .ws-manager-row'),
+    ].map((row) => ({
+        path: row.querySelector('.ws-manager-path').textContent,
+        checked: row.querySelector('input').checked,
+    }));
 }
 
 function toggle(path, root = false) {
-    const row = [...document.querySelectorAll(
-        root ? '#ws-manager-roots .ws-manager-row' : '#ws-manager-projects .ws-manager-row',
-    )].find(
+    const row = [
+        ...document.querySelectorAll(
+            root
+                ? '#ws-manager-roots .ws-manager-row'
+                : '#ws-manager-projects .ws-manager-row',
+        ),
+    ].find(
         (candidate) =>
             candidate.querySelector('.ws-manager-path').textContent === path,
     );
@@ -162,7 +170,8 @@ function setFilter(value) {
 }
 
 function allLabel(selector) {
-    return document.querySelector(`${selector} .ws-manager-all span`).textContent;
+    return document.querySelector(`${selector} .ws-manager-all span`)
+        .textContent;
 }
 
 function setOnline(online) {
@@ -208,7 +217,9 @@ function browseEntries(...children) {
 
 describe('workspace manager', () => {
     it('splits registered projects from the rest of a root, and never registers the root', async () => {
-        installFetch({ browse: () => browseEntries('phi', 'PHI', 'phi2', 'psi') });
+        installFetch({
+            browse: () => browseEntries('phi', 'PHI', 'phi2', 'psi'),
+        });
         const sessions = makeSessions({
             workspaces: [BROWSE_ROOT, '/code/phi'],
             roots: [BROWSE_ROOT],
@@ -230,15 +241,18 @@ describe('workspace manager', () => {
     });
 
     it('adds selected children in one batch and moves them into Projects', async () => {
-        const { calls } = installFetch({ browse: () => browseEntries('psi', 'theta') });
+        const { calls } = installFetch({
+            browse: () => browseEntries('psi', 'theta'),
+        });
         const sessions = makeSessions({ workspaces: [], roots: [BROWSE_ROOT] });
         await openManager(sessions);
 
         toggle('/code/psi', true);
         toggle('/code/theta', true);
         expect(buttonText('ws-manager-remove')).toBe('Remove selected (0)');
-        expect(document.querySelector('#ws-manager-roots .btn-accent').textContent)
-            .toBe('Add selected (2)');
+        expect(
+            document.querySelector('#ws-manager-roots .btn-accent').textContent,
+        ).toBe('Add selected (2)');
 
         document.querySelector('#ws-manager-roots .btn-accent').click();
         await vi.waitFor(() => expect(calls.length).toBe(1));
@@ -290,7 +304,9 @@ describe('workspace manager', () => {
                 .textContent,
         ).toBe('Add selected (3)');
 
-        document.querySelector('#ws-manager-roots .ws-manager-actions .btn').click();
+        document
+            .querySelector('#ws-manager-roots .ws-manager-actions .btn')
+            .click();
         await vi.waitFor(() => expect(calls.length).toBe(1));
         expect(calls[0].body).toEqual({
             paths: ['/code/psi', '/code/theta', '/code/zeta'],
@@ -364,7 +380,9 @@ describe('workspace manager', () => {
         await vi.waitFor(() =>
             expect(statusText()).toContain('Saved in this browser'),
         );
-        expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
+        expect(
+            fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE'),
+        ).toBe(false);
         expect(sessions.workspaces).toEqual([]);
         expect(
             JSON.parse(localStorage.getItem('phi_workspace_manager_outbox')),
@@ -422,9 +440,7 @@ describe('workspace manager', () => {
             expect(document.querySelector('.ws-manager-check-btn')).toBeNull(),
         );
         expect(writes().length).toBe(1);
-        expect(
-            localStorage.getItem('phi_workspace_manager_outbox'),
-        ).toBeNull();
+        expect(localStorage.getItem('phi_workspace_manager_outbox')).toBeNull();
     });
 
     it('renders cached children when the refresh fails, and notes truncation', async () => {
@@ -439,8 +455,12 @@ describe('workspace manager', () => {
             }),
         );
         const { fetchMock } = installFetch({
-            browse: () => { throw new Error('offline'); },
-            other: () => { throw new Error('offline'); },
+            browse: () => {
+                throw new Error('offline');
+            },
+            other: () => {
+                throw new Error('offline');
+            },
         });
         const sessions = makeSessions({
             workspaces: [],
@@ -452,9 +472,7 @@ describe('workspace manager', () => {
         await openManager(sessions);
 
         await vi.waitFor(() =>
-            expect(rootRows().map((row) => row.path)).toEqual([
-                '/code/cached',
-            ]),
+            expect(rootRows().map((row) => row.path)).toEqual(['/code/cached']),
         );
         expect(
             document.querySelector('#ws-manager-roots').textContent,
@@ -517,7 +535,9 @@ describe('workspace manager', () => {
         // The first change still owns the outbox, so a second one cannot start.
         setOnline(true);
         toggle('/code/psi', true);
-        document.querySelector('#ws-manager-roots .ws-manager-actions .btn').click();
+        document
+            .querySelector('#ws-manager-roots .ws-manager-actions .btn')
+            .click();
         expect(calls.length).toBe(0);
 
         window.dispatchEvent(new Event('online'));
@@ -539,9 +559,7 @@ describe('workspace manager', () => {
                               path: '/other',
                               parent: '/',
                               truncated: false,
-                              entries: [
-                                  { name: 'keep', path: '/other/keep' },
-                              ],
+                              entries: [{ name: 'keep', path: '/other/keep' }],
                           },
                       };
             },
@@ -584,9 +602,7 @@ describe('workspace manager', () => {
         sessions.workspaceManager.close();
         await openManager(sessions);
         await vi.waitFor(() =>
-            expect(rootRows().map((row) => row.path)).toEqual([
-                '/code/stays',
-            ]),
+            expect(rootRows().map((row) => row.path)).toEqual(['/code/stays']),
         );
     });
 
@@ -610,16 +626,16 @@ describe('workspace manager', () => {
         ).toBe('Add selected (0)');
 
         toggle('/code/theta', true);
-        document.querySelector('#ws-manager-roots .ws-manager-actions .btn').click();
+        document
+            .querySelector('#ws-manager-roots .ws-manager-actions .btn')
+            .click();
         await vi.waitFor(() => expect(calls.length).toBe(1));
         expect(calls[0].body).toEqual({ paths: ['/code/theta'] });
 
         // Clearing the filter brings the still-selected hidden row back.
         setFilter('');
         await vi.waitFor(() =>
-            expect(
-                rootRows().map((row) => [row.path, row.checked]),
-            ).toEqual([
+            expect(rootRows().map((row) => [row.path, row.checked])).toEqual([
                 ['/code/psi', true],
                 ['/code/psi-extra', false],
             ]),
@@ -692,9 +708,7 @@ describe('workspace manager', () => {
                               path: '/new-root',
                               parent: '/',
                               truncated: false,
-                              entries: [
-                                  { name: 'one', path: '/new-root/one' },
-                              ],
+                              entries: [{ name: 'one', path: '/new-root/one' }],
                           },
                       }
                     : browseEntries(),
