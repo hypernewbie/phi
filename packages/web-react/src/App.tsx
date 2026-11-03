@@ -11,6 +11,12 @@ import {
     resolveLegacyHandoff,
 } from './platform/legacy-handoff.ts';
 import { isVisible } from './platform/modal-trap.ts';
+import {
+    closePopout,
+    defaultPopoutDeps,
+    isPopoutCloseNow,
+    tryOpenNative,
+} from './platform/native-popout.ts';
 import { ConnectionScreen } from './screens/ConnectionScreen.tsx';
 import { LoginScreen } from './screens/LoginScreen.tsx';
 import { SettingsScreen } from './screens/SettingsScreen.tsx';
@@ -55,6 +61,9 @@ function SettingsPanel({
             onSetAccessPassword={store.setAccessPassword}
             onClearAccessPassword={store.clearAccessPassword}
             onSecurityEdit={store.dismissSecurity}
+            onUploadFont={store.uploadFont}
+            onUploadBackground={store.uploadBackground}
+            onRemoveBackground={store.removeBackground}
             mobileStore={mobile}
             onMobileSignIn={onMobileSignIn}
         />
@@ -70,7 +79,13 @@ export function App({
     settings: SettingsStore;
     mobile: MobileAppearanceStore | null;
 }) {
-    const [settingsOpen, setSettingsOpen] = useState(false);
+    // A claimed popout renders settings immediately; closing it
+    // closes the popup instead of unmounting the modal.
+    const [settingsOpen, setSettingsOpen] = useState(isPopoutCloseNow);
+    const closeSettings = (): void => {
+        if (isPopoutCloseNow()) closePopout(defaultPopoutDeps());
+        else setSettingsOpen(false);
+    };
     const [view, setView] = useState(session.view);
     const openerRef = useRef<HTMLButtonElement | null>(null);
     useEffect(() => session.start(setView), [session]);
@@ -98,6 +113,13 @@ export function App({
                     <Button
                         disabled={view.phase !== 'ready'}
                         onClick={(event) => {
+                            if (
+                                tryOpenNative(
+                                    'desktop',
+                                    defaultPopoutDeps(),
+                                )
+                            )
+                                return;
                             openerRef.current = event.currentTarget;
                             setSettingsOpen(true);
                         }}
@@ -122,7 +144,7 @@ export function App({
                     label="Phi Settings"
                     doneLabel={settingsCopy.done}
                     closeLabel={settingsCopy.closeLabel}
-                    onClose={() => setSettingsOpen(false)}
+                    onClose={closeSettings}
                 >
                     <SettingsPanel
                         store={settings}

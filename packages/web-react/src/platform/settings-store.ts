@@ -15,7 +15,19 @@ import {
     applyAppearanceFonts,
     removePrepaintNode,
 } from './appearance-apply.ts';
-import { readCustomFontName } from './appearance-assets.ts';
+import {
+    clearBackground as clearBackgroundAsset,
+    clearFont as clearFontAsset,
+    createIndexedDBAssetDatabase,
+    getFont as getFontAsset,
+    injectFontFace as injectFontFaceAsset,
+    putBackground as putBackgroundAsset,
+    putFont as putFontAsset,
+    readCustomBackgroundName,
+    readCustomFontName,
+    type AssetDatabase,
+    type AssetRecord,
+} from './appearance-assets.ts';
 import { broadcastConfigSync } from './config-sync.ts';
 import type {
     ConfigDocument,
@@ -59,6 +71,10 @@ export interface AppearanceControls {
     readonly profileNative: boolean;
     readonly profileMemoryOnly: boolean;
     readonly customFontName: string;
+    readonly terminalBgName: string;
+    readonly fontInstalled: boolean;
+    readonly fontError: string | null;
+    readonly bgError: string | null;
 }
 
 export type SecurityError =
@@ -84,6 +100,24 @@ export interface SecurityHooks {
     adoptBundle(bundle: CredentialBundle): void;
     accessDisabled(): void;
 }
+
+export interface AssetDeps {
+    putFont(name: string, blob: Blob): Promise<void>;
+    putBackground(name: string, blob: Blob): Promise<void>;
+    clearFont(): Promise<void>;
+    clearBackground(): Promise<void>;
+    getFont(): Promise<AssetRecord | null>;
+    injectFontFace(blob: Blob): void;
+}
+
+const defaultAssetDeps = (db: AssetDatabase): AssetDeps => ({
+    putFont: (name, blob) => putFontAsset(db, name, blob),
+    putBackground: (name, blob) => putBackgroundAsset(db, name, blob),
+    clearFont: () => clearFontAsset(db),
+    clearBackground: () => clearBackgroundAsset(db),
+    getFont: () => getFontAsset(db),
+    injectFontFace: (blob) => injectFontFaceAsset(blob),
+});
 
 export interface SettingsView {
     readonly ready: boolean;
@@ -111,6 +145,9 @@ export interface SettingsStore {
     setThemeColor(color: string): void;
     setProfile(profile: ProfileOverride): void;
     resetAppearance(): void;
+    uploadFont(name: string, blob: Blob): void;
+    uploadBackground(name: string, blob: Blob): void;
+    removeBackground(): void;
     setAccessPassword(newPassword: string, confirmPassword: string): void;
     clearAccessPassword(): void;
     dismissSecurity(): void;
@@ -215,7 +252,10 @@ export function createSettingsStore(
     broadcast: Broadcaster = defaultBroadcast,
     scopeInput?: AppearanceScope | null,
     securityHooks?: SecurityHooks,
+    assetDeps?: AssetDeps,
 ): SettingsStore {
+    const assets =
+        assetDeps ?? defaultAssetDeps(createIndexedDBAssetDatabase());
     const cacheKey = `${CACHE_PREFIX}${http.serverLabel}`;
     const scope = scopeInput === undefined ? readAppearanceScope() : scopeInput;
     const owner = scope === null ? null : appearanceOwner(scope);
@@ -235,6 +275,10 @@ export function createSettingsStore(
     let terminalFontSize = 0;
     let mobileScrollbackRows = 0;
     let customFontName = '';
+    let terminalBgName = '';
+    let fontInstalled = false;
+    let fontError: string | null = null;
+    let bgError: string | null = null;
     let themeColor = 'purple';
     let themeEdited = false;
     let profile: ProfileOverride = readProfileOverride(storage);
@@ -300,6 +344,10 @@ export function createSettingsStore(
         profileNative,
         profileMemoryOnly,
         customFontName,
+        terminalBgName,
+        fontInstalled,
+        fontError,
+        bgError,
     });
     const security = (): SecurityControls => ({
         enabled: securityEnabled,
@@ -382,6 +430,7 @@ export function createSettingsStore(
             server?.mobileScrollbackRows ?? 0,
         );
         customFontName = readCustomFontName(local);
+        terminalBgName = readCustomBackgroundName(local);
         applyAppearanceFonts(currentProfile(), {
             ui_font_family: uiFontFamily,
             ui_font_size: uiFontSize,
@@ -461,6 +510,8 @@ export function createSettingsStore(
         if (versionOutcome.kind === 'ok') version = versionOutcome.document;
         pending = false;
         emit();
+        // The name arrives with the fresh config on a cold boot.
+        void restoreCustomFont();
     };
     const announce = (
         type: string,
@@ -515,6 +566,32 @@ export function createSettingsStore(
             );
         } catch {
             // Local mirror is best-effort; the rendered state stands.
+        }
+    };
+    // Size rejections arrive as full sentences ('Font too large…');
+    // anything else is a storage failure wrapped with its cause.
+    const assetFailure = (
+        kind: 'Font' | 'Background',
+        error: unknown,
+    ): string => {
+        const message =
+            error instanceof Error ? error.message : String(error);
+        return message.startsWith(kind)
+            ? message
+            : `${kind} upload failed: ${message}`;
+    };
+    // A reload keeps the name in the local key but drops the
+    // @font-face; re-inject from IndexedDB like legacy loadCustomFont.
+    const restoreCustomFont = async (): Promise<void> => {
+        if (customFontName === '' || fontInstalled) return;
+        try {
+            const record = await assets.getFont();
+            if (record === null) return;
+            assets.injectFontFace(record.blob);
+            fontInstalled = true;
+            emit();
+        } catch (error) {
+            console.warn('[settings] custom font restore failed', error);
         }
     };
     const flushAppearance = (): void => {
@@ -600,6 +677,7 @@ export function createSettingsStore(
                 resolveAppearance(cached);
             }
             emit();
+            void restoreCustomFont();
             void load().catch(() => {});
             return () => {
                 listener = null;
@@ -773,6 +851,15 @@ export function createSettingsStore(
                 // Removal is best-effort; the zero write below stands.
             }
             removePrepaintNode();
+            // Legacy clears both IndexedDB assets on reset; families
+            // already zero below, which drops any 'Phi Custom Font' use.
+            void assets.clearFont().catch(() => {});
+            void assets.clearBackground().catch(() => {});
+            customFontName = '';
+            terminalBgName = '';
+            fontInstalled = false;
+            fontError = null;
+            bgError = null;
             uiFontFamily = '';
             uiFontSize = 0;
             terminalFontFamily = '';
@@ -781,7 +868,12 @@ export function createSettingsStore(
                 ui_font_family: '',
                 ui_font_size: 0,
             });
-            writeAppearanceLocal({ ...preserved, ...APPEARANCE_ZEROS });
+            writeAppearanceLocal({
+                ...preserved,
+                ...APPEARANCE_ZEROS,
+                custom_font_name: '',
+                terminal_bg_name: '',
+            });
             emit();
             // Reset posts immediately and announces at once; a pending
             // debounced patch still flushes after, like legacy.
@@ -806,6 +898,54 @@ export function createSettingsStore(
                     .catch(() => {});
             }
             announce('appearance');
+        },
+        uploadFont: (name, blob) => {
+            if (listener === null || config === null) return;
+            fontError = null;
+            emit();
+            assets
+                .putFont(name, blob)
+                .then(() => {
+                    assets.injectFontFace(blob);
+                    customFontName = name;
+                    fontInstalled = true;
+                    writeAppearanceLocal({ custom_font_name: name });
+                    announce('appearance');
+                    emit();
+                })
+                .catch((error: unknown) => {
+                    fontError = assetFailure('Font', error);
+                    emit();
+                });
+        },
+        uploadBackground: (name, blob) => {
+            if (listener === null || config === null) return;
+            bgError = null;
+            emit();
+            assets
+                .putBackground(name, blob)
+                .then(() => {
+                    terminalBgName = name;
+                    writeAppearanceLocal({ terminal_bg_name: name });
+                    announce('appearance');
+                    emit();
+                })
+                .catch((error: unknown) => {
+                    bgError = assetFailure('Background', error);
+                    emit();
+                });
+        },
+        removeBackground: () => {
+            if (listener === null || config === null) return;
+            bgError = null;
+            // Legacy restores the label even when the delete fails.
+            const restore = (): void => {
+                terminalBgName = '';
+                writeAppearanceLocal({ terminal_bg_name: '' });
+                announce('appearance');
+                emit();
+            };
+            void assets.clearBackground().then(restore, restore);
         },
         setAccessPassword: (newPassword, confirmPassword) => {
             if (listener === null || config === null || securityBusy) return;

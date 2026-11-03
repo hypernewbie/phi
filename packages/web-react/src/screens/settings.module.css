@@ -28,7 +28,9 @@
 }
 
 .hint {
-    color: var(--text-muted);
+    /* --text-muted is 4.16:1 on the modal; this matches the
+       login hint at 5.61:1. */
+    color: #8e8ca0;
     font-size: 0.9em;
 }
 

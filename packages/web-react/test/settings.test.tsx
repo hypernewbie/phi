@@ -34,6 +34,10 @@ const APPEARANCE = {
     profileNative: false,
     profileMemoryOnly: false,
     customFontName: '',
+    terminalBgName: '',
+    fontInstalled: false,
+    fontError: null,
+    bgError: null,
 } as const;
 
 const noopHandlers = {
@@ -54,6 +58,9 @@ const noopHandlers = {
     onSecurityEdit: () => {},
     mobileStore: null,
     onMobileSignIn: () => {},
+    onUploadFont: () => {},
+    onUploadBackground: () => {},
+    onRemoveBackground: () => {},
 };
 
 function view(patch: Partial<SettingsView> = {}): SettingsView {
@@ -562,5 +569,125 @@ it('shows the store error in the alert slot and clears inputs on done', async ()
     ).toBe('');
     expect(host.querySelector('[role="status"]')?.textContent).toBe(
         settingsCopy.security.done.updated,
+    );
+});
+
+it('passes a chosen font file to the upload handler', async () => {
+    const onUploadFont = vi.fn();
+    const { host } = await mount(
+        <SettingsScreen
+            view={view()}
+            onRetry={() => {}}
+            {...noopHandlers}
+            onUploadFont={onUploadFont}
+        />,
+    );
+    const input = host.querySelector(
+        '#settings-font-upload',
+    ) as HTMLInputElement | null;
+    if (!input) throw new Error('font upload input is missing');
+    expect(input.accept).toBe('.woff2,.woff,.ttf,.otf');
+    const file = new File(['font-bytes'], 'Fira.woff2', {
+        type: 'font/woff2',
+    });
+    await act(async () => {
+        Object.defineProperty(input, 'files', {
+            value: [file],
+            configurable: true,
+        });
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(onUploadFont).toHaveBeenCalledWith('Fira.woff2', file);
+});
+
+it('names the loaded font and renders an inline font error', async () => {
+    const { host, render } = await mount(
+        <SettingsScreen
+            view={view({
+                appearance: { ...APPEARANCE, customFontName: 'Fira.woff2' },
+            })}
+            onRetry={() => {}}
+            {...noopHandlers}
+        />,
+    );
+    expect(host.textContent).toContain('Loaded Fira.woff2.');
+    await render(
+        <SettingsScreen
+            view={view({
+                appearance: {
+                    ...APPEARANCE,
+                    customFontName: '',
+                    fontError: 'Font too large (max 8MB)',
+                },
+            })}
+            onRetry={() => {}}
+            {...noopHandlers}
+        />,
+    );
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(
+        'Font too large (max 8MB)',
+    );
+});
+
+it('labels the background upload and offers Remove', async () => {
+    const onRemoveBackground = vi.fn();
+    const onUploadBackground = vi.fn();
+    const { host } = await mount(
+        <SettingsScreen
+            view={view({
+                appearance: {
+                    ...APPEARANCE,
+                    terminalBgName: 'wallpaper.png',
+                },
+            })}
+            onRetry={() => {}}
+            {...noopHandlers}
+            onUploadBackground={onUploadBackground}
+            onRemoveBackground={onRemoveBackground}
+        />,
+    );
+    expect(host.textContent).toContain(
+        'Terminal background (wallpaper.png)',
+    );
+    const remove = host.querySelector(
+        '#settings-bg-remove',
+    ) as HTMLButtonElement | null;
+    if (!remove) throw new Error('background Remove button is missing');
+    await act(async () => {
+        remove.dispatchEvent(new Event('click', { bubbles: true }));
+    });
+    expect(onRemoveBackground).toHaveBeenCalled();
+    const input = host.querySelector(
+        '#settings-bg-upload',
+    ) as HTMLInputElement | null;
+    if (!input) throw new Error('background upload input is missing');
+    const file = new File(['png-bytes'], 'wallpaper.png', {
+        type: 'image/png',
+    });
+    await act(async () => {
+        Object.defineProperty(input, 'files', {
+            value: [file],
+            configurable: true,
+        });
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(onUploadBackground).toHaveBeenCalledWith('wallpaper.png', file);
+});
+
+it('renders an inline background error', async () => {
+    const { host } = await mount(
+        <SettingsScreen
+            view={view({
+                appearance: {
+                    ...APPEARANCE,
+                    bgError: 'Background image too large (max 16MB)',
+                },
+            })}
+            onRetry={() => {}}
+            {...noopHandlers}
+        />,
+    );
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(
+        'Background image too large (max 16MB)',
     );
 });

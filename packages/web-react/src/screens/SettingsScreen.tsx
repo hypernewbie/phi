@@ -254,6 +254,9 @@ export function SettingsScreen({
     onSetAccessPassword,
     onClearAccessPassword,
     onSecurityEdit,
+    onUploadFont,
+    onUploadBackground,
+    onRemoveBackground,
     mobileStore,
     onMobileSignIn,
 }: {
@@ -274,6 +277,9 @@ export function SettingsScreen({
     onSetAccessPassword: (next: string, confirm: string) => void;
     onClearAccessPassword: () => void;
     onSecurityEdit: () => void;
+    onUploadFont: (name: string, blob: Blob) => void;
+    onUploadBackground: (name: string, blob: Blob) => void;
+    onRemoveBackground: () => void;
     mobileStore: MobileAppearanceStore | null;
     onMobileSignIn: () => void;
 }) {
@@ -433,6 +439,7 @@ export function SettingsScreen({
                         uiOptions={uiOptions}
                         termOptions={termOptions}
                         customFontName={appearance.customFontName}
+                        fontInstalled={appearance.fontInstalled}
                         onSignIn={onMobileSignIn}
                     />
                     {scrollbackRow}
@@ -550,6 +557,64 @@ export function SettingsScreen({
                     </>
                 )}
                 {page === 'desktop' && scrollbackRow}
+                <p>
+                    <label>
+                        Upload font (this browser only)…{' '}
+                        <input
+                            type="file"
+                            id="settings-font-upload"
+                            name="settings-font-upload"
+                            accept=".woff2,.woff,.ttf,.otf"
+                            onChange={(event) => {
+                                const file = event.target.files?.[0];
+                                event.target.value = '';
+                                if (file) onUploadFont(file.name, file);
+                            }}
+                        />
+                    </label>
+                </p>
+                {appearance.customFontName !== '' && (
+                    <p className={settings.hint}>
+                        {`Loaded ${appearance.customFontName}. Pick "Custom: ${appearance.customFontName}" in the font dropdowns.`}
+                    </p>
+                )}
+                {appearance.fontError !== null && (
+                    <p role="alert" className={settings.accessError}>
+                        {appearance.fontError}
+                    </p>
+                )}
+                <p>
+                    <label>
+                        {appearance.terminalBgName !== ''
+                            ? `Terminal background (${appearance.terminalBgName})`
+                            : 'Terminal background…'}{' '}
+                        <input
+                            type="file"
+                            id="settings-bg-upload"
+                            name="settings-bg-upload"
+                            accept="image/png,image/jpeg,image/webp,image/gif"
+                            onChange={(event) => {
+                                const file = event.target.files?.[0];
+                                event.target.value = '';
+                                if (file)
+                                    onUploadBackground(file.name, file);
+                            }}
+                        />
+                    </label>{' '}
+                    {appearance.terminalBgName !== '' && (
+                        <Button
+                            id="settings-bg-remove"
+                            onClick={onRemoveBackground}
+                        >
+                            Remove
+                        </Button>
+                    )}
+                </p>
+                {appearance.bgError !== null && (
+                    <p role="alert" className={settings.accessError}>
+                        {appearance.bgError}
+                    </p>
+                )}
             </fieldset>
             <fieldset disabled={!view.ready} className={settings.group}>
                 <legend className={settings.legend}>

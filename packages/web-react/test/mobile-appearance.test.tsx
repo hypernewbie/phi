@@ -124,6 +124,10 @@ const APPEARANCE = {
     profileNative: false,
     profileMemoryOnly: false,
     customFontName: '',
+    terminalBgName: '',
+    fontInstalled: false,
+    fontError: null,
+    bgError: null,
 } as const;
 
 function view(patch: Partial<SettingsView> = {}): SettingsView {
@@ -178,6 +182,9 @@ function handlers(override: Record<string, unknown> = {}) {
         onSecurityEdit: () => {},
         mobileStore: null,
         onMobileSignIn: () => {},
+        onUploadFont: () => {},
+        onUploadBackground: () => {},
+        onRemoveBackground: () => {},
         ...override,
     };
 }
@@ -193,6 +200,7 @@ async function mobileSection(
             uiOptions={UI_FONT_OPTIONS}
             termOptions={TERM_FONT_OPTIONS}
             customFontName=""
+            fontInstalled={false}
             onSignIn={() => {}}
         />,
     );

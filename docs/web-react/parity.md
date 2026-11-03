@@ -179,6 +179,76 @@ Changed files stay inside the plan allowlist: `R/package.json` + `pnpm-lock.yaml
 
 Chromium unit/browser evidence does not establish cross-browser or screen-reader behavior. These checks remain pending human operation, not passes or integration authority.
 
+## Stage 04 full status (modal, Appearance, Security, mobile fence, uploads, popout)
+
+**Date:** 2026-11-03. **State:** implemented in a worktree, M5 uncommitted, not reviewed for integration.
+
+| Reference | Value |
+| --- | --- |
+| Base | `origin/main` `d5f1e4f7` (post-reset; content twin of `47a5a539` modulo two dropped research files) |
+| Branch | `stage-04-full`, pushed to `origin/stage-04-full` at `58722f2b` (M1–M4); M5 uncommitted atop |
+| Worktree | `/Users/n0mad/code/phi-worktrees/stage-04-full` |
+| Plan | `/Users/n0mad/code/phi/plan/2026-11-03_03-12-19_stage-04-full-settings.md` revision 2 |
+| Authorization | User supplied `EXECUTE` on 2026-11-03. Direct, non-independent review. No commit, push, merge, or deletion authorized for M5. |
+
+Milestones M0 (worktree + baselines), M1 (modal shell), M2 (Appearance core + profile), M3 (Security), M4 (mobile fence), and M5 (uploads + native popout) are complete. M5 is this review's feature delta; the gate below covers the full stage.
+
+### Final verification block
+
+All commands ran from the worktree root on 2026-11-03. Browser commands used command-scoped `SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"` on loopback fixtures with synthetic passwords. No check used a user server, real-user state, or production service.
+
+| Final command | Exit | Result |
+| --- | --- | --- |
+| `pnpm build:web` | 0 | Required legacy web build, before pet |
+| `pnpm --dir desktop/pet build` | 0 | Required pet build; no tree drift afterward |
+| `pnpm typecheck` | 0 | All compiler passes |
+| `pnpm check:vendors` | 0 | Vendored bytes unchanged |
+| `pnpm exec biome ci ./packages/phi-core ./packages/web-react` | 0 | No findings in the changed packages |
+| `pnpm check:pi-phi-generated` | 0 | No drift |
+| `pnpm exec vitest run packages/phi-core/test packages/web-react/test --maxWorkers=4` | 0 | 20 files, 467 tests passed |
+| `pnpm exec playwright test --config packages/web-react/playwright.config.ts` (twice) | 0 | 108 Chromium cases each (desktop + narrow touch); first run had 3 load flakes (auth rotation, offline renewal, offline drafts), all green standalone and on the second full run |
+
+Changed files stay inside `packages/web-react/{src,test}/`: modal shell (`App.tsx`, `main.tsx`, `Modal.tsx`, `modal-trap.ts`), settings (`SettingsScreen.tsx`, `settings-store.ts`, `settings.module.css`, `copy/settings.ts`), appearance (`appearance-{scope,apply,assets,accent-theme}.ts`, `copy/appearance.ts`), security (`auth-session.ts` adoptBundle), mobile fence (`mobile-appearance-store.ts`, `MobileAppearance.tsx`), popout (`native-popout.ts`), plus unit/browser tests. No Go, legacy `web/`, or `phi-core` changes.
+
+### Functional results
+
+- Modal shell: focus trap, opener refocus, Escape, 44px close target, max-height with internal scroll; hostname override input mirrors through the appearance channel with an owner-carrying broadcast.
+- Appearance: 29 native-radio swatches save the theme immediately and announce at click; font/size rows persist browser-local with a 300ms server mirror; This-browser profile (auto/desktop/mobile) gates inheritance; reset posts font zeros, preserves the hostname, clears both IndexedDB assets, and announces.
+- Security: set/clear with local length+mismatch rules before the network; rotation reuses the login bundle seam with chain reset; 401 renders inline sign-in text and never triggers re-login; the password route uses `credentials: 'same-origin'` for refresh-cookie rotation while every other React request stays `omit`.
+- Mobile fence: full protocol port (revision/409/fence/resolve, 15s fence generations, 300ms debounce, IDB drafts, cross-tab channel); definitive failures resolve, unknown failures gate on Resolve; desktop/mobile page switch moves the scrollback row without duplication.
+- Uploads: font (8MB) and background (16MB) rows write the shared `phi` v2 IndexedDB under the legacy keys, so uploads made in either surface appear in both; oversize files are rejected before any database write; the font installs as `Phi Custom Font` with a `Loaded …` hint and a Custom option in both dropdowns; Remove restores the background label even when the delete fails; a saved font re-installs on settings start.
+- Native popout: `tryNative('config')` port — bridge claims skip the modal, `?desktop=1` hosts get an 860×1000 popup carrying `?page=mobile` and embedded identity, fullscreen/embedded-bridge/blocked popups keep the modal; `?desktop-popout=1` auto-opens settings and closes the popup instead of the modal.
+- Isolated Chrome DevTools proof (fresh stack per milestone, synthetic passwords): font upload round-trip with IDB byte verification, oversize inline error with the prior font retained, background label/remove cycle, popup open/auto-open/close cycle, mobile 390px touch with no overflow (390=390), zero console errors, no failed network requests.
+
+### Design results
+
+- One scoped module (`settings.module.css`): page switch, recovery entry, swatch rows, hint, and inline errors reuse `.btn` and theme tokens; no shared-control changes.
+- New text contrast on the modal (`#141418`): labels 14.4:1, hint `#8e8ca0` 5.61:1 (shared with the login hint; `--text-muted` at 4.16:1 was rejected for this surface), errors `#f87171` 6.64:1. All ≥ 4.5:1.
+- File inputs keep native semantics (accept filters, keyboard-reachable); errors render as `role=alert` under their row; the loaded-font hint names the exact Custom option to pick.
+- No horizontal overflow at 390/1440 px; no transitions, so reduced motion needs no override.
+
+### Intentional differences
+
+- Inline feedback instead of toasts: upload success/failure renders under the row (hint or `role=alert`) because v2 has no toast surface. Same strings, same timing.
+- Opener fallback: when no native surface claims settings, the modal opens as before; the bridge/popup paths only ever skip it, never replace its behavior.
+- Popout URL reuses the React app path with `?desktop-popout=1` instead of legacy `/config.html`; there is no v2 config page to open.
+- Terminal background bytes persist and broadcast, but v2 renders no terminal surface, so no backdrop layer is mounted. Legacy tabs on the same browser pick the image up from the shared store.
+- Previous font object URLs are revoked on re-inject; legacy leaks them. Invisible behavior, bounded memory.
+- File inputs clear after each choice so the same file can be re-picked after a failure; legacy keeps the wart.
+- Edited values survive refresh for the store lifetime (app session), where the legacy modal tracks edits per open dialog. Same rule, longer window; revisit if cross-tab edit conflicts surface.
+
+### Pending human checks
+
+| Check | Required evidence | Current result |
+| --- | --- | --- |
+| Safari visual comparison | Modal + Appearance + Security + mobile page at 1280x800 and 390x844 | Pending |
+| Safari reflow and text zoom | 320 CSS px and actual 200% zoom, no clipped controls | Pending |
+| Safari keyboard/focus | Trap, swatches, uploads, fence buttons, visible focus | Pending |
+| Safari reduced motion | No nonessential transitions | Pending |
+| macOS VoiceOver with Safari | Landmarks, alert announcements, Custom options, resolve flow | Pending |
+
+Chromium unit/browser evidence does not establish cross-browser or screen-reader behavior. These checks remain pending human operation, not passes or integration authority.
+
 ## Architecture and ownership
 
 `@phi/core` exports an empty TypeScript module. Its source compiler excludes DOM and ambient Node types.

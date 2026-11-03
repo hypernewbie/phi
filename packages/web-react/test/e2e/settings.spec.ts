@@ -513,3 +513,52 @@ test('M1: settings nav is disabled before sign-in', async ({
     ).toBeVisible();
     await expect(page.getByRole('button', { name: 'Settings' })).toBeDisabled();
 });
+
+test('full-M5: font upload adds the Custom choice and survives reload', async ({
+    page,
+    authStack,
+}) => {
+    await login(page, authStack, 'full-m5-upload-secret');
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await expect(page.getByText(/Workspaces: \d+/)).toBeVisible();
+    await page.locator('#settings-font-upload').setInputFiles({
+        name: 'Probe.woff2',
+        mimeType: 'font/woff2',
+        buffer: Buffer.from('probe-font-bytes'),
+    });
+    await expect(page.locator('#settings-ui-font')).toContainText(
+        'Custom: Probe.woff2',
+    );
+    await expect(page.getByText('Loaded Probe.woff2.')).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole('status')).toHaveText('Connected.');
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await expect(page.locator('#settings-ui-font')).toContainText(
+        'Custom: Probe.woff2',
+    );
+    await expect
+        .poll(async () =>
+            page.evaluate(
+                () =>
+                    document.getElementById('phi-custom-fonts') !== null,
+            ),
+        )
+        .toBe(true);
+});
+
+test('full-M5: background upload labels the row and Remove restores it', async ({
+    page,
+    authStack,
+}) => {
+    await login(page, authStack, 'full-m5-background-secret');
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await expect(page.getByText(/Workspaces: \d+/)).toBeVisible();
+    await page.locator('#settings-bg-upload').setInputFiles({
+        name: 'wallpaper.png',
+        mimeType: 'image/png',
+        buffer: Buffer.from('probe-png-bytes'),
+    });
+    await expect(page.getByText('Terminal background (wallpaper.png)')).toBeVisible();
+    await page.locator('#settings-bg-remove').click();
+    await expect(page.getByText('Terminal background…')).toBeVisible();
+});

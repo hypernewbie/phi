@@ -37,6 +37,10 @@ function settingsFor(): SettingsStore {
                 profileNative: false,
                 profileMemoryOnly: false,
                 customFontName: '',
+    terminalBgName: '',
+    fontInstalled: false,
+    fontError: null,
+    bgError: null,
             },
             security: {
                 enabled: false,
@@ -60,6 +64,9 @@ function settingsFor(): SettingsStore {
         setThemeColor: vi.fn(),
         setProfile: vi.fn(),
         resetAppearance: vi.fn(),
+        uploadFont: vi.fn(),
+        uploadBackground: vi.fn(),
+        removeBackground: vi.fn(),
         setAccessPassword: vi.fn(),
         clearAccessPassword: vi.fn(),
         dismissSecurity: vi.fn(),
@@ -355,4 +362,65 @@ it.each([
             search as string,
         ),
     ).toBe(expected);
+});
+
+it('skips the modal when the desktop bridge claims settings', async () => {
+    const request = vi.fn();
+    const bridge = { request };
+    (window as unknown as Record<string, unknown>).__phiDesktop = bridge;
+    try {
+        const { session, emit } = sessionFor();
+        const { host } = await mount(
+            <App
+                session={session}
+                settings={settingsFor()}
+                mobile={null}
+            />,
+        );
+        await emit({
+            phase: 'ready',
+            protection: 'disabled',
+            hostname: 'phi-1',
+            pending: false,
+        });
+        const settingsButton = [...host.querySelectorAll('button')].find(
+            (button) => button.textContent === 'Settings',
+        );
+        await act(async () => settingsButton?.click());
+        expect(request).toHaveBeenCalledWith('config', { page: 'desktop' });
+        expect(host.querySelector('[role="dialog"]')).toBeNull();
+    } finally {
+        delete (window as unknown as Record<string, unknown>).__phiDesktop;
+    }
+});
+
+it('closes the popout window instead of the modal', async () => {
+    const close = vi.fn();
+    window.close = close;
+    window.history.replaceState(null, '', '/?desktop-popout=1');
+    try {
+        const { session, emit } = sessionFor();
+        const { host } = await mount(
+            <App
+                session={session}
+                settings={settingsFor()}
+                mobile={null}
+            />,
+        );
+        await emit({
+            phase: 'ready',
+            protection: 'disabled',
+            hostname: 'phi-1',
+            pending: false,
+        });
+        expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+        const done = [...host.querySelectorAll('button')].find(
+            (button) => button.textContent === 'Close',
+        );
+        await act(async () => done?.click());
+        expect(close).toHaveBeenCalled();
+        expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+    } finally {
+        window.history.replaceState(null, '', '/');
+    }
 });

@@ -158,12 +158,14 @@ export function MobileAppearance({
     uiOptions,
     termOptions,
     customFontName,
+    fontInstalled,
     onSignIn,
 }: {
     store: MobileAppearanceStore | null;
     uiOptions: ReadonlyArray<FontOption>;
     termOptions: ReadonlyArray<FontOption>;
     customFontName: string;
+    fontInstalled: boolean;
     onSignIn: () => void;
 }) {
     const [, setVersion] = useState(0);
@@ -202,14 +204,15 @@ export function MobileAppearance({
     };
     const attempt = store.attempt;
     const remaining = (attempt?.fences.at(-1)?.deadline ?? 0) - Date.now();
-    // M4 installs no fonts, so a saved custom choice is always unavailable
-    // here; M5 uploads will add the installed check legacy performs on the
-    // shared style node.
+    // Legacy checks the shared style node; the store tracks the same
+    // fact so screens stay free of DOM reads.
     const missingCustom =
-        (values.ui_font_family ?? store.inheritance?.ui_font_family) ===
+        !fontInstalled &&
+        ((values.ui_font_family ?? store.inheritance?.ui_font_family) ===
             'Phi Custom Font' ||
-        (values.terminal_font_family ??
-            store.inheritance?.terminal_font_family) === 'Phi Custom Font';
+            (values.terminal_font_family ??
+                store.inheritance?.terminal_font_family) ===
+                'Phi Custom Font');
     const fontNote = [store.inheritanceWarning || ''].filter(Boolean).join(' ');
     return (
         <fieldset className={settings.group} id="settings-mobile-appearance">

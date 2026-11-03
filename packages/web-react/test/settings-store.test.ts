@@ -17,7 +17,19 @@ import type {
 } from '../src/platform/http.ts';
 import { createConnectionService } from '../src/platform/http.ts';
 import type { CredentialBundle } from '@phi/core';
-import { writeProfileOverride } from '../src/platform/appearance-scope.ts';
+import {
+    legacyAppearanceKey,
+    writeProfileOverride,
+} from '../src/platform/appearance-scope.ts';
+import {
+    clearBackground as clearBackgroundAsset,
+    clearFont as clearFontAsset,
+    getFont as getFontAsset,
+    memoryAssetDatabase,
+    putBackground as putBackgroundAsset,
+    putFont as putFontAsset,
+} from '../src/platform/appearance-assets.ts';
+import type { AssetDeps } from '../src/platform/settings-store.ts';
 import { createSettingsStore } from '../src/platform/settings-store.ts';
 
 const UPSTREAM = 'http://fixture.invalid';
@@ -73,6 +85,7 @@ function storeHarness(
         clearPassword?: ClearPasswordOutcome;
         authStatus?: AuthStatusOutcome;
         protection?: 'enabled' | 'disabled' | 'unknown';
+        assets?: AssetDeps;
     } = {},
 ) {
     const backing = options.storage ?? new Map<string, string>();
@@ -181,6 +194,7 @@ function storeHarness(
                 disabledCalls += 1;
             },
         },
+        options.assets,
     );
     return {
         settings,
@@ -1563,6 +1577,142 @@ it('flags the profile choice memory-only when storage is missing', async () => {
     settings.setProfile('mobile');
     expect(settings.view().appearance.profile).toBe('mobile');
     expect(settings.view().appearance.profileMemoryOnly).toBe(true);
+    stop();
+});
+
+const assetHarness = () => {
+    const db = memoryAssetDatabase();
+    const injected: Array<Blob> = [];
+    const assets: AssetDeps = {
+        putFont: vi.fn((name: string, value: Blob) =>
+            putFontAsset(db, name, value),
+        ),
+        putBackground: vi.fn((name: string, value: Blob) =>
+            putBackgroundAsset(db, name, value),
+        ),
+        clearFont: vi.fn(() => clearFontAsset(db)),
+        clearBackground: vi.fn(() => clearBackgroundAsset(db)),
+        getFont: () => getFontAsset(db),
+        injectFontFace: vi.fn((value: Blob) => {
+            injected.push(value);
+        }),
+    };
+    return { db, injected, assets };
+};
+
+const blob = (size: number): Blob => new Blob([new Uint8Array(size)]);
+
+it('uploads a font into IndexedDB, labels it, and announces appearance', async () => {
+    const { db, injected, assets } = assetHarness();
+    const { settings, broadcasts, store } = storeHarness({ assets });
+    const stop = settings.start(() => {});
+    await flush();
+    settings.uploadFont('Fira.woff2', blob(10));
+    await flush();
+    await flush();
+    expect(assets.putFont).toHaveBeenCalledWith('Fira.woff2', expect.any(Blob));
+    expect(await db.get('fonts', 'custom')).toMatchObject({
+        displayName: 'Fira.woff2',
+    });
+    expect(injected).toHaveLength(1);
+    expect(settings.view().appearance.customFontName).toBe('Fira.woff2');
+    expect(settings.view().appearance.fontInstalled).toBe(true);
+    expect(
+        JSON.parse(store.get(legacyAppearanceKey(SCOPE)) ?? '{}')
+            .custom_font_name,
+    ).toBe('Fira.woff2');
+    expect(broadcasts).toContainEqual({
+        type: 'appearance',
+        payload: { owner: OWNER },
+    });
+    stop();
+});
+
+it('shows an oversize font inline and writes nothing', async () => {
+    const { db, assets } = assetHarness();
+    const { settings } = storeHarness({ assets });
+    const stop = settings.start(() => {});
+    await flush();
+    settings.uploadFont('huge.woff2', blob(8 * 1024 * 1024 + 1));
+    await flush();
+    await flush();
+    expect(settings.view().appearance.fontError).toBe(
+        'Font too large (max 8MB)',
+    );
+    expect(settings.view().appearance.customFontName).toBe('');
+    expect(await db.get('fonts', 'custom')).toBeNull();
+    stop();
+});
+
+it('restores the background label on remove even when the delete fails', async () => {
+    const { assets } = assetHarness();
+    assets.clearBackground = vi.fn(() =>
+        Promise.reject(new Error('locked')),
+    );
+    const { settings, broadcasts } = storeHarness({ assets });
+    const stop = settings.start(() => {});
+    await flush();
+    settings.uploadBackground('wallpaper.png', blob(20));
+    await flush();
+    await flush();
+    expect(settings.view().appearance.terminalBgName).toBe('wallpaper.png');
+    settings.removeBackground();
+    await flush();
+    expect(settings.view().appearance.terminalBgName).toBe('');
+    expect(settings.view().appearance.bgError).toBeNull();
+    expect(broadcasts).toContainEqual({
+        type: 'appearance',
+        payload: { owner: OWNER },
+    });
+    stop();
+});
+
+it('reset clears both assets, names, and errors', async () => {
+    const { db, assets } = assetHarness();
+    const { settings } = storeHarness({ assets });
+    const stop = settings.start(() => {});
+    await flush();
+    settings.uploadFont('Fira.woff2', blob(10));
+    settings.uploadBackground('wallpaper.png', blob(20));
+    await flush();
+    await flush();
+    settings.uploadFont('huge.woff2', blob(8 * 1024 * 1024 + 1));
+    await flush();
+    await flush();
+    expect(settings.view().appearance.fontError).not.toBeNull();
+    settings.resetAppearance();
+    await flush();
+    expect(assets.clearFont).toHaveBeenCalled();
+    expect(assets.clearBackground).toHaveBeenCalled();
+    expect(await db.get('fonts', 'custom')).toBeNull();
+    expect(await db.get('backgrounds', 'custom_bg')).toBeNull();
+    expect(settings.view().appearance).toMatchObject({
+        customFontName: '',
+        terminalBgName: '',
+        fontInstalled: false,
+        fontError: null,
+        bgError: null,
+    });
+    stop();
+});
+
+it('re-installs a saved custom font on start', async () => {
+    const { db, injected, assets } = assetHarness();
+    await db.put('fonts', 'custom', {
+        displayName: 'Fira.woff2',
+        blob: blob(10),
+    });
+    const storage = new Map<string, string>();
+    storage.set(
+        legacyAppearanceKey(SCOPE),
+        JSON.stringify({ custom_font_name: 'Fira.woff2' }),
+    );
+    const { settings } = storeHarness({ assets, storage });
+    const stop = settings.start(() => {});
+    await flush();
+    await flush();
+    expect(injected).toHaveLength(1);
+    expect(settings.view().appearance.fontInstalled).toBe(true);
     stop();
 });
 
