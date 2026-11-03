@@ -132,9 +132,7 @@ test('keeps an offline change locally and sends it once on reconnect', async ({
         expect(writes).toHaveLength(0);
 
         await context.setOffline(false);
-        await expect
-            .poll(() => writes.length, { timeout: 10_000 })
-            .toBe(1);
+        await expect.poll(() => writes.length, { timeout: 10_000 }).toBe(1);
         await expect(page.locator(STATUS)).not.toContainText(
             'Saved in this browser',
         );
