@@ -474,6 +474,10 @@ type PiToPhi struct {
 	PaneId            string                 `protobuf:"bytes,1,opt,name=pane_id,json=paneId,proto3" json:"pane_id,omitempty"`
 	ProcessId         string                 `protobuf:"bytes,2,opt,name=process_id,json=processId,proto3" json:"process_id,omitempty"`
 	RuntimeGeneration uint64                 `protobuf:"varint,3,opt,name=runtime_generation,json=runtimeGeneration,proto3" json:"runtime_generation,omitempty"`
+	// Optional W3C trace-context header for this frame's operation. Peers that
+	// predate this field ignore it; a missing or malformed value must never
+	// change behavior, only the trace's parentage.
+	Traceparent string `protobuf:"bytes,4,opt,name=traceparent,proto3" json:"traceparent,omitempty"`
 	// Types that are valid to be assigned to Payload:
 	//
 	//	*PiToPhi_Hello
@@ -547,6 +551,13 @@ func (x *PiToPhi) GetRuntimeGeneration() uint64 {
 		return x.RuntimeGeneration
 	}
 	return 0
+}
+
+func (x *PiToPhi) GetTraceparent() string {
+	if x != nil {
+		return x.Traceparent
+	}
+	return ""
 }
 
 func (x *PiToPhi) GetPayload() isPiToPhi_Payload {
@@ -821,6 +832,9 @@ type PhiToPi struct {
 	PaneId            string                 `protobuf:"bytes,1,opt,name=pane_id,json=paneId,proto3" json:"pane_id,omitempty"`
 	ProcessId         string                 `protobuf:"bytes,2,opt,name=process_id,json=processId,proto3" json:"process_id,omitempty"`
 	RuntimeGeneration uint64                 `protobuf:"varint,3,opt,name=runtime_generation,json=runtimeGeneration,proto3" json:"runtime_generation,omitempty"`
+	// Optional W3C trace-context header, mirroring the PiToPhi field so a
+	// request/response pair can share one trace.
+	Traceparent string `protobuf:"bytes,4,opt,name=traceparent,proto3" json:"traceparent,omitempty"`
 	// Types that are valid to be assigned to Payload:
 	//
 	//	*PhiToPi_Accepted
@@ -893,6 +907,13 @@ func (x *PhiToPi) GetRuntimeGeneration() uint64 {
 		return x.RuntimeGeneration
 	}
 	return 0
+}
+
+func (x *PhiToPi) GetTraceparent() string {
+	if x != nil {
+		return x.Traceparent
+	}
+	return ""
 }
 
 func (x *PhiToPi) GetPayload() isPhiToPi_Payload {
@@ -4189,13 +4210,13 @@ var File_bridge_proto protoreflect.FileDescriptor
 
 const file_bridge_proto_rawDesc = "" +
 	"\n" +
-	"\fbridge.proto\x12\tphi.pi.v1\"\xfc\n" +
-	"\n" +
+	"\fbridge.proto\x12\tphi.pi.v1\"\x9e\v\n" +
 	"\aPiToPhi\x12\x17\n" +
 	"\apane_id\x18\x01 \x01(\tR\x06paneId\x12\x1d\n" +
 	"\n" +
 	"process_id\x18\x02 \x01(\tR\tprocessId\x12-\n" +
-	"\x12runtime_generation\x18\x03 \x01(\x04R\x11runtimeGeneration\x12(\n" +
+	"\x12runtime_generation\x18\x03 \x01(\x04R\x11runtimeGeneration\x12 \n" +
+	"\vtraceparent\x18\x04 \x01(\tR\vtraceparent\x12(\n" +
 	"\x05hello\x18\n" +
 	" \x01(\v2\x10.phi.pi.v1.HelloH\x00R\x05hello\x12>\n" +
 	"\ragent_started\x18\v \x01(\v2\x17.phi.pi.v1.AgentStartedH\x00R\fagentStarted\x12>\n" +
@@ -4215,13 +4236,13 @@ const file_bridge_proto_rawDesc = "" +
 	"\x15attachment_prompt_ack\x18\x1b \x01(\v2\x1e.phi.pi.v1.AttachmentPromptAckH\x00R\x13attachmentPromptAck\x12c\n" +
 	"\x1atranscript_search_response\x18\x1c \x01(\v2#.phi.pi.v1.TranscriptSearchResponseH\x00R\x18transcriptSearchResponse\x12K\n" +
 	"\x12syncboard_push_ack\x18\x1d \x01(\v2\x1b.phi.pi.v1.SyncboardPushAckH\x00R\x10syncboardPushAckB\t\n" +
-	"\apayloadJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10J\x04\b\x10\x10\x11R\x0esummary_resultR\rcommand_errorR\x13cancel_acknowledged\"\xdf\n" +
-	"\n" +
+	"\apayloadJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10J\x04\b\x10\x10\x11R\x0esummary_resultR\rcommand_errorR\x13cancel_acknowledged\"\x81\v\n" +
 	"\aPhiToPi\x12\x17\n" +
 	"\apane_id\x18\x01 \x01(\tR\x06paneId\x12\x1d\n" +
 	"\n" +
 	"process_id\x18\x02 \x01(\tR\tprocessId\x12-\n" +
-	"\x12runtime_generation\x18\x03 \x01(\x04R\x11runtimeGeneration\x121\n" +
+	"\x12runtime_generation\x18\x03 \x01(\x04R\x11runtimeGeneration\x12 \n" +
+	"\vtraceparent\x18\x04 \x01(\tR\vtraceparent\x121\n" +
 	"\baccepted\x18\n" +
 	" \x01(\v2\x13.phi.pi.v1.AcceptedH\x00R\baccepted\x12A\n" +
 	"\x0eprotocol_error\x18\r \x01(\v2\x18.phi.pi.v1.ProtocolErrorH\x00R\rprotocolError\x12D\n" +

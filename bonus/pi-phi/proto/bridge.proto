@@ -29,6 +29,10 @@ message PiToPhi {
   string pane_id = 1;
   string process_id = 2;
   uint64 runtime_generation = 3;
+  // Optional W3C trace-context header for this frame's operation. Peers that
+  // predate this field ignore it; a missing or malformed value must never
+  // change behavior, only the trace's parentage.
+  string traceparent = 4;
   reserved 14, 15, 16;
   reserved "summary_result", "command_error", "cancel_acknowledged";
   oneof payload {
@@ -57,6 +61,9 @@ message PhiToPi {
   string pane_id = 1;
   string process_id = 2;
   uint64 runtime_generation = 3;
+  // Optional W3C trace-context header, mirroring the PiToPhi field so a
+  // request/response pair can share one trace.
+  string traceparent = 4;
   reserved 11, 12;
   reserved "summarize", "cancel";
   oneof payload {
