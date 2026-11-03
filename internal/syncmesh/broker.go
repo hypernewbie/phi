@@ -52,6 +52,9 @@ const WildcardRecipient = "*"
 // The snapshot and the registration happen under one lock, so an event is
 // either in the replay or arrives live — never in the gap between them.
 // sinceSeq 0 replays the whole retained history.
+//
+// A gap event carries the sequence of the next event that will be delivered,
+// so the receiver knows exactly where its history is broken.
 func (b *Broker) Subscribe(_ context.Context, sinceSeq uint64, recipient string) (<-chan *syncmeshb.SyncEvent, func()) {
 	b.mu.Lock()
 	ch := make(chan *syncmeshb.SyncEvent, subscriberQueue)
@@ -62,11 +65,24 @@ func (b *Broker) Subscribe(_ context.Context, sinceSeq uint64, recipient string)
 			pending = append(pending, ev)
 		}
 	}
+	// A cursor older than anything still retained cannot be served
+	// continuously. Say so with a gap event instead of handing the receiver a
+	// stream that looks complete but silently skips history.
+	gapSeq := uint64(0)
+	if len(b.history) > 0 {
+		oldest := b.history[0].Seq
+		if oldest > sinceSeq && oldest-sinceSeq > 1 {
+			gapSeq = oldest
+		}
+	}
 	// The channel cannot hold more than its capacity; keep the newest and
-	// tell the receiver it lost the rest rather than dropping them silently.
+	// move the boundary to the first event actually delivered.
 	if len(pending) > cap(ch)-1 {
 		pending = pending[len(pending)-(cap(ch)-1):]
-		ch <- &syncmeshb.SyncEvent{Seq: pending[0].Seq, Recipient: recipient, Gap: true}
+		gapSeq = pending[0].Seq
+	}
+	if gapSeq > 0 {
+		ch <- &syncmeshb.SyncEvent{Seq: gapSeq, Recipient: recipient, Gap: true}
 	}
 	for _, ev := range pending {
 		ch <- ev

@@ -167,3 +167,110 @@ func TestSubscribeResumesFromCursor(t *testing.T) {
 	default:
 	}
 }
+
+// TestCursorPredatingRetentionYieldsGap is the replay honesty invariant: a
+// receiver resuming from a sequence the publisher no longer retains must be
+// told its history is broken, not handed a stream that looks complete.
+//
+// The retained history here belongs to another recipient so the filtered
+// replay stays small; the gap is still raised because the publisher cannot
+// prove that nothing addressed to this subscriber was dropped.
+func TestCursorPredatingRetentionYieldsGap(t *testing.T) {
+	b := NewBroker()
+	for i := 0; i < replayHistory+10; i++ {
+		b.Publish(&syncmeshb.SyncEvent{Recipient: "elsewhere", Value: []byte("x")})
+	}
+	oldest := b.history[0].Seq
+
+	ch, cancel := b.Subscribe(context.Background(), 1, "mine")
+	defer cancel()
+
+	gap := drainN(t, ch, 1)[0]
+	if !gap.GetGap() {
+		t.Fatal("cursor older than retention did not produce a gap event")
+	}
+	if gap.GetSeq() != oldest {
+		t.Fatalf("gap seq = %d, want the oldest retained seq %d", gap.GetSeq(), oldest)
+	}
+}
+
+// TestReplayOverflowGapMarksDeliveryBoundary covers the second way a gap
+// arises: the receiver asked for more retained events than its queue holds, so
+// the newest are kept and the boundary names the first one actually delivered.
+func TestReplayOverflowGapMarksDeliveryBoundary(t *testing.T) {
+	b := NewBroker()
+	for i := 0; i < subscriberQueue*2; i++ {
+		b.Publish(&syncmeshb.SyncEvent{Recipient: WildcardRecipient, Value: []byte("x")})
+	}
+	ch, cancel := b.Subscribe(context.Background(), 0, WildcardRecipient)
+	defer cancel()
+
+	gap := drainN(t, ch, 1)[0]
+	if !gap.GetGap() {
+		t.Fatal("replay larger than the queue produced no gap event")
+	}
+	next := drainN(t, ch, 1)[0]
+	if next.GetSeq() != gap.GetSeq() {
+		t.Fatalf("first delivered seq = %d, want the gap boundary %d", next.GetSeq(), gap.GetSeq())
+	}
+}
+
+// TestFreshSubscriberOnTrimmedHistoryYieldsGap covers the cursor-0 case: a
+// publisher that already dropped events cannot pretend a fresh subscriber saw
+// everything.
+func TestFreshSubscriberOnTrimmedHistoryYieldsGap(t *testing.T) {
+	b := NewBroker()
+	for i := 0; i < replayHistory+5; i++ {
+		b.Publish(&syncmeshb.SyncEvent{Recipient: WildcardRecipient, Value: []byte("x")})
+	}
+	ch, cancel := b.Subscribe(context.Background(), 0, WildcardRecipient)
+	defer cancel()
+
+	if !drainN(t, ch, 1)[0].GetGap() {
+		t.Fatal("fresh subscriber on trimmed history got no gap event")
+	}
+}
+
+// TestCurrentCursorYieldsNoGap guards against always emitting a gap, which
+// would make the signal worthless.
+func TestCurrentCursorYieldsNoGap(t *testing.T) {
+	b := NewBroker()
+	b.Publish(&syncmeshb.SyncEvent{Recipient: "*", Value: []byte("one")})
+	second := b.Publish(&syncmeshb.SyncEvent{Recipient: "*", Value: []byte("two")})
+
+	ch, cancel := b.Subscribe(context.Background(), second, WildcardRecipient)
+	defer cancel()
+	select {
+	case ev := <-ch:
+		t.Fatalf("up-to-date cursor received %v, want nothing", ev)
+	default:
+	}
+
+	b.Publish(&syncmeshb.SyncEvent{Recipient: "*", Value: []byte("three")})
+	ev := drainN(t, ch, 1)[0]
+	if ev.GetGap() || string(ev.GetValue()) != "three" {
+		t.Fatalf("live event = %v, want a non-gap new event", ev)
+	}
+}
+
+// TestReplayIsContiguous proves a mid-range cursor receives exactly the
+// missing messages, in order, with no fabricated history.
+func TestReplayIsContiguous(t *testing.T) {
+	b := NewBroker()
+	for i := 0; i < 5; i++ {
+		b.Publish(&syncmeshb.SyncEvent{Recipient: "*", Value: []byte{byte('a' + i)}})
+	}
+	ch, cancel := b.Subscribe(context.Background(), 2, WildcardRecipient)
+	defer cancel()
+
+	want := []string{"c", "d", "e"}
+	for i, expected := range want {
+		ev := drainN(t, ch, 1)[0]
+		if ev.GetGap() {
+			t.Fatalf("event %d reported a gap on a retained range", i)
+		}
+		if string(ev.GetValue()) != expected {
+			t.Fatalf("event %d = %q, want %q", i, ev.GetValue(), expected)
+		}
+	}
+}
