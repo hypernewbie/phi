@@ -14,7 +14,6 @@ import (
 	"log/slog"
 	"net"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
@@ -41,33 +40,16 @@ type Server struct {
 	mu       sync.Mutex
 	listener net.Listener
 	addr     string
-
-	// peers maps a peer label to its shared secret. Empty means loopback
-	// development mode, which is the only mode allowed without credentials.
-	peersMu sync.Mutex
-	peers   map[string]string
-	// epoch advances whenever the peer set changes so open streams retire.
-	epoch atomic.Uint64
 }
 
 // New builds a mesh server with bounded frame and metadata limits. It binds
 // nothing; call Serve.
 func New() *Server {
-	s := &Server{hub: NewHub(), peers: map[string]string{}}
+	s := &Server{hub: NewHub()}
 	s.grpc = grpc.NewServer(
 		grpc.MaxRecvMsgSize(maxMessageBytes),
 		grpc.MaxSendMsgSize(maxMessageBytes),
 		grpc.MaxHeaderListSize(maxMetadataBytes),
-	)
-	// Authentication wraps every call. With no peer configured the mesh
-	// accepts loopback callers, which Serve refuses to expose beyond this
-	// machine.
-	s.grpc = grpc.NewServer(
-		grpc.MaxRecvMsgSize(maxMessageBytes),
-		grpc.MaxSendMsgSize(maxMessageBytes),
-		grpc.MaxHeaderListSize(maxMetadataBytes),
-		grpc.ChainUnaryInterceptor(s.authUnary),
-		grpc.ChainStreamInterceptor(s.authStream),
 	)
 	syncmeshb.RegisterSyncMeshServer(s.grpc, &service{hub: s.hub})
 	return s
@@ -79,11 +61,6 @@ func New() *Server {
 func (s *Server) Serve(addr string) error {
 	if s == nil || s.grpc == nil {
 		return errors.New("syncmesh: server unavailable")
-	}
-	// A non-loopback listener without credentials would let any reachable
-	// host publish into every pane on this machine. Refuse instead.
-	if !isLoopbackAddr(addr) && s.peerCount() == 0 {
-		return ErrNoPeers
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -171,21 +148,17 @@ func (s *service) Subscribe(req *syncmeshb.SubscribeRequest, stream grpc.ServerS
 // Publish stores one addressed message and fans it out. sender is stamped from
 // the authenticated peer, never taken from the request.
 func (s *service) Publish(ctx context.Context, req *syncmeshb.PublishRequest) (*syncmeshb.PublishResponse, error) {
-	seq, duplicate, err := s.hub.Publish(req.GetMessageId(), senderOf(ctx), req.GetRecipient(), req.GetValue(), req.GetHops())
+	seq, duplicate, err := s.hub.Publish(req.GetMessageId(), peerSender(ctx), req.GetRecipient(), req.GetValue(), req.GetHops())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	return &syncmeshb.PublishResponse{Seq: seq, Duplicate: duplicate}, nil
 }
 
-// senderOf reports the authenticated peer label. In development mode, where
-// no peer secret is configured, it falls back to the connection address: that
-// value cannot be chosen by the caller, so it still cannot impersonate another
-// agent.
-func senderOf(ctx context.Context) string {
-	if label, ok := senderFromContext(ctx); ok {
-		return label
-	}
+// peerSender derives the sender identity from the connection. Until the auth
+// interceptor lands this is the peer address, which cannot be chosen by the
+// caller and so cannot impersonate another agent.
+func peerSender(ctx context.Context) string {
 	p, ok := peer.FromContext(ctx)
 	if !ok || p.Addr == nil {
 		return "unknown"
