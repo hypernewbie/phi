@@ -739,9 +739,10 @@ func (s *Server) detachPeer(l *lease, p *peer) {
 // journal append holds that lock, so a replacement reset cannot interleave
 // with an old append. Callbacks carry the peer generation so the host can
 // fence delayed old callbacks after the lock is released.
-// handleMessage wraps dispatchMessage in a span parented to the trace context
-// the peer supplied on this frame. The signature stays stable because tests call
-// it directly with constructed messages.
+//
+// The span below is parented to the trace context the peer supplied on this
+// frame. Keeping the wrap here rather than threading a context through every
+// route means a route added later gets a span for free.
 func (s *Server) handleMessage(l *lease, p *peer, msg *pibridgepb.PiToPhi) (err error) {
 	ctx, end := obs.SpanFromTraceparent(p.ctx, msg.GetTraceparent(), "pi.message",
 		"pane", l.paneID, "process", l.processID)

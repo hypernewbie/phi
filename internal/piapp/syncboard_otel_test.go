@@ -12,7 +12,6 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/hypernewbie/phi/internal/config"
 	pibridgepb "github.com/hypernewbie/phi/internal/pibridge/pb"
@@ -79,32 +78,40 @@ func TestHandleSyncboardSpansShareOneTrace(t *testing.T) {
 	}
 
 	spans := sr.Ended()
-	var handler *trace.SpanContext
-	for _, s := range spans {
+	handlerIdx := -1
+	for i, s := range spans {
 		if s.Name() == "syncboard.handle" {
-			sc := s.SpanContext()
-			handler = &sc
+			handlerIdx = i
+			break
 		}
 	}
-	if handler == nil {
+	if handlerIdx < 0 {
 		t.Fatalf("syncboard.handle span missing from %d recorded spans", len(spans))
 	}
-	if got := handler.TraceID().String(); got != wantTrace {
+	handler := spans[handlerIdx]
+	if got := handler.SpanContext().TraceID().String(); got != wantTrace {
 		t.Errorf("handler trace id = %s, want %s", got, wantTrace)
 	}
 	// The handler span must continue the caller's trace, not start a new root.
-	var parented bool
+	if got := handler.Parent().SpanID().String(); got != wantSpan {
+		t.Errorf("handler parent span id = %s, want %s", got, wantSpan)
+	}
+	// The in-process dispatch must be a child of the handler in the same trace.
+	// Counted rather than name-matched: the point is the lineage, and a lost
+	// parent silently splits the trace into two roots that only look connected
+	// because they happen to share a handoff.
+	childFound := false
 	for _, s := range spans {
-		if s.Parent().SpanID().String() == wantSpan {
-			parented = true
+		if s.Parent().SpanID() != handler.SpanContext().SpanID() {
+			continue
+		}
+		childFound = true
+		if s.SpanContext().TraceID() != handler.SpanContext().TraceID() {
+			t.Errorf("child span trace id = %s, want %s", s.SpanContext().TraceID(), handler.SpanContext().TraceID())
 		}
 	}
-	if !parented {
-		t.Error("no span was parented to the carried remote traceparent")
-	}
-	// The in-process dispatch must appear as its own span in the same trace.
-	if len(spans) < 2 {
-		t.Errorf("recorded %d spans, want handler plus in-process server span", len(spans))
+	if !childFound {
+		t.Errorf("no span parented to syncboard.handle in %d recorded spans", len(spans))
 	}
 }
 

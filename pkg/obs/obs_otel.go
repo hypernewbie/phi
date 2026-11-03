@@ -138,10 +138,11 @@ func Init(ctx context.Context, endpoint string) (shutdown func(context.Context) 
 	}
 
 	// Installed before the provider so a span extracted from a peer's
-	// traceparent becomes a real child rather than a fresh root.
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{}, propagation.Baggage{},
-	))
+	// traceparent becomes a real child rather than a fresh root. Trace context
+	// only: the bridge crosses a process boundary, and baggage would let a peer
+	// string ride along into outbound requests and span attributes, which the
+	// no-secrets-in-telemetry rule forbids.
+	otel.SetTextMapPropagator(propagation.TraceContext{})
 
 	res := resource.NewWithAttributes(semconv.SchemaURL, semconv.ServiceNameKey.String("phi"))
 

@@ -529,23 +529,16 @@ describe('BridgeChannel traceparent stamping', () => {
         return frames;
     }
 
-    it('stamps frames sent through sendNonfatal', async () => {
-        const frames = await sentFrames();
-        const history = frames.find(
-            (f) => f.payload?.$case === 'historyResponse',
-        );
-        expect(history).toBeDefined();
-        expect(history?.traceparent).toMatch(pattern);
-    });
-
-    it('keeps the stamp after protobuf encoding', async () => {
+    it('stamps frames sent through sendNonfatal, on the wire', async () => {
         const frames = await sentFrames();
         const history = frames.find(
             (f) => f.payload?.$case === 'historyResponse',
         );
         if (!history) throw new Error('history frame missing');
+        // The in-memory frame is not the contract; the bytes are. Decode what
+        // the socket would have carried, so a dropped proto field fails here.
         const decoded = PiToPhi.decode(PiToPhi.encode(history).finish());
-        expect(decoded.traceparent).toBe(history.traceparent);
+        expect(decoded.traceparent).toMatch(pattern);
         expect(decoded.payload?.$case).toBe('historyResponse');
     });
 });

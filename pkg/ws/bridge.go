@@ -175,9 +175,8 @@ func (c *Client) readPump(ctx context.Context, inst *pty.PTYInstance, manager *p
 				// Resize is rare and does real work (PTY ioctl plus hub
 				// staging), so it earns a span. Keystrokes do not: they are
 				// throughput, and one span per byte would drown the trace.
-				resizeCtx, endResize := obs.Span(ctx, "ws.resize", "pane", inst.ID,
+				_, endResize := obs.Span(ctx, "ws.resize", "pane", inst.ID,
 					"cols", int(cols), "rows", int(rows))
-				_ = resizeCtx
 				// Stage the resize marker at the pane's current output
 				// head so replay can order it against output. Staged
 				// before the PTY takes the new size, committed only
