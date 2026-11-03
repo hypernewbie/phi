@@ -8,6 +8,7 @@
    cache first and refresh behind the rendered list. Writes apply locally at
    once; an HTTP error rolls back, a write that never left the browser is kept
    in a small outbox, and a write that may have arrived is never resent. */
+import { mountDirectoryTree, } from './path-picker.js';
 import { trapModalFocus } from './modal-focus.js';
 import { formatWorkspaceLabel, serverKey } from './util.js';
 const OUTBOX_KEY = 'phi_workspace_manager_outbox';
@@ -47,6 +48,9 @@ export class WorkspaceManager {
     removeBtn;
     rootInput;
     rootAddBtn;
+    rootBrowseBtn;
+    rootTreeHost;
+    rootTree = null;
     rootsContainer;
     filterInput;
     trap = null;
@@ -87,6 +91,8 @@ export class WorkspaceManager {
         this.removeBtn = byId('ws-manager-remove');
         this.rootInput = byId('ws-manager-root-input');
         this.rootAddBtn = byId('ws-manager-root-add');
+        this.rootBrowseBtn = byId('ws-manager-root-browse');
+        this.rootTreeHost = byId('ws-manager-root-tree');
         this.rootsContainer = byId('ws-manager-roots');
         this.closeBtn?.addEventListener('click', () => this.close());
         this.doneBtn?.addEventListener('click', () => this.close());
@@ -101,6 +107,7 @@ export class WorkspaceManager {
             this.applyProjectControls();
         });
         this.rootAddBtn?.addEventListener('click', () => void this.addRoot());
+        this.rootBrowseBtn?.addEventListener('click', () => this.toggleRootTree());
         this.filterInput?.addEventListener('input', () => {
             this.filter = this.filterInput?.value.trim().toLowerCase() ?? '';
             this.render();
@@ -164,6 +171,7 @@ export class WorkspaceManager {
         // A started write keeps running: closing is a view action, never a
         // cancel, so an in-flight config change is not silently dropped.
         this.generation++;
+        this.closeRootTree();
         this.trap?.dispose();
         this.trap = null;
         this.overlay.classList.add('hidden');
@@ -176,6 +184,7 @@ export class WorkspaceManager {
      *  in their own outbox, and old responses may not touch the new backend. */
     resetForBackend() {
         this.close();
+        this.closeRootTree();
         this.generation++;
         this.scope = this.app?.scope;
         this.storageKey = serverKey(OUTBOX_KEY);
@@ -191,6 +200,7 @@ export class WorkspaceManager {
     }
     dispose() {
         this.close();
+        this.closeRootTree();
         window.removeEventListener('online', this.onOnline);
     }
     /** Apply the local intent over every config read, not just dialog refreshes. */
@@ -600,8 +610,7 @@ export class WorkspaceManager {
             actions.className = 'ws-manager-group-actions';
             const removeRoot = document.createElement('button');
             removeRoot.type = 'button';
-            removeRoot.className =
-                'ws-manager-link ws-manager-link-danger ws-manager-root-remove';
+            removeRoot.className = 'btn btn-red ws-manager-root-remove';
             removeRoot.textContent = 'Remove root';
             removeRoot.disabled = this.isPending();
             removeRoot.addEventListener('click', () => void this.removeRoot(path));
@@ -736,6 +745,48 @@ export class WorkspaceManager {
     }
     async removeRoot(path) {
         await this.mutate({ kind: 'removeRoot', paths: [path] });
+    }
+    /**
+     * The same directory tree the Add Workspace dialog uses. Picking a folder
+     * fills the path field; adding stays an explicit click, so browsing never
+     * registers anything by itself.
+     */
+    toggleRootTree() {
+        if (!this.rootTreeHost)
+            return;
+        if (this.rootTree && !this.rootTreeHost.classList.contains('hidden')) {
+            this.closeRootTree();
+            return;
+        }
+        const start = this.rootInput?.value.trim() ||
+            this.sessions.activeWorkspace ||
+            '~';
+        this.rootTreeHost.classList.remove('hidden');
+        if (this.rootBrowseBtn) {
+            this.rootBrowseBtn.setAttribute('aria-expanded', 'true');
+            this.rootBrowseBtn.textContent = 'Hide';
+        }
+        this.rootTree = mountDirectoryTree(this.rootTreeHost, {
+            startPath: start,
+            onSelect: (path) => {
+                if (this.rootInput)
+                    this.rootInput.value = path;
+                this.closeRootTree();
+                this.rootInput?.focus({ preventScroll: true });
+            },
+        });
+        if (this.rootInput?.value.trim()) {
+            void this.rootTree.reveal(start);
+        }
+    }
+    closeRootTree() {
+        this.rootTree?.destroy();
+        this.rootTree = null;
+        this.rootTreeHost?.classList.add('hidden');
+        if (this.rootBrowseBtn) {
+            this.rootBrowseBtn.setAttribute('aria-expanded', 'false');
+            this.rootBrowseBtn.textContent = 'Browse';
+        }
     }
     /** Queue before sending; config reads always project this intent locally. */
     async mutate(mutation) {

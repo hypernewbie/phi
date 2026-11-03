@@ -4797,8 +4797,18 @@ body.has-terminal-bg
 .ws-manager-group-actions {
     display: flex;
     align-items: center;
-    gap: 10px;
+    justify-content: flex-end;
+    gap: 8px;
     margin-top: 8px;
+}
+
+/* One control style for every bulk action: same shape, size, and alignment.
+   Colour carries the meaning — red removes, accent adds. */
+.ws-manager-group-actions .btn {
+    width: auto;
+    height: 32px;
+    padding: 0 14px;
+    font-size: calc(12px * var(--ui-scale));
 }
 
 /* Destructive and recovery actions are text links, like the rest of Phi;
@@ -4823,20 +4833,10 @@ body.has-terminal-bg
     background-color: var(--bg-elevated);
 }
 
-.ws-manager-link-danger:hover:not(:disabled) {
-    color: var(--red);
-    background-color: rgba(255, 80, 80, 0.08);
-}
-
 /* Keep every mutation control visibly disabled while a write is pending. */
 .ws-manager-modal :is(.btn, .ws-manager-link):disabled {
     opacity: 0.45;
     cursor: not-allowed;
-}
-
-.ws-manager-group-actions .ws-manager-link {
-    margin-right: auto;
-    margin-left: -6px;
 }
 
 .ws-manager-group-actions .btn {
@@ -4844,6 +4844,19 @@ body.has-terminal-bg
     height: 32px;
     padding: 0 14px;
     font-size: calc(12px * var(--ui-scale));
+}
+
+.ws-manager-root-tree {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+    margin-top: 8px;
+}
+
+.ws-manager-root-form .path-input-row .btn {
+    height: 34px;
+    font-size: calc(13px * var(--ui-scale));
 }
 
 .ws-manager-note {
@@ -4866,6 +4879,10 @@ body.has-terminal-bg
 .ws-manager-root-form .path-input-row > .btn {
     height: 34px;
     font-size: calc(13px * var(--ui-scale));
+}
+
+.ws-manager-root-tree .directory-tree-scroll {
+    max-height: 260px;
 }
 
 @media (max-width: 480px) {
