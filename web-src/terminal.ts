@@ -607,6 +607,19 @@ const COARSE_CHECKPOINT_BYTES = 48 * 1024;
 // beacon.
 const MAX_CHECKPOINT_BYTES = 2 * 1024 * 1024;
 const MAX_WRITE_CHARS = 64 * 1024;
+// Arrivals this fast are a replay or a transcript repaint (pi reprinting a
+// resumed session, a large cat), not live output. Skipping frames keeps the
+// reader from watching the whole buffer scroll past before they can read it.
+const BURST_PAINT_SKIP_BYTES = 256 * 1024;
+// Arrival is judged over this window: a replay delivers megabytes inside one
+// window, live output does not.
+const BURST_PAINT_SKIP_WINDOW_MS = 400;
+// A stream that outlives this window reveals and paints normally: no pane may
+// stay blank long enough to look hung.
+const BURST_PAINT_SKIP_MAX_MS = 5000;
+// Output that stops for this long means the burst is over; reveal then, so a
+// stream that pauses mid-flight does not flash the pane on every gap.
+const BURST_PAINT_SKIP_REVEAL_MS = 120;
 // Full live scrollback, desktop and unset-mobile alike. The mobile lane
 // below references this — never a second literal.
 const LIVE_SCROLLBACK_ROWS = 10000;
@@ -1298,6 +1311,17 @@ export interface TabInfo {
     _attachmentRevision: number;
 
     _bootstrapGen: number;
+    /** Burst paint-skip: start time while a replay/repaint burst owns the paint. */
+    _burstPaintSkip: number | undefined;
+    /** The busy pill shown while the burst paints nothing. */
+    _burstPaintSkipEl?: HTMLElement;
+    /** Set after a burst expires or a gesture cancels it; cleared at quiet. */
+    _burstPaintSkipCooldown?: boolean;
+    /** Arrival-rate window: bytes received since the window opened. */
+    _burstWindowStart?: number;
+    _burstWindowBytes?: number;
+    /** Deferred settle: a burst reveals once the queue stays empty. */
+    _burstRevealTimer?: ReturnType<typeof setTimeout> | null;
     _ckptWaitingSince: number | undefined;
     _drainWaiters: Array<() => void>;
     _gapInFlight: boolean;
@@ -5342,6 +5366,9 @@ export class TabManager {
             this.updateDocumentTitle();
         }
 
+        // Only socket output can be a burst: a cached-screen restore or a
+        // banner is local, bounded, and already covered by the attach path.
+        this._noteBurstBytes(tabInfo, data.length);
         this._enqueueTerminalWrite(tabInfo, data, frontier);
     }
 
@@ -5424,6 +5451,113 @@ export class TabManager {
         });
     }
 
+    // Paint-skip for replay bursts. A resumed pi session reprints its whole
+    // transcript (measured: 6.3 MB over 4.7 s), and a resumed pane replays its
+    // journal; following the tail frame by frame shows the reader the entire
+    // buffer scrolling past before they can read any of it. While a burst
+    // owns the pane it paints once, when the output settles, and lands on the
+    // tail in a single step. History is never dropped, only intermediate
+    // paints.
+    //
+    // Queue depth cannot detect this: the pump drains a 64 KB batch in about a
+    // millisecond, so a 6 MB repaint never leaves a deep queue behind. Arrival
+    // rate is the signal — live output does not deliver 256 KB inside 400 ms.
+    _noteBurstBytes(tabInfo: TabInfo, bytes: number) {
+        // Output is still arriving: nothing has settled.
+        this._cancelBurstSettle(tabInfo);
+        const now = performance.now();
+        const start = tabInfo._burstWindowStart;
+        if (start === undefined || now - start > BURST_PAINT_SKIP_WINDOW_MS) {
+            tabInfo._burstWindowStart = now;
+            tabInfo._burstWindowBytes = 0;
+        }
+        tabInfo._burstWindowBytes = (tabInfo._burstWindowBytes ?? 0) + bytes;
+        if (tabInfo._burstWindowBytes < BURST_PAINT_SKIP_BYTES) return;
+        tabInfo._burstWindowBytes = 0;
+        tabInfo._burstWindowStart = now;
+        this._beginBurstPaintSkip(tabInfo);
+    }
+
+    _beginBurstPaintSkip(tabInfo: TabInfo): boolean {
+        if (tabInfo._burstPaintSkip !== undefined) return true;
+        // Muted until the output settles (see _settleBurst): an expiry must
+        // not let one long stream flash the pane every window.
+        if (tabInfo._burstPaintSkipCooldown) return false;
+        // A replay already owns the pane: it lands on the tail in one jump and
+        // shows its own progress pill, so a second skip would only fight it.
+        if (tabInfo._bootstrapGate) return false;
+        // Only a reader on the live tail is watching the burst. A scrolled-up
+        // reader keeps their anchored row and the normal paint path.
+        const buffer = tabInfo.term?.buffer?.active;
+        if (!buffer || buffer.viewportY < buffer.baseY) return false;
+        if (tabInfo.userFollowBottom === false) return false;
+        tabInfo._burstPaintSkip = performance.now();
+        tabInfo.termContainer?.classList?.add('burst-paint-skip');
+        // Same pill the replay path uses: the pane is busy, not broken. A
+        // replay that still owns the pane keeps its own pill and cancel
+        // button; the burst only adds one when the pane is otherwise quiet.
+        if (!tabInfo._replayProgressEl?.isConnected) {
+            const hint = document.createElement('div');
+            hint.className = 'replay-progress';
+            hint.innerHTML =
+                '<span class="replay-progress-text">Loading output…</span>';
+            tabInfo.termContainer?.appendChild(hint);
+            tabInfo._burstPaintSkipEl = hint;
+        }
+        return true;
+    }
+
+    // True while a burst still owns the pane. Expiry reveals and paints
+    // normally for the rest of that burst: a blank pane forever is worse than
+    // a scroll, so the window is bounded. The muting lifts only once output
+    // actually stops, so one burst cannot flash the pane every few seconds.
+    _burstPaintSkipActive(tabInfo: TabInfo): boolean {
+        const started = tabInfo._burstPaintSkip;
+        if (started === undefined) return false;
+        if (performance.now() - started < BURST_PAINT_SKIP_MAX_MS) return true;
+        tabInfo._burstPaintSkipCooldown = true;
+        this._endBurstPaintSkip(tabInfo, false);
+        return false;
+    }
+
+    // The parser caught up and nothing has arrived since: the burst is over.
+    // Reveal it, and let a later burst engage again. Arrival gaps alone cannot
+    // decide this — a slow client makes a running stream look quiet.
+    _settleBurst(tabInfo: TabInfo) {
+        if (
+            tabInfo._burstPaintSkip === undefined &&
+            !tabInfo._burstPaintSkipCooldown
+        )
+            return;
+        if (tabInfo._burstRevealTimer) return;
+        tabInfo._burstRevealTimer = setTimeout(() => {
+            tabInfo._burstRevealTimer = null;
+            tabInfo._burstPaintSkipCooldown = false;
+            this._endBurstPaintSkip(tabInfo, true);
+        }, BURST_PAINT_SKIP_REVEAL_MS);
+    }
+
+    _cancelBurstSettle(tabInfo: TabInfo) {
+        if (!tabInfo._burstRevealTimer) return;
+        clearTimeout(tabInfo._burstRevealTimer);
+        tabInfo._burstRevealTimer = null;
+    }
+
+    // Reveal: one paint, then follow the tail if the reader still wants it.
+    _endBurstPaintSkip(tabInfo: TabInfo, follow: boolean) {
+        this._cancelBurstSettle(tabInfo);
+        if (tabInfo._burstPaintSkip === undefined) return;
+        tabInfo._burstPaintSkip = undefined;
+        tabInfo.termContainer?.classList?.remove('burst-paint-skip');
+        tabInfo._burstPaintSkipEl?.remove();
+        tabInfo._burstPaintSkipEl = undefined;
+        if (follow && tabInfo.userFollowBottom !== false) {
+            tabInfo.term?.scrollToBottom?.();
+            this._clearReaderAnchor(tabInfo);
+        }
+        this._refreshTerminalScreen(tabInfo);
+    }
+
     _flushTerminalWrite(tabInfo: TabInfo) {
         if (tabInfo.writePending || tabInfo._writeRetryTimer) return;
         // Quiescence runs drain waiters (bootstrap watermarks): every
@@ -5484,19 +5618,37 @@ export class TabManager {
                             this._runDrainWaiters(tabInfo);
                         if (tabInfo.finalizing) {
                             tabInfo.writeBuffer = '';
+                            this._endBurstPaintSkip(tabInfo, false);
                             this._runDrainWaiters(tabInfo);
                             return;
                         }
 
-                        if (
-                            followBottom &&
-                            tabInfo.userFollowBottom !== false
-                        ) {
-                            tabInfo.term.scrollToBottom();
-                            this._clearReaderAnchor(tabInfo);
-                        } else if (internals(tabInfo.term)._phiReaderAnchor) {
-                            this._restoreReaderAnchor(tabInfo);
+                        // A burst reveals once the output settles; until
+                        // then the pane paints nothing a reader could read.
+                        // The check runs whatever the follow state: a burst
+                        // that engaged must always end, or the pane stays
+                        // blank.
+                        const skipping =
+                            tabInfo._burstPaintSkip !== undefined &&
+                            this._burstPaintSkipActive(tabInfo);
+                        if (!skipping) {
+                            if (
+                                followBottom &&
+                                tabInfo.userFollowBottom !== false
+                            ) {
+                                tabInfo.term.scrollToBottom();
+                                this._clearReaderAnchor(tabInfo);
+                            } else if (
+                                internals(tabInfo.term)._phiReaderAnchor
+                            ) {
+                                this._restoreReaderAnchor(tabInfo);
+                            }
                         }
+                        // The queue is empty and stays empty for a moment: the
+                        // burst is over. This also lifts the mute after an
+                        // expiry or a gesture, so a later burst can engage.
+                        if (tabInfo.writeBuffer.length === 0)
+                            this._settleBurst(tabInfo);
                         internals(tabInfo.term)._core?.viewport?.syncScrollArea(
                             true,
                         );
@@ -10338,6 +10490,15 @@ export class TabManager {
         if (tab._writeRetryTimer) {
             clearTimeout(tab._writeRetryTimer);
             tab._writeRetryTimer = null;
+        }
+        // A burst that is still open owns a reveal timer and a pill; both
+        // have to go with the pane.
+        if (
+            tab._burstPaintSkip !== undefined ||
+            tab._burstPaintSkipEl ||
+            tab._burstRevealTimer
+        ) {
+            this._endBurstPaintSkip(tab, false);
         }
         if (tab.spamInterval) {
             clearInterval(tab.spamInterval);
@@ -17489,6 +17650,10 @@ export class TabManager {
         tabInfo.isSpammingBottom = undefined;
         tabInfo.spamScrollY = undefined;
         tabInfo.userFollowBottom = false;
+        // A gesture is the reader taking the view back: reveal now instead of
+        // holding the pane hidden until the burst drains.
+        this._endBurstPaintSkip(tabInfo, false);
+        tabInfo._burstPaintSkipCooldown = true;
         // A newer viewport intent: a deferred send may still fire, but it does
         // not get to move the reader after this gesture.
         tabInfo._viewportIntentSeq = (tabInfo._viewportIntentSeq ?? 0) + 1;

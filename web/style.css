@@ -2701,6 +2701,16 @@ body.has-terminal-bg
     background-color: var(--bg-base) !important;
 }
 
+/* Replay burst (see _beginBurstPaintSkip): a resumed transcript or journal
+   paints its newest frame only, so the reader is not scrolled through the
+   whole buffer before they can read it. The hint pill above the pane is the
+   existing .replay-progress element. Only the paint surface is hidden: the
+   viewport keeps the pane background and its scrollbar, and xterm keeps
+   parsing and sizing underneath. */
+.term-container.burst-paint-skip .xterm-screen {
+    visibility: hidden;
+}
+
 /* Floating terminal navigation button: jump to live at the bottom-right. */
 .scroll-to-bottom-btn {
     position: absolute;
