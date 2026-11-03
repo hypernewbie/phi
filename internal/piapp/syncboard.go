@@ -272,7 +272,8 @@ func callSyncboardHTTP(ctx context.Context, base *url.URL, req *pibridgepb.Syncb
 		httpReq.Header.Set("Content-Type", "application/json")
 	}
 	client := &http.Client{
-		Timeout: piSyncboardHTTPTimeout,
+		Transport: obs.Transport(nil),
+		Timeout:   piSyncboardHTTPTimeout,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
