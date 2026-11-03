@@ -108,7 +108,7 @@ export class WorkspaceManager {
         }
     }
     isOpen() {
-        return (!!this.overlay && !this.overlay.classList.contains('hidden'));
+        return !!this.overlay && !this.overlay.classList.contains('hidden');
     }
     /** Opens the dialog from local state, then refreshes behind it. */
     open() {
@@ -551,9 +551,6 @@ export class WorkspaceManager {
     label(path) {
         const all = Array.from(new Set([...this.sessions.workspaces, ...this.rootPaths]));
         return formatWorkspaceLabel(path, all);
-    }
-    isBusy() {
-        return this.pendingState === 'sending';
     }
     /**
      * One write at a time. A write that never left the browser still owns the
