@@ -54,9 +54,14 @@ public struct ReplayPage: Equatable, Sendable {
   /// The fence this page belongs to, so a later page never follows a moving head.
   public var through: UInt64
   public var throughCursor: ReplayPosition
+  /// The journal could not keep every byte before this page (`history_incomplete`).
+  public var historyIncomplete: Bool
+  /// The pane records no durable history (`ephemeral`).
+  public var ephemeral: Bool
   public var data: Data
 
-  public static let maxPageBytes = 1 << 20
+  /// One page is at most 2 MiB of raw output (`replayPageMaxBytes`).
+  public static let maxPageBytes = 2 << 20
   public static let maxHeaderBytes = 64 << 10
   public static let maxBodyBytes = 4 + maxHeaderBytes + maxPageBytes
   public static let maxResizes = 256
@@ -64,7 +69,8 @@ public struct ReplayPage: Equatable, Sendable {
   public init(
     epoch: UInt64, start: UInt64, end: UInt64, initialCols: UInt16, initialRows: UInt16,
     resizes: [Resize], eventCursor: ReplayPosition, through: UInt64,
-    throughCursor: ReplayPosition, data: Data
+    throughCursor: ReplayPosition, historyIncomplete: Bool = false,
+    ephemeral: Bool = false, data: Data
   ) {
     self.epoch = epoch
     self.start = start
@@ -75,6 +81,8 @@ public struct ReplayPage: Equatable, Sendable {
     self.eventCursor = eventCursor
     self.through = through
     self.throughCursor = throughCursor
+    self.historyIncomplete = historyIncomplete
+    self.ephemeral = ephemeral
     self.data = data
   }
 
@@ -129,7 +137,8 @@ public struct ReplayPage: Equatable, Sendable {
       epoch: header.epoch, start: header.start, end: header.end,
       initialCols: UInt16(header.initCols), initialRows: UInt16(header.initRows),
       resizes: resizes, eventCursor: cursor, through: header.through,
-      throughCursor: throughCursor, data: data)
+      throughCursor: throughCursor, historyIncomplete: header.historyIncomplete ?? false,
+      ephemeral: header.ephemeral ?? false, data: data)
   }
 
   /// Splits one page so bytes and geometry reach the parser in stream order.
@@ -162,13 +171,16 @@ public struct ReplayPage: Equatable, Sendable {
     var eventCursor: String
     var through: UInt64
     var throughCursor: String
+    var historyIncomplete: Bool?
+    var ephemeral: Bool?
 
     enum CodingKeys: String, CodingKey {
-      case epoch, start, end, resizes, through
-      case initCols = "init_cols"
-      case initRows = "init_rows"
+      case epoch, start, end, resizes, through, ephemeral
+      case initCols = "initial_cols"
+      case initRows = "initial_rows"
       case eventCursor = "event_cursor"
-      case throughCursor = "through_cursor"
+      case throughCursor = "through_event_cursor"
+      case historyIncomplete = "history_incomplete"
     }
   }
 }

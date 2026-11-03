@@ -12,8 +12,8 @@ final class ReplayPageTests: XCTestCase {
   ) throws -> Data {
     let header: [String: Any] = [
       "epoch": epoch, "start": start, "end": end, "through": through,
-      "event_cursor": cursor, "through_cursor": throughCursor,
-      "init_cols": initCols, "init_rows": initRows, "resizes": resizes,
+      "event_cursor": cursor, "through_event_cursor": throughCursor,
+      "initial_cols": initCols, "initial_rows": initRows, "resizes": resizes,
     ]
     let json = try JSONSerialization.data(withJSONObject: header)
     var out = Data()
@@ -94,5 +94,63 @@ final class ReplayPageTests: XCTestCase {
     XCTAssertEqual(page.segments(from: 3), [
       .bytes(start: 3, end: 4, data: Data("d".utf8))
     ])
+  }
+}
+
+extension ReplayPageTests {
+  func testAFullTwoMiBPageIsAccepted() throws {
+    // The server caps one page at 2 MiB (`replayPageMaxBytes`); a client that
+    // caps lower would stall on the largest legal page.
+    let size = ReplayPage.maxPageBytes
+    let page = try ReplayPage.decode(
+      try body(
+        end: UInt64(size), through: UInt64(size), cursor: "v1.7.\(size).0",
+        throughCursor: "v1.7.\(size).0", resizes: [],
+        data: String(repeating: "x", count: size)),
+      epoch: 7, from: 0, through: UInt64(size), fence: "v1.7.\(size).0",
+      after: ReplayPosition(epoch: 7, seq: 0, ordinal: 0))
+
+    XCTAssertEqual(page.data.count, size)
+    XCTAssertFalse(page.historyIncomplete)
+  }
+
+  func testAPageWithMoreGeometryEventsThanTheProtocolAllowsIsRejected() throws {
+    let markers = (0..<257).map { [UInt64($0), 80, 24] }
+    XCTAssertThrowsError(try ReplayPage.decode(
+      try body(cursor: "v1.7.4.257", resizes: markers), epoch: 7, from: 0, through: 4,
+      fence: "v1.7.4.257", after: ReplayPosition(epoch: 7, seq: 0, ordinal: 0)))
+  }
+
+  func testAnIncompleteJournalIsReportedNotRejected() throws {
+    // A pane that lost bytes must still render; the caller warns, it never fails.
+    let json: [String: Any] = [
+      "epoch": 7, "start": 0, "end": 4, "through": 4,
+      "event_cursor": "v1.7.4.0", "through_event_cursor": "v1.7.4.0",
+      "initial_cols": 80, "initial_rows": 24, "resizes": [],
+      "history_incomplete": true, "ephemeral": false,
+    ]
+    let header = try JSONSerialization.data(withJSONObject: json)
+    var body = Data()
+    var length = UInt32(header.count).bigEndian
+    withUnsafeBytes(of: &length) { body.append(contentsOf: $0) }
+    body.append(header)
+    body.append(Data("abcd".utf8))
+
+    let page = try ReplayPage.decode(
+      body, epoch: 7, from: 0, through: 4, fence: "v1.7.4.0",
+      after: ReplayPosition(epoch: 7, seq: 0, ordinal: 0))
+
+    XCTAssertTrue(page.historyIncomplete)
+    XCTAssertFalse(page.ephemeral)
+  }
+
+  func testAPageThatReportsNoNewEventsIsNotTheFenceItself() throws {
+    // cursor == after is only legal when the page already reached the fence:
+    // otherwise recovery would loop on the same span forever.
+    XCTAssertThrowsError(try ReplayPage.decode(
+      try body(start: 0, end: 0, through: 4, cursor: "v1.7.0.0",
+                throughCursor: "v1.7.4.0", resizes: [], data: ""),
+      epoch: 7, from: 0, through: 4, fence: "v1.7.4.0",
+      after: ReplayPosition(epoch: 7, seq: 0, ordinal: 0)))
   }
 }
