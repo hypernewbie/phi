@@ -256,8 +256,8 @@ test('M1 models list and switch reach the real psi session', async ({
         const before = provider.requests.length;
         await page.locator('#input-textarea').press('Enter');
         await provider.waitForRequests(before + 1, 60_000);
-        const sent = provider.requests[before]!;
-        expect(sent.body.model).toBe('bridge-b');
+        const sent = provider.requests[before];
+        expect(sent?.body.model).toBe('bridge-b');
         await expect
             .poll(() => paneBridge(request, phi.url, pane), {
                 timeout: 60_000,
@@ -447,8 +447,8 @@ test('M3 skills dispatch once and search reads visible text', async ({
         expect(invokeResponse.ok()).toBe(true);
         expect(await invokeResponse.json()).toMatchObject({ ok: true });
         await provider.waitForRequests(before + 1, 60_000);
-        const sent = provider.requests[before]!;
-        expect(JSON.stringify(sent.body.messages)).toContain(
+        const sent = provider.requests[before];
+        expect(JSON.stringify(sent?.body.messages)).toContain(
             'BRIDGE_SKILL_BODY_MARKER',
         );
 
@@ -548,7 +548,7 @@ test('M4 one compact request creates one durable compaction', async ({
         for (const [index, size] of [8_000, 8_000].entries()) {
             await page
                 .locator('#input-textarea')
-                .fill(`compact turn ${index} ` + 'x'.repeat(size));
+                .fill(`compact turn ${index} ${'x'.repeat(size)}`);
             await send.click();
             // The editor clears after a submit; only then is the next turn's
             // input guaranteed to land in an editor that accepts it.
