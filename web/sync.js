@@ -283,7 +283,7 @@ export class SyncManager {
         }
         const note = existing ??
             this.messagesList.insertBefore(document.createElement('div'), this.messagesList.firstChild);
-        note.className = 'sync-error-state';
+        note.className = 'sync-error-state sync-refresh-note';
         note.textContent = `Sync failed: ${message}. Showing the last board.`;
         if (!this.messagesList.querySelector('.sync-card, .sync-empty-state'))
             note.textContent = `Sync failed: ${message}.`;

@@ -10960,7 +10960,17 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 }
 
 .sync-error-state {
-    color: var(--text-danger);
+    /* --text-danger is never defined by a theme; --red is. */
+    color: var(--red);
+}
+
+/* A failed refresh, shown above the cards it could not replace. */
+.sync-refresh-note {
+    text-align: left;
+    padding: 8px 12px;
+    margin-bottom: 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
 }
 
 /* Sync Message Card */
