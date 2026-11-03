@@ -15,11 +15,16 @@ import (
 
 	"github.com/hypernewbie/phi/internal/pibridge"
 	pibridgepb "github.com/hypernewbie/phi/internal/pibridge/pb"
+	"github.com/hypernewbie/phi/pkg/obs"
 )
 
 const piSyncboardHTTPTimeout = 10 * time.Second
 
 func (b *Bridge) handleSyncboard(ctx context.Context, processID string, req *pibridgepb.SyncboardRequest) *pibridgepb.SyncboardResponse {
+	// One span for the whole call; the in-process dispatch below adds a child
+	// server span, so the trace shows handler time separately from HTTP routing.
+	ctx, endSpan := obs.Span(ctx, "syncboard.handle", "op", req.GetOperation().String())
+	defer endSpan(nil)
 	refuse := func(reason string) *pibridgepb.SyncboardResponse {
 		return &pibridgepb.SyncboardResponse{Outcome: pibridgepb.SyncboardOutcome_SYNCBOARD_OUTCOME_NOT_SENT, Reason: reason}
 	}
@@ -151,7 +156,10 @@ func (b *Bridge) callSyncboardInternal(ctx context.Context, req *pibridgepb.Sync
 	if b.Syncboard == nil {
 		return refuse(pibridge.SyncboardReasonUnavailable)
 	}
-	b.Syncboard.ServeHTTP(writer, request)
+	// The local handler is the bare handleSyncMessages func, not the mux, so the
+	// server middleware never runs here. WrapHTTP supplies the child span; it is
+	// identity when tracing is disabled, so this costs nothing without a collector.
+	obs.WrapHTTP(b.Syncboard).ServeHTTP(writer, request)
 	if ctx.Err() != nil {
 		return unknown(pibridge.SyncboardReasonCancelled)
 	}
