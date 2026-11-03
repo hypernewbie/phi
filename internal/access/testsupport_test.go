@@ -1,6 +1,7 @@
 package access
 
 import (
+	"crypto/pbkdf2"
 	"crypto/sha256"
 	"os"
 	"path/filepath"
@@ -26,26 +27,22 @@ var (
 
 // TestMain runs the package's tests behind a cheap KDF. Every login fixture in
 // this package derives a verifier, and at the production 600k iterations each
-// derivation costs a full-strength PBKDF2: the package spent 208s of the Go
-// test job doing nothing else. The stand-in keeps the record format, the
-// iteration counts, and the rehash rule exactly as production has them, so the
-// assertions about those still hold; only the bytes of the derivation change.
-// Tests that verify a real derivation call useRealAccessHash.
+// derivation cost a full-strength PBKDF2: the package spent 208s of the Go
+// test job doing nothing else. The stand-in is the same code path at one
+// iteration, so the verifier size and the record format stay exactly as
+// production has them and the tests that assert on iteration counts still read
+// 600k. Tests that verify a real derivation call useRealAccessHash. Swapping
+// the variable is safe only because no test in this package runs in parallel.
 func TestMain(m *testing.M) {
 	accessPasswordDerive = testAccessStubHash
 	os.Exit(m.Run())
 }
 
-// testAccessStubHash satisfies deriveAccessVerifier's contract (a fixed-size
-// verifier that depends on both the password and the salt) without the work
-// factor. It ignores iterations because the tests that read that value assert
-// on the record's field, not on the derivation cost.
+// testAccessStubHash runs the real KDF at one iteration: the same code path and
+// the same verifier size, none of the work factor. It ignores iterations
+// because a test that cares about that number reads the record's field.
 func testAccessStubHash(password string, salt []byte, _ int) ([]byte, error) {
-	digest := sha256.New()
-	digest.Write([]byte(password))
-	digest.Write([]byte{0})
-	digest.Write(salt)
-	return digest.Sum(nil), nil
+	return pbkdf2.Key(sha256.New, password, salt, 1, accessPasswordVerifierBytes)
 }
 
 // useRealAccessHash restores PBKDF2 for the duration of one test, for the

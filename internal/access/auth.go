@@ -169,12 +169,11 @@ func deriveAccessVerifier(password string, salt []byte, iterations int) ([]byte,
 	return pbkdf2.Key(sha256.New, password, salt, iterations, accessPasswordVerifierBytes)
 }
 
-// accessPasswordDerive is the KDF that builds and checks password records. It
-// is a var so the test binary can substitute a cheap stand-in: at the
-// production 600k iterations every login test paid a full-strength PBKDF2, and
-// this package alone was 208s of the Go test job. The record format, iteration
-// counts, and rehash rule all keep their production values, so tests that
-// assert those still see 600k; only the cost of one derivation drops.
+// accessPasswordDerive derives a password verifier. Production code calls this,
+// never deriveAccessVerifier directly: the test binary swaps it for a
+// one-iteration variant, so a direct call would both cost the full 600k
+// iterations and disagree with every fixture a test built. The record format,
+// the iteration counts, and the rehash rule keep their production values.
 var accessPasswordDerive = deriveAccessVerifier
 
 // newAccessPasswordRecord builds a record at the current parameters from a raw
