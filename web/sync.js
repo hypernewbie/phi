@@ -252,20 +252,41 @@ export class SyncManager {
                 this.coordinatorInput.value = await this.getCoordinatorUrl();
             }
             const res = await this.fetchWithProxy('/api/sync/messages');
+            if (!res.ok)
+                throw new Error(`HTTP ${res.status}`);
             const messages = await res.json();
+            if (!Array.isArray(messages))
+                throw new Error('Unexpected board response.');
             const store = this.app?.getActiveStore?.();
             if (store) {
                 store.responses.set('/api/sync/messages', JSON.stringify(messages));
             }
             this.renderMessages(messages);
             this.signalDesktopAlert(messages);
+            this._setRefreshError(null);
         }
         catch (e) {
             if (e?.name === 'AbortError' || this.app?.scope?.aborted)
                 return;
             console.error('[sync] Failed to refresh:', e);
-            this.messagesList.innerHTML = `<div class="sync-error-state">Error: ${this.escapeHtml(e.message)}</div>`;
+            // A slow or broken link must not erase the board that is already
+            // on screen, so the failure becomes one inline line.
+            this._setRefreshError(e?.message || 'Request failed');
         }
+    }
+    /** Shows or clears the inline note above the board without touching it. */
+    _setRefreshError(message) {
+        const existing = this.messagesList.querySelector('.sync-error-state');
+        if (message === null) {
+            existing?.remove();
+            return;
+        }
+        const note = existing ??
+            this.messagesList.insertBefore(document.createElement('div'), this.messagesList.firstChild);
+        note.className = 'sync-error-state';
+        note.textContent = `Sync failed: ${message}. Showing the last board.`;
+        if (!this.messagesList.querySelector('.sync-card, .sync-empty-state'))
+            note.textContent = `Sync failed: ${message}.`;
     }
     onSyncChanged(_control) {
         if (this._syncDebounce)

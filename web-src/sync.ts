@@ -354,7 +354,10 @@ export class SyncManager {
             }
 
             const res = await this.fetchWithProxy('/api/sync/messages');
-            const messages = await res.json();
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const messages: unknown = await res.json();
+            if (!Array.isArray(messages))
+                throw new Error('Unexpected board response.');
             const store = (this.app as any)?.getActiveStore?.();
             if (store) {
                 store.responses.set(
@@ -365,12 +368,34 @@ export class SyncManager {
 
             this.renderMessages(messages);
             this.signalDesktopAlert(messages);
+            this._setRefreshError(null);
         } catch (e: any) {
             if (e?.name === 'AbortError' || (this.app as any)?.scope?.aborted)
                 return;
             console.error('[sync] Failed to refresh:', e);
-            this.messagesList.innerHTML = `<div class="sync-error-state">Error: ${this.escapeHtml((e as Error).message)}</div>`;
+            // A slow or broken link must not erase the board that is already
+            // on screen, so the failure becomes one inline line.
+            this._setRefreshError((e as Error)?.message || 'Request failed');
         }
+    }
+
+    /** Shows or clears the inline note above the board without touching it. */
+    _setRefreshError(message: string | null): void {
+        const existing = this.messagesList.querySelector('.sync-error-state');
+        if (message === null) {
+            existing?.remove();
+            return;
+        }
+        const note =
+            existing ??
+            this.messagesList.insertBefore(
+                document.createElement('div'),
+                this.messagesList.firstChild,
+            );
+        note.className = 'sync-error-state';
+        note.textContent = `Sync failed: ${message}. Showing the last board.`;
+        if (!this.messagesList.querySelector('.sync-card, .sync-empty-state'))
+            note.textContent = `Sync failed: ${message}.`;
     }
 
     onSyncChanged(_control?: any): void {
