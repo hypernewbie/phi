@@ -49,7 +49,7 @@ The workspace picker in the header controls which project Phi is looking at.
 - **Projects** lists the registered workspaces. Select rows and choose **Remove selected**. Removing a workspace only unregisters it: no files, tabs, or sessions are deleted.
 - **Rest of `<root>`** lists the folders inside a *root* folder. A root groups related projects, such as `~/code`. Roots are read from disk each time the dialog opens, so new folders appear without a rescan step.
 - Select folders and choose **Add selected** to register them as workspaces in one step. Nothing is registered until you select it, and a root folder itself is never a workspace.
-- **Add root** stores a folder as a root. Removing a root keeps its projects registered.
+- **Add root** under **Root folders** stores a folder as a root. Removing a root keeps its projects registered.
 - The filter box narrows both sections without asking the server. While filtered, **All** becomes **Select visible**, and the counts match exactly what the buttons will add or remove.
 - Changes apply immediately and are saved to the server. If the browser is offline, one change stays queued and is sent when the connection returns; a change that may have reached the server is never sent twice.
 

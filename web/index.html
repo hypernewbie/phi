@@ -1507,7 +1507,7 @@ eager to avoid a first-open unstyled flash. -->
                 <div class="modal-body ws-manager-body">
                     <div
                         id="ws-manager-status"
-                        class="ws-manager-status"
+                        class="ws-manager-status hidden"
                         role="status"
                         aria-live="polite"
                     ></div>
@@ -1521,10 +1521,10 @@ eager to avoid a first-open unstyled flash. -->
                     >
                     <section
                         id="ws-manager-projects-section"
-                        class="ws-manager-section"
+                        class="ws-manager-group"
                         aria-labelledby="ws-manager-projects-title"
                     >
-                        <div class="ws-manager-section-head">
+                        <div class="ws-manager-group-head">
                             <h4
                                 id="ws-manager-projects-title"
                                 class="ws-manager-section-title"
@@ -1544,10 +1544,10 @@ eager to avoid a first-open unstyled flash. -->
                             </label>
                         </div>
                         <div id="ws-manager-projects" class="ws-manager-list"></div>
-                        <div class="ws-manager-actions">
+                        <div class="ws-manager-group-actions">
                             <button
                                 id="ws-manager-remove"
-                                class="btn btn-red"
+                                class="ws-manager-link ws-manager-link-danger"
                                 type="button"
                                 disabled
                             >
@@ -1555,33 +1555,45 @@ eager to avoid a first-open unstyled flash. -->
                             </button>
                         </div>
                     </section>
-                    <div class="ws-manager-root-form">
-                        <label class="ws-modal-path-label" for="ws-manager-root-input">
-                            Root folder
-                        </label>
-                        <div class="path-input-row">
-                            <div class="input-autocomplete-wrapper">
-                                <input
-                                    type="text"
-                                    id="ws-manager-root-input"
-                                    placeholder="Absolute path or ~ path"
-                                    autocomplete="off"
-                                >
-                            </div>
-                            <button
-                                id="ws-manager-root-add"
-                                class="btn btn-accent"
-                                type="button"
+                    <section
+                        id="ws-manager-roots-section"
+                        class="ws-manager-group"
+                        aria-labelledby="ws-manager-roots-title"
+                    >
+                        <div class="ws-manager-group-head">
+                            <h4
+                                id="ws-manager-roots-title"
+                                class="ws-manager-section-title"
                             >
-                                Add root
-                            </button>
+                                Root folders
+                            </h4>
                         </div>
-                        <p class="ws-manager-note">
-                            A root groups the folders inside it. Nothing is
-                            added until you select it.
-                        </p>
-                    </div>
-                    <div id="ws-manager-roots" class="ws-manager-roots"></div>
+                        <div class="ws-manager-root-form">
+                            <div class="path-input-row">
+                                <div class="input-autocomplete-wrapper">
+                                    <input
+                                        type="text"
+                                        id="ws-manager-root-input"
+                                        placeholder="Type an absolute path or ~ path"
+                                        autocomplete="off"
+                                        aria-label="Root folder"
+                                    >
+                                </div>
+                                <button
+                                    id="ws-manager-root-add"
+                                    class="btn btn-primary"
+                                    type="button"
+                                >
+                                    Add root
+                                </button>
+                            </div>
+                            <p class="ws-manager-note">
+                                A root groups the folders inside it. Nothing is
+                                added until you select them.
+                            </p>
+                        </div>
+                        <div id="ws-manager-roots" class="ws-manager-roots"></div>
+                    </section>
                 </div>
                 <div class="modal-footer">
                     <button
