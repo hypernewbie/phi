@@ -19,6 +19,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"google.golang.org/grpc/stats"
 )
 
 // Span starts a logical span named name with the given key,value,... attrs.
@@ -55,6 +57,31 @@ func Init(ctx context.Context, endpoint string) (shutdown func(context.Context) 
 // WrapHTTP is a no-op in the default build — no OTel server span, no
 // traceparent extraction. Just returns h unchanged.
 func WrapHTTP(h http.Handler) http.Handler { return h }
+
+// Enabled is always false in the default build: no provider is ever installed.
+func Enabled() bool { return false }
+
+// SetEnabledForTest is a no-op in the default build and exists so test code
+// compiles against the same façade in both tag worlds.
+func SetEnabledForTest(bool) func() { return func() {} }
+
+// SpanFromTraceparent behaves like Span: there is no propagator and no parent
+// to extract, so the header is ignored.
+func SpanFromTraceparent(ctx context.Context, _ string, name string, attrs ...any) (context.Context, func(error)) {
+	return Span(ctx, name, attrs...)
+}
+
+// Transport is unmodified passthrough in the default build.
+func Transport(base http.RoundTripper) http.RoundTripper {
+	if base == nil {
+		return http.DefaultTransport
+	}
+	return base
+}
+
+// GRPCServerHandler is nil in the default build: no stream span, no
+// per-RPC stats collection.
+func GRPCServerHandler() stats.Handler { return nil }
 
 // TraceIDFromContext always returns "" in the default build: there is no
 // OTel span in ctx to read a trace id from.

@@ -1,6 +1,7 @@
 package pibridge
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -13,6 +14,8 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/hypernewbie/phi/pkg/obs"
 
 	pibridgepb "github.com/hypernewbie/phi/internal/pibridge/pb"
 )
@@ -62,6 +65,7 @@ func NewServer() *Server {
 		grpc.MaxRecvMsgSize(maxMessageBytes),
 		grpc.MaxSendMsgSize(maxMessageBytes),
 		grpc.MaxHeaderListSize(maxMetadataBytes),
+		grpc.StatsHandler(obs.GRPCServerHandler()),
 	)
 	pibridgepb.RegisterIntegrationServer(s.grpcServer, s)
 	return s
@@ -735,7 +739,21 @@ func (s *Server) detachPeer(l *lease, p *peer) {
 // journal append holds that lock, so a replacement reset cannot interleave
 // with an old append. Callbacks carry the peer generation so the host can
 // fence delayed old callbacks after the lock is released.
-func (s *Server) handleMessage(l *lease, p *peer, msg *pibridgepb.PiToPhi) error {
+//
+// The span below is parented to the trace context the peer supplied on this
+// frame. Keeping the wrap here rather than threading a context through every
+// route means a route added later gets a span for free.
+func (s *Server) handleMessage(l *lease, p *peer, msg *pibridgepb.PiToPhi) (err error) {
+	ctx, end := obs.SpanFromTraceparent(p.ctx, msg.GetTraceparent(), "pi.message",
+		"pane", l.paneID, "process", l.processID)
+	defer func() { end(err) }()
+	return s.dispatchMessage(ctx, l, p, msg)
+}
+
+// dispatchMessage routes one decoded Pi → Phi envelope. The span opened by
+// handleMessage covers dispatch only: async work it hands off continues on ctx
+// after this returns, in the same trace.
+func (s *Server) dispatchMessage(ctx context.Context, l *lease, p *peer, msg *pibridgepb.PiToPhi) error {
 	switch {
 	case msg.GetHello() != nil:
 		return status.Error(codes.InvalidArgument, "duplicate hello")
@@ -845,7 +863,7 @@ func (s *Server) handleMessage(l *lease, p *peer, msg *pibridgepb.PiToPhi) error
 		s.deliverInvokeSkill(l, p, msg.GetInvokeSkillAck())
 		return nil
 	case msg.GetSyncboardRequest() != nil:
-		s.receiveSyncboard(l, p, msg.GetSyncboardRequest())
+		s.receiveSyncboard(ctx, l, p, msg.GetSyncboardRequest())
 		return nil
 	case msg.GetAttachmentPromptAck() != nil:
 		s.deliverAttachmentPrompt(l, p, msg.GetAttachmentPromptAck())

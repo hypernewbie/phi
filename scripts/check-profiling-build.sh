@@ -89,13 +89,13 @@ check_variant default no
 check_variant profiling yes -tags=profiling
 check_variant otel no -tags=otel
 check_variant both yes -tags=profiling,otel
-check_variant release no -tags=embedassets
-check_variant release-profiling yes -tags=embedassets,profiling
+check_variant release no -tags=embedassets,otel
+check_variant release-profiling yes -tags=embedassets,profiling,otel
 
 # OTel SDK follows the otel tag only.
 lack "$OUT/default-deps.txt" 'go\.opentelemetry\.io/otel/sdk(/|$)'
 lack "$OUT/profiling-deps.txt" 'go\.opentelemetry\.io/otel/sdk(/|$)'
-lack "$OUT/release-deps.txt" 'go\.opentelemetry\.io/otel/sdk(/|$)'
+need "$OUT/release-deps.txt" 'go\.opentelemetry\.io/otel/sdk(/|$)'
 need "$OUT/otel-deps.txt" 'go\.opentelemetry\.io/otel/sdk(/|$)'
 need "$OUT/both-deps.txt" 'go\.opentelemetry\.io/otel/sdk(/|$)'
 

@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/hypernewbie/phi/pkg/obs"
 )
 
 // authStatus mirrors GET /api/auth/status.
@@ -57,7 +59,7 @@ func newAPIClient(server string) (*apiClient, error) {
 	}
 	return &apiClient{
 		base: u,
-		http: &http.Client{Jar: jar, Timeout: 30 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		http: &http.Client{Transport: obs.Transport(nil), Jar: jar, Timeout: 30 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			// Do not move credentials or proof bodies to another server.
 			if req.URL.Scheme != u.Scheme || !strings.EqualFold(req.URL.Host, u.Host) {
 				return fmt.Errorf("phic: cross-origin redirect refused")

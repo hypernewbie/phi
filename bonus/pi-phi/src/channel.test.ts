@@ -494,3 +494,51 @@ describe('BridgeChannel shutdown drain', () => {
         expect(channel.send(hello())).toBe(false);
     });
 });
+
+/**
+ * Phi parents its handler span to the traceparent on each frame, so a frame sent
+ * without one silently starts a new trace. Syncboard uses sendNonfatal while
+ * everything else uses send, so both paths must stamp — and the stamp must
+ * survive PiToPhi.encode, not just live on the in-memory object.
+ */
+describe('BridgeChannel traceparent stamping', () => {
+    const pattern = /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/;
+
+    async function sentFrames(): Promise<PiToPhi[]> {
+        const duplex = new HoldingDuplex();
+        const frames: PiToPhi[] = [];
+        const write = duplex.write.bind(duplex);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        duplex.write = (msg: any, cb?: () => void): boolean => {
+            frames.push(msg as PiToPhi);
+            return write(msg, cb);
+        };
+        const factory: ClientFactory = () => ({
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            connect: () => duplex as any,
+            close: () => {},
+        });
+        const channel = new BridgeChannel(
+            CREDS,
+            { onMessage: () => {}, onStatus: () => {} },
+            factory,
+        );
+        await channel.connect(hello());
+        channel.sendNonfatal(historyFrame(1, 1));
+        await new Promise((r) => setTimeout(r, 0));
+        return frames;
+    }
+
+    it('stamps frames sent through sendNonfatal, on the wire', async () => {
+        const frames = await sentFrames();
+        const history = frames.find(
+            (f) => f.payload?.$case === 'historyResponse',
+        );
+        if (!history) throw new Error('history frame missing');
+        // The in-memory frame is not the contract; the bytes are. Decode what
+        // the socket would have carried, so a dropped proto field fails here.
+        const decoded = PiToPhi.decode(PiToPhi.encode(history).finish());
+        expect(decoded.traceparent).toMatch(pattern);
+        expect(decoded.payload?.$case).toBe('historyResponse');
+    });
+});

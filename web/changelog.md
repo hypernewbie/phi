@@ -4,6 +4,9 @@ All notable changes to phi are documented here. Newest versions first.
 
 ## Unreleased
 
+### Added
+- **One trace now crosses the Pi bridge.** A trace minted in the Pi extension (`bonus/pi-phi`) travels as a `traceparent` field on the bridge envelope, so a syncboard action is followed from Pi through the gRPC bridge into the Phi handler and on to the outbound coordinator HTTP call — the same trace id in every span, no collector-side stitching. The gRPC stream, each WebSocket connection and its resizes, server HTTP requests, and outbound HTTP clients all open spans when a collector is configured. Absent or malformed `traceparent` on a frame never changes an outcome: the span roots itself and the message is served. Release binaries include the instrumentation (`-tags=embedassets,otel`, about +5 MB); a build without `-tags=otel` keeps zero OpenTelemetry dependencies, and with no `--otel-endpoint` set every wrapper is identity — no provider, no cost. See `docs/server-profiling.md` and the profiling partition guard, which now asserts the release variant carries the OTel SDK.
+
 ## v0.35.0 — 2026-11-02
 
 ### Added

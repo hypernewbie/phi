@@ -28,6 +28,7 @@ import {
     METADATA_PROCESS_KEY,
     METADATA_TOKEN_KEY,
 } from './protocol.js';
+import { mintTraceparent } from './trace.js';
 import { BoundedQueue } from './queue.js';
 
 export interface ChannelCreds {
@@ -176,7 +177,7 @@ export class BridgeChannel {
     send(msg: PiToPhi): boolean {
         if (this.closed || this.writerError) return false;
         try {
-            this.enqueue(msg);
+            this.enqueue(this.withTraceparent(msg));
         } catch {
             return false;
         }
@@ -192,10 +193,11 @@ export class BridgeChannel {
      */
     sendNonfatal(msg: PiToPhi): boolean {
         if (this.closed || this.writerError) return false;
-        const byteSize = PiToPhi.encode(msg).finish().length;
+        const stamped = this.withTraceparent(msg);
+        const byteSize = PiToPhi.encode(stamped).finish().length;
         if (
             !this.queue.tryEnqueueWithByteCap(
-                { byteSize, msg },
+                { byteSize, msg: stamped },
                 MAX_QUEUED_BYTES - LIFECYCLE_HEADROOM_BYTES,
                 MAX_QUEUED_MESSAGES - LIFECYCLE_HEADROOM_MESSAGES,
             )
@@ -291,6 +293,18 @@ export class BridgeChannel {
             this.writerError = new Error('bounded send queue full');
             throw this.writerError;
         }
+    }
+
+    /**
+     * Stamp a frame with a trace-context header unless it already carries one.
+     * Both send paths go through here — Syncboard uses sendNonfatal, so
+     * stamping only in send would leave it untraced. The header is ~54 bytes,
+     * well inside the per-frame byte caps.
+     */
+    private withTraceparent(msg: PiToPhi): PiToPhi {
+        return msg.traceparent
+            ? msg
+            : { ...msg, traceparent: mintTraceparent() };
     }
 
     private failWaiters(err: Error): void {

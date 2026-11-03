@@ -192,7 +192,7 @@ func (p *peer) finishSyncboard(id uint64) {
 	p.syncboardMu.Unlock()
 }
 
-func (s *Server) receiveSyncboard(l *lease, p *peer, req *pibridgepb.SyncboardRequest) {
+func (s *Server) receiveSyncboard(ctx context.Context, l *lease, p *peer, req *pibridgepb.SyncboardRequest) {
 	id, ok := syncboardRequestID(req.GetRequestId())
 	if !ok {
 		return
@@ -234,10 +234,18 @@ func (s *Server) receiveSyncboard(l *lease, p *peer, req *pibridgepb.SyncboardRe
 	handler := s.syncboardHandler
 	go func() {
 		defer p.finishSyncboard(id)
+		// This goroutine outlives receiveSyncboard, so the work context must be
+		// derived here, not in the caller. In-flight work is cancelled when
+		// either the message context or the peer connection ends; deriving it
+		// in the caller would cancel it before the handler ran.
+		work, cancel := context.WithCancelCause(ctx)
+		stop := context.AfterFunc(p.ctx, func() { cancel(context.Cause(p.ctx)) })
+		defer stop()
+		defer cancel(nil)
 		if p.ctx.Err() != nil || !s.syncboardPeerCurrent(l, p) {
 			return
 		}
-		result := normalizeSyncboardResponse(req.GetRequestId(), validated, handler(p.ctx, process, validated))
+		result := normalizeSyncboardResponse(req.GetRequestId(), validated, handler(work, process, validated))
 		if p.ctx.Err() != nil || !s.syncboardPeerCurrent(l, p) {
 			return
 		}

@@ -25012,7 +25012,7 @@ function invokeNativeReload(ctx, state) {
 }
 
 // src/runtime.ts
-var import_node_crypto2 = require("node:crypto");
+var import_node_crypto3 = require("node:crypto");
 
 // ../../node_modules/.pnpm/@earendil-works+pi-ai@1.0.1_@aws-sdk+credential-provider-node@3.972.84_@smithy+signatur_303f23ddf937e2f19a0bf4028b6e60b2/node_modules/@earendil-works/pi-ai/dist/models.js
 var EXTENDED_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -25917,7 +25917,7 @@ function assertFloat32(arg) {
 // src/gen/bridge.ts
 var import_grpc_js = __toESM(require_src3(), 1);
 function createBasePiToPhi() {
-  return { paneId: "", processId: "", runtimeGeneration: 0n, payload: void 0 };
+  return { paneId: "", processId: "", runtimeGeneration: 0n, traceparent: void 0, payload: void 0 };
 }
 var PiToPhi = {
   encode(message, writer = new BinaryWriter()) {
@@ -25932,6 +25932,9 @@ var PiToPhi = {
         throw new globalThis.Error("value provided for field message.runtimeGeneration of type uint64 too large");
       }
       writer.uint32(24).uint64(message.runtimeGeneration);
+    }
+    if (message.traceparent !== void 0) {
+      writer.uint32(34).string(message.traceparent);
     }
     switch (message.payload?.$case) {
       case "hello":
@@ -26020,6 +26023,13 @@ var PiToPhi = {
               break;
             }
             message.runtimeGeneration = reader.uint64();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+            message.traceparent = reader.string();
             continue;
           }
           case 10: {
@@ -26169,6 +26179,7 @@ var PiToPhi = {
     message.paneId = object.paneId ?? "";
     message.processId = object.processId ?? "";
     message.runtimeGeneration = object.runtimeGeneration !== void 0 && object.runtimeGeneration !== null ? BigInt(object.runtimeGeneration) : 0n;
+    message.traceparent = object.traceparent ?? void 0;
     switch (object.payload?.$case) {
       case "hello": {
         if (object.payload?.value !== void 0 && object.payload?.value !== null) {
@@ -26286,7 +26297,7 @@ var PiToPhi = {
   }
 };
 function createBasePhiToPi() {
-  return { paneId: "", processId: "", runtimeGeneration: 0n, payload: void 0 };
+  return { paneId: "", processId: "", runtimeGeneration: 0n, traceparent: void 0, payload: void 0 };
 }
 var PhiToPi = {
   encode(message, writer = new BinaryWriter()) {
@@ -26301,6 +26312,9 @@ var PhiToPi = {
         throw new globalThis.Error("value provided for field message.runtimeGeneration of type uint64 too large");
       }
       writer.uint32(24).uint64(message.runtimeGeneration);
+    }
+    if (message.traceparent !== void 0) {
+      writer.uint32(34).string(message.traceparent);
     }
     switch (message.payload?.$case) {
       case "accepted":
@@ -26386,6 +26400,13 @@ var PhiToPi = {
               break;
             }
             message.runtimeGeneration = reader.uint64();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+            message.traceparent = reader.string();
             continue;
           }
           case 10: {
@@ -26537,6 +26558,7 @@ var PhiToPi = {
     message.paneId = object.paneId ?? "";
     message.processId = object.processId ?? "";
     message.runtimeGeneration = object.runtimeGeneration !== void 0 && object.runtimeGeneration !== null ? BigInt(object.runtimeGeneration) : 0n;
+    message.traceparent = object.traceparent ?? void 0;
     switch (object.payload?.$case) {
       case "accepted": {
         if (object.payload?.value !== void 0 && object.payload?.value !== null) {
@@ -30260,6 +30282,14 @@ var IntegrationClient = (0, import_grpc_js.makeGenericClientConstructor)(
 
 // src/channel.ts
 var import_grpc_js2 = __toESM(require_src3(), 1);
+
+// src/trace.ts
+var import_node_crypto2 = require("node:crypto");
+function mintTraceparent() {
+  return `00-${(0, import_node_crypto2.randomBytes)(16).toString("hex")}-${(0, import_node_crypto2.randomBytes)(8).toString("hex")}-01`;
+}
+
+// src/channel.ts
 var defaultClientFactory = (target, creds, options) => (
   // SAFETY: the generated client implements connect/cancel/close with
   // compatible signatures; the assertion only narrows to the used surface.
@@ -30360,7 +30390,7 @@ var BridgeChannel = class {
   send(msg) {
     if (this.closed || this.writerError) return false;
     try {
-      this.enqueue(msg);
+      this.enqueue(this.withTraceparent(msg));
     } catch {
       return false;
     }
@@ -30375,9 +30405,10 @@ var BridgeChannel = class {
    */
   sendNonfatal(msg) {
     if (this.closed || this.writerError) return false;
-    const byteSize = PiToPhi.encode(msg).finish().length;
+    const stamped = this.withTraceparent(msg);
+    const byteSize = PiToPhi.encode(stamped).finish().length;
     if (!this.queue.tryEnqueueWithByteCap(
-      { byteSize, msg },
+      { byteSize, msg: stamped },
       MAX_QUEUED_BYTES - LIFECYCLE_HEADROOM_BYTES,
       MAX_QUEUED_MESSAGES - LIFECYCLE_HEADROOM_MESSAGES
     )) {
@@ -30466,6 +30497,15 @@ var BridgeChannel = class {
       this.writerError = new Error("bounded send queue full");
       throw this.writerError;
     }
+  }
+  /**
+   * Stamp a frame with a trace-context header unless it already carries one.
+   * Both send paths go through here — Syncboard uses sendNonfatal, so
+   * stamping only in send would leave it untraced. The header is ~54 bytes,
+   * well inside the per-frame byte caps.
+   */
+  withTraceparent(msg) {
+    return msg.traceparent ? msg : { ...msg, traceparent: mintTraceparent() };
   }
   failWaiters(err) {
     const waiters = this.acceptedWaiters;
@@ -30979,7 +31019,7 @@ var Runtime = class {
     this.backoffMs = opts.backoffBaseMs ?? RECONNECT_BASE_MS;
   }
   opts;
-  runtimeId = (0, import_node_crypto2.randomUUID)();
+  runtimeId = (0, import_node_crypto3.randomUUID)();
   channel = null;
   running = false;
   seq = 0n;

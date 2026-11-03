@@ -309,7 +309,7 @@ func TestWebSocketKeepalive(t *testing.T) {
 		hub.Register(inst.ID, client)
 
 		go client.WritePump()
-		client.ReadPump(inst, manager, hub, nil)
+		client.ReadPump(context.Background(), inst, manager, hub, nil)
 	}))
 	defer server.Close()
 

@@ -19,6 +19,7 @@ import (
 	"github.com/hypernewbie/phi/internal/piapp"
 	"github.com/hypernewbie/phi/pkg/clipboard"
 	"github.com/hypernewbie/phi/pkg/coders"
+	"github.com/hypernewbie/phi/pkg/obs"
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/session"
 	"github.com/hypernewbie/phi/pkg/system"
@@ -803,7 +804,8 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &http.Client{
-		Timeout: 10 * time.Second,
+		Transport: obs.Transport(nil),
+		Timeout:   10 * time.Second,
 	}
 	resp, err := client.Do(req)
 	if err != nil {

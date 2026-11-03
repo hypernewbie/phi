@@ -10,7 +10,7 @@ Diagnostics exist only in binaries built with `-tags=profiling`. Normal builds a
 go build -tags=profiling -o phi-profiling .
 ```
 
-Use `-tags=profiling,otel` to include OpenTelemetry as well. The tags are independent: `otel` alone does not include diagnostics. Normal release builds (`embedassets`) also exclude diagnostics; use `-tags=embedassets,profiling` after generating release assets to include both.
+Use `-tags=profiling,otel` to include OpenTelemetry as well. The tags are independent: `otel` alone does not include diagnostics. Release builds (`embedassets,otel`) include tracing but still exclude diagnostics; use `-tags=embedassets,profiling,otel` after generating release assets to include both. Tracing stays disabled and costs nothing on the request path until `--otel-endpoint` is set.
 
 The build tag includes the instrumentation. The flag starts the private service. An authenticated capture request starts recording. A profiling build without the flag has no private listener or active capture, but still includes worker labels and inactive timing checks.
 

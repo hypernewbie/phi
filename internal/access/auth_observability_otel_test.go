@@ -39,7 +39,12 @@ func withInMemoryTraces(t *testing.T) *tracetest.InMemoryExporter {
 	)
 	previous := otel.GetTracerProvider()
 	otel.SetTracerProvider(provider)
+	// obs gates its wrappers on Init having installed a provider, and these
+	// tests install one directly, so the gate must be opened explicitly or
+	// WrapHTTP returns its input unchanged and records nothing.
+	restoreGate := obs.SetEnabledForTest(true)
 	t.Cleanup(func() {
+		restoreGate()
 		otel.SetTracerProvider(previous)
 		_ = provider.Shutdown(context.Background())
 	})

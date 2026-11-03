@@ -132,6 +132,13 @@ export interface PiToPhi {
   paneId: string;
   processId: string;
   runtimeGeneration: bigint;
+  /**
+   * Optional W3C trace-context header for this frame's operation. Peers that
+   * predate this field ignore it; a missing or malformed value must never
+   * change behavior, only the trace's parentage. Declared optional so absence
+   * stays representable on both sides instead of decoding as an empty string.
+   */
+  traceparent?: string | undefined;
   payload:
     | { $case: "hello"; value: Hello }
     | { $case: "agentStarted"; value: AgentStarted }
@@ -158,6 +165,11 @@ export interface PhiToPi {
   paneId: string;
   processId: string;
   runtimeGeneration: bigint;
+  /**
+   * Optional W3C trace-context header, mirroring the PiToPhi field so a
+   * request/response pair can share one trace.
+   */
+  traceparent?: string | undefined;
   payload:
     | { $case: "accepted"; value: Accepted }
     | { $case: "protocolError"; value: ProtocolError }
@@ -768,7 +780,7 @@ export interface ProtocolError {
 }
 
 function createBasePiToPhi(): PiToPhi {
-  return { paneId: "", processId: "", runtimeGeneration: 0n, payload: undefined };
+  return { paneId: "", processId: "", runtimeGeneration: 0n, traceparent: undefined, payload: undefined };
 }
 
 export const PiToPhi: MessageFns<PiToPhi> = {
@@ -784,6 +796,9 @@ export const PiToPhi: MessageFns<PiToPhi> = {
         throw new globalThis.Error("value provided for field message.runtimeGeneration of type uint64 too large");
       }
       writer.uint32(24).uint64(message.runtimeGeneration);
+    }
+    if (message.traceparent !== undefined) {
+      writer.uint32(34).string(message.traceparent);
     }
     switch (message.payload?.$case) {
       case "hello":
@@ -876,6 +891,14 @@ export const PiToPhi: MessageFns<PiToPhi> = {
             }
 
             message.runtimeGeneration = reader.uint64() as bigint;
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.traceparent = reader.string();
             continue;
           }
           case 10: {
@@ -1045,6 +1068,7 @@ export const PiToPhi: MessageFns<PiToPhi> = {
     message.runtimeGeneration = (object.runtimeGeneration !== undefined && object.runtimeGeneration !== null)
       ? BigInt(object.runtimeGeneration)
       : 0n;
+    message.traceparent = object.traceparent ?? undefined;
     switch (object.payload?.$case) {
       case "hello": {
         if (object.payload?.value !== undefined && object.payload?.value !== null) {
@@ -1163,7 +1187,7 @@ export const PiToPhi: MessageFns<PiToPhi> = {
 };
 
 function createBasePhiToPi(): PhiToPi {
-  return { paneId: "", processId: "", runtimeGeneration: 0n, payload: undefined };
+  return { paneId: "", processId: "", runtimeGeneration: 0n, traceparent: undefined, payload: undefined };
 }
 
 export const PhiToPi: MessageFns<PhiToPi> = {
@@ -1179,6 +1203,9 @@ export const PhiToPi: MessageFns<PhiToPi> = {
         throw new globalThis.Error("value provided for field message.runtimeGeneration of type uint64 too large");
       }
       writer.uint32(24).uint64(message.runtimeGeneration);
+    }
+    if (message.traceparent !== undefined) {
+      writer.uint32(34).string(message.traceparent);
     }
     switch (message.payload?.$case) {
       case "accepted":
@@ -1268,6 +1295,14 @@ export const PhiToPi: MessageFns<PhiToPi> = {
             }
 
             message.runtimeGeneration = reader.uint64() as bigint;
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.traceparent = reader.string();
             continue;
           }
           case 10: {
@@ -1438,6 +1473,7 @@ export const PhiToPi: MessageFns<PhiToPi> = {
     message.runtimeGeneration = (object.runtimeGeneration !== undefined && object.runtimeGeneration !== null)
       ? BigInt(object.runtimeGeneration)
       : 0n;
+    message.traceparent = object.traceparent ?? undefined;
     switch (object.payload?.$case) {
       case "accepted": {
         if (object.payload?.value !== undefined && object.payload?.value !== null) {
