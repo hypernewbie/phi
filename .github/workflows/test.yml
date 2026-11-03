@@ -392,14 +392,16 @@ jobs:
         run: pnpm run test:pi-phi:integration
 
   test-e2e:
-    name: Playwright Chromium E2E (${{ matrix.shard }}/3)
+    name: Playwright Chromium E2E (${{ matrix.shard }}/5)
     runs-on: ubuntu-latest
-    # 319 tests on 2 workers took 19 min in a single job. Shard by file across
-    # three runners instead; each shard keeps its own 2 workers.
+    # 319 tests on 2 workers took 19 min in a single job. Shard across five
+    # runners instead; each shard keeps its own 2 workers. `playwright test
+    # --list --shard=n/5` splits them 65/65/62/62/62 tests, against
+    # 122/90/104 at three shards, where the longest shard set the job time.
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5]
     steps:
       - name: Checkout Code
         uses: actions/checkout@v5
@@ -437,7 +439,7 @@ jobs:
       - name: Run Playwright suite
         env:
           PLAYWRIGHT_BROWSERS_PATH: 0
-        run: pnpm exec playwright test --shard=${{ matrix.shard }}/3
+        run: pnpm exec playwright test --shard=${{ matrix.shard }}/5
 
       - name: Upload Playwright artifacts on failure
         if: failure()
