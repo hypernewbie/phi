@@ -4,7 +4,6 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
-	"time"
 
 	pibridgepb "github.com/hypernewbie/phi/internal/pibridge/pb"
 )
@@ -170,7 +169,3 @@ func (l *lease) pendingPushCount() int {
 	defer l.mu.Unlock()
 	return len(l.pendingPushes)
 }
-
-// pushRetryDelay is the wait before one failed delivery is retried by the
-// caller's own loop. Kept here so the sender and tests agree.
-const pushRetryDelay = 2 * time.Second

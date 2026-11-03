@@ -538,8 +538,15 @@ func (app *Server) startSyncboardPush() {
 // deliverSyncboardPush hands one event to the owning pane runtime and keeps it
 // pending there until the runtime acknowledges it.
 func (app *Server) deliverSyncboardPush(ev *syncmeshb.SyncEvent) {
-	if ev == nil || ev.GetGap() || app.bridge == nil {
-		// A gap marker carries no content; the sender resynchronizes.
+	if ev == nil || app.bridge == nil {
+		return
+	}
+	if ev.GetGap() {
+		// Events were dropped faster than this process drained them. Replay
+		// from a cursor is not implemented yet, so name the loss instead of
+		// letting the receiver believe it saw everything.
+		slog.Warn("syncboard push gap: events were dropped before delivery",
+			"recipient", ev.GetRecipient(), "seq", ev.GetSeq())
 		return
 	}
 	err := app.bridge.PushSyncboard(ev.GetRecipient(), pibridge.SyncboardPush{
