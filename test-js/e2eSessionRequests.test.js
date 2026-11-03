@@ -132,6 +132,12 @@ describe('expected terminal replay cancellation diagnostics', () => {
         [
             `${origin}/api/terminals/pane/replay`,
             'GET',
+            'net::ERR_INTERNET_DISCONNECTED',
+        ],
+        [`${origin}/api/terminals/pane/replay`, 'GET', 'net::ERR_TIMED_OUT'],
+        [
+            `${origin}/api/terminals/pane/replay`,
+            'GET',
             'net::ERR_CONNECTION_RESET',
         ],
         [`${origin}/api/terminals/pane/replay`, 'GET', null],

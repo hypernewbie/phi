@@ -1,10 +1,4 @@
-import {
-    test,
-    expect,
-    type Page,
-    type WebSocketRoute,
-    type APIRequestContext,
-} from '@playwright/test';
+import { test, expect, type Page, type WebSocketRoute } from '@playwright/test';
 import { copyFileSync, writeFileSync } from 'node:fs';
 import { stripVTControlCharacters } from 'node:util';
 import { startPhi } from './_server.js';
@@ -149,11 +143,10 @@ async function sendUI(page: Page, command: string) {
     await page.locator('#input-textarea').fill(command);
     await page.locator('#send-input-btn').click();
 }
-async function recorded(request: APIRequestContext, url: string, pane: string) {
+// Raw PTY replay includes prompt redraws; stripping controls does not reconstruct screen lines.
+async function recorded(url: string, pane: string) {
     const { data } = await readReplay(url, pane);
-    return stripVTControlCharacters(data.toString('utf8'))
-        .replaceAll('\r', '')
-        .split('\n');
+    return stripVTControlCharacters(data.toString('utf8')).replaceAll('\r', '');
 }
 async function visibility(page: Page, hidden: boolean) {
     await page.evaluate((value) => {
@@ -274,9 +267,10 @@ for (const mobile of [false, true]) {
                 );
                 for (const pane of panes) {
                     await selectPane(page, pane);
-                    await sendUI(page, 'echo READY');
+                    // The echoed command must not contain the output marker.
+                    await sendUI(page, "echo REA''DY");
                     await expect
-                        .poll(() => recorded(context.request, phi.url, pane), {
+                        .poll(() => recorded(phi.url, pane), {
                             timeout: 30000,
                         })
                         .toContain('READY');
@@ -364,18 +358,17 @@ for (const mobile of [false, true]) {
                     await pair.backend!.close();
                     await pair.client.close();
                 }
-                const recordings: string[][] = [];
+                const recordings: string[] = [];
                 for (let i = 0; i < 2; i++) {
                     const response = await context.request.post(
                         `${phi.url}/api/terminals/${panes[i]}/input`,
-                        { data: { text: `echo AWAY${i}` } },
+                        { data: { text: `echo AWAY''${i}` } },
                     );
                     expect(response.status()).toBe(204);
                     await expect
                         .poll(
                             async () => {
                                 recordings[i] = await recorded(
-                                    context.request,
                                     phi.url,
                                     panes[i],
                                 );
@@ -491,11 +484,9 @@ for (const mobile of [false, true]) {
                             preserved.map((key) => [key, before[key]]),
                         ),
                     );
-                expect(
-                    (await recorded(context.request, phi.url, panes[0])).join(
-                        '\n',
-                    ),
-                ).not.toContain(before.draft);
+                expect(await recorded(phi.url, panes[0])).not.toContain(
+                    before.draft,
+                );
                 for (let i = 0; i < 2; i++) {
                     await selectPane(page, panes[i]);
                     await sendUI(page, `echo NEW${i}`);
