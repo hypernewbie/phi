@@ -1547,7 +1547,7 @@ eager to avoid a first-open unstyled flash. -->
                         <div class="ws-manager-group-actions">
                             <button
                                 id="ws-manager-remove"
-                                class="ws-manager-link ws-manager-link-danger"
+                                class="btn btn-red"
                                 type="button"
                                 disabled
                             >
@@ -1580,8 +1580,17 @@ eager to avoid a first-open unstyled flash. -->
                                     >
                                 </div>
                                 <button
-                                    id="ws-manager-root-add"
+                                    id="ws-manager-root-browse"
                                     class="btn btn-primary"
+                                    type="button"
+                                    aria-expanded="false"
+                                    aria-controls="ws-manager-root-tree"
+                                >
+                                    Browse
+                                </button>
+                                <button
+                                    id="ws-manager-root-add"
+                                    class="btn btn-accent"
                                     type="button"
                                 >
                                     Add root
@@ -1591,6 +1600,10 @@ eager to avoid a first-open unstyled flash. -->
                                 A root groups the folders inside it. Nothing is
                                 added until you select them.
                             </p>
+                            <div
+                                id="ws-manager-root-tree"
+                                class="ws-manager-root-tree hidden"
+                            ></div>
                         </div>
                         <div id="ws-manager-roots" class="ws-manager-roots"></div>
                     </section>
