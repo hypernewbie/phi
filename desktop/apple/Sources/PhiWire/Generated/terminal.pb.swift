@@ -188,6 +188,14 @@ public nonisolated struct Phi_Websocket_Terminal_V1_TerminalServerFrame: Sendabl
     set {payload = .notification(newValue)}
   }
 
+  public var geometry: Phi_Websocket_Terminal_V1_TerminalGeometry {
+    get {
+      if case .geometry(let v)? = payload {return v}
+      return Phi_Websocket_Terminal_V1_TerminalGeometry()
+    }
+    set {payload = .geometry(newValue)}
+  }
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public nonisolated enum OneOf_Payload: Equatable, Sendable {
@@ -200,6 +208,7 @@ public nonisolated struct Phi_Websocket_Terminal_V1_TerminalServerFrame: Sendabl
     case bridgeState(Phi_Websocket_Terminal_V1_TerminalBridgeState)
     case settlement(Phi_Websocket_Terminal_V1_TerminalSettlement)
     case notification(Phi_Websocket_Events_V1_Notification)
+    case geometry(Phi_Websocket_Terminal_V1_TerminalGeometry)
 
   }
 
@@ -256,6 +265,51 @@ public nonisolated struct Phi_Websocket_Terminal_V1_TerminalAttach: Sendable {
   /// Clears the value of `replayFrom`. Subsequent reads from it will return its default value.
   public mutating func clearReplayFrom() {self._replayFrom = nil}
 
+  public var initialCols: UInt32 {
+    get {_initialCols ?? 0}
+    set {_initialCols = newValue}
+  }
+  /// Returns true if `initialCols` has been explicitly set.
+  public var hasInitialCols: Bool {self._initialCols != nil}
+  /// Clears the value of `initialCols`. Subsequent reads from it will return its default value.
+  public mutating func clearInitialCols() {self._initialCols = nil}
+
+  public var initialRows: UInt32 {
+    get {_initialRows ?? 0}
+    set {_initialRows = newValue}
+  }
+  /// Returns true if `initialRows` has been explicitly set.
+  public var hasInitialRows: Bool {self._initialRows != nil}
+  /// Clears the value of `initialRows`. Subsequent reads from it will return its default value.
+  public mutating func clearInitialRows() {self._initialRows = nil}
+
+  public var eventCursor: String {
+    get {_eventCursor ?? String()}
+    set {_eventCursor = newValue}
+  }
+  /// Returns true if `eventCursor` has been explicitly set.
+  public var hasEventCursor: Bool {self._eventCursor != nil}
+  /// Clears the value of `eventCursor`. Subsequent reads from it will return its default value.
+  public mutating func clearEventCursor() {self._eventCursor = nil}
+
+  public var historyIncomplete: Bool {
+    get {_historyIncomplete ?? false}
+    set {_historyIncomplete = newValue}
+  }
+  /// Returns true if `historyIncomplete` has been explicitly set.
+  public var hasHistoryIncomplete: Bool {self._historyIncomplete != nil}
+  /// Clears the value of `historyIncomplete`. Subsequent reads from it will return its default value.
+  public mutating func clearHistoryIncomplete() {self._historyIncomplete = nil}
+
+  public var ephemeral: Bool {
+    get {_ephemeral ?? false}
+    set {_ephemeral = newValue}
+  }
+  /// Returns true if `ephemeral` has been explicitly set.
+  public var hasEphemeral: Bool {self._ephemeral != nil}
+  /// Clears the value of `ephemeral`. Subsequent reads from it will return its default value.
+  public mutating func clearEphemeral() {self._ephemeral = nil}
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
@@ -265,6 +319,11 @@ public nonisolated struct Phi_Websocket_Terminal_V1_TerminalAttach: Sendable {
   fileprivate var _head: UInt64? = nil
   fileprivate var _checkpoint: Phi_Websocket_Terminal_V1_TerminalCheckpoint? = nil
   fileprivate var _replayFrom: UInt64? = nil
+  fileprivate var _initialCols: UInt32? = nil
+  fileprivate var _initialRows: UInt32? = nil
+  fileprivate var _eventCursor: String? = nil
+  fileprivate var _historyIncomplete: Bool? = nil
+  fileprivate var _ephemeral: Bool? = nil
 }
 
 public nonisolated struct Phi_Websocket_Terminal_V1_TerminalCheckpoint: Sendable {
@@ -351,6 +410,60 @@ public nonisolated struct Phi_Websocket_Terminal_V1_TerminalOutput: Sendable {
   public init() {}
 
   fileprivate var _start: UInt64? = nil
+}
+
+/// TerminalGeometry is one committed backend resize on the live stream.
+/// Every byte at seq >= at_seq was produced under cols x rows. Receivers
+/// adopt it for their parser and never answer with a resize of their own.
+public nonisolated struct Phi_Websocket_Terminal_V1_TerminalGeometry: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var atSeq: UInt64 {
+    get {_atSeq ?? 0}
+    set {_atSeq = newValue}
+  }
+  /// Returns true if `atSeq` has been explicitly set.
+  public var hasAtSeq: Bool {self._atSeq != nil}
+  /// Clears the value of `atSeq`. Subsequent reads from it will return its default value.
+  public mutating func clearAtSeq() {self._atSeq = nil}
+
+  public var cols: UInt32 {
+    get {_cols ?? 0}
+    set {_cols = newValue}
+  }
+  /// Returns true if `cols` has been explicitly set.
+  public var hasCols: Bool {self._cols != nil}
+  /// Clears the value of `cols`. Subsequent reads from it will return its default value.
+  public mutating func clearCols() {self._cols = nil}
+
+  public var rows: UInt32 {
+    get {_rows ?? 0}
+    set {_rows = newValue}
+  }
+  /// Returns true if `rows` has been explicitly set.
+  public var hasRows: Bool {self._rows != nil}
+  /// Clears the value of `rows`. Subsequent reads from it will return its default value.
+  public mutating func clearRows() {self._rows = nil}
+
+  public var eventCursor: String {
+    get {_eventCursor ?? String()}
+    set {_eventCursor = newValue}
+  }
+  /// Returns true if `eventCursor` has been explicitly set.
+  public var hasEventCursor: Bool {self._eventCursor != nil}
+  /// Clears the value of `eventCursor`. Subsequent reads from it will return its default value.
+  public mutating func clearEventCursor() {self._eventCursor = nil}
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _atSeq: UInt64? = nil
+  fileprivate var _cols: UInt32? = nil
+  fileprivate var _rows: UInt32? = nil
+  fileprivate var _eventCursor: String? = nil
 }
 
 public nonisolated struct Phi_Websocket_Terminal_V1_TerminalPong: Sendable {
@@ -625,6 +738,87 @@ public nonisolated struct Phi_Websocket_Terminal_V1_TerminalBridgeState: @unchec
   /// Clears the value of `compactPending`. Subsequent reads from it will return its default value.
   public mutating func clearCompactPending() {_uniqueStorage()._compactPending = nil}
 
+  public var processID: String {
+    get {_storage._processID ?? String()}
+    set {_uniqueStorage()._processID = newValue}
+  }
+  /// Returns true if `processID` has been explicitly set.
+  public var hasProcessID: Bool {_storage._processID != nil}
+  /// Clears the value of `processID`. Subsequent reads from it will return its default value.
+  public mutating func clearProcessID() {_uniqueStorage()._processID = nil}
+
+  public var runID: UInt64 {
+    get {_storage._runID ?? 0}
+    set {_uniqueStorage()._runID = newValue}
+  }
+  /// Returns true if `runID` has been explicitly set.
+  public var hasRunID: Bool {_storage._runID != nil}
+  /// Clears the value of `runID`. Subsequent reads from it will return its default value.
+  public mutating func clearRunID() {_uniqueStorage()._runID = nil}
+
+  public var contextRevision: UInt64 {
+    get {_storage._contextRevision ?? 0}
+    set {_uniqueStorage()._contextRevision = newValue}
+  }
+  /// Returns true if `contextRevision` has been explicitly set.
+  public var hasContextRevision: Bool {_storage._contextRevision != nil}
+  /// Clears the value of `contextRevision`. Subsequent reads from it will return its default value.
+  public mutating func clearContextRevision() {_uniqueStorage()._contextRevision = nil}
+
+  public var reloadIdle: Bool {
+    get {_storage._reloadIdle ?? false}
+    set {_uniqueStorage()._reloadIdle = newValue}
+  }
+  /// Returns true if `reloadIdle` has been explicitly set.
+  public var hasReloadIdle: Bool {_storage._reloadIdle != nil}
+  /// Clears the value of `reloadIdle`. Subsequent reads from it will return its default value.
+  public mutating func clearReloadIdle() {_uniqueStorage()._reloadIdle = nil}
+
+  public var reloadQueued: Bool {
+    get {_storage._reloadQueued ?? false}
+    set {_uniqueStorage()._reloadQueued = newValue}
+  }
+  /// Returns true if `reloadQueued` has been explicitly set.
+  public var hasReloadQueued: Bool {_storage._reloadQueued != nil}
+  /// Clears the value of `reloadQueued`. Subsequent reads from it will return its default value.
+  public mutating func clearReloadQueued() {_uniqueStorage()._reloadQueued = nil}
+
+  public var reloadActive: Bool {
+    get {_storage._reloadActive ?? false}
+    set {_uniqueStorage()._reloadActive = newValue}
+  }
+  /// Returns true if `reloadActive` has been explicitly set.
+  public var hasReloadActive: Bool {_storage._reloadActive != nil}
+  /// Clears the value of `reloadActive`. Subsequent reads from it will return its default value.
+  public mutating func clearReloadActive() {_uniqueStorage()._reloadActive = nil}
+
+  public var reloadCompactPending: Bool {
+    get {_storage._reloadCompactPending ?? false}
+    set {_uniqueStorage()._reloadCompactPending = newValue}
+  }
+  /// Returns true if `reloadCompactPending` has been explicitly set.
+  public var hasReloadCompactPending: Bool {_storage._reloadCompactPending != nil}
+  /// Clears the value of `reloadCompactPending`. Subsequent reads from it will return its default value.
+  public mutating func clearReloadCompactPending() {_uniqueStorage()._reloadCompactPending = nil}
+
+  public var reloadPending: Bool {
+    get {_storage._reloadPending ?? false}
+    set {_uniqueStorage()._reloadPending = newValue}
+  }
+  /// Returns true if `reloadPending` has been explicitly set.
+  public var hasReloadPending: Bool {_storage._reloadPending != nil}
+  /// Clears the value of `reloadPending`. Subsequent reads from it will return its default value.
+  public mutating func clearReloadPending() {_uniqueStorage()._reloadPending = nil}
+
+  public var reloadHighWater: UInt64 {
+    get {_storage._reloadHighWater ?? 0}
+    set {_uniqueStorage()._reloadHighWater = newValue}
+  }
+  /// Returns true if `reloadHighWater` has been explicitly set.
+  public var hasReloadHighWater: Bool {_storage._reloadHighWater != nil}
+  /// Clears the value of `reloadHighWater`. Subsequent reads from it will return its default value.
+  public mutating func clearReloadHighWater() {_uniqueStorage()._reloadHighWater = nil}
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
@@ -827,7 +1021,7 @@ nonisolated extension Phi_Websocket_Terminal_V1_TerminalPing: SwiftProtobuf.Mess
 
 nonisolated extension Phi_Websocket_Terminal_V1_TerminalServerFrame: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".TerminalServerFrame"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\u{10}attach\0\u{1}output\0\u{1}pong\0\u{1}exit\0\u{3}drop_notice\0\u{1}title\0\u{3}bridge_state\0\u{1}settlement\0\u{1}notification\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\u{10}attach\0\u{1}output\0\u{1}pong\0\u{1}exit\0\u{3}drop_notice\0\u{1}title\0\u{3}bridge_state\0\u{1}settlement\0\u{1}notification\0\u{1}geometry\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -952,6 +1146,19 @@ nonisolated extension Phi_Websocket_Terminal_V1_TerminalServerFrame: SwiftProtob
           self.payload = .notification(v)
         }
       }()
+      case 25: try {
+        var v: Phi_Websocket_Terminal_V1_TerminalGeometry?
+        var hadOneofValue = false
+        if let current = self.payload {
+          hadOneofValue = true
+          if case .geometry(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.payload = .geometry(v)
+        }
+      }()
       default: break
       }
     }
@@ -999,6 +1206,10 @@ nonisolated extension Phi_Websocket_Terminal_V1_TerminalServerFrame: SwiftProtob
       guard case .notification(let v)? = self.payload else { preconditionFailure() }
       try visitor.visitSingularMessageField(value: v, fieldNumber: 24)
     }()
+    case .geometry?: try {
+      guard case .geometry(let v)? = self.payload else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 25)
+    }()
     case nil: break
     }
     try unknownFields.traverse(visitor: &visitor)
@@ -1013,7 +1224,7 @@ nonisolated extension Phi_Websocket_Terminal_V1_TerminalServerFrame: SwiftProtob
 
 nonisolated extension Phi_Websocket_Terminal_V1_TerminalAttach: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".TerminalAttach"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}epoch\0\u{1}oldest\0\u{1}head\0\u{1}checkpoint\0\u{3}replay_from\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}epoch\0\u{1}oldest\0\u{1}head\0\u{1}checkpoint\0\u{3}replay_from\0\u{3}initial_cols\0\u{3}initial_rows\0\u{3}event_cursor\0\u{3}history_incomplete\0\u{1}ephemeral\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1026,6 +1237,11 @@ nonisolated extension Phi_Websocket_Terminal_V1_TerminalAttach: SwiftProtobuf.Me
       case 3: try { try decoder.decodeSingularUInt64Field(value: &self._head) }()
       case 4: try { try decoder.decodeSingularMessageField(value: &self._checkpoint) }()
       case 5: try { try decoder.decodeSingularUInt64Field(value: &self._replayFrom) }()
+      case 6: try { try decoder.decodeSingularUInt32Field(value: &self._initialCols) }()
+      case 7: try { try decoder.decodeSingularUInt32Field(value: &self._initialRows) }()
+      case 8: try { try decoder.decodeSingularStringField(value: &self._eventCursor) }()
+      case 9: try { try decoder.decodeSingularBoolField(value: &self._historyIncomplete) }()
+      case 10: try { try decoder.decodeSingularBoolField(value: &self._ephemeral) }()
       default: break
       }
     }
@@ -1051,6 +1267,21 @@ nonisolated extension Phi_Websocket_Terminal_V1_TerminalAttach: SwiftProtobuf.Me
     try { if let v = self._replayFrom {
       try visitor.visitSingularUInt64Field(value: v, fieldNumber: 5)
     } }()
+    try { if let v = self._initialCols {
+      try visitor.visitSingularUInt32Field(value: v, fieldNumber: 6)
+    } }()
+    try { if let v = self._initialRows {
+      try visitor.visitSingularUInt32Field(value: v, fieldNumber: 7)
+    } }()
+    try { if let v = self._eventCursor {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 8)
+    } }()
+    try { if let v = self._historyIncomplete {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 9)
+    } }()
+    try { if let v = self._ephemeral {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 10)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -1060,6 +1291,11 @@ nonisolated extension Phi_Websocket_Terminal_V1_TerminalAttach: SwiftProtobuf.Me
     if lhs._head != rhs._head {return false}
     if lhs._checkpoint != rhs._checkpoint {return false}
     if lhs._replayFrom != rhs._replayFrom {return false}
+    if lhs._initialCols != rhs._initialCols {return false}
+    if lhs._initialRows != rhs._initialRows {return false}
+    if lhs._eventCursor != rhs._eventCursor {return false}
+    if lhs._historyIncomplete != rhs._historyIncomplete {return false}
+    if lhs._ephemeral != rhs._ephemeral {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1158,6 +1394,55 @@ nonisolated extension Phi_Websocket_Terminal_V1_TerminalOutput: SwiftProtobuf.Me
   public static func ==(lhs: Phi_Websocket_Terminal_V1_TerminalOutput, rhs: Phi_Websocket_Terminal_V1_TerminalOutput) -> Bool {
     if lhs._start != rhs._start {return false}
     if lhs.data != rhs.data {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Phi_Websocket_Terminal_V1_TerminalGeometry: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".TerminalGeometry"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}at_seq\0\u{1}cols\0\u{1}rows\0\u{3}event_cursor\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularUInt64Field(value: &self._atSeq) }()
+      case 2: try { try decoder.decodeSingularUInt32Field(value: &self._cols) }()
+      case 3: try { try decoder.decodeSingularUInt32Field(value: &self._rows) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self._eventCursor) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._atSeq {
+      try visitor.visitSingularUInt64Field(value: v, fieldNumber: 1)
+    } }()
+    try { if let v = self._cols {
+      try visitor.visitSingularUInt32Field(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._rows {
+      try visitor.visitSingularUInt32Field(value: v, fieldNumber: 3)
+    } }()
+    try { if let v = self._eventCursor {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 4)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Phi_Websocket_Terminal_V1_TerminalGeometry, rhs: Phi_Websocket_Terminal_V1_TerminalGeometry) -> Bool {
+    if lhs._atSeq != rhs._atSeq {return false}
+    if lhs._cols != rhs._cols {return false}
+    if lhs._rows != rhs._rows {return false}
+    if lhs._eventCursor != rhs._eventCursor {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1286,7 +1571,7 @@ nonisolated extension Phi_Websocket_Terminal_V1_TerminalTitle: SwiftProtobuf.Mes
 
 nonisolated extension Phi_Websocket_Terminal_V1_TerminalBridgeState: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".TerminalBridgeState"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}state\0\u{1}reason\0\u{1}generation\0\u{3}telemetry_revision\0\u{3}last_run\0\u{3}last_outcome\0\u{1}running\0\u{1}connected\0\u{1}model\0\u{1}capabilities\0\u{3}pane_id\0\u{3}thinking_level\0\u{3}context_tokens\0\u{3}context_window\0\u{3}context_percent\0\u{3}compact_idle\0\u{3}compact_queued\0\u{3}compact_active\0\u{3}compact_pending\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}state\0\u{1}reason\0\u{1}generation\0\u{3}telemetry_revision\0\u{3}last_run\0\u{3}last_outcome\0\u{1}running\0\u{1}connected\0\u{1}model\0\u{1}capabilities\0\u{3}pane_id\0\u{3}thinking_level\0\u{3}context_tokens\0\u{3}context_window\0\u{3}context_percent\0\u{3}compact_idle\0\u{3}compact_queued\0\u{3}compact_active\0\u{3}compact_pending\0\u{3}process_id\0\u{3}run_id\0\u{3}context_revision\0\u{3}reload_idle\0\u{3}reload_queued\0\u{3}reload_active\0\u{3}reload_compact_pending\0\u{3}reload_pending\0\u{3}reload_high_water\0")
 
   fileprivate class _StorageClass {
     var _state: String? = nil
@@ -1308,6 +1593,15 @@ nonisolated extension Phi_Websocket_Terminal_V1_TerminalBridgeState: SwiftProtob
     var _compactQueued: Bool? = nil
     var _compactActive: Bool? = nil
     var _compactPending: Bool? = nil
+    var _processID: String? = nil
+    var _runID: UInt64? = nil
+    var _contextRevision: UInt64? = nil
+    var _reloadIdle: Bool? = nil
+    var _reloadQueued: Bool? = nil
+    var _reloadActive: Bool? = nil
+    var _reloadCompactPending: Bool? = nil
+    var _reloadPending: Bool? = nil
+    var _reloadHighWater: UInt64? = nil
 
       // This property is used as the initial default value for new instances of the type.
       // The type itself is protecting the reference to its storage via CoW semantics.
@@ -1337,6 +1631,15 @@ nonisolated extension Phi_Websocket_Terminal_V1_TerminalBridgeState: SwiftProtob
       _compactQueued = source._compactQueued
       _compactActive = source._compactActive
       _compactPending = source._compactPending
+      _processID = source._processID
+      _runID = source._runID
+      _contextRevision = source._contextRevision
+      _reloadIdle = source._reloadIdle
+      _reloadQueued = source._reloadQueued
+      _reloadActive = source._reloadActive
+      _reloadCompactPending = source._reloadCompactPending
+      _reloadPending = source._reloadPending
+      _reloadHighWater = source._reloadHighWater
     }
   }
 
@@ -1374,6 +1677,15 @@ nonisolated extension Phi_Websocket_Terminal_V1_TerminalBridgeState: SwiftProtob
         case 17: try { try decoder.decodeSingularBoolField(value: &_storage._compactQueued) }()
         case 18: try { try decoder.decodeSingularBoolField(value: &_storage._compactActive) }()
         case 19: try { try decoder.decodeSingularBoolField(value: &_storage._compactPending) }()
+        case 20: try { try decoder.decodeSingularStringField(value: &_storage._processID) }()
+        case 21: try { try decoder.decodeSingularUInt64Field(value: &_storage._runID) }()
+        case 22: try { try decoder.decodeSingularUInt64Field(value: &_storage._contextRevision) }()
+        case 23: try { try decoder.decodeSingularBoolField(value: &_storage._reloadIdle) }()
+        case 24: try { try decoder.decodeSingularBoolField(value: &_storage._reloadQueued) }()
+        case 25: try { try decoder.decodeSingularBoolField(value: &_storage._reloadActive) }()
+        case 26: try { try decoder.decodeSingularBoolField(value: &_storage._reloadCompactPending) }()
+        case 27: try { try decoder.decodeSingularBoolField(value: &_storage._reloadPending) }()
+        case 28: try { try decoder.decodeSingularUInt64Field(value: &_storage._reloadHighWater) }()
         default: break
         }
       }
@@ -1443,6 +1755,33 @@ nonisolated extension Phi_Websocket_Terminal_V1_TerminalBridgeState: SwiftProtob
       try { if let v = _storage._compactPending {
         try visitor.visitSingularBoolField(value: v, fieldNumber: 19)
       } }()
+      try { if let v = _storage._processID {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 20)
+      } }()
+      try { if let v = _storage._runID {
+        try visitor.visitSingularUInt64Field(value: v, fieldNumber: 21)
+      } }()
+      try { if let v = _storage._contextRevision {
+        try visitor.visitSingularUInt64Field(value: v, fieldNumber: 22)
+      } }()
+      try { if let v = _storage._reloadIdle {
+        try visitor.visitSingularBoolField(value: v, fieldNumber: 23)
+      } }()
+      try { if let v = _storage._reloadQueued {
+        try visitor.visitSingularBoolField(value: v, fieldNumber: 24)
+      } }()
+      try { if let v = _storage._reloadActive {
+        try visitor.visitSingularBoolField(value: v, fieldNumber: 25)
+      } }()
+      try { if let v = _storage._reloadCompactPending {
+        try visitor.visitSingularBoolField(value: v, fieldNumber: 26)
+      } }()
+      try { if let v = _storage._reloadPending {
+        try visitor.visitSingularBoolField(value: v, fieldNumber: 27)
+      } }()
+      try { if let v = _storage._reloadHighWater {
+        try visitor.visitSingularUInt64Field(value: v, fieldNumber: 28)
+      } }()
     }
     try unknownFields.traverse(visitor: &visitor)
   }
@@ -1471,6 +1810,15 @@ nonisolated extension Phi_Websocket_Terminal_V1_TerminalBridgeState: SwiftProtob
         if _storage._compactQueued != rhs_storage._compactQueued {return false}
         if _storage._compactActive != rhs_storage._compactActive {return false}
         if _storage._compactPending != rhs_storage._compactPending {return false}
+        if _storage._processID != rhs_storage._processID {return false}
+        if _storage._runID != rhs_storage._runID {return false}
+        if _storage._contextRevision != rhs_storage._contextRevision {return false}
+        if _storage._reloadIdle != rhs_storage._reloadIdle {return false}
+        if _storage._reloadQueued != rhs_storage._reloadQueued {return false}
+        if _storage._reloadActive != rhs_storage._reloadActive {return false}
+        if _storage._reloadCompactPending != rhs_storage._reloadCompactPending {return false}
+        if _storage._reloadPending != rhs_storage._reloadPending {return false}
+        if _storage._reloadHighWater != rhs_storage._reloadHighWater {return false}
         return true
       }
       if !storagesAreEqual {return false}

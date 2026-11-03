@@ -193,6 +193,8 @@ public actor PaneWireClient {
   private var attached = false
   private var stopped = false
   private var backoff = PaneWireClient.initialBackoff
+  /// Geometry events already applied; a live commit is recognised by its ordinal.
+  private var replayOrdinal: UInt64 = 0
   private var reconnects = 0
   private var gaps: [OutputGap] = []
   private var dropNotices = 0
@@ -617,6 +619,8 @@ public actor PaneWireClient {
         guard push.hasRevision, push.revision >= titleRevision else { continue }
         titleRevision = push.revision
         title = push.title
+      case .geometry(let change):
+        try await adoptGeometry(change, connection: connection)
       case .attach, .bridgeState, .settlement, .notification:
         continue
       }
@@ -634,6 +638,27 @@ public actor PaneWireClient {
     frame.payload = .input(Data(replies))
     guard let encoded = try? frame.serializedData(), isCurrent(connection) else { return }
     try? await task.send(.data(encoded))
+  }
+
+  /// One committed backend resize from the live stream. The server owns the
+  /// geometry, so this is applied as it lands and never answered with a
+  /// resize of our own (`internal/phic/tui_pane.go:678–699`).
+  private func adoptGeometry(
+    _ change: Phi_Websocket_Terminal_V1_TerminalGeometry, connection: UUID
+  ) async throws {
+    guard let position = ReplayPosition(change.eventCursor),
+          position.epoch == attach?.epoch, position.seq <= frontier,
+          position.ordinal > replayOrdinal,
+          (1...65535).contains(change.cols), (1...65535).contains(change.rows) else {
+      return
+    }
+    replayOrdinal = position.ordinal
+    terminal.resize(cols: UInt16(change.cols), rows: UInt16(change.rows))
+    try await emit(
+      .resize(
+        connection: connection, epoch: attach?.epoch ?? position.epoch,
+        position: position.seq, cols: UInt16(change.cols), rows: UInt16(change.rows)),
+      connection: connection)
   }
 
   private func isCurrent(_ connection: UUID) -> Bool {
