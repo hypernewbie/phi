@@ -177,6 +177,8 @@ export class SyncManager {
     formCancel!: HTMLElement;
     formSubmit!: HTMLElement;
     messagesList!: HTMLElement;
+    pushSection!: HTMLElement;
+    pushList!: HTMLElement;
 
     private _fileExistCache = new Map<string, Promise<boolean>>();
     private _handledToastKeys = new Set<string>();
@@ -198,12 +200,6 @@ export class SyncManager {
                     <label for="sync-coordinator-input">Coordinator:</label>
                     <input type="text" id="sync-coordinator-input" class="sync-input" placeholder="This server (leave blank)">
                 </div>
-                <div class="sync-header-actions">
-                    <button id="sync-clear-btn" class="sync-btn-secondary" title="Clear all messages">Clear all</button>
-                    <button id="sync-add-btn" class="sync-btn-primary" title="Add Message">
-                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                    </button>
-                </div>
             </div>
 
             <div id="sync-form-container" class="sync-form-container hidden">
@@ -215,8 +211,24 @@ export class SyncManager {
                 </div>
             </div>
 
-            <div id="sync-messages-list" class="sync-messages-list">
-                <div class="sync-empty-state">No messages synced.</div>
+            <div class="sync-section">
+                <div class="sync-section-header">
+                    <div class="sync-section-title">Board</div>
+                    <div class="sync-header-actions">
+                        <button id="sync-clear-btn" class="sync-btn-secondary" title="Clear all board messages">Clear all</button>
+                        <button id="sync-add-btn" class="sync-btn-primary" title="Add Message">
+                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                        </button>
+                    </div>
+                </div>
+                <div id="sync-messages-list" class="sync-messages-list">
+                    <div class="sync-empty-state">No messages synced.</div>
+                </div>
+            </div>
+
+            <div id="sync-push-section" class="sync-section hidden">
+                <div class="sync-section-title">Pushed to panes</div>
+                <div id="sync-push-list" class="sync-messages-list"></div>
             </div>
         `;
 
@@ -244,6 +256,12 @@ export class SyncManager {
         ) as HTMLElement;
         this.clearBtn = document.getElementById(
             'sync-clear-btn',
+        ) as HTMLElement;
+        this.pushSection = document.getElementById(
+            'sync-push-section',
+        ) as HTMLElement;
+        this.pushList = document.getElementById(
+            'sync-push-list',
         ) as HTMLElement;
 
         // Event listeners
@@ -369,6 +387,10 @@ export class SyncManager {
             this.renderMessages(messages);
             this.signalDesktopAlert(messages);
             this._setRefreshError(null);
+            // Addressed messages come from this Phi's mesh store, not the
+            // board. A failure here must not blank the board that just
+            // rendered, so it is fetched and handled on its own.
+            void this.refreshPushes();
         } catch (e: any) {
             if (e?.name === 'AbortError' || (this.app as any)?.scope?.aborted)
                 return;
@@ -534,6 +556,62 @@ export class SyncManager {
             diffCtrl.activeTab = 'diff';
             diffCtrl.refreshDiff(false);
         }
+    }
+
+    /**
+     * Refresh the addressed list. Unlike the board this is local state, so a
+     * failure keeps whatever is already on screen and stays quiet.
+     */
+    async refreshPushes(): Promise<void> {
+        try {
+            const res = await this.fetchWithProxy('/api/sync/pushes');
+            if (!res.ok) return;
+            const payload: unknown = await res.json();
+            const messages =
+                payload && typeof payload === 'object'
+                    ? (payload as { messages?: unknown }).messages
+                    : undefined;
+            if (!Array.isArray(messages)) return;
+            this.renderPushes(messages);
+        } catch {
+            // Keep the last good list.
+        }
+    }
+
+    /**
+     * Render addressed messages with the same card the board uses. The key
+     * slot carries the direction so a reader can tell who addressed whom.
+     */
+    renderPushes(messages: any[]): void {
+        if (!this.pushSection || !this.pushList) return;
+        if (messages.length === 0) {
+            this.pushSection.classList.add('hidden');
+            this.pushList.innerHTML = '';
+            return;
+        }
+        this.pushSection.classList.remove('hidden');
+
+        const sorted = [...messages].sort(
+            (a, b) => (b.updated_at_unix_ms || 0) - (a.updated_at_unix_ms || 0),
+        );
+        const frag = document.createDocumentFragment();
+        for (const msg of sorted) {
+            const card = document.createElement('div');
+            card.className = 'sync-card sync-card-push';
+            const when = msg.updated_at_unix_ms
+                ? new Date(msg.updated_at_unix_ms).toLocaleTimeString()
+                : '';
+            card.innerHTML = `
+                <div class="sync-card-header">
+                    <span class="sync-card-key" title="${this.escapeHtml(msg.message_id || '')}">${this.escapeHtml(msg.sender || 'unknown')} → ${this.escapeHtml(msg.recipient || 'unknown')}</span>
+                </div>
+                <div class="sync-card-value collapsed">${this.escapeHtml(msg.value || '')}</div>
+                <div class="sync-card-footer">${this.escapeHtml(when)}${msg.truncated ? ' · truncated' : ''}</div>
+            `;
+            frag.appendChild(card);
+        }
+        this.pushList.innerHTML = '';
+        this.pushList.appendChild(frag);
     }
 
     renderMessages(messages: any[]): void {

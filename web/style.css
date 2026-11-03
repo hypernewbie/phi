@@ -15023,3 +15023,38 @@ html.desktop-sidebar-hidden #left-resize-handle {
 }
 
 /* stylelint-enable custom-property-pattern */
+
+/* Addressed-message section inside the Syncboard panel. The section reuses
+   .sync-card; only the grouping and heading are new. */
+.sync-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+}
+
+.sync-section + .sync-section {
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+}
+
+.sync-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.sync-section-title {
+    font-family: var(--font-ui);
+    font-size: calc(11px * var(--ui-scale));
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.sync-card-push .sync-card-key {
+    font-family: var(--font-mono);
+    color: var(--accent);
+}
