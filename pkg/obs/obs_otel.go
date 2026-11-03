@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -19,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -91,6 +93,23 @@ func toKV(attrs ...any) []attribute.KeyValue {
 	return kvs
 }
 
+// enabled records whether Init installed a real TracerProvider. Every gated
+// seam (WrapHTTP, GRPCServerHandler, Transport) checks it: with no collector
+// configured, tracing must cost a terminal server nothing on the request path.
+var enabled atomic.Bool
+
+// Enabled reports whether tracing was configured. False means every gated
+// wrapper returns its input unchanged.
+func Enabled() bool { return enabled.Load() }
+
+// SetEnabledForTest forces the flag for tests that install their own
+// TracerProvider instead of calling Init. Returns a restore func. Tests using
+// it must not call t.Parallel(): the flag is process-global.
+func SetEnabledForTest(on bool) func() {
+	prev := enabled.Swap(on)
+	return func() { enabled.Store(prev) }
+}
+
 // Init stands up the OTel SDK: an OTLP/gRPC exporter, a batch processor
 // (short timeouts so a dead collector can never block the app), and a
 // resource tagged service.name=phi. Fail-open: any error here (or later,
@@ -116,6 +135,12 @@ func Init(ctx context.Context, endpoint string) (shutdown func(context.Context) 
 		return noop, nil
 	}
 
+	// Installed before the provider so a span extracted from a peer's
+	// traceparent becomes a real child rather than a fresh root.
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{}, propagation.Baggage{},
+	))
+
 	res := resource.NewWithAttributes(semconv.SchemaURL, semconv.ServiceNameKey.String("phi"))
 
 	tp := sdktrace.NewTracerProvider(
@@ -126,14 +151,41 @@ func Init(ctx context.Context, endpoint string) (shutdown func(context.Context) 
 		sdktrace.WithResource(res),
 	)
 	otel.SetTracerProvider(tp)
+	enabled.Store(true)
 
 	return tp.Shutdown, nil
 }
 
+// SpanFromTraceparent parents a span to the W3C context the peer supplied.
+// An absent or malformed header yields an ordinary root span: peers that
+// predate this field must keep working.
+func SpanFromTraceparent(ctx context.Context, header, name string, attrs ...any) (context.Context, func(error)) {
+	if header != "" {
+		ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier{"traceparent": header})
+	}
+	return Span(ctx, name, attrs...)
+}
+
+// Transport instruments outbound HTTP. base nil means http.DefaultTransport.
+// Disabled returns base unchanged so no client behavior shifts.
+func Transport(base http.RoundTripper) http.RoundTripper {
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	if !Enabled() {
+		return base
+	}
+	return otelhttp.NewTransport(base)
+}
+
 // WrapHTTP opens the HTTP server span for every request — traceparent
 // extraction, semconv HTTP attributes, the works — via the official
-// instrumentation library rather than a hand-rolled middleware.
+// instrumentation library rather than a hand-rolled middleware. Disabled
+// returns h unchanged: no collector means no per-request span cost.
 func WrapHTTP(h http.Handler) http.Handler {
+	if !Enabled() {
+		return h
+	}
 	return otelhttp.NewHandler(h, "phi")
 }
 
