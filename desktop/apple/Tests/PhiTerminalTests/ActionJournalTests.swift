@@ -197,4 +197,19 @@ final class ActionJournalTests: XCTestCase {
     let otherPending = await other.pending()
     XCTAssertTrue(otherPending.isEmpty, "a journal reused another pane's actions")
   }
+
+  /// A journal file is local state, not a licence to read gigabytes into memory.
+  func testAnOversizedJournalIsRefusedInsteadOfRead() async throws {
+    let file = try XCTUnwrap(directory).appendingPathComponent("actions-p1.json")
+    try FileManager.default.createDirectory(
+      at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    XCTAssertTrue(FileManager.default.createFile(atPath: file.path, contents: Data()))
+    let handle = try FileHandle(forWritingTo: file)
+    try handle.truncate(atOffset: UInt64(ActionJournal.maxPayload + 1))
+    try handle.close()
+
+    XCTAssertThrowsError(try ActionJournal(directory: directory, pane: "p1")) { error in
+      XCTAssertEqual(error as? ActionJournal.JournalError, .unsafeState)
+    }
+  }
 }

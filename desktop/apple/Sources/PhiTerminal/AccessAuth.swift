@@ -41,6 +41,13 @@ public actor AccessAuth {
   static let iterations = 600_000
   static let saltBytes = 16
   static let verifierBytes = 32
+  /// A server that asks for more work than this would freeze the client while
+  /// it derives a verifier, so an out-of-range count is refused instead.
+  static let iterationRange = 1_000...10_000_000
+
+  static func accepts(iterations: Int) -> Bool {
+    iterationRange.contains(iterations)
+  }
 
   private let origin: URL
   private let password: PasswordProvider?
@@ -92,7 +99,7 @@ public actor AccessAuth {
       return nil
     }
     guard status.version == "v1", status.algorithm == "pbkdf2-sha256",
-          let iterations = status.iterations, iterations > 0,
+          let iterations = status.iterations, Self.accepts(iterations: iterations),
           let salt = status.salt, let challenge = status.challenge else {
       throw Failure.badStatus
     }
@@ -271,7 +278,6 @@ public actor AccessAuth {
   }
 
   static func base64URLDecode(_ value: String) -> Data? {
-    guard value.rangeOfCharacter(from: CharacterSet(charactersIn: "-_0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")) != nil else { return nil }
     var text = value.replacingOccurrences(of: "-", with: "+")
       .replacingOccurrences(of: "_", with: "/")
     while text.count % 4 != 0 { text += "=" }

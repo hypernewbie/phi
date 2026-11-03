@@ -41,6 +41,9 @@ public actor ActionJournal {
   /// Terminal input has no ack, so the attempted list is a short receipt, not a
   /// full history: an unbounded one would rewrite a growing file per keystroke.
   static let attemptedLimit = 32
+  /// A journal this large is not a draft any more; refuse it instead of
+  /// reading an unbounded file into memory.
+  static let maxPayload = 64 << 20
 
   private let file: URL
   private let pane: String
@@ -82,7 +85,12 @@ public actor ActionJournal {
       guard fstat(payload, &info) == 0, info.st_uid == getuid(),
             info.st_mode & S_IFMT == S_IFREG else { throw JournalError.unsafeState }
       guard fchmod(payload, 0o600) == 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
-      let decoded = try JSONDecoder().decode(Snapshot.self, from: handle.readToEnd() ?? Data())
+      guard info.st_size >= 0, Int(info.st_size) <= Self.maxPayload else {
+        throw JournalError.unsafeState
+      }
+      guard let body = try handle.read(upToCount: Int(info.st_size)),
+            body.count == Int(info.st_size) else { throw JournalError.unsafeState }
+      let decoded = try JSONDecoder().decode(Snapshot.self, from: body)
       contents = decoded.pane == pane ? decoded : Snapshot(pane: pane, actions: [])
     } else if errno == ENOENT {
       contents = Snapshot(pane: pane, actions: [])
@@ -173,7 +181,8 @@ public actor ActionJournal {
     }
     let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
     defer { unlink(template) }
-    guard fchmod(descriptor, 0o600) == 0, fcntl(descriptor, F_SETFD, FD_CLOEXEC) == 0 else {
+    guard fchmod(descriptor, 0o600) == 0,
+          fcntl(descriptor, F_SETFD, fcntl(descriptor, F_GETFD) | FD_CLOEXEC) == 0 else {
       throw POSIXError(.init(rawValue: errno) ?? .EIO)
     }
     try handle.write(contentsOf: data)

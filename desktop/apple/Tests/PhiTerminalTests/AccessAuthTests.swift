@@ -72,6 +72,14 @@ final class AccessAuthTests: XCTestCase {
     XCTAssertNil(AccessAuth.base64URLDecode("not base64!"))
   }
 
+  func testAnAbsurdIterationCountIsRefusedBeforeHashing() {
+    // A hostile or broken status must not lock the client in PBKDF2.
+    XCTAssertFalse(AccessAuth.accepts(iterations: 0))
+    XCTAssertFalse(AccessAuth.accepts(iterations: 999))
+    XCTAssertTrue(AccessAuth.accepts(iterations: 600_000))
+    XCTAssertFalse(AccessAuth.accepts(iterations: 10_000_001))
+  }
+
   func testPasswordHashIsTheOnlyFormatTheServerParses() throws {
     let salt = [UInt8](repeating: 7, count: 16)
     let verifier = try XCTUnwrap(AccessAuth.pbkdf2SHA256(
