@@ -189,6 +189,12 @@ type Config struct {
 	AccessAuthMigration *MigrationMarker `json:"access_auth_migration,omitempty" toml:"access_auth_migration,omitempty"`
 	SyncCoordinator     string           `json:"sync_coordinator" toml:"sync_coordinator"`
 
+	// SyncMesh opens the Phi-to-Phi gRPC listener (phi.sync.v1). Off by
+	// default: with it off nothing binds beyond the usual HTTP listeners and
+	// pre-existing behavior is unchanged. The listener is loopback-only until
+	// the auth interceptor lands, so enabling it never widens the network face.
+	SyncMesh bool `json:"sync_mesh" toml:"sync_mesh"`
+
 	// AuthOrigins lists extra origins a browser may present to the v2 auth
 	// routes when a reverse proxy terminates TLS. Same-origin requests never
 	// need an entry. Malformed entries are a startup error, not a skip.

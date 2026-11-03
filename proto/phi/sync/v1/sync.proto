@@ -28,6 +28,9 @@ message SyncEvent {
   bytes value = 4;
   int64 updated_at_unix_ms = 5;
   bool gap = 6;
+  // Caller-supplied idempotency key. Receivers dedupe on it, so a replayed
+  // event after a reconnect never produces a second injection.
+  string message_id = 7;
 }
 
 // SubscribeRequest opens one publisher-scoped stream. since_seq 0 starts at
