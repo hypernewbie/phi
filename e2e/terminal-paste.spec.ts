@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { startPhi, type PhiServer } from './_server.js';
-import { isCancelledBackgroundRead } from './_session-requests.js';
+import { isExpectedRequestFailure } from './_session-requests.js';
 
 // Terminal paste: byte fidelity, local recovery on disconnect, and no
 // silent retransmission. One pane carries cumulative byte expectations
@@ -233,7 +233,7 @@ for (const touch of [false, true]) {
             });
             const failedRequests: string[] = [];
             page.on('requestfailed', (req) => {
-                if (isCancelledBackgroundRead(req, phi.url)) return;
+                if (isExpectedRequestFailure(req, phi.url)) return;
                 if (
                     /^\/api\/terminals\/[^/]+\/pin$/.test(
                         new URL(req.url()).pathname,

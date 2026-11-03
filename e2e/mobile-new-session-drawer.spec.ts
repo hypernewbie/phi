@@ -9,10 +9,7 @@ import {
     type Request,
 } from '@playwright/test';
 import { configToToml, startPhi, type PhiServer } from './_server.js';
-import {
-    isCancelledTerminalReplay,
-    isCancelledWorktreeRead,
-} from './_session-requests.js';
+import { isExpectedRequestFailure } from './_session-requests.js';
 
 let phi: PhiServer | undefined;
 let context: BrowserContext | undefined;
@@ -45,9 +42,7 @@ async function observe(p: Page) {
         if (!expected) errors.push(`console: ${message.text()}`);
     });
     p.on('requestfailed', (request) => {
-        if (isCancelledWorktreeRead(request, p.url())) return;
-        // Switching panes or closing the drawer aborts that pane's replay read.
-        if (isCancelledTerminalReplay(request, p.url())) return;
+        if (isExpectedRequestFailure(request, p.url())) return;
         // Chromium can report successful empty pin responses as aborted.
         if (
             successfulPins.has(request) &&
