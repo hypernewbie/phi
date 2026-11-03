@@ -19,6 +19,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"google.golang.org/grpc/stats"
 )
 
 // Span starts a logical span named name with the given key,value,... attrs.
@@ -76,6 +78,10 @@ func Transport(base http.RoundTripper) http.RoundTripper {
 	}
 	return base
 }
+
+// GRPCServerHandler is nil in the default build: no stream span, no
+// per-RPC stats collection.
+func GRPCServerHandler() stats.Handler { return nil }
 
 // TraceIDFromContext always returns "" in the default build: there is no
 // OTel span in ctx to read a trace id from.

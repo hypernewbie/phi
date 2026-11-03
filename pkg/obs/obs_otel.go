@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -22,6 +23,7 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"google.golang.org/grpc/stats"
 
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.28.0"
@@ -187,6 +189,16 @@ func WrapHTTP(h http.Handler) http.Handler {
 		return h
 	}
 	return otelhttp.NewHandler(h, "phi")
+}
+
+// GRPCServerHandler instruments the one long-lived Connect stream: stream
+// lifetime and transport health. Per-call detail comes from the envelope
+// traceparent, not from here. Nil when disabled, which grpc accepts.
+func GRPCServerHandler() stats.Handler {
+	if !Enabled() {
+		return nil
+	}
+	return otelgrpc.NewServerHandler()
 }
 
 // TraceIDFromContext returns the active span's trace id (hex), or "" if

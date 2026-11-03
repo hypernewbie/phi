@@ -65,6 +65,7 @@ func NewServer() *Server {
 		grpc.MaxRecvMsgSize(maxMessageBytes),
 		grpc.MaxSendMsgSize(maxMessageBytes),
 		grpc.MaxHeaderListSize(maxMetadataBytes),
+		grpc.StatsHandler(obs.GRPCServerHandler()),
 	)
 	pibridgepb.RegisterIntegrationServer(s.grpcServer, s)
 	return s
