@@ -81,20 +81,3 @@ export function isCancelledBackgroundRead(
         isCancelledSessionListRead(request, origin)
     );
 }
-
-// Every failure the app causes on purpose: a superseded background read, a
-// replay aborted by a pane switch or close, a git read the drawer dropped, a
-// bell range request replaced by the next chime. Specs that assert "no
-// unexpected failed request" filter with this instead of naming one case, so
-// a test cannot fail on an abort the UI performs by design.
-export function isExpectedRequestFailure(
-    request: Request,
-    origin: string,
-): boolean {
-    return (
-        isCancelledBackgroundRead(request, origin) ||
-        isCancelledGitRead(request, origin) ||
-        isCancelledTerminalReplay(request, origin) ||
-        isCancelledBellAudio(request, origin)
-    );
-}

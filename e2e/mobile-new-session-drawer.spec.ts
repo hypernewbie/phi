@@ -9,7 +9,10 @@ import {
     type Request,
 } from '@playwright/test';
 import { configToToml, startPhi, type PhiServer } from './_server.js';
-import { isExpectedRequestFailure } from './_session-requests.js';
+import {
+    isCancelledTerminalReplay,
+    isCancelledWorktreeRead,
+} from './_session-requests.js';
 
 let phi: PhiServer | undefined;
 let context: BrowserContext | undefined;
@@ -42,7 +45,11 @@ async function observe(p: Page) {
         if (!expected) errors.push(`console: ${message.text()}`);
     });
     p.on('requestfailed', (request) => {
-        if (isExpectedRequestFailure(request, p.url())) return;
+        if (
+            isCancelledWorktreeRead(request, p.url()) ||
+            isCancelledTerminalReplay(request, p.url())
+        )
+            return;
         // Chromium can report successful empty pin responses as aborted.
         if (
             successfulPins.has(request) &&
