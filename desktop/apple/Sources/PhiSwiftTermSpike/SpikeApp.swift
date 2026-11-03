@@ -70,6 +70,13 @@ struct SpikeOptions {
       throw SpikeArgumentsError.invalid
     }
     let stateDirectory = URL(fileURLWithPath: statePath, isDirectory: true).standardizedFileURL
+    // A named directory that does not exist yet is ours to create: the launch
+    // is the only chance to make it private before any state lands there.
+    if !FileManager.default.fileExists(atPath: stateDirectory.path) {
+      try FileManager.default.createDirectory(
+        at: stateDirectory, withIntermediateDirectories: true,
+        attributes: [.posixPermissions: 0o700])
+    }
     let attributes = try FileManager.default.attributesOfItem(atPath: stateDirectory.path)
     guard attributes[.type] as? FileAttributeType == .typeDirectory,
           (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == getuid() else {

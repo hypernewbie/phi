@@ -76,10 +76,6 @@ final class SpikeLaunchTests: XCTestCase {
     XCTAssertThrowsError(try SpikeOptions.parse([]))
   }
 
-  func testANonexistentStateDirectoryIsRejected() {
-    let missing = stateDirectory.appendingPathComponent("absent", isDirectory: true)
-    XCTAssertThrowsError(try SpikeOptions.parse(["--state-dir", missing.path]))
-  }
 }
 
 extension SpikeLaunchTests {
@@ -89,5 +85,21 @@ extension SpikeLaunchTests {
   }
   func testAServerAloneOpensTheCatalogThereButNotACredentialledOne() throws {
     XCTAssertThrowsError(try parse(["--server", "http://user:secret@host:7070"]))
+  }
+}
+
+extension SpikeLaunchTests {
+  func testAMissingStateDirectoryIsCreatedPrivate() throws {
+    let missing = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent("phi-state-\(UUID().uuidString)", isDirectory: true)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: missing.path))
+    defer { try? FileManager.default.removeItem(at: missing) }
+
+    let options = try SpikeOptions.parse(["--state-dir", missing.path])
+
+    XCTAssertEqual(options.stateDirectory.path, missing.standardizedFileURL.path)
+    let attributes = try FileManager.default.attributesOfItem(atPath: missing.path)
+    XCTAssertEqual(attributes[.type] as? FileAttributeType, .typeDirectory)
+    XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o700)
   }
 }
