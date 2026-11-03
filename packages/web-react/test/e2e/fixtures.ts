@@ -31,6 +31,7 @@ export interface ForwardedRequest {
     route: string;
     authorization: boolean;
     cookie: boolean;
+    body: string | null;
 }
 
 export interface GuardHandle {
@@ -66,13 +67,15 @@ export async function guardBrowserContext(
             request.method() === 'GET' &&
             (url.pathname === '/api/auth/v2/status' ||
                 url.pathname === '/api/config' ||
-                url.pathname === '/api/version') &&
+                url.pathname === '/api/version' ||
+                url.pathname === '/api/config/mobile-appearance') &&
             url.origin === stack.reactUrl;
         const authAllowed =
             options.allowPosts === true &&
             request.method() === 'POST' &&
             (url.pathname === '/api/auth/v2/login' ||
-                url.pathname === '/api/auth/v2/refresh') &&
+                url.pathname === '/api/auth/v2/refresh' ||
+                url.pathname === '/api/auth/v2/password') &&
             url.origin === stack.reactUrl;
         const configPostAllowed =
             options.allowPosts === true &&
@@ -85,7 +88,11 @@ export async function guardBrowserContext(
                 url.pathname ===
                     '/api/config/claude-dangerously-skip-permissions' ||
                 url.pathname === '/api/config/agy-theme-ansi' ||
-                url.pathname === '/api/config/opencode-idle-stop') &&
+                url.pathname === '/api/config/opencode-idle-stop' ||
+                url.pathname === '/api/config/appearance' ||
+                url.pathname === '/api/config/theme' ||
+                url.pathname === '/api/config/mobile-appearance' ||
+                url.pathname === '/api/config/mobile-appearance/fence') &&
             url.origin === stack.reactUrl;
         if (
             !origins.has(url.origin) ||
@@ -197,6 +204,7 @@ export async function guardBrowserContext(
                     route: `${request.method()} ${url.origin}${url.pathname}`,
                     authorization: sentAuthorization,
                     cookie: sentCookie !== undefined && sentCookie !== '',
+                    body: postData?.toString('utf8') ?? null,
                 });
                 if (authAllowed && faults?.stripSetCookie === true) {
                     const kept: Record<string, string> = {};

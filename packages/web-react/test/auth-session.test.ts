@@ -4,12 +4,17 @@ import type { AuthView } from '../src/platform/auth-session.ts';
 import { createAuthSession } from '../src/platform/auth-session.ts';
 import type {
     AuthStatusOutcome,
+    ClearPasswordOutcome,
     ConfigDocumentOutcome,
     ConfigOutcome,
     ConnectionService,
     LoginOutcome,
+    MobileFenceOutcome,
+    MobileReadOutcome,
+    MobileSaveOutcome,
     PostOutcome,
     RefreshOutcome,
+    SetPasswordOutcome,
     VersionOutcome,
 } from '../src/platform/http.ts';
 import { createServerStateAdapter } from '../src/platform/server-state.ts';
@@ -60,6 +65,26 @@ function deferredHttp() {
             Promise.resolve({ kind: 'unavailable' } as VersionOutcome),
         postConfig: () =>
             Promise.resolve({ kind: 'unavailable' } as PostOutcome),
+        postAppearance: () =>
+            Promise.resolve({ kind: 'unavailable' } as PostOutcome),
+        postTheme: () =>
+            Promise.resolve({ kind: 'unavailable' } as PostOutcome),
+        setPassword: () =>
+            Promise.resolve({
+                kind: 'unavailable',
+            } as SetPasswordOutcome),
+        clearPassword: () =>
+            Promise.resolve({
+                kind: 'unavailable',
+            } as ClearPasswordOutcome),
+        getMobileAppearance: () =>
+            Promise.resolve({
+                kind: 'unavailable',
+            } as MobileReadOutcome),
+        postMobileAppearance: () =>
+            Promise.resolve({ kind: 'unknown' } as MobileSaveOutcome),
+        postMobileFence: () =>
+            Promise.resolve({ kind: 'unknown' } as MobileFenceOutcome),
     };
     return { http, status, logins, refreshes, configs };
 }
@@ -123,6 +148,32 @@ it('exposes the live bearer after an accepted sign-in', async () => {
     await expect(result).resolves.toBe('accepted');
     expect(session.bearer()).toBe(BUNDLE.token);
     stop();
+});
+
+it('adopts a rotated bundle from a settings password change', async () => {
+    const { session, status, logins, stop } = started();
+    status[0]?.resolve({
+        kind: 'ok',
+        status: { enabled: true, authenticated: false, owned: true },
+    });
+    await flush();
+    const result = session.signIn('correct-horse');
+    logins[0]?.resolve({ kind: 'accepted', bundle: BUNDLE });
+    await expect(result).resolves.toBe('accepted');
+    session.adoptBundle({ ...BUNDLE, token: 'rotated-token' });
+    expect(session.bearer()).toBe('rotated-token');
+    expect(session.view().phase).toBe('ready');
+    // The rotated credential proves itself with one authed read.
+    await flush();
+    expect(status[status.length - 1]?.bearer).toBe('rotated-token');
+    stop();
+});
+
+it('ignores an adopted bundle before start', () => {
+    const { session, stop } = started();
+    stop();
+    session.adoptBundle({ ...BUNDLE, token: 'rotated-token' });
+    expect(session.bearer()).toBeNull();
 });
 
 it('renders the cached hostname synchronously before any request', () => {

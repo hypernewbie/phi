@@ -2,7 +2,17 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App.tsx';
 import { createAuthSession } from './platform/auth-session.ts';
+import {
+    appearanceOwner,
+    readAppearanceScope,
+} from './platform/appearance-scope.ts';
 import { createConnectionService } from './platform/http.ts';
+import {
+    MobileAppearanceStore,
+    createIndexedDBDraftStore,
+    createLocalStorageCache,
+    createOnlineProbe,
+} from './platform/mobile-appearance-store.ts';
 import { directUpstreamOrigin } from './platform/legacy-handoff.ts';
 import { createServerStateAdapter } from './platform/server-state.ts';
 import { createSettingsStore } from './platform/settings-store.ts';
@@ -18,10 +28,35 @@ const session = createAuthSession(
     http,
     createServerStateAdapter(undefined, directUpstream),
 );
-const settings = createSettingsStore(http, () => session.bearer());
+const mobileScope = readAppearanceScope();
+const mobile =
+    mobileScope === null
+        ? null
+        : new MobileAppearanceStore({
+              http,
+              bearer: () => session.bearer(),
+              owner: appearanceOwner(mobileScope),
+              storage: createIndexedDBDraftStore(),
+              cache: createLocalStorageCache() ?? undefined,
+              isOnline: createOnlineProbe(),
+          });
+
+const settings = createSettingsStore(
+    http,
+    () => session.bearer(),
+    undefined,
+    undefined,
+    undefined,
+    {
+        protection: () => session.view().protection,
+        adoptBundle: (bundle) => session.adoptBundle(bundle),
+        // Clearing drops the credential: re-check into disabled mode.
+        accessDisabled: () => session.retry(),
+    },
+);
 
 createRoot(host).render(
     <StrictMode>
-        <App session={session} settings={settings} />
+        <App session={session} settings={settings} mobile={mobile} />
     </StrictMode>,
 );

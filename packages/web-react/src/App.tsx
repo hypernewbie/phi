@@ -1,23 +1,41 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import styles from './app.module.css';
 import { Button } from './components/ui/Button.tsx';
+import { Modal } from './components/ui/Modal.tsx';
 import type { AuthSession } from './platform/auth-session.ts';
+import { settingsCopy } from './copy/settings.ts';
 import {
     currentSearch,
     isDirectServe,
     navigateToLegacyMain,
     resolveLegacyHandoff,
 } from './platform/legacy-handoff.ts';
+import { isVisible } from './platform/modal-trap.ts';
 import { ConnectionScreen } from './screens/ConnectionScreen.tsx';
 import { LoginScreen } from './screens/LoginScreen.tsx';
 import { SettingsScreen } from './screens/SettingsScreen.tsx';
 import type { SettingsStore } from './platform/settings-store.ts';
+import type { MobileAppearanceStore } from './platform/mobile-appearance-store.ts';
 
-type Screen = 'connection' | 'settings';
-
-function SettingsPanel({ store }: { store: SettingsStore }) {
+function SettingsPanel({
+    store,
+    mobile,
+    onMobileSignIn,
+}: {
+    store: SettingsStore;
+    mobile: MobileAppearanceStore | null;
+    onMobileSignIn: () => void;
+}) {
     const [view, setView] = useState(store.view);
-    useEffect(() => store.start(setView), [store]);
+    // The mobile store is app-lifetime like legacy: closing the modal
+    // drops the subscription, never the store.
+    useEffect(() => {
+        const stop = store.start(setView);
+        void mobile?.start();
+        return () => {
+            stop();
+        };
+    }, [store, mobile]);
     return (
         <SettingsScreen
             view={view}
@@ -25,6 +43,20 @@ function SettingsPanel({ store }: { store: SettingsStore }) {
             onToggle={store.setToggle}
             onIdleMinutes={store.setIdleMinutes}
             onLowPower={store.setLowPower}
+            onHostname={store.setHostnameOverride}
+            onUIFontFamily={store.setUIFontFamily}
+            onUIFontSize={store.setUIFontSize}
+            onTerminalFontFamily={store.setTerminalFontFamily}
+            onTerminalFontSize={store.setTerminalFontSize}
+            onMobileScrollback={store.setMobileScrollback}
+            onThemeColor={store.setThemeColor}
+            onProfile={store.setProfile}
+            onResetAppearance={store.resetAppearance}
+            onSetAccessPassword={store.setAccessPassword}
+            onClearAccessPassword={store.clearAccessPassword}
+            onSecurityEdit={store.dismissSecurity}
+            mobileStore={mobile}
+            onMobileSignIn={onMobileSignIn}
         />
     );
 }
@@ -32,13 +64,22 @@ function SettingsPanel({ store }: { store: SettingsStore }) {
 export function App({
     session,
     settings,
+    mobile,
 }: {
     session: AuthSession;
     settings: SettingsStore;
+    mobile: MobileAppearanceStore | null;
 }) {
-    const [screen, setScreen] = useState<Screen>('connection');
+    const [settingsOpen, setSettingsOpen] = useState(false);
     const [view, setView] = useState(session.view);
+    const openerRef = useRef<HTMLButtonElement | null>(null);
     useEffect(() => session.start(setView), [session]);
+    useEffect(() => {
+        if (settingsOpen || openerRef.current === null) return;
+        const opener = openerRef.current;
+        openerRef.current = null;
+        if (isVisible(opener)) opener.focus();
+    }, [settingsOpen]);
     useEffect(() => {
         if (resolveLegacyHandoff(isDirectServe(), view.phase, currentSearch()))
             navigateToLegacyMain();
@@ -53,29 +94,20 @@ export function App({
                     <span>phi</span>
                 </div>
                 <nav aria-label="Main" className={styles.navigation}>
+                    <Button aria-current="page">Connection</Button>
                     <Button
-                        aria-current={
-                            screen === 'connection' ? 'page' : undefined
-                        }
-                        onClick={() => setScreen('connection')}
-                    >
-                        Connection
-                    </Button>
-                    <Button
-                        aria-current={
-                            screen === 'settings' ? 'page' : undefined
-                        }
                         disabled={view.phase !== 'ready'}
-                        onClick={() => setScreen('settings')}
+                        onClick={(event) => {
+                            openerRef.current = event.currentTarget;
+                            setSettingsOpen(true);
+                        }}
                     >
                         Settings
                     </Button>
                 </nav>
             </header>
             <main className={styles.main}>
-                {screen === 'settings' ? (
-                    <SettingsPanel store={settings} />
-                ) : view.phase === 'sign-in' ? (
+                {view.phase === 'sign-in' ? (
                     <LoginScreen
                         view={view}
                         signIn={session.signIn}
@@ -85,6 +117,23 @@ export function App({
                     <ConnectionScreen view={view} onRetry={session.retry} />
                 )}
             </main>
+            {settingsOpen && (
+                <Modal
+                    label="Phi Settings"
+                    doneLabel={settingsCopy.done}
+                    closeLabel={settingsCopy.closeLabel}
+                    onClose={() => setSettingsOpen(false)}
+                >
+                    <SettingsPanel
+                        store={settings}
+                        mobile={mobile}
+                        onMobileSignIn={() => {
+                            session.retry();
+                            void mobile?.refresh(true);
+                        }}
+                    />
+                </Modal>
+            )}
         </div>
     );
 }

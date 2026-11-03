@@ -24,6 +24,25 @@ function settingsFor(): SettingsStore {
                 agyTheme: false,
                 idleMinutes: 0,
                 lowPower: false,
+                hostnameOverride: '',
+            },
+            appearance: {
+                themeColor: 'purple',
+                uiFontFamily: '',
+                uiFontSize: 0,
+                terminalFontFamily: '',
+                terminalFontSize: 0,
+                mobileScrollbackRows: 0,
+                profile: 'auto',
+                profileNative: false,
+                profileMemoryOnly: false,
+                customFontName: '',
+            },
+            security: {
+                enabled: false,
+                busy: false,
+                error: null,
+                done: null,
             },
             note: null,
         }),
@@ -32,6 +51,18 @@ function settingsFor(): SettingsStore {
         setToggle: vi.fn(),
         setIdleMinutes: vi.fn(),
         setLowPower: vi.fn(),
+        setHostnameOverride: vi.fn(),
+        setUIFontFamily: vi.fn(),
+        setUIFontSize: vi.fn(),
+        setTerminalFontFamily: vi.fn(),
+        setTerminalFontSize: vi.fn(),
+        setMobileScrollback: vi.fn(),
+        setThemeColor: vi.fn(),
+        setProfile: vi.fn(),
+        resetAppearance: vi.fn(),
+        setAccessPassword: vi.fn(),
+        clearAccessPassword: vi.fn(),
+        dismissSecurity: vi.fn(),
     };
 }
 
@@ -63,6 +94,7 @@ function sessionFor(initial: Partial<AuthView> = {}) {
         signIn: vi.fn(async () => 'cancelled' as const),
         retry: vi.fn(),
         bearer: () => null,
+        adoptBundle: vi.fn(),
     };
     const emit = async (patch: Partial<AuthView>) => {
         current = { ...current, ...patch };
@@ -81,7 +113,7 @@ it('starts the session, escapes the server label, and keeps mutations inside its
         const { session, emit } = sessionFor();
         const { host } = await mount(
             <StrictMode>
-                <App session={session} settings={settingsFor()} />
+                <App session={session} settings={settingsFor()} mobile={null} />
             </StrictMode>,
         );
         expect(session.start).toHaveBeenCalledTimes(2);
@@ -109,6 +141,82 @@ it('starts the session, escapes the server label, and keeps mutations inside its
     }
 });
 
+it('opens settings as a modal and refocuses the opener on close', async () => {
+    const { session, emit } = sessionFor();
+    const { host } = await mount(
+        <App session={session} settings={settingsFor()} mobile={null} />,
+    );
+    await emit({
+        phase: 'ready',
+        protection: 'disabled',
+        hostname: 'phi-1',
+        pending: false,
+    });
+    const settingsButton = [...host.querySelectorAll('button')].find(
+        (button) => button.textContent === 'Settings',
+    );
+    if (!settingsButton) throw new Error('Settings button is missing.');
+    expect(settingsButton.disabled).toBe(false);
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    vi.spyOn(settingsButton, 'getBoundingClientRect').mockReturnValue({
+        width: 10,
+        height: 10,
+        right: 10,
+        left: 0,
+        bottom: 10,
+        top: 0,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+    });
+    await act(async () => settingsButton.click());
+    const dialog = host.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog?.getAttribute('aria-modal')).toBe('true');
+    const done = [...host.querySelectorAll('button')].find(
+        (button) => button.textContent === 'Close',
+    );
+    await act(async () => done?.click());
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.activeElement).toBe(settingsButton);
+});
+
+it('closes the settings modal on Escape', async () => {
+    const { session, emit } = sessionFor();
+    const { host } = await mount(
+        <App session={session} settings={settingsFor()} mobile={null} />,
+    );
+    await emit({
+        phase: 'ready',
+        protection: 'disabled',
+        hostname: 'phi-1',
+        pending: false,
+    });
+    const settingsButton = [...host.querySelectorAll('button')].find(
+        (button) => button.textContent === 'Settings',
+    );
+    await act(async () => settingsButton?.click());
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+    await act(async () => {
+        document.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+        );
+    });
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+});
+
+it('keeps Settings disabled until the session is ready', async () => {
+    const { session } = sessionFor({ phase: 'checking', pending: true });
+    const { host } = await mount(
+        <App session={session} settings={settingsFor()} mobile={null} />,
+    );
+    const settingsButton = [...host.querySelectorAll('button')].find(
+        (button) => button.textContent === 'Settings',
+    );
+    expect(settingsButton?.disabled).toBe(true);
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+});
+
 it('routes the sign-in phase to Login and other phases to the card', async () => {
     const { session, emit } = sessionFor({
         phase: 'sign-in',
@@ -117,7 +225,7 @@ it('routes the sign-in phase to Login and other phases to the card', async () =>
         canSignIn: true,
     });
     const { host } = await mount(
-        <App session={session} settings={settingsFor()} />,
+        <App session={session} settings={settingsFor()} mobile={null} />,
     );
     expect(host.querySelector('input[type="password"]')).not.toBeNull();
     expect(host.querySelector('[role="status"]')).toBeNull();
@@ -137,7 +245,7 @@ it('labels cached hostnames as last known until confirmed', async () => {
         pending: false,
     });
     const { host } = await mount(
-        <App session={session} settings={settingsFor()} />,
+        <App session={session} settings={settingsFor()} mobile={null} />,
     );
     expect(host.textContent).toContain('Last known server');
     await emit({ stale: false });
@@ -152,7 +260,7 @@ it('retries only on explicit action and keeps the status node', async () => {
         message: 'status-unavailable',
     });
     const { host } = await mount(
-        <App session={session} settings={settingsFor()} />,
+        <App session={session} settings={settingsFor()} mobile={null} />,
     );
     const buttons = host.querySelectorAll('button');
     expect(buttons).toHaveLength(3);
@@ -178,7 +286,7 @@ async function startRetry() {
         message: 'status-unavailable',
     });
     const { host } = await mount(
-        <App session={session} settings={settingsFor()} />,
+        <App session={session} settings={settingsFor()} mobile={null} />,
     );
     const retry = host.querySelectorAll('button')[2];
     if (!retry) throw new Error('Retry button is missing.');

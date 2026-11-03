@@ -32,6 +32,39 @@ export type RefreshOutcome =
     | { kind: 'blocked' }
     | { kind: 'cancelled' };
 
+export type SetPasswordOutcome =
+    | { kind: 'ok'; bundle: CredentialBundle }
+    | { kind: 'invalid-length' }
+    | { kind: 'rejected'; status: number }
+    | { kind: 'unavailable' }
+    | { kind: 'cancelled' };
+
+export type ClearPasswordOutcome =
+    | { kind: 'ok' }
+    | { kind: 'rejected'; status: number }
+    | { kind: 'unavailable' }
+    | { kind: 'cancelled' };
+
+export type MobileReadOutcome =
+    | { kind: 'ok'; state: MobileAppearance }
+    | { kind: 'rejected'; status: number }
+    | { kind: 'unavailable' }
+    | { kind: 'unsupported' }
+    | { kind: 'cancelled' };
+
+export type MobileSaveOutcome =
+    | { kind: 'saved'; state: MobileAppearance }
+    | { kind: 'conflict'; state: MobileAppearance }
+    | { kind: 'rejected'; status: number }
+    | { kind: 'unknown' }
+    | { kind: 'cancelled' };
+
+export type MobileFenceOutcome =
+    | { kind: 'saved'; state: MobileAppearance }
+    | { kind: 'rejected'; status: number }
+    | { kind: 'unknown' }
+    | { kind: 'cancelled' };
+
 export type ConfigOutcome =
     | { kind: 'ok'; hostname: string }
     | { kind: 'rejected'; status: number }
@@ -85,6 +118,15 @@ export interface ConnectionService {
     ): Promise<AuthStatusOutcome>;
     login(password: string, signal: AbortSignal): Promise<LoginOutcome>;
     refresh(signal: AbortSignal): Promise<RefreshOutcome>;
+    setPassword(
+        password: string,
+        signal: AbortSignal,
+        bearer?: string,
+    ): Promise<SetPasswordOutcome>;
+    clearPassword(
+        signal: AbortSignal,
+        bearer?: string,
+    ): Promise<ClearPasswordOutcome>;
     getConfigHostname(
         signal: AbortSignal,
         bearer?: string,
@@ -94,8 +136,31 @@ export interface ConnectionService {
         bearer?: string,
     ): Promise<ConfigDocumentOutcome>;
     getVersion(signal: AbortSignal, bearer?: string): Promise<VersionOutcome>;
+    getMobileAppearance(
+        signal: AbortSignal,
+        bearer?: string,
+    ): Promise<MobileReadOutcome>;
+    postMobileAppearance(
+        bodyJson: string,
+        signal: AbortSignal,
+        bearer?: string,
+    ): Promise<MobileSaveOutcome>;
+    postMobileFence(
+        signal: AbortSignal,
+        bearer?: string,
+    ): Promise<MobileFenceOutcome>;
     postConfig(
         path: TogglePath,
+        bodyJson: string,
+        signal: AbortSignal,
+        bearer?: string,
+    ): Promise<PostOutcome>;
+    postAppearance(
+        bodyJson: string,
+        signal: AbortSignal,
+        bearer?: string,
+    ): Promise<PostOutcome>;
+    postTheme(
         bodyJson: string,
         signal: AbortSignal,
         bearer?: string,
@@ -109,6 +174,7 @@ const BUNDLE_TOKEN_LIMIT = 8192;
 const ACCESS_LIFETIME_MAX_S = 3600;
 const PASSWORD_MIN_BYTES = 8;
 const PASSWORD_MAX_BYTES = 1024;
+const MOBILE_DEFINITIVE = new Set([400, 401, 403, 404, 405, 413, 415]);
 const HOSTNAME_LIMIT = 255;
 const PROXY_ERROR_HEADER = 'X-Phi-Proxy-Error';
 const UPSTREAM_MISMATCH = 'upstream-mismatch';
@@ -259,6 +325,13 @@ export const configDocumentSchema = z.object({
     claudeSkipPermissions: z.boolean(),
     agyThemeAnsi: z.boolean(),
     opencodeIdleMinutes: z.number().int().min(0),
+    themeColor: z.string().catch(''),
+    uiFontFamily: z.string().catch(''),
+    uiFontSize: z.number().int().min(0).catch(0),
+    terminalFontFamily: z.string().catch(''),
+    terminalFontSize: z.number().int().min(0).catch(0),
+    mobileScrollbackRows: z.number().int().min(0).catch(0),
+    hostnameOverride: z.string().catch(''),
 });
 
 export type ConfigDocument = z.infer<typeof configDocumentSchema>;
@@ -275,7 +348,56 @@ const configWireSchema = z.object({
     claude_dangerously_skip_permissions: z.boolean(),
     agy_theme_ansi: z.boolean(),
     opencode_idle_stop_minutes: z.number().int().min(0),
+    theme_color: z.string().catch(''),
+    ui_font_family: z.string().catch(''),
+    ui_font_size: z.number().int().min(0).catch(0),
+    terminal_font_family: z.string().catch(''),
+    terminal_font_size: z.number().int().min(0).catch(0),
+    mobile_scrollback_rows: z.number().int().min(0).catch(0),
+    hostname_override: z.string().catch(''),
 });
+
+const mobileFamilyField = z
+    .string()
+    .refine(
+        (value) => new TextEncoder().encode(value).length <= 512,
+        'family too long',
+    )
+    .refine((value) => !/\p{Cc}/u.test(value), 'family has controls');
+
+const mobileAppearanceSchema = z
+    .object({
+        revision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+        ui_font_size: z.number().int().min(10).max(24).nullable(),
+        terminal_font_size: z.number().int().min(8).max(32).nullable(),
+        ui_font_family: mobileFamilyField.nullable(),
+        terminal_font_family: mobileFamilyField.nullable(),
+    })
+    .strict();
+
+export type MobileAppearance = z.infer<typeof mobileAppearanceSchema>;
+
+export interface InheritedFamilies {
+    readonly ui_font_family: string;
+    readonly terminal_font_family: string;
+}
+
+const inheritedFamiliesSchema = z.object({
+    ui_font_family: mobileFamilyField,
+    terminal_font_family: mobileFamilyField,
+});
+
+export function decodeInheritedFamilies(
+    body: unknown,
+): InheritedFamilies | null {
+    const parsed = inheritedFamiliesSchema.safeParse(body);
+    return parsed.success ? parsed.data : null;
+}
+
+function decodeMobileAppearance(body: unknown): MobileAppearance | null {
+    const parsed = mobileAppearanceSchema.safeParse(body);
+    return parsed.success ? parsed.data : null;
+}
 
 function decodeConfigDocument(body: unknown): ConfigDocument | null {
     const parsed = configWireSchema.safeParse(body);
@@ -293,6 +415,13 @@ function decodeConfigDocument(body: unknown): ConfigDocument | null {
         claudeSkipPermissions: wire.claude_dangerously_skip_permissions,
         agyThemeAnsi: wire.agy_theme_ansi,
         opencodeIdleMinutes: wire.opencode_idle_stop_minutes,
+        themeColor: wire.theme_color,
+        uiFontFamily: wire.ui_font_family,
+        uiFontSize: wire.ui_font_size,
+        terminalFontFamily: wire.terminal_font_family,
+        terminalFontSize: wire.terminal_font_size,
+        mobileScrollbackRows: wire.mobile_scrollback_rows,
+        hostnameOverride: wire.hostname_override,
     };
     return document;
 }
@@ -549,6 +678,124 @@ export function createConnectionService(
     };
     const refresh = (caller: AbortSignal): Promise<RefreshOutcome> =>
         postBundle('/api/auth/v2/refresh', '{}', caller);
+    // One-shot password set/clear. Same timeout/body/redirect discipline
+    // as login, plus a bearer. credentials stay same-origin (not omit):
+    // the rotation response rotates the refresh cookie, and an omitted
+    // fetch would drop it, logging the user out on the next reload.
+    const postPassword = async (
+        bodyJson: string,
+        caller: AbortSignal,
+        bearer: string | undefined,
+        expectEnabled: boolean,
+    ): Promise<
+        | { kind: 'ok'; bundle: CredentialBundle | null }
+        | { kind: 'rejected'; status: number }
+        | { kind: 'unavailable' }
+        | { kind: 'cancelled' }
+    > => {
+        type PasswordAttempt =
+            | { bundle: CredentialBundle | null }
+            | { rejected: number }
+            | 'unavailable';
+        const outcome = await withDeadline<PasswordAttempt>(
+            caller,
+            async (signal) => {
+                let response: Response;
+                try {
+                    response = await fetchImpl('/api/auth/v2/password', {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        redirect: 'error',
+                        cache: 'no-store',
+                        headers: headersFor(bearer, true),
+                        body: bodyJson,
+                        signal,
+                    });
+                } catch {
+                    return 'unavailable';
+                }
+                try {
+                    if (response.redirected) return 'unavailable';
+                    if (
+                        response.headers.get(PROXY_ERROR_HEADER) ===
+                        UPSTREAM_MISMATCH
+                    )
+                        return 'unavailable';
+                    if (
+                        response.status === 400 ||
+                        response.status === 401 ||
+                        response.status === 403 ||
+                        response.status === 429 ||
+                        response.status === 500 ||
+                        response.status === 503
+                    )
+                        return { rejected: response.status };
+                    if (response.status !== 200) return 'unavailable';
+                    const body = await readBoundedJson(
+                        response,
+                        AUTH_BODY_LIMIT,
+                    );
+                    if (!body.ok) return 'unavailable';
+                    const payload = body.value as Record<string, unknown>;
+                    if (
+                        typeof payload !== 'object' ||
+                        payload === null ||
+                        Array.isArray(payload) ||
+                        payload.enabled !== expectEnabled
+                    )
+                        return 'unavailable';
+                    const bundle = decodeBundle(body.value);
+                    // Set rotates the credential: no bundle, no success.
+                    // Clear carries no bundle; the flag is the proof.
+                    if (expectEnabled && bundle === null) return 'unavailable';
+                    return { bundle };
+                } finally {
+                    discardBody(response);
+                }
+            },
+        );
+        if (outcome === 'cancelled' || outcome === 'expired')
+            return outcome === 'cancelled'
+                ? { kind: 'cancelled' }
+                : { kind: 'unavailable' };
+        if (outcome === 'unavailable') return { kind: 'unavailable' };
+        if ('rejected' in outcome)
+            return { kind: 'rejected', status: outcome.rejected };
+        return { kind: 'ok', bundle: outcome.bundle };
+    };
+    const setPassword = async (
+        password: string,
+        caller: AbortSignal,
+        bearer?: string,
+    ): Promise<SetPasswordOutcome> => {
+        const bytes = passwordByteLength(password);
+        if (bytes < PASSWORD_MIN_BYTES || bytes > PASSWORD_MAX_BYTES)
+            return { kind: 'invalid-length' };
+        const outcome = await postPassword(
+            JSON.stringify({ password }),
+            caller,
+            bearer,
+            true,
+        );
+        if (outcome.kind === 'ok') {
+            if (outcome.bundle === null) return { kind: 'unavailable' };
+            return { kind: 'ok', bundle: outcome.bundle };
+        }
+        return outcome;
+    };
+    const clearPassword = async (
+        caller: AbortSignal,
+        bearer?: string,
+    ): Promise<ClearPasswordOutcome> => {
+        const outcome = await postPassword(
+            JSON.stringify({ password: '' }),
+            caller,
+            bearer,
+            false,
+        );
+        if (outcome.kind === 'ok') return { kind: 'ok' };
+        return outcome;
+    };
     const getConfigHostname = async (
         caller: AbortSignal,
         bearer?: string,
@@ -671,9 +918,122 @@ export function createConnectionService(
         bearer?: string,
     ): Promise<VersionOutcome> =>
         getDocument('/api/version', decodeVersionDocument, caller, bearer);
-    // Toggle saves report status only; like legacy, the body is unread.
-    const postConfig = async (
-        path: TogglePath,
+    const getMobileAppearance = async (
+        caller: AbortSignal,
+        bearer?: string,
+    ): Promise<MobileReadOutcome> => {
+        const outcome = await getDocument(
+            '/api/config/mobile-appearance',
+            decodeMobileAppearance,
+            caller,
+            bearer,
+        );
+        if (outcome.kind === 'ok')
+            return { kind: 'ok', state: outcome.document };
+        if (outcome.kind === 'blocked') return { kind: 'unavailable' };
+        return outcome;
+    };
+    // Mobile saves distinguish definitive rejections from unknown
+    // outcomes (web/mobile-appearance.js send): anything outside the
+    // definitive list, including 5xx and malformed 200 bodies, means
+    // the write may have applied and must be fenced, never retried.
+    const postMobile = async (
+        path:
+            | '/api/config/mobile-appearance'
+            | '/api/config/mobile-appearance/fence',
+        bodyJson: string,
+        caller: AbortSignal,
+        bearer: string | undefined,
+        acceptConflict: boolean,
+    ): Promise<MobileSaveOutcome> => {
+        type Attempt =
+            | { saved: MobileAppearance }
+            | { conflict: MobileAppearance }
+            | { rejected: number }
+            | 'unknown';
+        const outcome = await withDeadline<Attempt>(caller, async (signal) => {
+            let response: Response;
+            try {
+                response = await fetchImpl(path, {
+                    method: 'POST',
+                    credentials: 'omit',
+                    redirect: 'error',
+                    cache: 'no-store',
+                    headers: headersFor(bearer, true),
+                    body: bodyJson,
+                    signal,
+                });
+            } catch {
+                return 'unknown';
+            }
+            try {
+                if (response.redirected) return 'unknown';
+                if (
+                    response.headers.get(PROXY_ERROR_HEADER) ===
+                    UPSTREAM_MISMATCH
+                )
+                    return 'unknown';
+                if (
+                    response.status === 200 ||
+                    (response.status === 409 && acceptConflict)
+                ) {
+                    const body = await readBoundedJson(
+                        response,
+                        AUTH_BODY_LIMIT,
+                    );
+                    if (!body.ok) return 'unknown';
+                    const state = decodeMobileAppearance(body.value);
+                    if (state === null) return 'unknown';
+                    return response.status === 200
+                        ? { saved: state }
+                        : { conflict: state };
+                }
+                if (MOBILE_DEFINITIVE.has(response.status))
+                    return { rejected: response.status };
+                return 'unknown';
+            } finally {
+                discardBody(response);
+            }
+        });
+        if (outcome === 'cancelled' || outcome === 'expired')
+            return outcome === 'cancelled'
+                ? { kind: 'cancelled' }
+                : { kind: 'unknown' };
+        if (outcome === 'unknown') return { kind: 'unknown' };
+        if ('rejected' in outcome)
+            return { kind: 'rejected', status: outcome.rejected };
+        if ('saved' in outcome) return { kind: 'saved', state: outcome.saved };
+        return { kind: 'conflict', state: outcome.conflict };
+    };
+    const postMobileAppearance = (
+        bodyJson: string,
+        caller: AbortSignal,
+        bearer?: string,
+    ): Promise<MobileSaveOutcome> =>
+        postMobile(
+            '/api/config/mobile-appearance',
+            bodyJson,
+            caller,
+            bearer,
+            true,
+        );
+    const postMobileFence = async (
+        caller: AbortSignal,
+        bearer?: string,
+    ): Promise<MobileFenceOutcome> => {
+        const outcome = await postMobile(
+            '/api/config/mobile-appearance/fence',
+            '{}',
+            caller,
+            bearer,
+            false,
+        );
+        if (outcome.kind === 'conflict') return { kind: 'unknown' };
+        return outcome;
+    };
+    // Config saves report status only; like legacy, the body is unread.
+    const postStatus = async (
+        path: string,
         bodyJson: string,
         caller: AbortSignal,
         bearer?: string,
@@ -727,6 +1087,24 @@ export function createConnectionService(
             return { kind: 'rejected', status: outcome.rejected };
         return { kind: 'ok' };
     };
+    const postConfig = (
+        path: TogglePath,
+        bodyJson: string,
+        caller: AbortSignal,
+        bearer?: string,
+    ): Promise<PostOutcome> => postStatus(path, bodyJson, caller, bearer);
+    const postAppearance = (
+        bodyJson: string,
+        caller: AbortSignal,
+        bearer?: string,
+    ): Promise<PostOutcome> =>
+        postStatus('/api/config/appearance', bodyJson, caller, bearer);
+    const postTheme = (
+        bodyJson: string,
+        caller: AbortSignal,
+        bearer?: string,
+    ): Promise<PostOutcome> =>
+        postStatus('/api/config/theme', bodyJson, caller, bearer);
     return {
         serverLabel: upstreamOrigin,
         async getStatus(signal) {
@@ -787,9 +1165,16 @@ export function createConnectionService(
         getAuthStatus,
         login,
         refresh,
+        setPassword,
+        clearPassword,
         getConfigHostname,
         getConfigDocument,
         getVersion,
+        getMobileAppearance,
+        postMobileAppearance,
+        postMobileFence,
         postConfig,
+        postAppearance,
+        postTheme,
     };
 }

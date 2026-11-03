@@ -1,10 +1,6 @@
 import type { CredentialBundle } from '@phi/core';
 import type { AuthMessageId } from '../copy/auth.ts';
-import type {
-    ConnectionService,
-    LoginOutcome,
-    RefreshOutcome,
-} from './http.ts';
+import type { ConnectionService, LoginOutcome } from './http.ts';
 import type { ServerState } from './server-state.ts';
 
 export type AuthPhase =
@@ -45,6 +41,9 @@ export interface AuthSession {
     // Live in-memory bearer for authed platform clients. Read per request;
     // never cache: the session owns renewal and revocation.
     bearer(): string | null;
+    // Installs a rotated credential from a settings password change:
+    // same install path as a login accept, chain state reset.
+    adoptBundle(bundle: CredentialBundle): void;
 }
 
 const LOGIN_COOLDOWN_DEFAULT_MS = 60_000;
@@ -1017,5 +1016,27 @@ export function createAuthSession(
             void runChain().catch(() => {});
         },
         bearer: () => token,
+        adoptBundle: (bundle) => {
+            if (listener === null) return;
+            installBundle(bundle, now());
+            chainRefreshUsed = false;
+            exhausted = false;
+            stale = true;
+            followUpPending = true;
+            message = null;
+            emit();
+            const current = generation;
+            const own = new AbortController();
+            // Same follow-up as a login accept: the rotated credential
+            // proves itself with one authed read. A supersede drops it.
+            void verifyBearer(current, own.signal)
+                .catch(() => {})
+                .finally(() => {
+                    if (current === generation) {
+                        followUpPending = false;
+                        emit();
+                    }
+                });
+        },
     };
 }

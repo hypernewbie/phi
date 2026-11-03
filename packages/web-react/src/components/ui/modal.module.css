@@ -1,0 +1,65 @@
+.overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: var(--space-4);
+    background: rgb(0 0 0 / 55%);
+    overflow-y: auto;
+    z-index: 50;
+}
+
+.modal {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    width: min(480px, 100%);
+    min-width: 0;
+    margin: auto 0;
+    padding: 22px;
+    border: 1px solid var(--bg-border);
+    border-radius: 10px;
+    background: var(--bg-elevated);
+    box-shadow: 0 20px 60px rgb(0 0 0 / 42%);
+    overflow-wrap: anywhere;
+    max-height: calc(100dvh - 2 * var(--space-4));
+    overflow-y: auto;
+}
+
+.modal:focus {
+    outline: none;
+}
+
+.header {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.close {
+    border: 0;
+    min-width: 44px;
+    min-height: 44px;
+    padding: var(--space-1) var(--space-2);
+    color: var(--text-primary);
+    background: transparent;
+    font: inherit;
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    border-radius: 6px;
+}
+
+.close:hover {
+    background: var(--bg-border);
+}
+
+.close:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.footer {
+    display: flex;
+    justify-content: flex-end;
+}

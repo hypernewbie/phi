@@ -8,7 +8,13 @@ export const settingsCopy = {
     buildSource: 'Build source',
     workspaces: 'Workspaces',
     retry: 'Retry',
+    done: 'Close',
+    closeLabel: 'Close',
     unknownBuild: 'unknown build',
+    hostnameLabel: 'Hostname label (blank = real hostname)',
+    hostnameTitle:
+        "A display label for this machine in phi's UI, push titles, and status dumps. Purely cosmetic: it never affects how sockets connect, so it does not need to be a real hostname (any short text works).",
+    hostnamePlaceholder: 'e.g. dusty_potato, europa, homelab',
     toggles: {
         hidden: 'Use separate hidden terminal for commands',
         reuse: 'Reuse shell tab for terminal commands',
@@ -36,5 +42,33 @@ export const settingsCopy = {
     messages: {
         'settings-unavailable': 'Cannot load settings. Retry to refresh.',
         'settings-stale': 'Showing saved settings. Retry to refresh.',
+    },
+    security: {
+        title: 'Security',
+        accessPassword: 'Access password',
+        enabledText: 'Enabled',
+        disabledText: 'Disabled',
+        newId: 'settings-access-new',
+        confirmId: 'settings-access-confirm',
+        newPlaceholder: 'New password',
+        confirmPlaceholder: 'Confirm new password',
+        hint: '8+ characters.',
+        setButton: 'Set password',
+        updateButton: 'Update password',
+        removeLink: '\u00b7  Remove password',
+        confirmRemove: 'Confirm remove',
+        errors: {
+            'too-short': 'At least 8 characters.',
+            mismatch: 'Passwords don\u2019t match.',
+            'too-long': 'Password must be at most 1024 bytes.',
+            'sign-in': 'Sign in to change Phi access',
+            'rate-limited': 'Too many attempts. Try again in a moment.',
+            'save-failed': 'Unable to save access password',
+            'clear-failed': 'Unable to clear access password',
+        },
+        done: {
+            updated: 'Password updated',
+            removed: 'Password removed',
+        },
     },
 };
