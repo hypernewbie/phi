@@ -15,6 +15,7 @@ import (
 	"github.com/hypernewbie/phi/internal/config"
 	"github.com/hypernewbie/phi/internal/gitapi"
 	"github.com/hypernewbie/phi/internal/piapp"
+	"github.com/hypernewbie/phi/internal/syncmesh"
 	"github.com/hypernewbie/phi/pkg/bindaddr"
 	"github.com/hypernewbie/phi/pkg/coders"
 	"github.com/hypernewbie/phi/pkg/fleet"
@@ -76,6 +77,7 @@ type Server struct {
 	version, commit, date, buildSource string
 	startedAt                          int64
 	shuttingDown                       atomic.Bool
+	syncMesh                           *syncmesh.Server
 	diagnosticsProcessStartedAt        time.Time
 	serverStartedAt                    time.Time
 	cachedInstallMethod                string
@@ -154,6 +156,9 @@ func (app *Server) closeResources() {
 	}
 	app.accessManager.BeginRestart()
 	app.bridge.Stop()
+	if app.syncMesh != nil {
+		app.syncMesh.Stop()
+	}
 	if app.fleet != nil {
 		app.fleet.Start(nil)
 	}
