@@ -106,7 +106,9 @@ async function startPsiCapabilityPhi(): Promise<Fixture> {
             mkdirSync(work, { recursive: true });
             // One real skill so dispatch exercises discovery, expansion, and
             // provenance instead of a stub.
-            mkdirSync(join(agent, 'skills', 'bridge-echo'), { recursive: true });
+            mkdirSync(join(agent, 'skills', 'bridge-echo'), {
+                recursive: true,
+            });
             writeFileSync(
                 join(agent, 'skills', 'bridge-echo', 'SKILL.md'),
                 '---\nname: bridge-echo\ndescription: Echo the bridge fixture marker\n---\nBRIDGE_SKILL_BODY_MARKER\n',
@@ -215,8 +217,14 @@ test('M1 models list and switch reach the real psi session', async ({
         expect(catalog.unavailable).toBe(false);
         expect(catalog.models).toEqual(
             expect.arrayContaining([
-                expect.objectContaining({ provider: 'anthropic', id: 'bridge-a' }),
-                expect.objectContaining({ provider: 'anthropic', id: 'bridge-b' }),
+                expect.objectContaining({
+                    provider: 'anthropic',
+                    id: 'bridge-a',
+                }),
+                expect.objectContaining({
+                    provider: 'anthropic',
+                    id: 'bridge-b',
+                }),
             ]),
         );
 
@@ -374,10 +382,13 @@ test('M2 thinking, context, and recall follow the live psi session', async ({
 
         // Context telemetry is a measurement, present only when known.
         await expect
-            .poll(async () => {
-                const view = await paneBridge(request, phi.url, pane);
-                return view && typeof view.context_tokens === 'number';
-            }, { timeout: 30_000 })
+            .poll(
+                async () => {
+                    const view = await paneBridge(request, phi.url, pane);
+                    return view && typeof view.context_tokens === 'number';
+                },
+                { timeout: 30_000 },
+            )
             .toBe(true);
         const view = await paneBridge(request, phi.url, pane);
         expect(view?.context_window).toBe(32_000);
@@ -564,17 +575,20 @@ test('M4 one compact request creates one durable compaction', async ({
             await expect
                 .poll(
                     async () =>
-                        (
-                            await paneBridge(request, phi.url, pane)
-                        )?.compact_idle,
+                        (await paneBridge(request, phi.url, pane))
+                            ?.compact_idle,
                     { timeout: 60_000 },
                 )
                 .toBe(true);
         }
         await expect
-            .poll(async () => (await paneBridge(request, phi.url, pane))?.compact_idle, {
-                timeout: 60_000,
-            })
+            .poll(
+                async () =>
+                    (await paneBridge(request, phi.url, pane))?.compact_idle,
+                {
+                    timeout: 60_000,
+                },
+            )
             .toBe(true);
 
         // The published revision settles a moment after the run, so a press
@@ -586,20 +600,19 @@ test('M4 one compact request creates one durable compaction', async ({
         for (let attempt = 0; attempt < 10; attempt++) {
             const view = await paneBridge(request, phi.url, pane);
             lastView = JSON.stringify(view);
-            const press = await request.post(`${phi.url}/api/pi-bridge/compact`, {
-                data: {
-                    pane,
-                    generation: view?.generation,
-                    telemetry_revision: view?.telemetry_revision,
+            const press = await request.post(
+                `${phi.url}/api/pi-bridge/compact`,
+                {
+                    data: {
+                        pane,
+                        generation: view?.generation,
+                        telemetry_revision: view?.telemetry_revision,
+                    },
                 },
-            });
+            );
             pressStatus = press.status();
             pressBody = await press.text();
-            if (
-                pressStatus !== 409 ||
-                !/"(stale|busy)"/.test(pressBody)
-            )
-                break;
+            if (pressStatus !== 409 || !/"(stale|busy)"/.test(pressBody)) break;
             await new Promise((resolve) => setTimeout(resolve, 250));
         }
         expect(
@@ -616,7 +629,8 @@ test('M4 one compact request creates one durable compaction', async ({
         const stale = await request.post(`${phi.url}/api/pi-bridge/compact`, {
             data: {
                 pane,
-                generation: (await paneBridge(request, phi.url, pane))?.generation,
+                generation: (await paneBridge(request, phi.url, pane))
+                    ?.generation,
                 telemetry_revision: '1',
             },
         });
