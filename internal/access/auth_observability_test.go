@@ -215,7 +215,7 @@ func TestAccessObservabilityLogsNoCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode salt: %v", err)
 	}
-	verifier, err := deriveAccessVerifier(firstPassword, salt, iterations)
+	verifier, err := accessPasswordDerive(firstPassword, salt, iterations)
 	if err != nil {
 		t.Fatalf("derive verifier: %v", err)
 	}
