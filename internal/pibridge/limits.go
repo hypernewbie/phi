@@ -53,6 +53,17 @@ const (
 	CapabilitySkills = "pi.skills.v1"
 	// CapabilitySyncboard is the fixed Syncboard REST capability.
 	CapabilitySyncboard = "pi.syncboard.v1"
+	// CapabilitySyncboardPush is the addressed-message injection capability.
+	// Advertised separately from CapabilitySyncboard: reading the board and
+	// accepting an injected turn are different hazards, and a host may offer
+	// one without the other.
+	CapabilitySyncboardPush = "pi.syncboard.push.v1"
+	// maxPendingPushes bounds unacknowledged pushes retained per lease for a
+	// post-reconnect resend. Beyond this the oldest entry is dropped and the
+	// drop is logged: bounded memory outranks a silent backlog.
+	maxPendingPushes = 32
+	// maxPushMessageIDBytes bounds the idempotency key carried on the wire.
+	maxPushMessageIDBytes = 128
 	// CapabilityAttachments is the user-triggered native attachment capability.
 	CapabilityAttachments = "pi.attachments.v3"
 	// CapabilityState is the read-only live snapshot refresh capability.

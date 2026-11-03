@@ -326,6 +326,24 @@ export function createExtension(
                               nativeSkills.sendUserMessage!(content, options),
                       }
                     : {}),
+                // A pushed message becomes a displayed custom message that
+                // triggers a turn. followUp never interrupts a running turn.
+                ...(typeof pi.sendMessage === 'function'
+                    ? {
+                          injectSyncboardMessage: (
+                              customType: string,
+                              content: string,
+                          ) => {
+                              pi.sendMessage(
+                                  { customType, content, display: true },
+                                  {
+                                      triggerTurn: true,
+                                      deliverAs: 'followUp',
+                                  },
+                              );
+                          },
+                      }
+                    : {}),
                 attachmentRoot: ownerSlot().attachmentRoot,
                 attachmentState: ownerAttachmentState(),
             }));

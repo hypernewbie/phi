@@ -18,6 +18,7 @@ import {
     SyncboardOutcome,
     type SyncboardResponse,
     type StateSnapshot,
+    SyncboardNotification,
     TerminalRefreshOutcome,
 } from './gen/bridge.js';
 import { LIFECYCLE_HEADROOM_BYTES } from './protocol.js';
@@ -34,6 +35,7 @@ import { CAPABILITY_HISTORY, CAPABILITY_LIFECYCLE } from './protocol.js';
 import { CAPABILITY_MODELS } from './protocol.js';
 import { CAPABILITY_SKILLS } from './protocol.js';
 import { CAPABILITY_SYNCBOARD } from './protocol.js';
+import { CAPABILITY_SYNCBOARD_PUSH } from './protocol.js';
 import { CAPABILITY_TERMINAL_REFRESH } from './protocol.js';
 import { CAPABILITY_THINKING } from './protocol.js';
 import { CAPABILITY_TRANSCRIPT_SEARCH } from './protocol.js';
@@ -5420,6 +5422,132 @@ describe('Runtime terminal refresh', () => {
         expect(refreshAcks(channels[1]!).map((a) => a.outcome)).toEqual([
             TerminalRefreshOutcome.TERMINAL_REFRESH_OUTCOME_DISPATCHED,
         ]);
+        rt.shutdown();
+    });
+});
+
+describe('Runtime syncboard push', () => {
+    function pushNotification(messageId: string, text: string) {
+        return SyncboardNotification.create({
+            seq: 7n,
+            sender: 'agent-a',
+            recipient: 'agent-b',
+            value: Buffer.from(text),
+            messageId,
+        });
+    }
+
+    function deliver(rt: Runtime, ch: MockChannel, messageId: string, text: string) {
+        void rt;
+        ch.hooks!.onMessage({
+            paneId: CREDS.pane,
+            processId: CREDS.process,
+            runtimeGeneration: 1n,
+            payload: {
+                $case: 'syncboardNotification',
+                value: pushNotification(messageId, text),
+            },
+        });
+    }
+    const acksOf = (ch: MockChannel) =>
+        ch.nonfatalSends
+            .map((message) => message.payload)
+            .filter((payload) => payload?.$case === 'syncboardPushAck');
+
+    it('injects a pushed message into the model input and acknowledges it', async () => {
+        const ch = mockChannel();
+        const injected: { customType: string; content: string }[] = [];
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            injectSyncboardMessage: (customType, content) => {
+                injected.push({ customType, content });
+            },
+            makeChannel: wired(ch),
+        });
+        rt.start(ctx());
+        await sleep(10);
+
+        const hello = payloadOf(ch.hellos[0]!);
+        if (hello.$case !== 'hello') throw new Error('missing hello');
+        expect(hello.value.capabilities).toContain(CAPABILITY_SYNCBOARD_PUSH);
+
+        deliver(rt, ch, 'm-1', 'the push text');
+
+        expect(injected).toHaveLength(1);
+        expect(injected[0]!.customType).toBe('phi-syncboard');
+        expect(injected[0]!.content).toContain('the push text');
+        const acks = acksOf(ch);
+        expect(acks).toHaveLength(1);
+        if (acks[0]?.$case !== 'syncboardPushAck') throw new Error('no ack');
+        expect(acks[0].value.messageId).toBe('m-1');
+        expect(acks[0].value.seq).toBe(7n);
+        rt.shutdown();
+    });
+
+    it('acknowledges a resend without injecting a second time', async () => {
+        const ch = mockChannel();
+        let injections = 0;
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            injectSyncboardMessage: () => {
+                injections += 1;
+            },
+            makeChannel: wired(ch),
+        });
+        rt.start(ctx());
+        await sleep(10);
+
+        deliver(rt, ch, 'm-dup', 'text');
+        deliver(rt, ch, 'm-dup', 'text');
+
+        expect(injections).toBe(1);
+        expect(acksOf(ch)).toHaveLength(2);
+        rt.shutdown();
+    });
+
+    it('ignores a notification the bridge did not accept the capability for', async () => {
+        const ch = mockChannel();
+        ch.acceptedCaps = [CAPABILITY_LIFECYCLE];
+        let injections = 0;
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            injectSyncboardMessage: () => {
+                injections += 1;
+            },
+            makeChannel: wired(ch),
+        });
+        rt.start(ctx());
+        await sleep(10);
+
+        deliver(rt, ch, 'm-1', 'text');
+
+        expect(injections).toBe(0);
+        expect(acksOf(ch)).toEqual([]);
+        rt.shutdown();
+    });
+
+    it('never advertises the capability without a host injection hook', async () => {
+        const ch = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            makeChannel: wired(ch),
+        });
+        rt.start(ctx());
+        await sleep(10);
+
+        const hello = payloadOf(ch.hellos[0]!);
+        if (hello.$case !== 'hello') throw new Error('missing hello');
+        expect(hello.value.capabilities).not.toContain(
+            CAPABILITY_SYNCBOARD_PUSH,
+        );
         rt.shutdown();
     });
 });

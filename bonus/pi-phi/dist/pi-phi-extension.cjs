@@ -24597,13 +24597,13 @@ var CAPABILITY_COMPACT = "pi.compact.v1";
 var CAPABILITY_RELOAD = "pi.reload.v1";
 var CAPABILITY_SKILLS = "pi.skills.v1";
 var CAPABILITY_SYNCBOARD = "pi.syncboard.v1";
+var CAPABILITY_SYNCBOARD_PUSH = "pi.syncboard.push.v1";
 var MAX_SYNCBOARD_VALUE_BYTES = 64 * 1024;
 var MAX_SYNCBOARD_RESPONSE_BYTES = 192 * 1024;
 var MAX_SYNCBOARD_PENDING = 4;
 var SYNCBOARD_CALL_TIMEOUT_MS = 15e3;
 var CAPABILITY_ATTACHMENTS = "pi.attachments.v3";
 var CAPABILITY_STATE = "pi.state.v2";
-var CAPABILITY_TERMINAL_REFRESH = "pi.terminal-refresh.v1";
 var CAPABILITY_TRANSCRIPT_SEARCH = "pi.transcript-search.v2";
 var MAX_SKILL_ENTRIES = 200;
 var MAX_SKILL_NAME_BYTES = 64;
@@ -24921,7 +24921,7 @@ function parseAttachmentRequestID(value) {
 
 // src/tui-probe.ts
 var PROBE_KEY = "phi.pi-phi.focus-probe";
-function captureLiveTui(ui, key) {
+function captureFocusedComponent(ui, key) {
   try {
     if (typeof ui !== "object" || ui === null) return null;
     const candidate = ui.setWidget;
@@ -24945,15 +24945,7 @@ function captureLiveTui(ui, key) {
       } catch {
       }
     }
-    return typeof tui === "object" && tui !== null ? tui : null;
-  } catch {
-    return null;
-  }
-}
-function captureFocusedComponent(ui, key) {
-  const tui = captureLiveTui(ui, key);
-  if (!tui) return null;
-  try {
+    if (typeof tui !== "object" || tui === null) return null;
     const getFocused = tui.getFocusedComponent;
     if (typeof getFocused !== "function") return null;
     const focused = getFocused.call(tui);
@@ -25997,9 +25989,6 @@ var PiToPhi = {
       case "syncboardPushAck":
         SyncboardPushAck.encode(message.payload.value, writer.uint32(234).fork()).join();
         break;
-      case "terminalRefreshAck":
-        TerminalRefreshAck.encode(message.payload.value, writer.uint32(242).fork()).join();
-        break;
     }
     return writer;
   },
@@ -26172,16 +26161,6 @@ var PiToPhi = {
             message.payload = { $case: "syncboardPushAck", value: SyncboardPushAck.decode(reader, reader.uint32()) };
             continue;
           }
-          case 30: {
-            if (tag !== 242) {
-              break;
-            }
-            message.payload = {
-              $case: "terminalRefreshAck",
-              value: TerminalRefreshAck.decode(reader, reader.uint32())
-            };
-            continue;
-          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -26314,15 +26293,6 @@ var PiToPhi = {
         }
         break;
       }
-      case "terminalRefreshAck": {
-        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
-          message.payload = {
-            $case: "terminalRefreshAck",
-            value: TerminalRefreshAck.fromPartial(object.payload.value)
-          };
-        }
-        break;
-      }
     }
     return message;
   }
@@ -26395,9 +26365,6 @@ var PhiToPi = {
         break;
       case "syncboardNotification":
         SyncboardNotification.encode(message.payload.value, writer.uint32(218).fork()).join();
-        break;
-      case "terminalRefreshRequest":
-        TerminalRefreshRequest.encode(message.payload.value, writer.uint32(226).fork()).join();
         break;
     }
     return writer;
@@ -26573,16 +26540,6 @@ var PhiToPi = {
             };
             continue;
           }
-          case 28: {
-            if (tag !== 226) {
-              break;
-            }
-            message.payload = {
-              $case: "terminalRefreshRequest",
-              value: TerminalRefreshRequest.decode(reader, reader.uint32())
-            };
-            continue;
-          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -26714,15 +26671,6 @@ var PhiToPi = {
           message.payload = {
             $case: "syncboardNotification",
             value: SyncboardNotification.fromPartial(object.payload.value)
-          };
-        }
-        break;
-      }
-      case "terminalRefreshRequest": {
-        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
-          message.payload = {
-            $case: "terminalRefreshRequest",
-            value: TerminalRefreshRequest.fromPartial(object.payload.value)
           };
         }
         break;
@@ -27488,128 +27436,6 @@ var StateRequest = {
   fromPartial(object) {
     const message = createBaseStateRequest();
     message.requestId = object.requestId ?? "";
-    return message;
-  }
-};
-function createBaseTerminalRefreshRequest() {
-  return { requestId: "" };
-}
-var TerminalRefreshRequest = {
-  encode(message, writer = new BinaryWriter()) {
-    if (message.requestId !== "") {
-      writer.uint32(10).string(message.requestId);
-    }
-    return writer;
-  },
-  decode(input, length) {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
-    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
-    if (previousRecursionDepth >= 100) {
-      throw new globalThis.Error("protobuf decode recursion limit exceeded");
-    }
-    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
-    try {
-      const end = length === void 0 ? reader.len : reader.pos + length;
-      const message = createBaseTerminalRefreshRequest();
-      while (reader.pos < end) {
-        const tag = reader.uint32();
-        switch (tag >>> 3) {
-          case 1: {
-            if (tag !== 10) {
-              break;
-            }
-            message.requestId = reader.string();
-            continue;
-          }
-        }
-        if ((tag & 7) === 4 || tag === 0) {
-          break;
-        }
-        reader.skip(tag & 7);
-      }
-      return message;
-    } finally {
-      reader.__tsProtoDecodeDepth = previousRecursionDepth;
-    }
-  },
-  create(base) {
-    return TerminalRefreshRequest.fromPartial(base ?? {});
-  },
-  fromPartial(object) {
-    const message = createBaseTerminalRefreshRequest();
-    message.requestId = object.requestId ?? "";
-    return message;
-  }
-};
-function createBaseTerminalRefreshAck() {
-  return { requestId: "", outcome: 0, reason: "" };
-}
-var TerminalRefreshAck = {
-  encode(message, writer = new BinaryWriter()) {
-    if (message.requestId !== "") {
-      writer.uint32(10).string(message.requestId);
-    }
-    if (message.outcome !== 0) {
-      writer.uint32(16).int32(message.outcome);
-    }
-    if (message.reason !== "") {
-      writer.uint32(26).string(message.reason);
-    }
-    return writer;
-  },
-  decode(input, length) {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
-    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
-    if (previousRecursionDepth >= 100) {
-      throw new globalThis.Error("protobuf decode recursion limit exceeded");
-    }
-    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
-    try {
-      const end = length === void 0 ? reader.len : reader.pos + length;
-      const message = createBaseTerminalRefreshAck();
-      while (reader.pos < end) {
-        const tag = reader.uint32();
-        switch (tag >>> 3) {
-          case 1: {
-            if (tag !== 10) {
-              break;
-            }
-            message.requestId = reader.string();
-            continue;
-          }
-          case 2: {
-            if (tag !== 16) {
-              break;
-            }
-            message.outcome = reader.int32();
-            continue;
-          }
-          case 3: {
-            if (tag !== 26) {
-              break;
-            }
-            message.reason = reader.string();
-            continue;
-          }
-        }
-        if ((tag & 7) === 4 || tag === 0) {
-          break;
-        }
-        reader.skip(tag & 7);
-      }
-      return message;
-    } finally {
-      reader.__tsProtoDecodeDepth = previousRecursionDepth;
-    }
-  },
-  create(base) {
-    return TerminalRefreshAck.fromPartial(base ?? {});
-  },
-  fromPartial(object) {
-    const message = createBaseTerminalRefreshAck();
-    message.requestId = object.requestId ?? "";
-    message.outcome = object.outcome ?? 0;
-    message.reason = object.reason ?? "";
     return message;
   }
 };
@@ -30746,6 +30572,64 @@ var BridgeChannel = class {
   }
 };
 
+// src/push.ts
+var SYNCBOARD_PUSH_CUSTOM_TYPE = "phi-syncboard";
+var MAX_SYNCBOARD_PUSH_INJECT_BYTES = 8 * 1024;
+var MAX_REMEMBERED_PUSH_IDS = 256;
+function formatPushContent(notification) {
+  const value = notification.value ?? new Uint8Array();
+  const total = value.byteLength;
+  const kept = total > MAX_SYNCBOARD_PUSH_INJECT_BYTES ? value.subarray(0, MAX_SYNCBOARD_PUSH_INJECT_BYTES) : value;
+  const text = new TextDecoder("utf-8").decode(kept);
+  const sender = notification.sender || "unknown";
+  const header = `[phi-syncboard from=${sender} message_id=${notification.messageId}]`;
+  if (total <= MAX_SYNCBOARD_PUSH_INJECT_BYTES) {
+    return `${header}
+${text}`;
+  }
+  return `${header}
+${text}
+[truncated: first ${MAX_SYNCBOARD_PUSH_INJECT_BYTES} of ${total} bytes]`;
+}
+function createSyncboardPushHandler(options) {
+  const seen = /* @__PURE__ */ new Set();
+  const order = [];
+  const remember = (messageId) => {
+    seen.add(messageId);
+    order.push(messageId);
+    if (order.length > MAX_REMEMBERED_PUSH_IDS) {
+      const oldest = order.shift();
+      if (oldest !== void 0) seen.delete(oldest);
+    }
+  };
+  return {
+    accept(notification) {
+      const messageId = notification.messageId;
+      const seq = notification.seq ?? 0n;
+      if (!messageId) return;
+      if (seen.has(messageId)) {
+        options.ack(seq, messageId);
+        return;
+      }
+      const inject = options.inject;
+      if (inject === void 0) return;
+      try {
+        inject(
+          SYNCBOARD_PUSH_CUSTOM_TYPE,
+          formatPushContent(notification)
+        );
+      } catch {
+        return;
+      }
+      remember(messageId);
+      options.ack(seq, messageId);
+    },
+    remembered() {
+      return seen.size;
+    }
+  };
+}
+
 // src/history-reader.ts
 var PROBE_KEY3 = "phi.pi-phi.history-probe";
 function readEditorHistory(ui) {
@@ -30767,36 +30651,6 @@ function readEditorHistoryInner(ui) {
 }
 function isHistoryReaderAvailable(ui) {
   return readEditorHistory(ui) !== null;
-}
-
-// src/terminal-refresh.ts
-var PROBE_KEY4 = "phi.pi-phi.refresh-probe";
-function readRefreshTui(ui) {
-  const tui = captureLiveTui(ui, PROBE_KEY4);
-  if (!tui) return null;
-  const candidate = tui;
-  if (typeof candidate.stop !== "function" || typeof candidate.start !== "function" || typeof candidate.requestRender !== "function") {
-    return null;
-  }
-  return candidate;
-}
-function invokeTerminalRefresh(tui) {
-  try {
-    tui.stop({ preserveScreen: true });
-    tui.start();
-    tui.requestRender(true);
-    return true;
-  } catch {
-    try {
-      tui.start();
-    } catch {
-    }
-    try {
-      tui.requestRender(true);
-    } catch {
-    }
-    return false;
-  }
 }
 
 // src/transcript-search.ts
@@ -31257,14 +31111,11 @@ var Runtime = class {
   syncboardAccepted = false;
   syncboardSeq = 0n;
   syncboardPending = /* @__PURE__ */ new Map();
+  syncboardPushAccepted = false;
+  /** Created on first use: opts is assigned after field initializers. */
+  syncboardPushHandler = null;
   attachmentsAccepted = false;
   stateAccepted = false;
-  terminalRefreshAccepted = false;
-  /**
-   * Newest accepted repaint request ID. Server IDs are monotonic, so an
-   * older or repeated ID is stale and never repaints twice.
-   */
-  terminalRefreshHighWater = null;
   transcriptSearchAccepted = false;
   transcriptSearchReads = /* @__PURE__ */ new Set();
   /** getContextUsage present on the latest event context. */
@@ -31671,6 +31522,7 @@ var Runtime = class {
     if (this.shutdownRequested) return;
     this.shutdownRequested = true;
     this.setSyncboardAccepted(false);
+    this.syncboardPushAccepted = false;
     if (this.compact.active?.runtimeId === this.runtimeId) {
       this.compact.active = null;
     }
@@ -31949,9 +31801,10 @@ var Runtime = class {
     if (this.opts.getSkills && this.opts.invokeSkill)
       caps.push(CAPABILITY_SKILLS);
     if (this.opts.syncboardEnabled) caps.push(CAPABILITY_SYNCBOARD);
+    if (this.opts.injectSyncboardMessage)
+      caps.push(CAPABILITY_SYNCBOARD_PUSH);
     if (this.attachmentApi)
       caps.push(CAPABILITY_ATTACHMENTS, CAPABILITY_STATE);
-    if (readRefreshTui(this.ui)) caps.push(CAPABILITY_TERMINAL_REFRESH);
     return caps;
   }
   hello() {
@@ -32004,9 +31857,9 @@ var Runtime = class {
     this.reloadAccepted = false;
     this.skillsAccepted = false;
     this.setSyncboardAccepted(false);
+    this.syncboardPushAccepted = false;
     this.attachmentsAccepted = false;
     this.stateAccepted = false;
-    this.terminalRefreshAccepted = false;
     this.transcriptSearchAccepted = false;
     if (this.lastCtx) this.sampleTelemetry(this.lastCtx);
     const channel = make(this.opts.creds, {
@@ -32032,15 +31885,13 @@ var Runtime = class {
         this.setSyncboardAccepted(
           this.opts.syncboardEnabled === true && accepted.capabilities.includes(CAPABILITY_SYNCBOARD)
         );
+        this.syncboardPushAccepted = this.opts.injectSyncboardMessage !== void 0 && accepted.capabilities.includes(CAPABILITY_SYNCBOARD_PUSH);
         this.attachmentsAccepted = accepted.capabilities.includes(
           CAPABILITY_ATTACHMENTS
         );
         this.stateAccepted = accepted.capabilities.includes(CAPABILITY_STATE);
         this.transcriptSearchAccepted = accepted.capabilities.includes(
           CAPABILITY_TRANSCRIPT_SEARCH
-        );
-        this.terminalRefreshAccepted = accepted.capabilities.includes(
-          CAPABILITY_TERMINAL_REFRESH
         );
       }
     } catch (err) {
@@ -32085,6 +31936,8 @@ var Runtime = class {
         msg.payload.value.requestId,
         msg.payload.value.name
       );
+    } else if (msg.payload?.$case === "syncboardNotification" && this.syncboardPushAccepted) {
+      this.syncboardPush().accept(msg.payload.value);
     } else if (msg.payload?.$case === "attachmentPromptRequest" && this.attachmentsAccepted) {
       void this.onAttachmentPromptRequest(msg.payload.value);
     } else if (msg.payload?.$case === "stateRequest" && this.stateAccepted) {
@@ -32114,53 +31967,27 @@ var Runtime = class {
       this.onSyncboardResponse(msg.payload.value);
     } else if (msg.payload?.$case === "transcriptSearchRequest" && this.transcriptSearchAccepted) {
       this.onTranscriptSearchRequest(msg.payload.value);
-    } else if (msg.payload?.$case === "terminalRefreshRequest" && this.terminalRefreshAccepted) {
-      this.onTerminalRefreshRequest(msg.payload.value.requestId);
     }
   }
-  /**
-   * Run one accepted repaint and answer with a receipt. The host TUI is
-   * probed again here: a Hello capability is stale the moment the UI
-   * surface changes, and a missing method must never be called.
-   */
-  onTerminalRefreshRequest(requestId) {
-    const id = parseMutationId(requestId);
-    if (id === null || !this.channel) return;
-    if (this.terminalRefreshHighWater !== null && id <= this.terminalRefreshHighWater) {
-      this.sendTerminalRefreshAck(requestId, "not-sent", "stale");
-      return;
+  /** One handler per runtime, so deduplication survives reconnects. */
+  syncboardPush() {
+    if (this.syncboardPushHandler === null) {
+      this.syncboardPushHandler = createSyncboardPushHandler({
+        inject: this.opts.injectSyncboardMessage,
+        ack: (seq, messageId) => {
+          this.channel?.sendNonfatal({
+            paneId: this.opts.creds.pane,
+            processId: this.opts.creds.process,
+            runtimeGeneration: this.opts.generation,
+            payload: {
+              $case: "syncboardPushAck",
+              value: SyncboardPushAck.create({ seq, messageId })
+            }
+          });
+        }
+      });
     }
-    const tui = readRefreshTui(this.ui);
-    if (!tui) {
-      this.sendTerminalRefreshAck(requestId, "not-sent", "unavailable");
-      return;
-    }
-    this.terminalRefreshHighWater = id;
-    if (invokeTerminalRefresh(tui)) {
-      this.sendTerminalRefreshAck(requestId, "dispatched", "");
-      return;
-    }
-    this.sendTerminalRefreshAck(requestId, "unknown", "error");
-  }
-  sendTerminalRefreshAck(requestId, outcome, reason) {
-    const wire = {
-      dispatched: 1 /* TERMINAL_REFRESH_OUTCOME_DISPATCHED */,
-      "not-sent": 2 /* TERMINAL_REFRESH_OUTCOME_NOT_SENT */,
-      unknown: 3 /* TERMINAL_REFRESH_OUTCOME_UNKNOWN */
-    }[outcome];
-    return this.channel?.sendNonfatal({
-      paneId: this.opts.creds.pane,
-      processId: this.opts.creds.process,
-      runtimeGeneration: this.opts.generation,
-      payload: {
-        $case: "terminalRefreshAck",
-        value: TerminalRefreshAck.create({
-          requestId,
-          outcome: wire,
-          reason
-        })
-      }
-    }) ?? false;
+    return this.syncboardPushHandler;
   }
   onSyncboardResponse(response) {
     const waiter = this.syncboardPending.get(response.requestId);
@@ -33382,6 +33209,7 @@ var Runtime = class {
   }
   onStreamEnd(status) {
     this.setSyncboardAccepted(false);
+    this.syncboardPushAccepted = false;
     const channel = this.channel;
     this.cancelTranscriptSearches(channel ?? void 0);
     channel?.close();
@@ -38235,6 +38063,19 @@ function createExtension(pi, deps = {}) {
     } : {},
     ...hasInvokeApi ? {
       sendUserMessage: (content, options) => nativeSkills.sendUserMessage(content, options)
+    } : {},
+    // A pushed message becomes a displayed custom message that
+    // triggers a turn. followUp never interrupts a running turn.
+    ...typeof pi.sendMessage === "function" ? {
+      injectSyncboardMessage: (customType, content) => {
+        pi.sendMessage(
+          { customType, content, display: true },
+          {
+            triggerTurn: true,
+            deliverAs: "followUp"
+          }
+        );
+      }
     } : {},
     attachmentRoot: ownerSlot().attachmentRoot,
     attachmentState: ownerAttachmentState()
