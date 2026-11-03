@@ -5437,7 +5437,12 @@ describe('Runtime syncboard push', () => {
         });
     }
 
-    function deliver(rt: Runtime, ch: MockChannel, messageId: string, text: string) {
+    function deliver(
+        rt: Runtime,
+        ch: MockChannel,
+        messageId: string,
+        text: string,
+    ) {
         void rt;
         ch.hooks!.onMessage({
             paneId: CREDS.pane,

@@ -95,7 +95,8 @@ test('a pushed message reaches the receiving Pi model without a tool call', asyn
         const carrying = provider
             .bodies()
             .filter(
-                (body) => body.includes(MARKER) && body.includes('phi-syncboard'),
+                (body) =>
+                    body.includes(MARKER) && body.includes('phi-syncboard'),
             );
         expect(carrying.length).toBeGreaterThan(0);
         // Nothing was delivered through the tool: the receiver never called

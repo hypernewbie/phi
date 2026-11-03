@@ -22,7 +22,9 @@ export interface SyncboardPushOptions {
      * suppresses the acknowledgement so Phi resends rather than losing the
      * message.
      */
-    readonly inject: ((customType: string, content: string) => void) | undefined;
+    readonly inject:
+        | ((customType: string, content: string) => void)
+        | undefined;
     /** Confirms one notification to Phi. */
     readonly ack: (seq: bigint, messageId: string) => void;
 }
@@ -38,14 +40,13 @@ export interface SyncboardPushHandler {
  * Rebuild the one-line header and bounded body for injection. Truncation is
  * stated in the text so the model never treats a partial message as complete.
  */
-export function formatPushContent(
-    notification: SyncboardNotification,
-): string {
+export function formatPushContent(notification: SyncboardNotification): string {
     const value = notification.value ?? new Uint8Array();
     const total = value.byteLength;
-    const kept = total > MAX_SYNCBOARD_PUSH_INJECT_BYTES
-        ? value.subarray(0, MAX_SYNCBOARD_PUSH_INJECT_BYTES)
-        : value;
+    const kept =
+        total > MAX_SYNCBOARD_PUSH_INJECT_BYTES
+            ? value.subarray(0, MAX_SYNCBOARD_PUSH_INJECT_BYTES)
+            : value;
     const text = new TextDecoder('utf-8').decode(kept);
     const sender = notification.sender || 'unknown';
     const header = `[phi-syncboard from=${sender} message_id=${notification.messageId}]`;

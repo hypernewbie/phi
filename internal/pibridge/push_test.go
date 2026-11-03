@@ -1,7 +1,6 @@
 package pibridge
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -232,5 +231,3 @@ func TestSyncboardPushWithoutServerFlag(t *testing.T) {
 		t.Fatalf("err = %v, want ErrPushUnavailable", err)
 	}
 }
-
-var _ = context.Background

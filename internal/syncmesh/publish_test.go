@@ -2,6 +2,7 @@ package syncmesh
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -188,7 +189,7 @@ func TestPublishRefusals(t *testing.T) {
 func TestStoreEvictsOldest(t *testing.T) {
 	h := NewHub()
 	for i := 0; i < maxStoredMessages+5; i++ {
-		if _, _, err := h.Publish(string(rune('a'+i%26))+string(rune('0'+i%10))+string(rune('0'+i/10)), "s", "*", []byte("v"), 0); err != nil {
+		if _, _, err := h.Publish(strconv.Itoa(i), "s", "*", []byte("v"), 0); err != nil {
 			t.Fatalf("publish %d: %v", i, err)
 		}
 	}
