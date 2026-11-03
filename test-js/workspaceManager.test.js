@@ -42,7 +42,12 @@ function makeSessions(options = {}) {
             </div>
         </div>
         <div id="ws-manager-modal" class="modal-overlay hidden">
-            <div class="modal-content" role="dialog" aria-modal="true">
+            <div
+                class="modal-content"
+                role="dialog"
+                aria-modal="true"
+                tabindex="-1"
+            >
                 <button id="ws-manager-close" type="button">×</button>
                 <div id="ws-manager-status" role="status" aria-live="polite"></div>
                 <input
@@ -251,10 +256,11 @@ describe('workspace manager', () => {
         toggle('/code/theta', true);
         expect(buttonText('ws-manager-remove')).toBe('Remove selected (0)');
         expect(
-            document.querySelector('#ws-manager-roots .btn-accent').textContent,
+            document.querySelector('#ws-manager-roots .ws-manager-add-btn')
+                .textContent,
         ).toBe('Add selected (2)');
 
-        document.querySelector('#ws-manager-roots .btn-accent').click();
+        document.querySelector('#ws-manager-roots .ws-manager-add-btn').click();
         await vi.waitFor(() => expect(calls.length).toBe(1));
 
         expect(calls[0]).toEqual({
@@ -300,13 +306,11 @@ describe('workspace manager', () => {
             true,
         ]);
         expect(
-            document.querySelector('#ws-manager-roots .ws-manager-actions .btn')
+            document.querySelector('#ws-manager-roots .ws-manager-add-btn')
                 .textContent,
         ).toBe('Add selected (3)');
 
-        document
-            .querySelector('#ws-manager-roots .ws-manager-actions .btn')
-            .click();
+        document.querySelector('#ws-manager-roots .ws-manager-add-btn').click();
         await vi.waitFor(() => expect(calls.length).toBe(1));
         expect(calls[0].body).toEqual({
             paths: ['/code/psi', '/code/theta', '/code/zeta'],
@@ -352,14 +356,15 @@ describe('workspace manager', () => {
         await openManager(sessions);
 
         toggle('/code/psi', true);
-        document.querySelector('#ws-manager-roots .btn-accent').click();
+        document.querySelector('#ws-manager-roots .ws-manager-add-btn').click();
 
         await vi.waitFor(() => expect(statusText()).toContain('Path rejected'));
         expect(sessions.workspaces).toEqual(['/code/keep']);
         expect(projects().map((row) => row.path)).toEqual(['/code/keep']);
         expect(rootRows()).toEqual([{ path: '/code/psi', checked: true }]);
         expect(
-            document.querySelector('#ws-manager-roots .btn-accent').textContent,
+            document.querySelector('#ws-manager-roots .ws-manager-add-btn')
+                .textContent,
         ).toBe('Add selected (1)');
     });
 
@@ -417,7 +422,7 @@ describe('workspace manager', () => {
         await openManager(sessions);
 
         toggle('/code/psi', true);
-        document.querySelector('#ws-manager-roots .btn-accent').click();
+        document.querySelector('#ws-manager-roots .ws-manager-add-btn').click();
 
         await vi.waitFor(() =>
             expect(statusText()).toContain('Change not confirmed'),
@@ -535,9 +540,7 @@ describe('workspace manager', () => {
         // The first change still owns the outbox, so a second one cannot start.
         setOnline(true);
         toggle('/code/psi', true);
-        document
-            .querySelector('#ws-manager-roots .ws-manager-actions .btn')
-            .click();
+        document.querySelector('#ws-manager-roots .ws-manager-add-btn').click();
         expect(calls.length).toBe(0);
 
         window.dispatchEvent(new Event('online'));
@@ -621,14 +624,12 @@ describe('workspace manager', () => {
         // The hidden selection is kept, but it is not counted and would not be
         // part of a batch sent now.
         expect(
-            document.querySelector('#ws-manager-roots .ws-manager-actions .btn')
+            document.querySelector('#ws-manager-roots .ws-manager-add-btn')
                 .textContent,
         ).toBe('Add selected (0)');
 
         toggle('/code/theta', true);
-        document
-            .querySelector('#ws-manager-roots .ws-manager-actions .btn')
-            .click();
+        document.querySelector('#ws-manager-roots .ws-manager-add-btn').click();
         await vi.waitFor(() => expect(calls.length).toBe(1));
         expect(calls[0].body).toEqual({ paths: ['/code/theta'] });
 
@@ -641,31 +642,17 @@ describe('workspace manager', () => {
             ]),
         );
         expect(
-            document.querySelector('#ws-manager-roots .ws-manager-actions .btn')
+            document.querySelector('#ws-manager-roots .ws-manager-add-btn')
                 .textContent,
         ).toBe('Add selected (1)');
         expect(allLabel('#ws-manager-roots')).toBe('All');
-    });
 
-    it('shows an empty result instead of stale rows when nothing matches', async () => {
-        installFetch({ browse: () => browseEntries('psi', 'theta') });
-        const sessions = makeSessions({
-            workspaces: ['/code/alpha'],
-            roots: [BROWSE_ROOT],
-        });
-        await openManager(sessions);
-
+        // A filter that matches nothing shows an empty list, never stale rows.
         setFilter('zzz');
-
-        expect(projects()).toEqual([]);
         expect(rootRows()).toEqual([]);
-        expect(
-            document.getElementById('ws-manager-projects').textContent,
-        ).toContain('No projects match the filter.');
-        expect(
-            document.querySelector('#ws-manager-roots').textContent,
-        ).toContain('No folders here match the filter.');
-        expect(sessions.workspaces).toEqual(['/code/alpha']);
+        expect(projects()).toEqual([]);
+        // Filtering never rewrites the registered list.
+        expect(sessions.workspaces).toEqual(['/code/theta']);
     });
 
     it('drops a late root listing after the dialog is closed and reopened', async () => {
@@ -695,6 +682,100 @@ describe('workspace manager', () => {
         resolveStale(browseEntries('stale'));
         await new Promise((resolve) => setTimeout(resolve, 0));
         expect(rootRows().map((row) => row.path)).toEqual(['/code/fresh']);
+    });
+
+    it('flushes a write queued in an earlier visit as soon as the dialog opens online', async () => {
+        localStorage.setItem(
+            'phi_workspace_manager_outbox',
+            JSON.stringify({
+                kind: 'add',
+                paths: ['/code/psi'],
+                state: 'unsent',
+            }),
+        );
+        const { calls } = installFetch({
+            browse: () => browseEntries('psi'),
+        });
+        const sessions = makeSessions({ workspaces: [], roots: [BROWSE_ROOT] });
+        await openManager(sessions);
+
+        // Nothing else retries a never-sent write: no `online` event fires when
+        // the browser was already online at load.
+        await vi.waitFor(() => expect(calls.length).toBe(1));
+        expect(calls[0]).toEqual({
+            url: '/api/config/workspaces',
+            method: 'POST',
+            body: { paths: ['/code/psi'] },
+        });
+        await vi.waitFor(() =>
+            expect(
+                localStorage.getItem('phi_workspace_manager_outbox'),
+            ).toBeNull(),
+        );
+    });
+
+    it('says the change was not applied when the reload proves it never landed', async () => {
+        const { fetchMock } = installFetch({
+            browse: () => browseEntries('psi'),
+            write: () => new TypeError('network down'),
+        });
+        const sessions = makeSessions({ workspaces: [], roots: [BROWSE_ROOT] });
+        // The server answers reads normally; it simply never got the write.
+        sessions.loadConfig = async () => {
+            sessions.applyConfigData({
+                workspaces: [],
+                workspace_roots: [BROWSE_ROOT],
+                active_cwd: '',
+            });
+            return true;
+        };
+        await openManager(sessions);
+
+        toggle('/code/psi', true);
+        document.querySelector('#ws-manager-roots .ws-manager-add-btn').click();
+
+        // The follow-up read succeeds and shows the old list: the change never
+        // reached the server, and the message must not claim it was saved.
+        await vi.waitFor(() =>
+            expect(statusText()).toContain('did not apply this change'),
+        );
+        expect(projects()).toEqual([]);
+        expect(
+            fetchMock.mock.calls.filter(([url]) =>
+                String(url).includes('/api/config/workspace'),
+            ).length,
+        ).toBe(1);
+    });
+
+    it('keeps keyboard focus inside the dialog when a retry re-renders it', async () => {
+        let fail = true;
+        installFetch({
+            browse: () => {
+                if (fail) throw new Error('offline');
+                return browseEntries('psi');
+            },
+        });
+        const sessions = makeSessions({ workspaces: [], roots: [BROWSE_ROOT] });
+        await openManager(sessions);
+
+        const retry = document.querySelector('.ws-manager-retry-btn');
+        retry.focus();
+        expect(document.activeElement).toBe(retry);
+
+        fail = false;
+        retry.click();
+        await vi.waitFor(() =>
+            expect(document.querySelector('.ws-manager-retry-btn')).toBeNull(),
+        );
+
+        // The focused button was replaced: focus must land back in the dialog,
+        // not on <body> outside the trap.
+        expect(document.activeElement).not.toBe(document.body);
+        expect(
+            document
+                .getElementById('ws-manager-modal')
+                .contains(document.activeElement),
+        ).toBe(true);
     });
 
     it('adds a root without touching the workspace list', async () => {

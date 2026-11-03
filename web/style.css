@@ -4655,8 +4655,7 @@ body.has-terminal-bg
     font-size: calc(12px * var(--ui-scale));
 }
 
-.ws-manager-status[data-state="unconfirmed"],
-.ws-manager-status[data-state="unsent"] {
+.ws-manager-status[data-tone="error"] {
     color: var(--red);
 }
 
@@ -4721,9 +4720,14 @@ body.has-terminal-bg
 .ws-manager-root-remove {
     width: auto;
     height: 30px;
+    margin-right: auto;
     padding: 0 10px;
     color: var(--text-muted);
     font-size: calc(12px * var(--ui-scale));
+}
+
+.ws-manager-actions .ws-manager-root-remove:hover {
+    color: var(--text-primary);
 }
 
 .ws-manager-root-path {
@@ -4750,7 +4754,7 @@ body.has-terminal-bg
 }
 
 .ws-manager-row:hover {
-    background-color: rgba(255, 255, 255, 0.03);
+    background-color: var(--bg-elevated);
 }
 
 .ws-manager-check {
@@ -4762,17 +4766,26 @@ body.has-terminal-bg
 }
 
 .ws-manager-name {
-    flex: 0 0 auto;
+    flex: 0 1 auto;
+    max-width: 50%;
+    overflow: hidden;
     color: var(--text-primary);
     font-size: calc(13px * var(--ui-scale));
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
+/* One line per row, so a deep root path cannot make rows differ in height.
+   The full path stays available as the row's title. */
 .ws-manager-path {
+    flex: 1 1 auto;
     min-width: 0;
+    overflow: hidden;
     color: var(--text-muted);
     font-family: var(--font-mono);
     font-size: calc(11px * var(--ui-scale));
-    overflow-wrap: anywhere;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .ws-manager-actions {
@@ -4812,6 +4825,19 @@ body.has-terminal-bg
 }
 
 /* Touch targets: a row is the control, so it must clear the 44px floor. */
+@media (max-width: 480px) {
+    /* No room for both: the name is the identity, the path only repeats the
+       root prefix and stays available as the row title. */
+    .ws-manager-row .ws-manager-path {
+        display: none;
+    }
+
+    .ws-manager-name {
+        flex: 1 1 auto;
+        max-width: 100%;
+    }
+}
+
 html[data-appearance-profile="mobile"]
     :is(.ws-manager-row, .ws-manager-all, .ws-manager-root-remove) {
     min-height: 44px;
@@ -9157,7 +9183,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 }
 .review-bubble.role-assistant {
     align-self: flex-start;
-    background-color: rgba(255, 255, 255, 0.03);
+    background-color: var(--bg-elevated);
     border: 1px solid var(--bg-border);
     border-bottom-left-radius: 2px;
     color: var(--text-primary);

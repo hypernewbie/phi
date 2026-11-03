@@ -59,9 +59,7 @@ test('adds and removes projects through a live root folder', async ({
 
         await restRow(page, 'alpha').locator('input').check();
         await restRow(page, 'beta').locator('input').check();
-        await rootSection(page)
-            .locator('.ws-manager-actions .btn-accent')
-            .click();
+        await rootSection(page).locator('.ws-manager-add-btn').click();
 
         await expect(projectRow(page, 'alpha')).toHaveCount(1);
         await expect(projectRow(page, 'beta')).toHaveCount(1);
@@ -84,6 +82,57 @@ test('adds and removes projects through a live root folder', async ({
         await expect(projectRow(page, 'beta')).toHaveCount(1);
         await expect(restRow(page, 'alpha')).toHaveCount(1);
         await expect(restRow(page, 'gamma')).toHaveCount(1);
+    } finally {
+        await server.stop();
+    }
+});
+
+test('flushes a change queued in an earlier session when the app loads online', async ({
+    page,
+}) => {
+    const server = await startPhi({
+        setup: (dir) => {
+            mkdirSync(join(dir, 'code', 'alpha'), { recursive: true });
+        },
+    });
+    try {
+        const rootPath = join(server.dir, 'code');
+        // A write that never left the browser in a previous session (the tab
+        // was closed while offline). Nothing else retries it: the `online`
+        // event already happened before this page existed.
+        await page.addInitScript((path: string) => {
+            localStorage.setItem(
+                'phi_workspace_manager_outbox',
+                JSON.stringify({
+                    kind: 'add',
+                    paths: [path],
+                    state: 'unsent',
+                }),
+            );
+        }, `${rootPath}/alpha`);
+
+        const writes: string[] = [];
+        page.on('request', (request) => {
+            if (
+                request.method() !== 'GET' &&
+                request.url().includes('/api/config/workspace')
+            ) {
+                writes.push(request.url());
+            }
+        });
+
+        await page.goto(server.url);
+        await openManager(page);
+
+        await expect.poll(() => writes.length, { timeout: 10_000 }).toBe(1);
+        await expect(projectRow(page, 'alpha')).toHaveCount(1);
+        await expect
+            .poll(() =>
+                page.evaluate(() =>
+                    localStorage.getItem('phi_workspace_manager_outbox'),
+                ),
+            )
+            .toBeNull();
     } finally {
         await server.stop();
     }
@@ -120,9 +169,7 @@ test('keeps an offline change locally and sends it once on reconnect', async ({
 
         await context.setOffline(true);
         await restRow(page, 'alpha').locator('input').check();
-        await rootSection(page)
-            .locator('.ws-manager-actions .btn-accent')
-            .click();
+        await rootSection(page).locator('.ws-manager-add-btn').click();
 
         await expect(page.locator(STATUS)).toContainText(
             'Saved in this browser',
