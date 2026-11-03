@@ -302,7 +302,9 @@ export class BridgeChannel {
      * well inside the per-frame byte caps.
      */
     private withTraceparent(msg: PiToPhi): PiToPhi {
-        return msg.traceparent ? msg : { ...msg, traceparent: mintTraceparent() };
+        return msg.traceparent
+            ? msg
+            : { ...msg, traceparent: mintTraceparent() };
     }
 
     private failWaiters(err: Error): void {
