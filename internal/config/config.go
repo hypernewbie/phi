@@ -195,6 +195,13 @@ type Config struct {
 	// the auth interceptor lands, so enabling it never widens the network face.
 	SyncMesh bool `json:"sync_mesh" toml:"sync_mesh"`
 
+	// SyncMeshPeers maps a peer label to the secret it presents on the mesh.
+	// The label becomes the sender identity for everything that peer
+	// publishes, so revoking one peer never disturbs the others. With no
+	// entry the mesh accepts loopback callers only and refuses to bind
+	// anywhere else.
+	SyncMeshPeers map[string]string `json:"sync_mesh_peers" toml:"sync_mesh_peers"`
+
 	// AuthOrigins lists extra origins a browser may present to the v2 auth
 	// routes when a reverse proxy terminates TLS. Same-origin requests never
 	// need an entry. Malformed entries are a startup error, not a skip.
