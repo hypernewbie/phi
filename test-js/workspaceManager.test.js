@@ -69,6 +69,12 @@ function makeSessions(options = {}) {
                 </div>
                 <input id="ws-manager-root-input" type="text">
                 <button id="ws-manager-root-add" type="button">Add root</button>
+                <button
+                    id="ws-manager-root-browse"
+                    type="button"
+                    aria-expanded="false"
+                >Browse</button>
+                <div id="ws-manager-root-tree" class="hidden"></div>
                 <div id="ws-manager-roots"></div>
                 <button id="ws-manager-done" type="button">Done</button>
             </div>
@@ -1012,6 +1018,53 @@ describe('workspace manager', () => {
         replies[0]({ json: { workspaces: ['/old'], workspace_roots: [] } });
         expect(await older).toBe(false);
         expect(sessions.workspaces).toEqual(['/new']);
+    });
+
+    it('mounts the shared directory picker for a root and fills the path without adding it', async () => {
+        const { calls } = installFetch({
+            browse: () => browseEntries('alpha'),
+        });
+        const sessions = makeSessions({ workspaces: ['/code/keep'] });
+        sessions.workspaceManager.open();
+        await vi.waitFor(() =>
+            expect(
+                document.querySelector('#ws-manager-roots').textContent,
+            ).toContain('No roots yet'),
+        );
+
+        const browseBtn = document.getElementById('ws-manager-root-browse');
+        browseBtn.click();
+        expect(browseBtn.getAttribute('aria-expanded')).toBe('true');
+        await vi.waitFor(() =>
+            expect(
+                document.querySelectorAll(
+                    '#ws-manager-root-tree [role="treeitem"]',
+                ).length,
+            ).toBeGreaterThan(0),
+        );
+
+        await vi.waitFor(() =>
+            expect(
+                document.querySelectorAll(
+                    '#ws-manager-root-tree [role="treeitem"] .directory-tree-row',
+                ).length,
+            ).toBeGreaterThan(1),
+        );
+        const items = document.querySelectorAll(
+            '#ws-manager-root-tree [role="treeitem"] .directory-tree-row',
+        );
+        // The last row is the loaded child, not the tree root.
+        items[items.length - 1].click();
+        expect(document.getElementById('ws-manager-root-input').value).toBe(
+            `${BROWSE_ROOT}/alpha`,
+        );
+        expect(browseBtn.getAttribute('aria-expanded')).toBe('false');
+        expect(
+            document.getElementById('ws-manager-root-tree').classList,
+        ).toContain('hidden');
+        // Browsing picks a path only; adding stays an explicit click.
+        expect(calls).toHaveLength(0);
+        expect(sessions.workspaces).toEqual(['/code/keep']);
     });
 
     it('keeps keyboard focus inside the dialog when a retry re-renders it', async () => {
