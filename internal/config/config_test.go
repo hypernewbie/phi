@@ -125,6 +125,7 @@ func TestSaveConfigNeverPersistsTestScratchPaths(t *testing.T) {
 		`C:/code/github/phi`, // legitimate, must survive
 	}
 	cfg.Workspaces = poisoned
+	cfg.WorkspaceRoots = poisoned
 	saveConfig(cfg)
 
 	reloaded := loadConfig()
@@ -132,6 +133,11 @@ func TestSaveConfigNeverPersistsTestScratchPaths(t *testing.T) {
 		for _, ws := range reloaded.Workspaces {
 			if ws == bad {
 				t.Errorf("test scratch path persisted to disk: %s", bad)
+			}
+		}
+		for _, root := range reloaded.WorkspaceRoots {
+			if root == bad {
+				t.Errorf("test scratch root persisted to disk: %s", bad)
 			}
 		}
 	}
@@ -145,6 +151,16 @@ func TestSaveConfigNeverPersistsTestScratchPaths(t *testing.T) {
 	}
 	if !found {
 		t.Error("legitimate workspace path was filtered out by the test-artifact guard")
+	}
+	found = false
+	for _, root := range reloaded.WorkspaceRoots {
+		if root == `C:/code/github/phi` {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("legitimate workspace root was filtered out by the test-artifact guard")
 	}
 }
 
