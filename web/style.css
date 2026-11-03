@@ -4630,6 +4630,197 @@ body.has-terminal-bg
     margin-top: 4px;
 }
 
+/* ── Workspace manager (.ws-manager-*) ────────────────────────────────
+   Reuses .modal-overlay/.modal-content/.modal-header/.modal-body/
+   .modal-footer, .path-input-row, .ws-modal-path-label and the shared
+   .btn variants. Only this dialog's list chrome is styled here. */
+.ws-manager-modal {
+    width: min(640px, calc(100vw - 24px));
+    overflow: hidden;
+}
+
+.ws-manager-body {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.ws-manager-status {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    min-height: 1.2em;
+    color: var(--text-muted);
+    font-size: calc(12px * var(--ui-scale));
+}
+
+.ws-manager-status[data-state="unconfirmed"],
+.ws-manager-status[data-state="unsent"] {
+    color: var(--red);
+}
+
+.ws-manager-filter {
+    width: 100%;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: calc(13px * var(--ui-scale));
+}
+
+.ws-manager-check-btn {
+    width: auto;
+    padding: 0 12px;
+    height: 30px;
+    font-size: calc(12px * var(--ui-scale));
+}
+
+.ws-manager-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--bg-border);
+    border-radius: 8px;
+}
+
+.ws-manager-section-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.ws-manager-section-title {
+    margin: 0;
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: calc(13px * var(--ui-scale));
+    font-weight: 600;
+}
+
+.ws-manager-count {
+    margin-left: 4px;
+    color: var(--text-muted);
+    font-weight: 400;
+}
+
+.ws-manager-all {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: calc(12px * var(--ui-scale));
+    cursor: pointer;
+}
+
+.ws-manager-root-remove {
+    width: auto;
+    height: 30px;
+    padding: 0 10px;
+    color: var(--text-muted);
+    font-size: calc(12px * var(--ui-scale));
+}
+
+.ws-manager-root-path {
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: calc(11px * var(--ui-scale));
+    overflow-wrap: anywhere;
+}
+
+.ws-manager-list {
+    display: flex;
+    flex-direction: column;
+    max-height: min(38vh, 320px);
+    overflow-y: auto;
+}
+
+.ws-manager-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 4px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.ws-manager-row:hover {
+    background-color: rgba(255, 255, 255, 0.03);
+}
+
+.ws-manager-check {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+.ws-manager-name {
+    flex: 0 0 auto;
+    color: var(--text-primary);
+    font-size: calc(13px * var(--ui-scale));
+}
+
+.ws-manager-path {
+    min-width: 0;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: calc(11px * var(--ui-scale));
+    overflow-wrap: anywhere;
+}
+
+.ws-manager-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.ws-manager-actions .btn {
+    width: auto;
+    padding: 0 14px;
+}
+
+/* Shared .btn has no disabled style, so a disabled action here would look live. */
+.ws-manager-actions .btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.ws-manager-note {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: calc(11px * var(--ui-scale));
+}
+
+.ws-manager-note .ws-manager-retry-btn {
+    width: auto;
+    margin-left: 8px;
+    padding: 0 10px;
+    height: 26px;
+    font-size: calc(11px * var(--ui-scale));
+}
+
+.ws-manager-root-form {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+/* Touch targets: a row is the control, so it must clear the 44px floor. */
+html[data-appearance-profile="mobile"]
+    :is(.ws-manager-row, .ws-manager-all, .ws-manager-root-remove) {
+    min-height: 44px;
+}
+
+html[data-appearance-profile="mobile"] .ws-manager-list {
+    max-height: none;
+}
+
 .directory-tree-controls {
     display: flex;
     align-items: center;

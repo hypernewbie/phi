@@ -17,6 +17,8 @@ import {
 } from './util.js';
 import { openPiRpcChatTab } from './chat-pi/tab.js';
 import { createReviewTranscriptView } from './review-transcript.js';
+import { trapModalFocus, type ModalFocusTrap } from './modal-focus.js';
+import { WorkspaceManager } from './workspace-manager.js';
 import {
     loadCoderRegistry,
     openCodePaneMode,
@@ -391,8 +393,8 @@ export class SessionsManager {
     wsSubmitPostStarted: boolean;
     wsModalComposing: boolean;
     wsModalOpener: HTMLElement | null;
-    wsModalKeydownHandler: ((event: KeyboardEvent) => void) | null;
-    wsModalFocusinHandler: ((event: FocusEvent) => void) | null;
+    wsModalTrap: ModalFocusTrap | null;
+    workspaceManager: WorkspaceManager;
     worktreeDirtyRequestId: number;
     worktreeLoadRequestId: number;
     worktreeRootGeneration: number;
@@ -489,8 +491,7 @@ export class SessionsManager {
         this.wsSubmitPostStarted = false;
         this.wsModalComposing = false;
         this.wsModalOpener = null;
-        this.wsModalKeydownHandler = null;
-        this.wsModalFocusinHandler = null;
+        this.wsModalTrap = null;
         this.worktreeDirtyRequestId = 0;
         this.worktreeLoadRequestId = 0;
         this.worktreeRootGeneration = 0;
@@ -502,6 +503,8 @@ export class SessionsManager {
         this._contextMenu = null;
         this._ctxDismissMousedown = null;
         this._ctxDismissKey = null;
+
+        this.workspaceManager = new WorkspaceManager(app, this);
 
         this.setupEventListeners();
     }
@@ -711,9 +714,7 @@ export class SessionsManager {
         });
 
         this.removeWorkspaceBtn.addEventListener('click', () => {
-            if (confirm(`Remove workspace: ${this.activeWorkspace}?`)) {
-                this.removeWorkspace(this.activeWorkspace);
-            }
+            this.workspaceManager.open();
         });
 
         // Modal Action Bindings
@@ -844,6 +845,51 @@ export class SessionsManager {
         select.style.width = `${finalWidth}px`;
     }
 
+    /** Resolves the sidebar's workspace list from a config payload. */
+    applyWorkspaceList(
+        workspaces: readonly string[],
+        activeCwd?: string,
+    ): void {
+        // Settings → About reads this list even when no workspace select
+        // exists, and a non-string entry would throw in the labels below.
+        this.workspaces = workspaces.filter(
+            (ws: unknown): ws is string => typeof ws === 'string',
+        );
+        if (!this.workspaceSelect) return;
+
+        this.workspaceSelect.innerHTML = '';
+        this.workspaces.forEach((ws) => {
+            const opt = document.createElement('option');
+            opt.value = ws;
+            opt.innerText = this.formatWorkspaceLabel(ws, this.workspaces);
+            opt.title = ws;
+            this.workspaceSelect.appendChild(opt);
+        });
+
+        let lastChosen: string | null = null;
+        try {
+            lastChosen = localStorage.getItem(
+                serverKey('phi_last_chosen_project'),
+            );
+        } catch {
+            lastChosen = this.activeWorkspace;
+        }
+        if (lastChosen && this.workspaces.includes(lastChosen)) {
+            this.activeWorkspace = lastChosen;
+        } else {
+            this.activeWorkspace =
+                activeCwd || this.workspaces[0] || '';
+        }
+        this.workspaceSelect.value = this.activeWorkspace;
+        this.updateWorkspaceSelectWidth();
+    }
+
+    /** True when `path` names a registered workspace (OS-agnostic compare). */
+    isWorkspaceRegistered(path: string): boolean {
+        const wanted = normalizePath(path);
+        return this.workspaces.some((ws) => normalizePath(ws) === wanted);
+    }
+
     applyConfigData(data: any, _options: { stale?: boolean } = {}): void {
         if (!data || typeof data !== 'object') return;
         this.config = data;
@@ -852,38 +898,7 @@ export class SessionsManager {
         }
 
         if (Array.isArray(data.workspaces)) {
-            // Settings → About reads this list even when no workspace select
-            // exists, and a non-string entry would throw in the labels below.
-            this.workspaces = data.workspaces.filter(
-                (ws: unknown): ws is string => typeof ws === 'string',
-            );
-        }
-        if (this.workspaceSelect && Array.isArray(data.workspaces)) {
-            this.workspaceSelect.innerHTML = '';
-            this.workspaces.forEach((ws) => {
-                const opt = document.createElement('option');
-                opt.value = ws;
-                opt.innerText = this.formatWorkspaceLabel(ws, this.workspaces);
-                opt.title = ws;
-                this.workspaceSelect.appendChild(opt);
-            });
-
-            let lastChosen: string | null = null;
-            try {
-                lastChosen = localStorage.getItem(
-                    serverKey('phi_last_chosen_project'),
-                );
-            } catch {
-                lastChosen = this.activeWorkspace;
-            }
-            if (lastChosen && this.workspaces.includes(lastChosen)) {
-                this.activeWorkspace = lastChosen;
-            } else {
-                this.activeWorkspace =
-                    data.active_cwd || this.workspaces[0] || '';
-            }
-            this.workspaceSelect.value = this.activeWorkspace;
-            this.updateWorkspaceSelectWidth();
+            this.applyWorkspaceList(data.workspaces, data.active_cwd);
         }
 
         if (data.theme_color && this.app) {
@@ -942,7 +957,9 @@ export class SessionsManager {
         }
     }
 
-    async loadConfig(): Promise<void> {
+    /** Reloads /api/config. Returns false when the config could not be read, so
+     *  callers can tell a confirmed write from a failed reconcile. */
+    async loadConfig(): Promise<boolean> {
         try {
             await loadCoderRegistry();
             const fetchFn =
@@ -951,6 +968,9 @@ export class SessionsManager {
                           this.app.scope.fetch(url, opts)
                     : fetch;
             const res = await fetchFn('/api/config');
+            if (res.ok === false) {
+                throw new Error(`HTTP ${res.status}`);
+            }
             const data = await res.json();
             const store = (this.app as any)?.getActiveStore?.();
             if (store) {
@@ -964,9 +984,12 @@ export class SessionsManager {
             await this.app?.loadCustomFont?.();
             await this.app?.loadCustomBg?.();
             await this.loadSessions();
+            return true;
         } catch (e: any) {
-            if (e?.name === 'AbortError' || this.app?.scope?.aborted) return;
+            if (e?.name === 'AbortError' || this.app?.scope?.aborted)
+                return false;
             console.error('[config] Failed to load workspace config:', e);
+            return false;
         }
     }
 
@@ -3104,53 +3127,11 @@ export class SessionsManager {
         this.wsModal.classList.remove('hidden');
         this.wsModalAddBtn.disabled = this.wsSubmitPending;
 
-        const onKeydown = (event: KeyboardEvent): void => {
-            if (event.key === 'Escape') {
-                event.preventDefault();
-                event.stopPropagation();
-                this.closeWorkspaceModal();
-                return;
-            }
-            if (event.key !== 'Tab') return;
-
-            const focusable = Array.from(
-                this.wsModal.querySelectorAll<HTMLElement>(
-                    'button:not(:disabled):not([hidden]), input:not(:disabled), [tabindex="0"]',
-                ),
-            ).filter((element) => !element.closest('.hidden'));
-            if (focusable.length === 0) {
-                event.preventDefault();
-                return;
-            }
-            const first = focusable[0];
-            const last = focusable[focusable.length - 1];
-            const activeIndex = focusable.indexOf(
-                document.activeElement as HTMLElement,
-            );
-            if (event.shiftKey && activeIndex <= 0) {
-                event.preventDefault();
-                last.focus({ preventScroll: true });
-            } else if (
-                !event.shiftKey &&
-                activeIndex === focusable.length - 1
-            ) {
-                event.preventDefault();
-                first.focus({ preventScroll: true });
-            }
-        };
-        const onFocusin = (event: FocusEvent): void => {
-            if (
-                !this.wsModal.classList.contains('hidden') &&
-                event.target instanceof Node &&
-                !this.wsModal.contains(event.target)
-            ) {
-                this.wsModalInput.focus({ preventScroll: true });
-            }
-        };
-        this.wsModalKeydownHandler = onKeydown;
-        this.wsModalFocusinHandler = onFocusin;
-        document.addEventListener('keydown', onKeydown, true);
-        document.addEventListener('focusin', onFocusin, true);
+        this.wsModalTrap = trapModalFocus(this.wsModal, {
+            onEscape: () => this.closeWorkspaceModal(),
+            isOpen: () => !this.wsModal.classList.contains('hidden'),
+            initialFocus: () => this.wsModalInput,
+        });
 
         const dialog = this.wsDialogGeneration;
         this.wsTreeController = mountDirectoryTree(this.wsModalTree, {
@@ -3181,21 +3162,9 @@ export class SessionsManager {
         this.invalidateAutocompleteSuggestions();
         this.wsTreeController?.destroy();
         this.wsTreeController = null;
-        if (this.wsModalKeydownHandler) {
-            document.removeEventListener(
-                'keydown',
-                this.wsModalKeydownHandler,
-                true,
-            );
-            this.wsModalKeydownHandler = null;
-        }
-        if (this.wsModalFocusinHandler) {
-            document.removeEventListener(
-                'focusin',
-                this.wsModalFocusinHandler,
-                true,
-            );
-            this.wsModalFocusinHandler = null;
+        if (this.wsModalTrap) {
+            this.wsModalTrap.dispose();
+            this.wsModalTrap = null;
         }
         this.wsModal.classList.add('hidden');
         const opener = this.wsModalOpener;

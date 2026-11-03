@@ -68,6 +68,7 @@ func (app *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/config/export-terminal-commands", app.handleConfigExportTerminalCommands)
 	mux.HandleFunc("/api/config/import-cmds", app.handleConfigImportCmds)
 	mux.HandleFunc("/api/config/workspaces", app.handleWorkspaceToggle)
+	mux.HandleFunc("/api/config/workspace-roots", app.handleWorkspaceRoots)
 	mux.HandleFunc("/api/config/models", app.handleModelPresets)
 	mux.HandleFunc("/api/config/thinking-presets", app.handleThinkingPresets)
 	mux.HandleFunc("/api/fs/autocomplete", handleFSAutocomplete)

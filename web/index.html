@@ -138,9 +138,10 @@ eager to avoid a first-open unstyled flash. -->
                     </button>
                     <button
                         id="remove-workspace-btn"
-                        title="Remove Active Workspace"
+                        title="Manage workspaces"
+                        aria-label="Manage workspaces"
                     >
-                        -
+                        …
                     </button>
                 </div>
 
@@ -1477,6 +1478,116 @@ eager to avoid a first-open unstyled flash. -->
                         class="btn btn-primary"
                         type="button"
                     >Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- WORKSPACE MANAGER DIALOG: registered projects and live root folders.
+             Rows are rendered by web-src/workspace-manager.ts; only the stable
+             containers and section titles live here. -->
+        <div id="ws-manager-modal" class="modal-overlay hidden">
+            <div
+                class="modal-content ws-manager-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="ws-manager-title"
+            >
+                <div class="modal-header">
+                    <h3 id="ws-manager-title">Workspaces</h3>
+                    <button
+                        id="ws-manager-close"
+                        class="modal-close-btn"
+                        type="button"
+                        aria-label="Close workspace manager"
+                    >
+                        ×
+                    </button>
+                </div>
+                <div class="modal-body ws-manager-body">
+                    <div
+                        id="ws-manager-status"
+                        class="ws-manager-status"
+                        role="status"
+                        aria-live="polite"
+                    ></div>
+                    <input
+                        type="text"
+                        id="ws-manager-filter"
+                        class="ws-manager-filter"
+                        placeholder="Filter projects and folders"
+                        autocomplete="off"
+                        aria-label="Filter projects and folders"
+                    >
+                    <section
+                        id="ws-manager-projects-section"
+                        class="ws-manager-section"
+                        aria-labelledby="ws-manager-projects-title"
+                    >
+                        <div class="ws-manager-section-head">
+                            <h4
+                                id="ws-manager-projects-title"
+                                class="ws-manager-section-title"
+                            >
+                                Projects
+                                <span
+                                    id="ws-manager-projects-count"
+                                    class="ws-manager-count"
+                                ></span>
+                            </h4>
+                            <label class="ws-manager-all">
+                                <input
+                                    id="ws-manager-projects-all"
+                                    type="checkbox"
+                                >
+                                <span>All</span>
+                            </label>
+                        </div>
+                        <div id="ws-manager-projects" class="ws-manager-list"></div>
+                        <div class="ws-manager-actions">
+                            <button
+                                id="ws-manager-remove"
+                                class="btn btn-red"
+                                type="button"
+                                disabled
+                            >
+                                Remove selected (0)
+                            </button>
+                        </div>
+                    </section>
+                    <div class="ws-manager-root-form">
+                        <label class="ws-modal-path-label" for="ws-manager-root-input">
+                            Root folder
+                        </label>
+                        <div class="path-input-row">
+                            <input
+                                type="text"
+                                id="ws-manager-root-input"
+                                placeholder="Absolute path or ~ path"
+                                autocomplete="off"
+                            >
+                            <button
+                                id="ws-manager-root-add"
+                                class="btn btn-accent"
+                                type="button"
+                            >
+                                Add root
+                            </button>
+                        </div>
+                        <p class="ws-manager-note">
+                            A root groups the folders inside it. Nothing is
+                            added until you select it.
+                        </p>
+                    </div>
+                    <div id="ws-manager-roots" class="ws-manager-roots"></div>
+                </div>
+                <div class="modal-footer">
+                    <button
+                        id="ws-manager-done"
+                        class="btn btn-primary"
+                        type="button"
+                    >
+                        Done
+                    </button>
                 </div>
             </div>
         </div>
