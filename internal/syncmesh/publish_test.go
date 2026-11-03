@@ -168,6 +168,8 @@ func TestPublishRefusals(t *testing.T) {
 		{"hops exceeded", &syncmeshb.PublishRequest{MessageId: "b", Recipient: "*", Value: []byte("v"), Hops: MaxHops + 1}, ErrHopsExceeded},
 		{"empty recipient", &syncmeshb.PublishRequest{MessageId: "c", Value: []byte("v")}, ErrRecipientEmpty},
 		{"empty message id", &syncmeshb.PublishRequest{Recipient: "*", Value: []byte("v")}, ErrMessageIDEmpty},
+		{"oversized id", &syncmeshb.PublishRequest{MessageId: strings.Repeat("x", MaxMessageIDBytes+1), Recipient: "pane"}, ErrMessageIDTooLarge},
+		{"oversized recipient", &syncmeshb.PublishRequest{MessageId: "id", Recipient: strings.Repeat("x", MaxRecipientBytes+1)}, ErrRecipientTooLarge},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -188,12 +190,12 @@ func TestPublishRefusals(t *testing.T) {
 // TestStoreEvictsOldest bounds memory: retention never grows without limit.
 func TestStoreEvictsOldest(t *testing.T) {
 	h := NewHub()
-	for i := 0; i < maxStoredMessages+5; i++ {
+	for i := 0; i < MaxStoredMessages+5; i++ {
 		if _, _, err := h.Publish(strconv.Itoa(i), "s", "*", []byte("v"), 0); err != nil {
 			t.Fatalf("publish %d: %v", i, err)
 		}
 	}
-	if n := h.Len(); n != maxStoredMessages {
-		t.Fatalf("stored %d messages, want %d", n, maxStoredMessages)
+	if n := h.Len(); n != MaxStoredMessages {
+		t.Fatalf("stored %d messages, want %d", n, MaxStoredMessages)
 	}
 }

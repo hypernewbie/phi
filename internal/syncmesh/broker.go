@@ -13,8 +13,6 @@ const (
 	// stops draining is treated as lost rather than allowed to grow memory.
 	subscriberQueue = 64
 	// replayHistory bounds what a new or reconnecting subscriber can recover.
-	// Must be at least subscriberQueue so the snapshot below can never
-	// overflow the channel it fills.
 	replayHistory = 256
 )
 
@@ -64,6 +62,15 @@ func (b *Broker) Subscribe(_ context.Context, sinceSeq uint64, recipient string)
 		if ev.Seq > sinceSeq && matches(ev, recipient) {
 			pending = append(pending, ev)
 		}
+	}
+	if sinceSeq > b.seq {
+		// A publisher restart resets its sequence; the old cursor is unusable.
+		gapSeq := uint64(1)
+		if len(b.history) > 0 {
+			gapSeq = b.history[0].Seq
+		}
+		ch <- &syncmeshb.SyncEvent{Seq: gapSeq, Recipient: recipient, Gap: true}
+		pending = pending[:0]
 	}
 	// A cursor older than anything still retained cannot be served
 	// continuously. Say so with a gap event instead of handing the receiver a

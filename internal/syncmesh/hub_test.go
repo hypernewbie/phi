@@ -15,6 +15,9 @@ func TestRecentReturnsNewestLast(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("got %d messages, want 2", len(got))
 	}
+	if len(h.Recent(0)) != 0 {
+		t.Fatal("zero limit must return no messages")
+	}
 	if got[0].GetMessageId() != "m-2" || got[1].GetMessageId() != "m-3" {
 		t.Fatalf("order = %s,%s, want m-2,m-3", got[0].GetMessageId(), got[1].GetMessageId())
 	}
@@ -24,9 +27,11 @@ func TestRecentReturnsNewestLast(t *testing.T) {
 // must not corrupt a later delivery.
 func TestRecentCopiesValues(t *testing.T) {
 	h := NewHub()
-	if _, _, err := h.Publish("m-1", "a", "b", []byte("original"), 0); err != nil {
+	input := []byte("original")
+	if _, _, err := h.Publish("m-1", "a", "b", input, 0); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
+	input[0] = 'x' // Admission must not retain the caller's mutable buffer.
 
 	got := h.Recent(1)[0]
 	for i := range got.Value {
@@ -36,21 +41,5 @@ func TestRecentCopiesValues(t *testing.T) {
 	again := h.Recent(1)[0]
 	if string(again.GetValue()) != "original" {
 		t.Fatalf("stored value = %q, want it unchanged", again.GetValue())
-	}
-}
-
-// TestRecentHonoursLimit guards against an unbounded response.
-func TestRecentHonoursLimit(t *testing.T) {
-	h := NewHub()
-	for i := 0; i < 5; i++ {
-		if _, _, err := h.Publish(string(rune('a'+i)), "a", "b", []byte("v"), 0); err != nil {
-			t.Fatalf("publish: %v", err)
-		}
-	}
-	if got := len(h.Recent(0)); got != 0 {
-		t.Fatalf("limit 0 returned %d messages", got)
-	}
-	if got := len(h.Recent(3)); got != 3 {
-		t.Fatalf("limit 3 returned %d messages", got)
 	}
 }

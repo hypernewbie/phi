@@ -6,6 +6,7 @@ import {
     SYNCBOARD_PUSH_CUSTOM_TYPE,
     createSyncboardPushHandler,
     formatPushContent,
+    freshSyncboardPushState,
 } from './push.js';
 
 function notification(
@@ -44,9 +45,18 @@ function harness(inject?: (customType: string, content: string) => void) {
 }
 
 describe('formatPushContent', () => {
+    it('does not corrupt a UTF-8 character cut at the preview boundary', () => {
+        const value = Buffer.from(
+            `${'a'.repeat(MAX_SYNCBOARD_PUSH_INJECT_BYTES - 1)}🌍`,
+        );
+        const content = formatPushContent(notification({ value }));
+        expect(content).not.toContain('�');
+        expect(content).toContain('[truncated:');
+    });
+
     it('names the sender and id, then the value', () => {
         const content = formatPushContent(notification());
-        expect(content).toContain('from=agent-a');
+        expect(content).toContain('from=agent-a to=agent-b');
         expect(content).toContain('message_id=m-1');
         expect(content.endsWith('hello')).toBe(true);
     });
@@ -61,6 +71,25 @@ describe('formatPushContent', () => {
 });
 
 describe('createSyncboardPushHandler', () => {
+    it('keeps duplicate protection across runtime replacement in the same process', () => {
+        const state = freshSyncboardPushState();
+        const injected: string[] = [];
+        const acks: string[] = [];
+        const options = {
+            state,
+            inject: (_type: string, content: string) => {
+                injected.push(content);
+            },
+            ack: (_seq: bigint, id: string) => {
+                acks.push(id);
+            },
+        };
+        createSyncboardPushHandler(options).accept(notification());
+        createSyncboardPushHandler(options).accept(notification());
+        expect(injected).toHaveLength(1);
+        expect(acks).toEqual(['m-1', 'm-1']);
+    });
+
     it('injects once with the phi-syncboard custom type and acknowledges', () => {
         const { handler, injected, acks } = harness();
         handler.accept(notification());

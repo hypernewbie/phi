@@ -85,7 +85,7 @@ Runtime identity binds `(generation, runtime_id, session_id)`:
 | `pi.state.v2` | Read-only live identity and readiness refresh |
 | `pi.terminal-refresh.v1` | Live TUI repaint without a history replay |
 | `pi.transcript-search.v2` | Read-only visible-text search on the active Pi branch |
-| `pi.syncboard.push.v1` | Reserved. Addressed Syncboard message injection. Contract only; no runtime implements or advertises it yet |
+| `pi.syncboard.push.v1` | Addressed Syncboard message injection through the host's `sendMessage` |
 
 Context, Compact, and Reload negotiate independently on every Hello
 from checked host availability: `pi.context.v1` needs `getContextUsage`;
@@ -262,6 +262,33 @@ lifecycle messages. The worker limit is four per peer.
 The value limit is 64 KiB and the response limit is 192 KiB. The Pi caller
 waits up to 15 seconds. Phi's remote HTTP request deadline is 10 seconds. The
 shared stream retains 16 KiB and two message slots for lifecycle traffic.
+
+## Addressed Syncboard pushes
+
+`pi.syncboard.push.v1` requires the host's public `sendMessage` API. Phi
+sends `SyncboardNotification` (field 27); Pi acknowledges with
+`SyncboardPushAck` (field 29), correlated by `message_id`. Phi fences the
+acknowledgement to the current peer and the notification's sequence.
+
+Pi dispatches a displayed `phi-syncboard` custom message with
+`triggerTurn: true` and `deliverAs: 'followUp'`. The public extension API
+returns void. An acknowledgement means the call returned normally, not
+that a provider completed a turn. A synchronous refusal is not acknowledged.
+The text names sender, recipient, and message ID. Its body is capped at 8 KiB
+with an explicit truncation note. Partial UTF-8 characters are not injected.
+
+Phi retains up to 32 unacknowledged notifications per lease. A full backlog
+refuses new work without evicting accepted work. Writer progress queues work
+that was never sent; reconnect replays unacknowledged work. Pi remembers the
+last 256 injected IDs in process-owned state across reconnects and reloads,
+so a lost acknowledgement does not repeat a turn within that window.
+
+The local mesh dispatcher retains the hub's 1024-message window, retries
+unavailable panes, and recovers retained events after a subscriber gap. Its
+window is memory-only: process restart or retention expiry can lose pending
+work. There is no cross-Phi follower, durable delivery, or authenticated
+routable mesh in this increment. The mesh is opt-in and loopback-only.
+`GET /api/sync/pushes` is a bounded local history view, not a delivery receipt.
 
 ## Live state reads
 

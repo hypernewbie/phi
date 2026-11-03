@@ -68,6 +68,7 @@ import { CAPABILITY_SYNCBOARD_PUSH } from './protocol.js';
 import {
     createSyncboardPushHandler,
     type SyncboardPushHandler,
+    type SyncboardPushState,
 } from './push.js';
 import { CAPABILITY_THINKING } from './protocol.js';
 import { CAPABILITY_TRANSCRIPT_SEARCH } from './protocol.js';
@@ -288,6 +289,7 @@ export interface RuntimeOptions {
      * the host can render a custom message; absent keeps the push capability
      * unadvertised.
      */
+    readonly syncboardPushState?: SyncboardPushState;
     readonly injectSyncboardMessage?:
         | ((customType: string, content: string) => void)
         | undefined;
@@ -1746,6 +1748,9 @@ export class Runtime {
     private syncboardPush(): SyncboardPushHandler {
         if (this.syncboardPushHandler === null) {
             this.syncboardPushHandler = createSyncboardPushHandler({
+                ...(this.opts.syncboardPushState
+                    ? { state: this.opts.syncboardPushState }
+                    : {}),
                 inject: this.opts.injectSyncboardMessage,
                 ack: (seq, messageId) => {
                     this.channel?.sendNonfatal({

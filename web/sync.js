@@ -1,5 +1,5 @@
 /* Φ phi — AI Sync Board Manager */
-import { escapeHtml as escapeHtmlUtil, buildProxyUrl, } from './util.js';
+import { escapeHtml as escapeHtmlUtil, buildProxyUrl, serverKey, } from './util.js';
 import { renderMarkdownSafe, highlightCodeIn } from './md-render.js';
 // Sync Board desktop-alert markers: a message whose key or value carries
 // one of these signals the desktop shell via a transient page title
@@ -7,6 +7,28 @@ import { renderMarkdownSafe, highlightCodeIn } from './md-render.js';
 const SYNC_NOTIF_MARKER = 'PHI_NOTIF';
 const SYNC_ALARM_MARKER = 'PHI_ALARM';
 const SYNC_TITLE_MAX = 120;
+const PUSHES_ENDPOINT = '/api/sync/pushes';
+const PUSH_CACHE_KEY = 'phi_sync_pushes_v1';
+function parsePushMessages(value) {
+    if (!Array.isArray(value) || value.length > 100)
+        return null;
+    for (const item of value) {
+        const msg = asObject(item);
+        if (!msg ||
+            typeof msg.message_id !== 'string' ||
+            !msg.message_id ||
+            msg.message_id.length > 128 ||
+            typeof msg.sender !== 'string' ||
+            msg.sender.length > 128 ||
+            typeof msg.recipient !== 'string' ||
+            msg.recipient.length > 128 ||
+            typeof msg.value !== 'string' ||
+            msg.value.length > 4096 ||
+            !Number.isFinite(msg.updated_at_unix_ms))
+            return null;
+    }
+    return value;
+}
 function asString(value) {
     return typeof value === 'string' ? value : undefined;
 }
@@ -124,6 +146,10 @@ export class SyncManager {
     _fileExistCache = new Map();
     _handledToastKeys = new Set();
     _syncDebounce = null;
+    _pushRefresh = null;
+    _pushScope;
+    _pushExpanded = new Set();
+    _pushRendered = '';
     constructor(app) {
         this.app = app;
         this.panelEl = document.getElementById('sync-panel');
@@ -150,6 +176,7 @@ export class SyncManager {
                 </div>
             </div>
 
+            <div class="sync-sections">
             <div class="sync-section">
                 <div class="sync-section-header">
                     <div class="sync-section-title">Board</div>
@@ -166,8 +193,10 @@ export class SyncManager {
             </div>
 
             <div id="sync-push-section" class="sync-section hidden">
-                <div class="sync-section-title">Pushed to panes</div>
+                <div class="sync-section-title">Addressed messages · this server</div>
+                <div class="sync-push-note hidden" role="status"></div>
                 <div id="sync-push-list" class="sync-messages-list"></div>
+            </div>
             </div>
         `;
         this.coordinatorInput = document.getElementById('sync-coordinator-input');
@@ -225,6 +254,7 @@ export class SyncManager {
         }
         this._fileExistCache.clear();
         this._handledToastKeys.clear();
+        this.restorePushes();
         this.refreshMessages();
         const activeScope = scope || this.app?.scope;
         const tick = () => {
@@ -261,6 +291,7 @@ export class SyncManager {
             !this.app.sessionsManager.config?.sync_coordinator) {
             return;
         }
+        void this.refreshPushes();
         try {
             if (document.activeElement !== this.coordinatorInput) {
                 this.coordinatorInput.value = await this.getCoordinatorUrl();
@@ -278,10 +309,6 @@ export class SyncManager {
             this.renderMessages(messages);
             this.signalDesktopAlert(messages);
             this._setRefreshError(null);
-            // Addressed messages come from this Phi's mesh store, not the
-            // board. A failure here must not blank the board that just
-            // rendered, so it is fetched and handled on its own.
-            void this.refreshPushes();
         }
         catch (e) {
             if (e?.name === 'AbortError' || this.app?.scope?.aborted)
@@ -413,59 +440,135 @@ export class SyncManager {
             diffCtrl.refreshDiff(false);
         }
     }
-    /**
-     * Refresh the addressed list. Unlike the board this is local state, so a
-     * failure keeps whatever is already on screen and stays quiet.
-     */
-    async refreshPushes() {
+    /** Paint synchronously on startup and backend switches, even offline. */
+    restorePushes(store = this.app.getActiveStore?.()) {
+        let messages = null;
         try {
-            const res = await this.fetchWithProxy('/api/sync/pushes');
-            if (!res.ok)
-                return;
-            const payload = await res.json();
-            const messages = payload && typeof payload === 'object'
-                ? payload.messages
-                : undefined;
-            if (!Array.isArray(messages))
-                return;
-            this.renderPushes(messages);
+            messages = parsePushMessages(JSON.parse(store?.responses.get(PUSHES_ENDPOINT) ??
+                localStorage.getItem(serverKey(PUSH_CACHE_KEY)) ??
+                '[]'));
         }
         catch {
-            // Keep the last good list.
+            /* A damaged or unavailable cache is not a UI error. */
+        }
+        this._pushExpanded.clear();
+        this._pushRendered = '';
+        this.renderPushes(messages ?? []);
+        this.setPushError(false);
+    }
+    /** Read the owning Phi, not the remote board coordinator. */
+    async refreshPushes() {
+        const scope = this.app.scope;
+        if (scope?.aborted)
+            return;
+        if (this._pushRefresh && this._pushScope === scope)
+            return;
+        this._pushRefresh?.abort();
+        const controller = new AbortController();
+        this._pushRefresh = controller;
+        this._pushScope = scope;
+        const store = this.app.getActiveStore?.();
+        const cacheKey = serverKey(PUSH_CACHE_KEY);
+        const current = () => !scope?.aborted &&
+            !controller.signal.aborted &&
+            this.app.scope === scope &&
+            this.app.getActiveStore?.() === store;
+        const timer = setTimeout(() => controller.abort(), 5000);
+        try {
+            const res = await fetch(PUSHES_ENDPOINT, {
+                signal: controller.signal,
+            });
+            if (!res.ok)
+                throw new Error(`HTTP ${res.status}`);
+            const payload = await res.json();
+            const messages = parsePushMessages(asObject(payload)?.messages);
+            if (!messages)
+                throw new Error('Unexpected addressed messages response');
+            if (!current())
+                return;
+            const cached = JSON.stringify(messages);
+            store?.responses.set(PUSHES_ENDPOINT, cached);
+            try {
+                localStorage.setItem(cacheKey, cached);
+            }
+            catch {
+                /* Storage can be full. */
+            }
+            this.renderPushes(messages);
+            this.setPushError(false);
+        }
+        catch {
+            if (!scope?.aborted &&
+                this._pushRefresh === controller &&
+                this.app.scope === scope) {
+                this.setPushError(true);
+            }
+        }
+        finally {
+            clearTimeout(timer);
+            if (this._pushRefresh === controller)
+                this._pushRefresh = null;
         }
     }
-    /**
-     * Render addressed messages with the same card the board uses. The key
-     * slot carries the direction so a reader can tell who addressed whom.
-     */
+    setPushError(failed) {
+        const note = this.pushSection?.querySelector('.sync-push-note');
+        if (!note)
+            return;
+        note.textContent = failed
+            ? 'Refresh unavailable. Showing saved addressed messages.'
+            : '';
+        note.classList.toggle('hidden', !failed);
+        this.pushSection.classList.toggle('hidden', !failed && this.pushList.children.length === 0);
+    }
     renderPushes(messages) {
         if (!this.pushSection || !this.pushList)
             return;
-        if (messages.length === 0) {
-            this.pushSection.classList.add('hidden');
-            this.pushList.innerHTML = '';
+        const rendered = JSON.stringify(messages);
+        if (rendered === this._pushRendered)
             return;
-        }
-        this.pushSection.classList.remove('hidden');
-        const sorted = [...messages].sort((a, b) => (b.updated_at_unix_ms || 0) - (a.updated_at_unix_ms || 0));
+        this._pushRendered = rendered;
+        this.pushSection.classList.toggle('hidden', messages.length === 0);
+        const ids = new Set(messages.map((msg) => msg.message_id));
+        for (const id of this._pushExpanded)
+            if (!ids.has(id))
+                this._pushExpanded.delete(id);
+        const focused = document.activeElement?.closest('.sync-card-push')?.dataset.messageId;
+        const sorted = [...messages].sort((a, b) => b.updated_at_unix_ms - a.updated_at_unix_ms);
         const frag = document.createDocumentFragment();
         for (const msg of sorted) {
-            const card = document.createElement('div');
+            const card = document.createElement('details');
             card.className = 'sync-card sync-card-push';
-            const when = msg.updated_at_unix_ms
-                ? new Date(msg.updated_at_unix_ms).toLocaleTimeString()
-                : '';
+            card.dataset.messageId = msg.message_id;
+            card.open = this._pushExpanded.has(msg.message_id);
+            const when = new Date(msg.updated_at_unix_ms).toLocaleString();
             card.innerHTML = `
-                <div class="sync-card-header">
-                    <span class="sync-card-key" title="${this.escapeHtml(msg.message_id || '')}">${this.escapeHtml(msg.sender || 'unknown')} → ${this.escapeHtml(msg.recipient || 'unknown')}</span>
-                </div>
-                <div class="sync-card-value collapsed">${this.escapeHtml(msg.value || '')}</div>
-                <div class="sync-card-footer">${this.escapeHtml(when)}${msg.truncated ? ' · truncated' : ''}</div>
+                <summary class="sync-push-summary" aria-label="Read message from ${this.escapeHtml(msg.sender || 'unknown')} to ${this.escapeHtml(msg.recipient)} · ${this.escapeHtml(when)}">
+                    <span class="sync-card-header">
+                        <span class="sync-card-key">${this.escapeHtml(msg.sender || 'unknown')} → ${this.escapeHtml(msg.recipient)}</span>
+                        <span class="sync-push-disclosure" aria-hidden="true">▸</span>
+                    </span>
+                    <span class="sync-push-preview">${this.escapeHtml(msg.value)}</span>
+                    <span class="sync-card-footer">${this.escapeHtml(when)}${msg.truncated ? ' · preview limited to 4 KiB' : ''}</span>
+                </summary>
+                <div class="sync-card-value">${this.escapeHtml(msg.value)}</div>
             `;
+            card.addEventListener('toggle', () => {
+                if (!card.isConnected)
+                    return;
+                if (card.open)
+                    this._pushExpanded.add(msg.message_id);
+                else
+                    this._pushExpanded.delete(msg.message_id);
+            });
             frag.appendChild(card);
         }
-        this.pushList.innerHTML = '';
-        this.pushList.appendChild(frag);
+        this.pushList.replaceChildren(frag);
+        if (focused) {
+            const card = [
+                ...this.pushList.querySelectorAll('.sync-card-push'),
+            ].find((item) => item.dataset.messageId === focused);
+            card?.querySelector('summary')?.focus({ preventScroll: true });
+        }
     }
     renderMessages(messages) {
         if (!messages || messages.length === 0) {

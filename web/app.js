@@ -789,6 +789,7 @@ export class App {
             // leave another backend's messages visible on a cache miss.
             this.syncManager?.renderMessages?.([]);
         }
+        this.syncManager?.restorePushes?.(store);
         return true;
     }
     switchToBackend(profileId, origin = '') {

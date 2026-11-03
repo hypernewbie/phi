@@ -32,6 +32,9 @@ const maxMessageBytes = 256 * 1024
 // maxMetadataBytes bounds request metadata, matching the bridge limit.
 const maxMetadataBytes = 8 * 1024
 
+// Each open subscriber owns a queue; cap the total, not just each queue.
+const maxSubscribers = 64
+
 // Server owns the mesh listener and its gRPC server. A nil or stopped Server
 // is inert.
 type Server struct {
@@ -51,7 +54,7 @@ func New() *Server {
 		grpc.MaxSendMsgSize(maxMessageBytes),
 		grpc.MaxHeaderListSize(maxMetadataBytes),
 	)
-	syncmeshb.RegisterSyncMeshServer(s.grpc, &service{hub: s.hub})
+	syncmeshb.RegisterSyncMeshServer(s.grpc, &service{hub: s.hub, subscribers: make(chan struct{}, maxSubscribers)})
 	return s
 }
 
@@ -61,6 +64,10 @@ func New() *Server {
 func (s *Server) Serve(addr string) error {
 	if s == nil || s.grpc == nil {
 		return errors.New("syncmesh: server unavailable")
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil || !net.ParseIP(host).IsLoopback() {
+		return errors.New("syncmesh: unauthenticated listener must bind a literal loopback address")
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -119,7 +126,8 @@ func (s *Server) Stop() {
 // service implements phi.sync.v1 over the local hub.
 type service struct {
 	syncmeshb.UnimplementedSyncMeshServer
-	hub *Hub
+	hub         *Hub
+	subscribers chan struct{}
 }
 
 // compile-time guard: the generated interface is the contract, and a protobuf
@@ -128,6 +136,15 @@ var _ syncmeshb.SyncMeshServer = (*service)(nil)
 
 // Subscribe streams this publisher's events until the peer goes away.
 func (s *service) Subscribe(req *syncmeshb.SubscribeRequest, stream grpc.ServerStreamingServer[syncmeshb.SyncEvent]) error {
+	select {
+	case s.subscribers <- struct{}{}:
+		defer func() { <-s.subscribers }()
+	default:
+		return status.Error(codes.ResourceExhausted, "syncmesh: subscriber limit reached")
+	}
+	if len(req.GetRecipient()) > MaxRecipientBytes {
+		return status.Error(codes.InvalidArgument, "syncmesh: recipient exceeds limit")
+	}
 	ch, cancel := s.hub.broker.Subscribe(stream.Context(), req.GetSinceSeq(), req.GetRecipient())
 	defer cancel()
 	for {

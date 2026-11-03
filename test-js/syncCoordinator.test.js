@@ -150,14 +150,11 @@ describe('SyncManager refresh resilience', () => {
             sessionsManager: { config: {} },
             showToast: vi.fn(),
         });
+        const render = vi.spyOn(manager, 'renderMessages');
         await vi.waitFor(() => expect(initial).toHaveBeenCalled());
-        // Wait for the poll to render, not just to start: a late render would
-        // wipe the cards the test is about to assert on.
-        await vi.waitFor(() =>
-            expect(
-                manager.messagesList.querySelector('.sync-empty-state'),
-            ).not.toBeNull(),
-        );
+        // The initial markup is already empty; only the render call proves
+        // the startup request settled before the test changes its mock.
+        await vi.waitFor(() => expect(render).toHaveBeenCalledWith([]));
     }
 
     it('keeps the rendered board when a refresh fails', async () => {

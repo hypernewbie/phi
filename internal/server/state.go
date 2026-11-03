@@ -156,7 +156,6 @@ func (app *Server) closeResources() {
 		}
 	}
 	app.accessManager.BeginRestart()
-	app.bridge.Stop()
 	if app.syncPushCancel != nil {
 		app.syncPushCancel()
 		app.syncPushCancel = nil
@@ -164,6 +163,7 @@ func (app *Server) closeResources() {
 	if app.syncMesh != nil {
 		app.syncMesh.Stop()
 	}
+	app.bridge.Stop()
 	if app.fleet != nil {
 		app.fleet.Start(nil)
 	}

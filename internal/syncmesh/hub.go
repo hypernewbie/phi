@@ -1,6 +1,7 @@
 package syncmesh
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -15,19 +16,23 @@ const (
 	// MaxHops bounds relay depth. A message past this limit is a loop, not
 	// traffic, and is refused before it is stored.
 	MaxHops = 3
-	// maxStoredMessages bounds retention. Oldest entries are evicted first, so
-	// a retry older than the window is treated as new: at that point the
-	// sender has long since stopped retrying.
-	maxStoredMessages = 1024
+	// MaxStoredMessages bounds retention and the deduplication window.
+	// Retrying an ID after its entry expires is treated as a new message.
+	MaxStoredMessages = 1024
+	// Mesh admission must fit the bridge notification's identity bounds.
+	MaxMessageIDBytes = 128
+	MaxRecipientBytes = 128
 )
 
 // ErrValueTooLarge and friends are validation refusals. They map to
 // InvalidArgument at the gRPC boundary and never store anything.
 var (
-	ErrValueTooLarge  = errors.New("syncmesh: value exceeds limit")
-	ErrHopsExceeded   = errors.New("syncmesh: hops exceed limit")
-	ErrRecipientEmpty = errors.New("syncmesh: recipient required")
-	ErrMessageIDEmpty = errors.New("syncmesh: message_id required")
+	ErrValueTooLarge     = errors.New("syncmesh: value exceeds limit")
+	ErrHopsExceeded      = errors.New("syncmesh: hops exceed limit")
+	ErrRecipientEmpty    = errors.New("syncmesh: recipient required")
+	ErrMessageIDEmpty    = errors.New("syncmesh: message_id required")
+	ErrMessageIDTooLarge = errors.New("syncmesh: message_id exceeds limit")
+	ErrRecipientTooLarge = errors.New("syncmesh: recipient exceeds limit")
 )
 
 // Hub owns the addressed-message store and the subscriber fan-out. Publish is
@@ -66,6 +71,12 @@ func (h *Hub) Publish(messageID, sender, recipient string, value []byte, hops ui
 	if messageID == "" {
 		return 0, false, ErrMessageIDEmpty
 	}
+	if len(messageID) > MaxMessageIDBytes {
+		return 0, false, ErrMessageIDTooLarge
+	}
+	if len(recipient) > MaxRecipientBytes {
+		return 0, false, ErrRecipientTooLarge
+	}
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -77,14 +88,14 @@ func (h *Hub) Publish(messageID, sender, recipient string, value []byte, hops ui
 	ev := &syncmeshb.SyncEvent{
 		Sender:    sender,
 		Recipient: recipient,
-		Value:     value,
+		Value:     bytes.Clone(value),
 		MessageId: messageID,
 	}
 	seq = h.broker.Publish(ev)
 
 	h.byID[messageID] = ev
 	h.order = append(h.order, messageID)
-	for len(h.order) > maxStoredMessages {
+	for len(h.order) > MaxStoredMessages {
 		oldest := h.order[0]
 		h.order = h.order[1:]
 		delete(h.byID, oldest)
