@@ -102,9 +102,13 @@ export class WorkspaceManager {
     private pending: Mutation | null = null;
     private pendingState: PendingState = 'idle';
     private status = '';
+    private statusTone: 'info' | 'error' = 'info';
     /** Lower-cased local filter. Never touches server state or selection. */
     private filter = '';
     private rowSeq = 0;
+    /** Label lookups for one render pass; a root can hold hundreds of rows. */
+    private labelBases: string[] = [];
+    private labels = new Map<string, string>();
     private readonly onOnline = (): void => {
         void this.flushPending();
     };
@@ -168,6 +172,7 @@ export class WorkspaceManager {
                 ? document.activeElement
                 : null;
         this.status = '';
+        this.statusTone = 'info';
         this.rowSeq = 0;
         this.filter = '';
         if (this.filterInput) this.filterInput.value = '';
@@ -179,10 +184,24 @@ export class WorkspaceManager {
         this.trap = trapModalFocus(this.overlay, {
             onEscape: () => this.close(),
             isOpen: () => this.isOpen(),
-            initialFocus: () => this.projectsList ?? this.overlay,
+            initialFocus: () => this.dialog(),
         });
-        (this.projectsList ?? this.overlay).focus?.({ preventScroll: true });
+        this.dialog().focus?.({ preventScroll: true });
         void this.refresh();
+        // A write queued in an earlier visit was only waiting for a working
+        // connection. Nothing else retries it, so opening the dialog does.
+        if (this.pendingState === 'unsent' && this.isOnline()) {
+            void this.flushPending();
+        }
+    }
+
+    /** The dialog element itself: focusable, so focus can rest inside it. */
+    private dialog(): HTMLElement {
+        return (
+            this.overlay?.querySelector<HTMLElement>('.modal-content') ??
+            this.overlay ??
+            document.body
+        );
     }
 
     close(): void {
@@ -219,7 +238,6 @@ export class WorkspaceManager {
         const roots = Array.isArray(raw) ? raw.filter(isString) : [];
         this.rootPaths = roots.slice();
         for (const path of roots) {
-            if (!this.rootPaths.includes(path)) this.rootPaths.push(path);
             if (!this.sections.has(path)) {
                 this.sections.set(path, {
                     path,
@@ -254,16 +272,28 @@ export class WorkspaceManager {
     }
 
     private async loadRoots(generation: number): Promise<void> {
+        // One paint for every "Reading folder…" placeholder; each root then
+        // paints as its own listing lands, so a slow root never blocks the rest.
+        for (const section of this.sections.values()) {
+            if (!section.rows.length) section.loading = true;
+        }
+        this.render();
         await Promise.allSettled(
-            this.rootPaths.map((path) => this.loadRoot(path, generation)),
+            this.rootPaths.map((path) =>
+                this.loadRoot(path, generation, false),
+            ),
         );
     }
 
-    private async loadRoot(path: string, generation: number): Promise<void> {
+    private async loadRoot(
+        path: string,
+        generation: number,
+        paint = true,
+    ): Promise<void> {
         const section = this.sections.get(path);
         if (!section) return;
         if (!section.rows.length) section.loading = true;
-        this.render();
+        if (paint) this.render();
 
         const url = `/api/fs/browse?path=${encodeURIComponent(path)}`;
         const scope = (this.app as any)?.scope;
@@ -316,9 +346,20 @@ export class WorkspaceManager {
     }
 
     private render(): void {
+        // Workspace membership decides both row partition and label collisions,
+        // so the label cache is rebuilt once per pass, not once per row.
+        this.labelBases = Array.from(
+            new Set([...this.sessions.workspaces, ...this.rootPaths]),
+        );
+        this.labels.clear();
         this.renderStatus();
         this.renderProjects();
         this.renderRoots();
+        // A re-render replaces the buttons the user may have activated, which
+        // drops focus to <body>. Put it back inside the dialog.
+        if (this.isOpen() && document.activeElement === document.body) {
+            this.dialog().focus({ preventScroll: true });
+        }
     }
 
     private renderStatus(): void {
@@ -344,26 +385,32 @@ export class WorkspaceManager {
             }
         }
         this.statusEl.dataset.state = this.pendingState;
+        this.statusEl.dataset.tone = this.statusTone;
+        // No reserved band: an empty status row would read as a gap under the
+        // title, and nothing here needs the space until there is a message.
+        this.statusEl.classList.toggle('hidden', !text.textContent);
     }
 
     private renderProjects(): void {
         if (!this.projectsList) return;
         const workspaces = this.sessions.workspaces;
+        const visible = this.visibleProjects();
         this.projectsList.replaceChildren();
+        // The count follows the rows on screen, like the root sections below.
         if (this.projectsCount) {
-            this.projectsCount.textContent = `(${workspaces.length})`;
+            this.projectsCount.textContent = `(${visible.length})`;
         }
         for (const path of Array.from(this.projectSelection)) {
             if (!workspaces.includes(path)) this.projectSelection.delete(path);
         }
         if (workspaces.length === 0) {
             this.projectsList.appendChild(this.emptyNote('No workspaces yet.'));
-        } else if (this.visibleProjects().length === 0) {
+        } else if (visible.length === 0) {
             this.projectsList.appendChild(
                 this.emptyNote('No projects match the filter.'),
             );
         }
-        for (const path of this.visibleProjects()) {
+        for (const path of visible) {
             this.projectsList.appendChild(
                 this.renderRow({
                     path,
@@ -453,6 +500,9 @@ export class WorkspaceManager {
             allLabel.className = 'ws-manager-all';
             const allBox = document.createElement('input');
             allBox.type = 'checkbox';
+            // Chrome warns about form fields without an id or name; the label
+            // already supplies the accessible name.
+            allBox.name = 'ws-manager-root-all';
             const allText = document.createElement('span');
             allText.textContent = 'All';
             allLabel.append(allBox, allText);
@@ -466,17 +516,6 @@ export class WorkspaceManager {
                 this.applySectionControls(section, element);
             });
             head.appendChild(allLabel);
-
-            const removeRoot = document.createElement('button');
-            removeRoot.type = 'button';
-            removeRoot.className = 'btn ws-manager-root-remove';
-            removeRoot.textContent = 'Remove root';
-            removeRoot.disabled = this.isPending();
-            removeRoot.addEventListener(
-                'click',
-                () => void this.removeRoot(path),
-            );
-            head.appendChild(removeRoot);
             element.appendChild(head);
 
             const rootPath = document.createElement('div');
@@ -540,9 +579,21 @@ export class WorkspaceManager {
 
             const actions = document.createElement('div');
             actions.className = 'ws-manager-actions';
+            // Section-level removal belongs beside the section-level add, not
+            // in the heading where it competes with the title and All.
+            const removeRoot = document.createElement('button');
+            removeRoot.type = 'button';
+            removeRoot.className = 'btn ws-manager-root-remove';
+            removeRoot.textContent = 'Remove root';
+            removeRoot.disabled = this.isPending();
+            removeRoot.addEventListener(
+                'click',
+                () => void this.removeRoot(path),
+            );
+            actions.appendChild(removeRoot);
             const add = document.createElement('button');
             add.type = 'button';
-            add.className = 'btn btn-accent';
+            add.className = 'btn btn-accent ws-manager-add-btn';
             add.addEventListener('click', () => void this.addSelected(path));
             actions.appendChild(add);
             element.appendChild(actions);
@@ -577,7 +628,7 @@ export class WorkspaceManager {
             if (text) text.textContent = this.filter ? 'Select visible' : 'All';
         }
         const add = element.querySelector<HTMLButtonElement>(
-            '.ws-manager-actions .btn',
+            '.ws-manager-add-btn',
         );
         if (add) {
             add.textContent =
@@ -624,6 +675,9 @@ export class WorkspaceManager {
         const path = document.createElement('span');
         path.className = 'ws-manager-path';
         path.textContent = options.path;
+        // The path is truncated to keep rows one line; the full value stays
+        // reachable on hover and for assistive tech.
+        row.title = options.path;
         row.append(box, name, path);
         return row;
     }
@@ -636,10 +690,11 @@ export class WorkspaceManager {
     }
 
     private label(path: string): string {
-        const all = Array.from(
-            new Set([...this.sessions.workspaces, ...this.rootPaths]),
-        );
-        return formatWorkspaceLabel(path, all);
+        const cached = this.labels.get(path);
+        if (cached !== undefined) return cached;
+        const label = formatWorkspaceLabel(path, this.labelBases);
+        this.labels.set(path, label);
+        return label;
     }
 
     /**
@@ -655,8 +710,10 @@ export class WorkspaceManager {
         return typeof navigator === 'undefined' || navigator.onLine !== false;
     }
 
-    private setStatus(text: string): void {
+    /** `tone` only colours the line: an error must not look like a hint. */
+    private setStatus(text: string, tone: 'info' | 'error' = 'info'): void {
         this.status = text;
+        this.statusTone = tone;
         this.render();
     }
 
@@ -705,6 +762,7 @@ export class WorkspaceManager {
             this.writeOutbox(mutation, 'unsent');
             this.setStatus(
                 'Saved in this browser. It is sent when the server is reachable.',
+                'error',
             );
             return;
         }
@@ -725,7 +783,14 @@ export class WorkspaceManager {
             this.pendingState = 'idle';
             this.writeOutbox(null);
             this.syncFromConfig();
-            this.setStatus(message.trim() || 'The server rejected the change.');
+            // A rejected root POST must give the typed path back, not eat it.
+            if (mutation.kind === 'addRoot' && this.rootInput) {
+                this.rootInput.value = mutation.paths[0] ?? '';
+            }
+            this.setStatus(
+                message.trim() || 'The server rejected the change.',
+                'error',
+            );
             return;
         }
 
@@ -824,6 +889,7 @@ export class WorkspaceManager {
             } else {
                 this.status =
                     'Saved on the server. The reload failed, so this view may be behind.';
+                this.statusTone = 'error';
             }
             this.render();
             await this.loadRoots(generation);
@@ -837,6 +903,7 @@ export class WorkspaceManager {
         this.writeOutbox(mutation, 'unconfirmed');
         this.setStatus(
             'Change not confirmed. It may or may not have been saved.',
+            'error',
         );
         const ok = await this.sessions.loadConfig();
         if (ok) {
@@ -844,7 +911,7 @@ export class WorkspaceManager {
             this.pending = null;
             this.pendingState = 'idle';
             this.writeOutbox(null);
-            this.setStatus('Server state reloaded.');
+            this.setReconcileStatus(mutation);
         }
     }
 
@@ -855,15 +922,60 @@ export class WorkspaceManager {
         if (!ok) {
             this.setStatus(
                 'The server is still unreachable. Nothing was resent.',
+                'error',
             );
             return;
         }
+        const pending = this.pending;
         this.syncFromConfig();
         this.pending = null;
         this.pendingState = 'idle';
         this.writeOutbox(null);
-        this.setStatus('Server state reloaded. Nothing was resent.');
+        this.setReconcileStatus(pending);
         await this.loadRoots(this.generation);
+    }
+
+    /**
+     * What the reloaded config proves about a write. `null` means the stored
+     * list cannot answer it, so the message must not claim an outcome.
+     */
+    private mutationLanded(mutation: Mutation | null): boolean | null {
+        if (!mutation) return null;
+        const roots = this.rootPaths;
+        switch (mutation.kind) {
+            case 'add':
+                return mutation.paths.every((path) =>
+                    this.sessions.isWorkspaceRegistered(path),
+                );
+            case 'remove':
+                return mutation.paths.every(
+                    (path) => !this.sessions.isWorkspaceRegistered(path),
+                );
+            case 'addRoot': {
+                const path = mutation.paths[0] ?? '';
+                if (roots.includes(path)) return true;
+                // A typed "~/code" was stored expanded, so it cannot be matched.
+                return path.startsWith('~') ? null : false;
+            }
+            case 'removeRoot':
+                return mutation.paths.every((path) => !roots.includes(path));
+        }
+    }
+
+    private setReconcileStatus(mutation: Mutation | null): void {
+        const landed = this.mutationLanded(mutation);
+        if (landed === false) {
+            this.setStatus(
+                'The server did not apply this change. Nothing was saved.',
+                'error',
+            );
+            return;
+        }
+        this.setStatus(
+            landed === true
+                ? 'Saved.'
+                : 'Server state reloaded. Nothing was resent.',
+        );
     }
 
     /** Flushes the one write that never reached the server. */
@@ -877,10 +989,22 @@ export class WorkspaceManager {
         try {
             response = await this.send(mutation);
         } catch {
+            if (!this.isOnline()) {
+                // Still no connection: nothing reached the server, so the write
+                // stays queued instead of becoming ambiguous.
+                this.pendingState = 'unsent';
+                this.writeOutbox(mutation, 'unsent');
+                this.setStatus(
+                    'Saved in this browser. It is sent when the server is reachable.',
+                    'error',
+                );
+                return;
+            }
             this.pendingState = 'unconfirmed';
             this.writeOutbox(mutation, 'unconfirmed');
             this.setStatus(
                 'Change not confirmed. It may or may not have been saved.',
+                'error',
             );
             return;
         }
@@ -893,7 +1017,7 @@ export class WorkspaceManager {
             const ok = await this.sessions.loadConfig();
             if (ok) this.syncFromConfig();
             this.render();
-            this.setStatus('The server rejected the queued change.');
+            this.setStatus('The server rejected the queued change.', 'error');
             return;
         }
         this.pending = null;
@@ -912,6 +1036,7 @@ export class WorkspaceManager {
             // A write from a previous page may have arrived. Never resend it.
             this.status =
                 'Change not confirmed. It may or may not have been saved.';
+            this.statusTone = 'error';
         }
     }
 
