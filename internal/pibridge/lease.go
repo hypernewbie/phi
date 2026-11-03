@@ -63,7 +63,7 @@ type lease struct {
 	// pendingPushes retains unacknowledged notifications for resend after a
 	// reconnect, keyed by message_id so a repeat never injects twice.
 	pendingPushes map[string]*pendingPush
-	// pendingOrder preserves delivery order and makes eviction oldest-first.
+	// pendingOrder preserves delivery order; a full backlog refuses new work.
 	pendingOrder []string
 }
 

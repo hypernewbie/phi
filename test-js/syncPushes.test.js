@@ -5,23 +5,29 @@ import { setupDomHarness, mockFetch } from './_dom.js';
 import { SyncManager } from '../web/sync.js';
 
 setupDomHarness();
-
 let manager;
-afterEach(() => clearInterval(manager?.pollInterval));
+afterEach(() => {
+    clearInterval(manager?.pollInterval);
+    vi.useRealTimers();
+});
 
-function newManager(fetchHandler) {
+function newManager(handler = () => ({ messages: [] }), app = {}) {
     document.body.innerHTML = '<div id="sync-panel"></div>';
-    const fetchMock = mockFetch(fetchHandler);
+    const requests = mockFetch(handler);
+    // Each test controls refresh timing. Startup itself is covered below.
+    vi.spyOn(SyncManager.prototype, 'startPolling').mockImplementationOnce(
+        () => {},
+    );
     manager = new SyncManager({
         sessionsManager: { config: {} },
         showToast: vi.fn(),
+        ...app,
     });
-    return fetchMock;
+    return requests;
 }
 
 const push = (over = {}) => ({
     message_id: 'm-1',
-    seq: 1,
     sender: 'laptop-a',
     recipient: 'pane-b',
     value: 'hello from another agent',
@@ -30,75 +36,172 @@ const push = (over = {}) => ({
 });
 
 describe('Syncboard addressed messages', () => {
-    it('stays hidden when nothing was addressed here', () => {
-        newManager(() => []);
+    it('renders literal content newest first, with readable direction and truncation', () => {
+        newManager();
+        manager.renderPushes([
+            push({
+                message_id: 'old',
+                value: 'older',
+                updated_at_unix_ms: 1_000,
+            }),
+            push({
+                message_id: 'new',
+                value: '<img src=x onerror=alert(1)>',
+                updated_at_unix_ms: 2_000,
+                truncated: true,
+            }),
+        ]);
+        const cards = [...manager.pushList.children];
+        expect(cards.map((card) => card.dataset.messageId)).toEqual([
+            'new',
+            'old',
+        ]);
+        expect(cards[0].querySelector('.sync-card-key').textContent).toBe(
+            'laptop-a → pane-b',
+        );
+        expect(cards[0].querySelector('.sync-card-value').textContent).toBe(
+            '<img src=x onerror=alert(1)>',
+        );
+        expect(cards[0].querySelector('img')).toBeNull();
+        expect(
+            cards[0].querySelector('.sync-card-footer').textContent,
+        ).toContain('preview limited to 4 KiB');
         manager.renderPushes([]);
-
         expect(manager.pushSection.classList.contains('hidden')).toBe(true);
         expect(manager.pushList.children).toHaveLength(0);
     });
 
-    it('renders the direction, the body, and reuses the board card', () => {
-        newManager(() => []);
+    it('keeps native disclosure state and keyboard focus across background refresh', () => {
+        newManager();
         manager.renderPushes([push()]);
-
-        expect(manager.pushSection.classList.contains('hidden')).toBe(false);
-        const card = manager.pushList.querySelector('.sync-card');
-        expect(card).not.toBeNull();
-        expect(card.classList.contains('sync-card-push')).toBe(true);
-        expect(card.querySelector('.sync-card-key').textContent).toContain(
-            'laptop-a → pane-b',
-        );
-        expect(card.querySelector('.sync-card-value').textContent).toBe(
-            'hello from another agent',
+        const card = manager.pushList.firstElementChild;
+        card.open = true;
+        card.dispatchEvent(new Event('toggle'));
+        card.querySelector('summary').focus();
+        manager.renderPushes([push()]);
+        expect(manager.pushList.firstElementChild.open).toBe(true);
+        expect(document.activeElement).toBe(
+            manager.pushList.querySelector('summary'),
         );
     });
 
-    it('orders newest first like the board', () => {
-        newManager(() => []);
-        manager.renderPushes([
-            push({ message_id: 'old', updated_at_unix_ms: 1_000 }),
-            push({ message_id: 'new', updated_at_unix_ms: 2_000 }),
-        ]);
-
-        const keys = [...manager.pushList.querySelectorAll('.sync-card-key')];
-        expect(keys[0].textContent).toContain('laptop-a');
-        expect(manager.pushList.querySelectorAll('.sync-card')).toHaveLength(2);
-        // The newest message must be the first card.
-        expect(manager.pushList.firstElementChild.textContent).toContain(
-            'hello from another agent',
+    it('fetches this Phi even when the remote board hangs', async () => {
+        const requests = newManager((url) =>
+            url === '/api/sync/pushes'
+                ? { messages: [push()] }
+                : new Promise(() => {}),
         );
-    });
-
-    it('says so when a value was truncated', () => {
-        newManager(() => []);
-        manager.renderPushes([push({ truncated: true })]);
-
+        manager.app.sessionsManager.config.sync_coordinator =
+            'https://remote.example:7443';
+        void manager.refreshMessages();
+        await vi.waitFor(() =>
+            expect(manager.pushList.children).toHaveLength(1),
+        );
         expect(
-            manager.pushList.querySelector('.sync-card-footer').textContent,
-        ).toContain('truncated');
+            requests.mock.calls.some(([url]) => url === '/api/sync/pushes'),
+        ).toBe(true);
+        expect(
+            requests.mock.calls
+                .filter(([url]) => String(url).includes('proxy'))
+                .every(
+                    ([url]) =>
+                        !decodeURIComponent(url).includes('/api/sync/pushes'),
+                ),
+        ).toBe(true);
     });
 
-    it('keeps the last good list when the refresh fails', async () => {
-        newManager(() => []);
-        manager.renderPushes([push()]);
-
-        mockFetch(() => {
-            throw new TypeError('Failed to fetch');
+    it('paints the persisted last good answer before the startup request finishes', async () => {
+        const store = { responses: new Map() };
+        newManager(() => ({ messages: [push()] }), {
+            getActiveStore: () => store,
         });
         await manager.refreshPushes();
-
-        expect(manager.pushList.querySelectorAll('.sync-card')).toHaveLength(1);
+        expect(store.responses.get('/api/sync/pushes')).toContain('m-1');
+        // A fresh manager, with no memory cache and a stalled network.
+        mockFetch(() => new Promise(() => {}));
+        document.body.innerHTML = '<div id="sync-panel"></div>';
+        manager = new SyncManager({
+            sessionsManager: { config: {} },
+            showToast: vi.fn(),
+        });
+        expect(manager.pushList.children).toHaveLength(1);
+        expect(manager.pushList.textContent).toContain(
+            'hello from another agent',
+        );
+        // Release the background read without waiting for its five-second deadline.
+        manager._pushRefresh.abort();
     });
 
-    it('renders from a successful refresh', async () => {
-        newManager((url) =>
-            decodeURIComponent(String(url)).includes('/api/sync/pushes')
-                ? { messages: [push()] }
-                : [],
-        );
-        await manager.refreshPushes();
+    it.each([
+        () => {
+            throw new TypeError('offline');
+        },
+        () => ({ ok: false, status: 502 }),
+        () => ({ messages: [null] }),
+        () => ({ messages: [push({ value: { invalid: true } })] }),
+    ])(
+        'preserves the last good list on transport or malformed-response failure',
+        async (handler) => {
+            newManager(handler);
+            manager.renderPushes([push()]);
+            await manager.refreshPushes();
+            expect(manager.pushList.textContent).toContain(
+                'hello from another agent',
+            );
+            expect(
+                manager.pushSection.querySelector('[role=status]').textContent,
+            ).toContain('Refresh unavailable');
+            mockFetch(() => ({ messages: [] }));
+            await manager.refreshPushes();
+            expect(manager.pushSection.classList.contains('hidden')).toBe(true);
+        },
+    );
 
-        expect(manager.pushList.querySelectorAll('.sync-card')).toHaveLength(1);
+    it('bounds concurrent refreshes and recovers after a background timeout', async () => {
+        vi.useFakeTimers();
+        const requests = newManager(
+            (_url, options) =>
+                new Promise((_resolve, reject) => {
+                    options.signal.addEventListener('abort', () =>
+                        reject(new DOMException('aborted', 'AbortError')),
+                    );
+                }),
+        );
+        manager.renderPushes([push()]);
+        const pending = manager.refreshPushes();
+        await manager.refreshPushes();
+        expect(requests).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(5000);
+        await pending;
+        expect(manager.pushList.children).toHaveLength(1);
+        expect(
+            manager.pushSection.querySelector('[role=status]').textContent,
+        ).toContain('Refresh unavailable');
+        mockFetch(() => ({ messages: [push({ value: 'back online' })] }));
+        await manager.refreshPushes();
+        expect(manager.pushList.textContent).toContain('back online');
+    });
+
+    it('does not paint an old backend reply into a newly selected server', async () => {
+        let finish;
+        let scope = { aborted: false };
+        let store = { responses: new Map() };
+        newManager(
+            () =>
+                new Promise((resolve) => {
+                    finish = resolve;
+                }),
+            { getActiveStore: () => store },
+        );
+        manager.app.scope = scope;
+        const oldRead = manager.refreshPushes();
+        scope = { aborted: false };
+        store = { responses: new Map() };
+        manager.app.scope = scope;
+        manager.restorePushes(store);
+        finish({ messages: [push()] });
+        await oldRead;
+        expect(manager.pushList.children).toHaveLength(0);
+        expect(store.responses.size).toBe(0);
     });
 });

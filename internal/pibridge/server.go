@@ -621,6 +621,7 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 	}
 	oldPeer := l.peer
 	p := newPeer(gen, hello.GetSessionId(), stream)
+	p.onWritable = func() { l.flushPendingPushes(p) }
 	l.peer = p
 	l.caps = l.caps[:0]
 	for c := range caps {
@@ -694,7 +695,7 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 	// Replay what the runtime has not acknowledged. A push sent while it was
 	// away is retained, so a reconnect delivers it instead of losing it; the
 	// runtime dedupes by message_id, so a repeat never injects twice.
-	l.resendPendingPushes()
+	l.flushPendingPushes(p)
 
 	for {
 		msg, err := p.recv()

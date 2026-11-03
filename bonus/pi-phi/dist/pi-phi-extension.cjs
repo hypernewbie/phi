@@ -24731,6 +24731,67 @@ var BoundedQueue = class {
 // src/extension.ts
 var import_node_path2 = require("node:path");
 
+// src/push.ts
+var SYNCBOARD_PUSH_CUSTOM_TYPE = "phi-syncboard";
+var MAX_SYNCBOARD_PUSH_INJECT_BYTES = 8 * 1024;
+var MAX_REMEMBERED_PUSH_IDS = 256;
+function freshSyncboardPushState() {
+  return { seen: /* @__PURE__ */ new Set() };
+}
+function formatPushContent(notification) {
+  const value = notification.value ?? new Uint8Array();
+  const total = value.byteLength;
+  const kept = total > MAX_SYNCBOARD_PUSH_INJECT_BYTES ? value.subarray(0, MAX_SYNCBOARD_PUSH_INJECT_BYTES) : value;
+  const text = new TextDecoder("utf-8").decode(kept, {
+    stream: total > MAX_SYNCBOARD_PUSH_INJECT_BYTES
+  });
+  const sender = notification.sender || "unknown";
+  const header = `[phi-syncboard from=${sender} to=${notification.recipient} message_id=${notification.messageId}]`;
+  if (total <= MAX_SYNCBOARD_PUSH_INJECT_BYTES) {
+    return `${header}
+${text}`;
+  }
+  return `${header}
+${text}
+[truncated: first ${MAX_SYNCBOARD_PUSH_INJECT_BYTES} of ${total} bytes]`;
+}
+function createSyncboardPushHandler(options) {
+  const { seen } = options.state ?? freshSyncboardPushState();
+  const remember = (messageId) => {
+    seen.add(messageId);
+    if (seen.size > MAX_REMEMBERED_PUSH_IDS) {
+      const oldest = seen.values().next().value;
+      if (oldest !== void 0) seen.delete(oldest);
+    }
+  };
+  return {
+    accept(notification) {
+      const messageId = notification.messageId;
+      const seq = notification.seq ?? 0n;
+      if (!messageId) return;
+      if (seen.has(messageId)) {
+        options.ack(seq, messageId);
+        return;
+      }
+      const inject = options.inject;
+      if (inject === void 0) return;
+      try {
+        inject(
+          SYNCBOARD_PUSH_CUSTOM_TYPE,
+          formatPushContent(notification)
+        );
+      } catch {
+        return;
+      }
+      remember(messageId);
+      options.ack(seq, messageId);
+    },
+    remembered() {
+      return seen.size;
+    }
+  };
+}
+
 // src/attachments.ts
 var import_node_crypto = require("node:crypto");
 var import_node_fs = require("node:fs");
@@ -30572,64 +30633,6 @@ var BridgeChannel = class {
   }
 };
 
-// src/push.ts
-var SYNCBOARD_PUSH_CUSTOM_TYPE = "phi-syncboard";
-var MAX_SYNCBOARD_PUSH_INJECT_BYTES = 8 * 1024;
-var MAX_REMEMBERED_PUSH_IDS = 256;
-function formatPushContent(notification) {
-  const value = notification.value ?? new Uint8Array();
-  const total = value.byteLength;
-  const kept = total > MAX_SYNCBOARD_PUSH_INJECT_BYTES ? value.subarray(0, MAX_SYNCBOARD_PUSH_INJECT_BYTES) : value;
-  const text = new TextDecoder("utf-8").decode(kept);
-  const sender = notification.sender || "unknown";
-  const header = `[phi-syncboard from=${sender} message_id=${notification.messageId}]`;
-  if (total <= MAX_SYNCBOARD_PUSH_INJECT_BYTES) {
-    return `${header}
-${text}`;
-  }
-  return `${header}
-${text}
-[truncated: first ${MAX_SYNCBOARD_PUSH_INJECT_BYTES} of ${total} bytes]`;
-}
-function createSyncboardPushHandler(options) {
-  const seen = /* @__PURE__ */ new Set();
-  const order = [];
-  const remember = (messageId) => {
-    seen.add(messageId);
-    order.push(messageId);
-    if (order.length > MAX_REMEMBERED_PUSH_IDS) {
-      const oldest = order.shift();
-      if (oldest !== void 0) seen.delete(oldest);
-    }
-  };
-  return {
-    accept(notification) {
-      const messageId = notification.messageId;
-      const seq = notification.seq ?? 0n;
-      if (!messageId) return;
-      if (seen.has(messageId)) {
-        options.ack(seq, messageId);
-        return;
-      }
-      const inject = options.inject;
-      if (inject === void 0) return;
-      try {
-        inject(
-          SYNCBOARD_PUSH_CUSTOM_TYPE,
-          formatPushContent(notification)
-        );
-      } catch {
-        return;
-      }
-      remember(messageId);
-      options.ack(seq, messageId);
-    },
-    remembered() {
-      return seen.size;
-    }
-  };
-}
-
 // src/history-reader.ts
 var PROBE_KEY3 = "phi.pi-phi.history-probe";
 function readEditorHistory(ui) {
@@ -31973,6 +31976,7 @@ var Runtime = class {
   syncboardPush() {
     if (this.syncboardPushHandler === null) {
       this.syncboardPushHandler = createSyncboardPushHandler({
+        ...this.opts.syncboardPushState ? { state: this.opts.syncboardPushState } : {},
         inject: this.opts.injectSyncboardMessage,
         ack: (seq, messageId) => {
           this.channel?.sendNonfatal({
@@ -37933,6 +37937,11 @@ function ownerSlot() {
   globalThis[OWNER_KEY] = fresh;
   return fresh;
 }
+function ownerSyncboardPushState() {
+  const slot = ownerSlot();
+  if (!slot.syncboardPush) slot.syncboardPush = freshSyncboardPushState();
+  return slot.syncboardPush;
+}
 function ownerAttachmentState() {
   const slot = ownerSlot();
   if (!slot.attachments) slot.attachments = freshAttachmentLatch();
@@ -38064,6 +38073,7 @@ function createExtension(pi, deps = {}) {
     ...hasInvokeApi ? {
       sendUserMessage: (content, options) => nativeSkills.sendUserMessage(content, options)
     } : {},
+    syncboardPushState: ownerSyncboardPushState(),
     // A pushed message becomes a displayed custom message that
     // triggers a turn. followUp never interrupts a running turn.
     ...typeof pi.sendMessage === "function" ? {

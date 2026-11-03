@@ -1251,20 +1251,3 @@ func (b *Bridge) PushSyncboard(paneID string, push pibridge.SyncboardPush) error
 	}
 	return b.server.SendSyncboardPush(paneID, push)
 }
-
-// ManagedPaneIDs lists panes that currently run under the bridge. The mesh
-// subscriber uses it to decide which pane a recipient names.
-func (b *Bridge) ManagedPaneIDs() []string {
-	if b == nil {
-		return nil
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	out := make([]string, 0, len(b.panes))
-	for id, pane := range b.panes {
-		if pane.managed {
-			out = append(out, id)
-		}
-	}
-	return out
-}

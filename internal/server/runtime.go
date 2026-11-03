@@ -16,9 +16,7 @@ import (
 
 	"github.com/hypernewbie/phi/internal/attachments"
 	"github.com/hypernewbie/phi/internal/piapp"
-	"github.com/hypernewbie/phi/internal/pibridge"
 	"github.com/hypernewbie/phi/internal/syncmesh"
-	syncmeshb "github.com/hypernewbie/phi/internal/syncmesh/pb"
 	"github.com/hypernewbie/phi/internal/webassets"
 	"github.com/hypernewbie/phi/pkg/bindaddr"
 	"github.com/hypernewbie/phi/pkg/coders"
@@ -516,49 +514,4 @@ func (app *Server) gracefulShutdown(servers []*http.Server, drainDelay, ptyGrace
 		}(srv)
 	}
 	wg.Wait()
-}
-
-// startSyncboardPush subscribes to the local mesh hub and delivers each
-// addressed message to the pane named by its recipient. A recipient that names
-// no managed pane is ignored: the message was addressed elsewhere, and a push
-// must never reach a runtime it was not meant for.
-func (app *Server) startSyncboardPush() {
-	if app.syncMesh == nil {
-		return
-	}
-	events, cancel := app.syncMesh.SubscribePush()
-	app.syncPushCancel = cancel
-	go func() {
-		for ev := range events {
-			app.deliverSyncboardPush(ev)
-		}
-	}()
-}
-
-// deliverSyncboardPush hands one event to the owning pane runtime and keeps it
-// pending there until the runtime acknowledges it.
-func (app *Server) deliverSyncboardPush(ev *syncmeshb.SyncEvent) {
-	if ev == nil || app.bridge == nil {
-		return
-	}
-	if ev.GetGap() {
-		// Events were dropped faster than this process drained them. Replay
-		// from a cursor is not implemented yet, so name the loss instead of
-		// letting the receiver believe it saw everything.
-		slog.Warn("syncboard push gap: events were dropped before delivery",
-			"recipient", ev.GetRecipient(), "seq", ev.GetSeq())
-		return
-	}
-	err := app.bridge.PushSyncboard(ev.GetRecipient(), pibridge.SyncboardPush{
-		Seq:             ev.GetSeq(),
-		Sender:          ev.GetSender(),
-		Recipient:       ev.GetRecipient(),
-		Value:           ev.GetValue(),
-		UpdatedAtUnixMs: ev.GetUpdatedAtUnixMs(),
-		MessageID:       ev.GetMessageId(),
-	})
-	if err != nil {
-		slog.Debug("syncboard push deferred",
-			"recipient", ev.GetRecipient(), "message_id", ev.GetMessageId(), "err", err)
-	}
 }

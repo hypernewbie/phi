@@ -16,7 +16,17 @@ export const MAX_SYNCBOARD_PUSH_INJECT_BYTES = 8 * 1024;
  */
 export const MAX_REMEMBERED_PUSH_IDS = 256;
 
+export interface SyncboardPushState {
+    readonly seen: Set<string>;
+}
+
+export function freshSyncboardPushState(): SyncboardPushState {
+    return { seen: new Set() };
+}
+
 export interface SyncboardPushOptions {
+    /** Process-owned so a reload cannot repeat an injected, unacknowledged turn. */
+    readonly state?: SyncboardPushState;
     /**
      * Injects text into the host session. Throws when the host refuses, which
      * suppresses the acknowledgement so Phi resends rather than losing the
@@ -47,9 +57,11 @@ export function formatPushContent(notification: SyncboardNotification): string {
         total > MAX_SYNCBOARD_PUSH_INJECT_BYTES
             ? value.subarray(0, MAX_SYNCBOARD_PUSH_INJECT_BYTES)
             : value;
-    const text = new TextDecoder('utf-8').decode(kept);
+    const text = new TextDecoder('utf-8').decode(kept, {
+        stream: total > MAX_SYNCBOARD_PUSH_INJECT_BYTES,
+    });
     const sender = notification.sender || 'unknown';
-    const header = `[phi-syncboard from=${sender} message_id=${notification.messageId}]`;
+    const header = `[phi-syncboard from=${sender} to=${notification.recipient} message_id=${notification.messageId}]`;
     if (total <= MAX_SYNCBOARD_PUSH_INJECT_BYTES) {
         return `${header}\n${text}`;
     }
@@ -64,14 +76,11 @@ export function formatPushContent(notification: SyncboardNotification): string {
 export function createSyncboardPushHandler(
     options: SyncboardPushOptions,
 ): SyncboardPushHandler {
-    const seen = new Set<string>();
-    const order: string[] = [];
-
+    const { seen } = options.state ?? freshSyncboardPushState();
     const remember = (messageId: string): void => {
         seen.add(messageId);
-        order.push(messageId);
-        if (order.length > MAX_REMEMBERED_PUSH_IDS) {
-            const oldest = order.shift();
+        if (seen.size > MAX_REMEMBERED_PUSH_IDS) {
+            const oldest = seen.values().next().value;
             if (oldest !== undefined) seen.delete(oldest);
         }
     };

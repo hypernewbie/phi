@@ -2,6 +2,7 @@ package pibridge
 
 import (
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -116,7 +117,7 @@ func TestSyncboardPushAckClearsPending(t *testing.T) {
 	stream, proc, _, cancel := openLeaseStream(t, s, sock, "pane-ack", CapabilityLifecycle, CapabilitySyncboardPush)
 	defer cancel()
 
-	if err := s.SendSyncboardPush("pane-ack", SyncboardPush{Recipient: "pane-ack", Value: []byte("x"), MessageID: "m-1"}); err != nil {
+	if err := s.SendSyncboardPush("pane-ack", SyncboardPush{Seq: 1, Recipient: "pane-ack", Value: []byte("x"), MessageID: "m-1"}); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 	_ = recvNotification(t, stream)
@@ -141,8 +142,7 @@ func TestSyncboardPushAckClearsPending(t *testing.T) {
 }
 
 // TestSyncboardPushBacklogIsBounded protects memory: a runtime that never
-// acknowledges cannot grow the pending map without limit, and the oldest entry
-// is the one dropped.
+// acknowledges cannot grow the pending map or evict unacknowledged entries.
 func TestSyncboardPushBacklogIsBounded(t *testing.T) {
 	s, sock, cleanup := pushServer(t)
 	defer cleanup()
@@ -159,9 +159,13 @@ func TestSyncboardPushBacklogIsBounded(t *testing.T) {
 	}()
 
 	for i := 0; i < maxPendingPushes+5; i++ {
-		id := "m-" + string(rune('a'+i))
-		if err := s.SendSyncboardPush("pane-full", SyncboardPush{Recipient: "pane-full", Value: []byte("x"), MessageID: id}); err != nil {
+		id := "m-" + strconv.Itoa(i)
+		err := s.SendSyncboardPush("pane-full", SyncboardPush{Recipient: "pane-full", Value: []byte("x"), MessageID: id})
+		if i < maxPendingPushes && err != nil {
 			t.Fatalf("send %d: %v", i, err)
+		}
+		if i >= maxPendingPushes && !errors.Is(err, ErrPushBacklogFull) {
+			t.Fatalf("overflow %d: got %v, want ErrPushBacklogFull", i, err)
 		}
 	}
 	l := leaseFor(t, s, "pane-full")
@@ -169,10 +173,10 @@ func TestSyncboardPushBacklogIsBounded(t *testing.T) {
 		t.Fatalf("pending = %d, want %d", got, maxPendingPushes)
 	}
 	l.mu.Lock()
-	_, keptOldest := l.pendingPushes["m-a"]
+	_, keptOldest := l.pendingPushes["m-0"]
 	l.mu.Unlock()
-	if keptOldest {
-		t.Fatal("oldest entry survived overflow; eviction is not oldest-first")
+	if !keptOldest {
+		t.Fatal("overflow evicted unacknowledged work")
 	}
 }
 
@@ -188,7 +192,6 @@ func TestSyncboardPushResentAfterReconnect(t *testing.T) {
 	}
 	_ = recvNotification(t, stream)
 	cancel()
-	time.Sleep(50 * time.Millisecond)
 
 	stream2, cancel2 := openStream(t, sock, "pane-resend", proc, token)
 	defer cancel2()

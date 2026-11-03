@@ -65,6 +65,8 @@ type peer struct {
 	syncboardPending   map[uint64]struct{}
 
 	writerDone chan struct{}
+	// Installed before runWriter; called without the peer lock after progress.
+	onWritable func()
 }
 
 func newPeer(generation uint64, sessionID string, stream connectStream) *peer {
@@ -211,6 +213,9 @@ func (p *peer) runWriter() {
 			p.mu.Unlock()
 			if err != nil {
 				return
+			}
+			if p.onWritable != nil {
+				p.onWritable()
 			}
 		case <-p.stream.Context().Done():
 			p.closeWith(codes.Canceled, "stream context done")
