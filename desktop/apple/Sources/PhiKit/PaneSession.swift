@@ -111,8 +111,10 @@ public final class PaneSession {
     desiredSize = (cols, rows)
     resizeTask = Task { [weak self, client] in
       try? await Task.sleep(for: .milliseconds(150))
-      while !Task.isCancelled {
-        guard let self, !self.closed else { return }
+      // An offline pane re-offers its size when it reattaches, so this loop
+      // gives up instead of waking twice a second forever.
+      for _ in 0..<60 {
+        guard let self, !self.closed, !Task.isCancelled else { return }
         if await client.sendResize(cols: cols, rows: rows) { return }
         do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
       }
