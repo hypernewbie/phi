@@ -31,10 +31,10 @@ func TestPiPsiIsPerLaunch(t *testing.T) {
 		t.Fatalf("bad Psi resume argv: %v %v", plan.Args, err)
 	}
 
-	// Test FreshSession omits --session-id for Psi
+	// Psi takes the same caller-chosen --session-id as pi.
 	freshPsi, id := FreshSession(psi)
-	if id != "" || len(freshPsi.Args) != 0 {
-		t.Fatalf("FreshSession should not inject --session-id for Psi: id=%q args=%v", id, freshPsi.Args)
+	if id == "" || len(freshPsi.Args) != 2 || freshPsi.Args[0] != "--session-id" || freshPsi.Args[1] != id {
+		t.Fatalf("FreshSession should inject --session-id for Psi: id=%q args=%v", id, freshPsi.Args)
 	}
 
 	// Ensure PiPsi cannot be called on non-pi coder
