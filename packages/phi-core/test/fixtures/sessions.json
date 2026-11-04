@@ -1,0 +1,25 @@
+[
+    {
+        "id": "probe-session-3",
+        "title": "Third session",
+        "cwd": "/tmp/stage05-probe/ws",
+        "coder": "pi",
+        "session_path": "/tmp/stage05-probe/ws/.pi/session-3",
+        "time_updated": "2026-11-03T22:03:00Z"
+    },
+    {
+        "id": "probe-session-2",
+        "title": "Second session",
+        "cwd": "/tmp/stage05-probe/ws",
+        "coder": "pi",
+        "time_updated": "2026-11-03T22:02:00Z",
+        "env": "SECRET-MUST-NOT-SURFACE"
+    },
+    {
+        "id": "probe-session-1",
+        "title": "First session",
+        "cwd": "/tmp/stage05-probe/other",
+        "coder": "opencode",
+        "time_updated": "2026-11-03T22:01:00Z"
+    }
+]

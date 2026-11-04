@@ -1,0 +1,33 @@
+{
+    "pi": {
+        "id": "pi",
+        "order": 3,
+        "name": "Pi Coder",
+        "short_label": "Pi",
+        "logo": "vendor/logos/pi.png",
+        "sidebar_visible": true,
+        "is_shell": false,
+        "input_mode": "staged",
+        "presets": [{ "name": "default", "value": "pi" }],
+        "capabilities": {
+            "list": true,
+            "transcript": true,
+            "rename": false,
+            "pi_rpc": true
+        },
+        "model_switch_disabled": false,
+        "pi_mode": "rpc",
+        "env": "SECRET-MUST-NOT-SURFACE",
+        "command": "/bin/false"
+    },
+    "custom-minimal": {
+        "name": "Custom Minimal"
+    },
+    "pi-rpc": {
+        "name": "Reserved Entry"
+    },
+    "keyed": {
+        "id": "embedded-ignored",
+        "name": "Key Wins"
+    }
+}

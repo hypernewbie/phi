@@ -1,1 +1,42 @@
 export type { AuthStatus, CredentialBundle } from './auth.ts';
+export type {
+    AbortSignalLike,
+    ApiRequest,
+    ApiTransport,
+    Capabilities,
+    CoderDescriptor,
+    CoderRegistry,
+    CodersOutcome,
+    Preset,
+    RenameOutcome,
+    Session,
+    SessionsOutcome,
+    TransportResult,
+} from './api/index.ts';
+export {
+    decodeCoderRegistry,
+    decodeSessionPage,
+    fetchCoderRegistry,
+    getCoder,
+    hasPiRpc,
+    hasRename,
+    hasSessions,
+    hasTranscript,
+    inputMode,
+    isShell,
+    listCoders,
+    listSessions,
+    logoFor,
+    modelSwitchDisabled,
+    presetsFor,
+    renameSession,
+    seedBuiltins,
+    sessionsUrl,
+    updateRegistry,
+    visibleCoders,
+} from './api/index.ts';
+export type {
+    FetchCoderRegistryOptions,
+    ListSessionsOptions,
+    RenameSessionOptions,
+} from './api/index.ts';

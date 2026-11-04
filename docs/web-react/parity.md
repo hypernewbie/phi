@@ -179,6 +179,54 @@ Changed files stay inside the plan allowlist: `R/package.json` + `pnpm-lock.yaml
 
 Chromium unit/browser evidence does not establish cross-browser or screen-reader behavior. These checks remain pending human operation, not passes or integration authority.
 
+## Stage 05 status (sessions and coder API seam)
+
+**Date:** 2026-11-04. **State:** implemented in a worktree, not committed, not reviewed for integration. Core-only stage: no UI, no browser surface.
+
+| Reference | Value |
+| --- | --- |
+| Base | `origin/main` `111f11a8` (release v0.36.0) |
+| Branch | `stage-05-sessions` |
+| Worktree | `/Users/n0mad/code/phi-worktrees/stage-05-sessions` |
+| Plan | `/Users/n0mad/code/phi/plan/2026-11-03_22-55-55_stage-05-sessions-coders.md` revision 1 |
+| Authorization | User supplied `EXECUTE` on 2026-11-04. Direct, non-independent review. No commit, push, merge, or deletion authorized. |
+
+Milestones M0 (worktree + baselines), M1 (transport seam + session list), M2 (coders + rename), and M3 (this review gate) are complete. The seam is `ApiTransport` (status + text + signal/bearer passthrough); the web-react adapter lands in Stage 6.
+
+### Final verification block
+
+All commands ran from the worktree root on 2026-11-04. Live probes used isolated loopback servers with synthetic data and passwordless auth. No check used a user server, real-user state, or production service.
+
+| Final command | Exit | Result |
+| --- | --- | --- |
+| `pnpm typecheck` | 0 | All compiler passes, core src + tests |
+| `pnpm check:vendors` | 0 | Vendored bytes unchanged |
+| `pnpm exec biome ci ./packages/phi-core` | 0 | No findings |
+| `pnpm exec vitest run packages/phi-core/test --maxWorkers=2` (twice) | 0 | 4 files, 42 tests passed, boundary included |
+| M1 live probe (twice) | 0 | Planted pi session round-trips through `listSessions`; bogus coder → `unsupported-coder` |
+| M2 live probe (twice) | 0 | 7 real descriptors decode; synthetic rename → `ok` with meta file created; unchanged rename makes zero calls |
+
+Changed files stay inside `packages/phi-core/{src/api,test/api,test/fixtures}` plus the `src/index.ts` re-export lines and this document. No Go, legacy `web/`, or `web-react` changes. Root `.gitignore` blankets `sessions.json`, so that fixture needs `git add -f` at commit time.
+
+### Functional results
+
+- `listSessions` builds the legacy-exact URL, decodes whole-page strict (one bad entry rejects all), preserves server order and identity fields verbatim, drops unknown wire fields, and maps 401/403 → `auth-required`, 400 → `unsupported-coder`, rest → `unavailable`.
+- `renameSession` short-circuits empty/unchanged names without touching the transport, posts exact `{id, name}` JSON, and never throws.
+- `seedBuiltins` carries the 7 legacy descriptors verbatim; `decodeCoderRegistry` accepts array or ID-keyed object form, skips invalid entries, drops reserved ids, and lets the object key win over an embedded id.
+- `updateRegistry` replaces on `ok` (even zero descriptors) and returns the identical Map otherwise: a failed read never erases capabilities.
+- Capability readers and `logoFor` (vendor-only, traversal-rejected) match legacy semantics over an explicit registry parameter; unknown ids return safe defaults.
+
+### Intentional differences
+
+- No module state: legacy keeps a module-level registry; core takes the registry as a parameter. The Stage 6 owner holds the map.
+- `limit <= 0` skips the page-length check (legacy always sends a positive page size; the server returns all sessions for non-positive limits).
+- The loader is named `fetchCoderRegistry`, not legacy `loadCoderRegistry`, because there is no module state to load into.
+- Transcript fetch, `hasModelSwitch`, attachment formatting, and recipes are consumer-stage code, excluded per the master plan.
+
+### Pending human checks
+
+None new: this stage ships no UI and no browser behavior. Prior stages' Safari/VoiceOver checks still stand where recorded.
+
 ## Architecture and ownership
 
 `@phi/core` exports an empty TypeScript module. Its source compiler excludes DOM and ambient Node types.
