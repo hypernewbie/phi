@@ -1782,6 +1782,40 @@ describe('refresh ownership', () => {
         expect(state.loggedOut).toBe(true);
     });
 
+    it('drops the credential when a rotation lands during the logout', async () => {
+        await startV2('jwt-before-rotation', 3600);
+        // The answer is held so a rotation can install a new token first.
+        let release;
+        const held = new Promise((resolve) => {
+            release = () => resolve({ json: { ok: true } });
+        });
+        mockAuth((url) => (url === '/api/auth/v2/logout' ? held : undefined));
+        const logout = logoutAccess();
+        // A rotation of the same session: new token, same refresh family.
+        __test__.receiveBundle(siblingBundle('jwt-rotated', 7200));
+        expect(__test__.getAccessState().accessToken).toBe('jwt-rotated');
+        release();
+        await expect(logout).resolves.toEqual({ ok: true });
+        const state = __test__.getAccessState();
+        expect(state.accessToken).toBeNull();
+        expect(state.loggedOut).toBe(true);
+    });
+
+    it('keeps the credential a sign-in installed during the logout', async () => {
+        await startV2('jwt-before-signin', 3600);
+        let release;
+        const held = new Promise((resolve) => {
+            release = () => resolve({ json: { ok: true } });
+        });
+        mockAuth((url) => (url === '/api/auth/v2/logout' ? held : undefined));
+        const logout = logoutAccess();
+        // A different session now owns the page: the late answer is stale.
+        installToken('jwt-new-signin');
+        release();
+        await expect(logout).resolves.toEqual({ ok: true });
+        expect(__test__.getAccessState().accessToken).toBe('jwt-new-signin');
+    });
+
     it('ignores an older bundle and a foreign-origin bundle', async () => {
         await startV2('jwt-newer', 7200);
         const older = siblingBundle('jwt-older', 60);
