@@ -91,21 +91,20 @@ it.each([
 });
 
 it.each([
-    ['garbage date', 'not-a-date'],
-    ['numeric date', 12345],
-])('rejects the page on %s', async (_name, time_updated) => {
-    const body = JSON.stringify([
-        { id: 'a', title: 't', time_updated },
-    ]);
-    const { transport } = fakeTransport(ok(body));
-    const outcome = await listSessions(transport, options);
-    expect(outcome).toEqual({ kind: 'invalid-response' });
-});
-
-it('rejects the page on a missing time_updated', async () => {
-    const { transport } = fakeTransport(
-        ok(JSON.stringify([{ id: 'a', title: 't' }])),
-    );
+    ['garbage date', { id: 'a', title: 't', time_updated: 'not-a-date' }],
+    ['numeric date', { id: 'a', title: 't', time_updated: 12345 }],
+    ['missing time_updated', { id: 'a', title: 't' }],
+    [
+        'non-string optional field',
+        {
+            id: 'a',
+            title: 't',
+            time_updated: '2026-11-03T22:00:00Z',
+            cwd: 42,
+        },
+    ],
+])('rejects the page on %s', async (_name, bad) => {
+    const { transport } = fakeTransport(ok(JSON.stringify([bad])));
     const outcome = await listSessions(transport, options);
     expect(outcome).toEqual({ kind: 'invalid-response' });
 });
@@ -235,6 +234,17 @@ it.each([
     expect(requests).toHaveLength(0);
 });
 
+it.each([401, 403])('maps rename %i to auth-required', async (status) => {
+    const { transport } = fakeTransport({ kind: 'response', status, text: '' });
+    const outcome = await renameSession(transport, {
+        id: 'session-1',
+        currentTitle: 'Old',
+        name: 'New',
+        signal,
+    });
+    expect(outcome).toEqual({ kind: 'auth-required' });
+});
+
 it('maps rename failures into outcomes', async () => {
     const base = {
         id: 'session-1',
@@ -242,10 +252,6 @@ it('maps rename failures into outcomes', async () => {
         name: 'New',
         signal,
     };
-    const auth = fakeTransport({ kind: 'response', status: 403, text: '' });
-    expect(await renameSession(auth.transport, base)).toEqual({
-        kind: 'auth-required',
-    });
     const server = fakeTransport({
         kind: 'response',
         status: 500,

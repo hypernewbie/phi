@@ -196,6 +196,59 @@ it('reads seed capabilities through the capability readers', () => {
     expect(logoFor(seed, 'pi')).toBe('vendor/logos/pi.png');
 });
 
+it('coerces invalid field values to safe defaults', () => {
+    const decoded = decodeCoderRegistry([
+        {
+            id: 'coerced',
+            name: 'Coerced',
+            order: -1,
+            input_mode: 'weird',
+            opencode_mode: 'weird',
+            pi_mode: 42,
+            logo: 42,
+            presets: [
+                { name: 'good', value: 'g' },
+                { name: 'missing-value' },
+                { name: 7, value: 'v' },
+                'garbage',
+                null,
+            ],
+            capabilities: { list: 'yes', transcript: 1 },
+        },
+        { id: 'float-order', name: 'Float Order', order: 1.5 },
+    ]);
+    if (decoded === null) throw new Error('fixture must decode');
+    const coerced = decoded.find((d) => d.id === 'coerced');
+    expect(coerced).toMatchObject({
+        input_mode: 'staged',
+        logo: '',
+        presets: [{ name: 'good', value: 'g' }],
+        capabilities: {
+            list: false,
+            transcript: false,
+            rename: false,
+            pi_rpc: false,
+        },
+    });
+    expect(coerced).not.toHaveProperty('order');
+    expect(coerced).not.toHaveProperty('opencode_mode');
+    expect(coerced).not.toHaveProperty('pi_mode');
+    const floated = decoded.find((d) => d.id === 'float-order');
+    expect(floated).not.toHaveProperty('order');
+});
+
+it('reads decoded presets through presetsFor', () => {
+    const descriptors = decodeCoderRegistry(JSON.parse(codersText));
+    if (descriptors === null) throw new Error('fixture must decode');
+    const registry = updateRegistry(seedBuiltins(), {
+        kind: 'ok',
+        descriptors,
+    });
+    expect(presetsFor(registry, 'pi')).toEqual([
+        { name: 'default', value: 'pi' },
+    ]);
+});
+
 it('rejects non-vendor and traversal logos', () => {
     const descriptors = decodeCoderRegistry([
         { id: 'ok', name: 'Ok', logo: 'vendor/logos/pi.png' },
@@ -229,6 +282,19 @@ it('returns safe defaults for unknown ids', () => {
     expect(logoFor(seed, 'nope')).toBe('');
 });
 
+it('falls back when optional descriptor fields are absent', () => {
+    const descriptors = decodeCoderRegistry([
+        { id: 'bare', name: 'Bare' },
+    ]);
+    if (descriptors === null) throw new Error('fixture must decode');
+    const bare = descriptors[0];
+    const registry = new Map([
+        ['bare', { ...bare, logo: undefined, presets: undefined }],
+    ]);
+    expect(logoFor(registry, 'bare')).toBe('');
+    expect(presetsFor(registry, 'bare')).toEqual([]);
+});
+
 it('reads the registry through the injected transport', async () => {
     const { transport, requests } = fakeTransport(ok(codersText));
     const outcome = await fetchCoderRegistry(transport, {
@@ -251,11 +317,14 @@ it('reads the registry through the injected transport', async () => {
     expect(requests[0].signal).toBe(signal);
 });
 
-it('maps registry failures into outcomes', async () => {
-    const auth = fakeTransport({ kind: 'response', status: 401, text: '' });
+it.each([401, 403])('maps registry %i to auth-required', async (status) => {
+    const auth = fakeTransport({ kind: 'response', status, text: '' });
     expect(await fetchCoderRegistry(auth.transport, { signal })).toEqual({
         kind: 'auth-required',
     });
+});
+
+it('maps registry failures into outcomes', async () => {
     const garbage = fakeTransport(ok('"just-a-string"'));
     expect(await fetchCoderRegistry(garbage.transport, { signal })).toEqual({
         kind: 'invalid-response',
