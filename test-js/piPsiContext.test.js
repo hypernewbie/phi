@@ -4,7 +4,11 @@ import { setupDomHarness, mockFetch } from './_dom.js';
 
 setupDomHarness();
 
-async function harness() {
+// harness mounts the real coder-tab, empty-launcher, and new-session controls
+// against a fake store, so the opposite-agent action is exercised through its
+// production event wiring rather than a copy of it. storeMode is the store's
+// effective default; null means the default is still unknown.
+async function harness(storeMode = null) {
     vi.resetModules();
     mockFetch(() => ({
         pi: {
@@ -46,37 +50,62 @@ async function harness() {
         switchCoder: vi.fn(),
         spawnNewSession: vi.fn(),
         launchSession: vi.fn(),
+        app: {
+            piLaunchStore: storeMode ? { mode: storeMode } : null,
+            tabManager: { createTab: vi.fn() },
+            showToast: vi.fn(),
+        },
     });
     document.body.appendChild(button);
     ctx.setupEventListeners();
     return { ctx, button, coders, SessionsManager };
 }
 
+function openMenu(target) {
+    target.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true }),
+    );
+    return document.querySelector('.session-ctx-item');
+}
+
 beforeEach(() => {
     vi.useRealTimers();
 });
 
-describe('Psi is explicit and per launch for Pi', () => {
+describe('The opposite agent action follows the default', () => {
     it.each([
         '#coder-selector button',
         '#empty-quick-launch button',
         'new-session',
-    ])('offers Open with Psi on right-click only (%s)', async (selector) => {
+    ])('offers Open with Psi when the default is Pi or unknown (%s)', async (selector) => {
         const { ctx, button } = await harness();
         const target =
             selector === 'new-session'
                 ? button
                 : document.querySelector(selector);
-        target.dispatchEvent(
-            new MouseEvent('contextmenu', { bubbles: true, cancelable: true }),
-        );
-        const item = document.querySelector('.session-ctx-item');
+        const item = openMenu(target);
         expect(item).not.toBeNull();
         expect(item.textContent).toBe('Open with Psi');
         expect(ctx.spawnNewSession).not.toHaveBeenCalled();
         item.click();
-        expect(ctx.spawnNewSession).toHaveBeenCalledWith(false, true);
+        expect(ctx.spawnNewSession).toHaveBeenCalledWith(false, 'psi');
         expect(document.querySelector('.session-ctx-menu')).toBeNull();
+    });
+
+    it.each([
+        '#coder-selector button',
+        '#empty-quick-launch button',
+        'new-session',
+    ])('offers Open with Pi when the default is Psi (%s)', async (selector) => {
+        const { ctx, button } = await harness('psi');
+        const target =
+            selector === 'new-session'
+                ? button
+                : document.querySelector(selector);
+        const item = openMenu(target);
+        expect(item.textContent).toBe('Open with Pi');
+        item.click();
+        expect(ctx.spawnNewSession).toHaveBeenCalledWith(false, 'pi');
     });
 
     it('left-click remains the normal launch', async () => {
@@ -85,8 +114,8 @@ describe('Psi is explicit and per launch for Pi', () => {
         expect(ctx.spawnNewSession).toHaveBeenCalledWith();
     });
 
-    it('saved Pi sessions get Open with Psi without changing normal Launch', async () => {
-        const { ctx } = await harness();
+    it('saved Pi sessions offer the opposite agent without changing Launch', async () => {
+        const { ctx } = await harness('psi');
         const row = document.createElement('div');
         document.body.appendChild(row);
         ctx._showSessionContextMenu(new MouseEvent('contextmenu'), row, {
@@ -95,21 +124,21 @@ describe('Psi is explicit and per launch for Pi', () => {
             coder: 'pi',
         });
         const items = [...document.querySelectorAll('.session-ctx-item')];
-        const psiItem = items.find(
-            (item) => item.textContent === 'Open with Psi',
-        );
-        expect(psiItem).toBeDefined();
-        psiItem.click();
+        const piItem = items.find((item) => item.textContent === 'Open with Pi');
+        expect(piItem).toBeDefined();
+        piItem.click();
         expect(ctx.launchSession).toHaveBeenCalledWith(
             'pi-ses',
             'Pi Session',
             [],
             false,
-            true,
+            'pi',
         );
     });
+});
 
-    it('pins a Psi request and passes pi_mode to createTab', async () => {
+describe('Pi launch requests carry the resolved agent', () => {
+    it('pins an explicit Psi request and passes pi_mode to createTab', async () => {
         const { ctx, SessionsManager } = await harness();
         let complete;
         const fetcher = mockFetch(
@@ -118,16 +147,16 @@ describe('Psi is explicit and per launch for Pi', () => {
                     complete = resolve;
                 }),
         );
-        const createTab = vi.fn();
-        ctx.app = { tabManager: { createTab }, showToast: vi.fn() };
+        const createTab = ctx.app.tabManager.createTab;
         const launch = SessionsManager.prototype.spawnNewSession.call(
             ctx,
             false,
-            true,
+            'psi',
         );
         expect(JSON.parse(fetcher.mock.calls[0][1].body)).toMatchObject({
             coder: 'pi',
             cwd: '/repo',
+            pi_mode: 'psi',
             pi_psi: true,
         });
         complete({ pane_id: 'pane-psi', session_id: '', pi_mode: 'psi' });
@@ -139,6 +168,78 @@ describe('Psi is explicit and per launch for Pi', () => {
         ]);
         expect(createTab.mock.calls[0][2]).toBe('+ Psi');
         expect(createTab.mock.calls[0][12]).toEqual({ piMode: 'psi' });
+    });
+
+    it('uses the confirmed default when the caller names no agent', async () => {
+        const { ctx, SessionsManager } = await harness('psi');
+        const fetcher = mockFetch(() => ({ pane_id: 'p', session_id: '' }));
+        await SessionsManager.prototype.spawnNewSession.call(ctx);
+        const body = JSON.parse(fetcher.mock.calls[0][1].body);
+        expect(body.pi_mode).toBe('psi');
+        expect(body.pi_psi).toBe(true);
+        expect(body.title).toBe('+ Psi');
+    });
+
+    it('leaves the choice to the server when no default is known', async () => {
+        // A cold start must not wait for a settings GET, and must not guess Pi:
+        // both mode fields are omitted and the returned mode titles the tab.
+        const { ctx, SessionsManager } = await harness();
+        const fetcher = mockFetch(() => ({
+            pane_id: 'p',
+            session_id: '',
+            pi_mode: 'psi',
+        }));
+        const createTab = ctx.app.tabManager.createTab;
+        await SessionsManager.prototype.spawnNewSession.call(ctx);
+        const body = JSON.parse(fetcher.mock.calls[0][1].body);
+        expect('pi_mode' in body).toBe(false);
+        expect('pi_psi' in body).toBe(false);
+        expect(body.title).toBe('');
+        expect(createTab.mock.calls[0][2]).toBe('+ Psi');
+        expect(createTab.mock.calls[0][12]).toEqual({ piMode: 'psi' });
+    });
+
+    it('does not send Pi fields for another coder', async () => {
+        const { ctx, SessionsManager } = await harness('psi');
+        ctx.activeCoder = 'bash';
+        const fetcher = mockFetch(() => ({ pane_id: 'p', session_id: '' }));
+        await SessionsManager.prototype.spawnNewSession.call(ctx);
+        const body = JSON.parse(fetcher.mock.calls[0][1].body);
+        expect('pi_mode' in body).toBe(false);
+        expect('pi_psi' in body).toBe(false);
+    });
+
+    it('restart keeps the pane agent instead of the configured default', async () => {
+        const { TabManager } = await import('../web/terminal.js');
+        const fetcher = mockFetch(() => ({
+            pane_id: 'p',
+            session_id: '',
+            ok: false,
+        }));
+        const noop = () => {};
+        const tm = Object.assign(Object.create(TabManager.prototype), {
+            app: { piLaunchStore: { mode: 'pi' } },
+            tabs: new Map([['old', {}]]),
+            activePaneId: 'old',
+            _invalidatePiBridgeThinking: noop,
+            _invalidatePiBridgeCompact: noop,
+            _invalidatePiBridgeReload: noop,
+        });
+        const termContainer = document.createElement('div');
+        tm.restartTab({
+            paneId: 'old',
+            coder: 'pi',
+            piMode: 'psi',
+            cwd: '/repo',
+            sessionId: 'sid',
+            title: 'Saved',
+            workspace: 'ws',
+            termContainer,
+            tabEl: document.createElement('div'),
+        });
+        const body = JSON.parse(fetcher.mock.calls[0][1].body);
+        expect(body.pi_mode).toBe('psi');
+        expect(body.pi_psi).toBe(true);
     });
 
     it('hides attachment control when tab is running in psi mode', async () => {

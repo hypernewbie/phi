@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hypernewbie/phi/internal/config"
 	"github.com/hypernewbie/phi/pkg/coders"
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/ws"
@@ -149,6 +150,63 @@ func TestRestoreCorruptFileNeverAbortsStartup(t *testing.T) {
 	testServer.restoreSavedTabs()
 	if len(testServer.pty.ListActive()) != 0 {
 		t.Fatal("corrupt state published ghost tabs")
+	}
+}
+
+func TestRestoreKeepsSavedPiAgentUnderOppositeDefault(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		saved    string
+		def      string
+		noInject bool
+		want     string
+	}{
+		{"legacy pi pane under psi default", "", "psi", false, "pi"},
+		{"explicit pi pane under psi default", "pi", "psi", false, "pi"},
+		{"psi pane under pi default", "psi", "pi", false, "psi"},
+		{"psi pane under psi default", "psi", "psi", false, "psi"},
+		// The wrong mode must not be a fallback for an unavailable bridge: with
+		// injection disabled and no bridge attached, a saved Psi pane is still
+		// Psi.
+		{"psi pane with bridge injection disabled", "psi", "pi", true, "psi"},
+		{"psi pane under psi default with injection disabled", "psi", "psi", true, "psi"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := restoreHarness(t)
+			// The configured default only picks agents for new panes; a saved
+			// pane keeps the agent it was created with.
+			if _, err := testStore.Update(func(cfg *config.Config) error {
+				cfg.PiDefaultMode = test.def
+				cfg.PsiCommand = os.Args[0]
+				cfg.PiBridgeNoInject = test.noInject
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			pi := testServer.coders.MustGet("pi")
+			pi.Command = os.Args[0]
+			pi.Args = nil
+			argsPath := filepath.Join(home, "restored.args")
+			pi.Env = map[string]string{"PHI_TEST_RESTORE_CHILD": "1", "PHI_TEST_RESTORE_ARGS": argsPath}
+			testServer.coders.Add(pi)
+
+			tab := pty.SavedTab{PTYInstanceSnapshot: pty.PTYInstanceSnapshot{
+				ID: "restored-pi", Coder: "pi", PiMode: test.saved, Cwd: home, Title: "Saved title",
+			}}
+			testServer.restoreSavedTab(tab)
+			inst, ok := testServer.pty.Get(tab.ID)
+			if !ok || inst.IsPtyDead() {
+				t.Fatalf("restored pane is not live: ok=%v", ok)
+			}
+			// The child writes this file only when it really ran, so the mode
+			// assertion cannot pass on a pane whose process never started.
+			if _, err := os.Stat(argsPath); err != nil {
+				t.Fatalf("configured command did not run: %v", err)
+			}
+			if got := inst.Snapshot().PiMode; got != test.want {
+				t.Fatalf("saved mode %q under default %q restored as %q", test.saved, test.def, got)
+			}
+		})
 	}
 }
 
