@@ -284,6 +284,52 @@ func TestNativeRefreshNotSentFallsBackExactlyOnce(t *testing.T) {
 	}
 }
 
+func TestNativeRefreshFallbackReplaysMarkerOnlyHead(t *testing.T) {
+	attach := refreshAttach(0)
+	attach.Oldest = proto.Uint64(0)
+	attach.FloorEventCursor = proto.String("v1.7.0.0")
+	attach.EventCursor = proto.String("v1.7.0.1")
+	attach.HeadCols, attach.HeadRows = proto.Uint32(100), proto.Uint32(30)
+	started := make(chan url.Values, 1)
+	release := make(chan struct{})
+	f := newWindowFixture(t, attach, func(w http.ResponseWriter, q url.Values) {
+		started <- q
+		<-release
+		writeReplayFixture(w, wireproto.ReplayHeader{
+			Epoch: 7, Start: 0, End: 0, Through: 0,
+			ThroughCursor: "v1.7.0.1", EventCursor: "v1.7.0.1",
+			InitCols: 80, InitRows: 24,
+			Resizes: [][3]uint64{{0, 100, 30}},
+		}, nil)
+	})
+	p, ev := startNativePane(t, f.srv.URL, 80, 24)
+	resize := f.waitFrame(t, func(frame *wspb.TerminalClientFrame) bool {
+		return frame.GetResize() != nil && frame.GetResize().GetRefreshRequestId() != ""
+	})
+	waitPaneEvent(t, ev, paneOutput) // the certified-head frame before refusal
+	f.push(t, &wspb.TerminalServerFrame{Payload: &wspb.TerminalServerFrame_RefreshResult{
+		RefreshResult: &wspb.TerminalRefreshResult{
+			RequestId: resize.GetResize().RefreshRequestId,
+			Outcome:   wspb.TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_NOT_SENT.Enum(),
+			Reason:    proto.String("unavailable"),
+		},
+	}})
+	select {
+	case q := <-started:
+		if q.Get("from") != "0" || q.Get("through") != "0" || q.Get("after_event_cursor") != "v1.7.0.0" {
+			t.Fatalf("marker-only fallback request: %v", q)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("zero-byte attach skipped its resize timeline")
+	}
+	close(release)
+	waitPaneEvent(t, ev, paneOutput)
+	frame, ok := p.snapshotCopy()
+	if !ok || frame.Cols != 100 || frame.Rows != 30 {
+		t.Fatalf("fallback geometry = %dx%d, want 100x30", frame.Cols, frame.Rows)
+	}
+}
+
 func TestNativeInputStaysLiveDuringReplay(t *testing.T) {
 	attach := refreshAttach(11)
 	attach.TerminalRefreshAvailable = proto.Bool(false)

@@ -172,6 +172,21 @@ func TestTerminalRefreshWithoutBridgeAnswersNotSent(t *testing.T) {
 	}
 }
 
+func TestTerminalRefreshAfterPaneCloseDropsLateReceipt(t *testing.T) {
+	hub := NewHub(0)
+	client := &Client{Send: make(chan []byte, 1)}
+	if !hub.AttachHot("closed", client) {
+		t.Fatal("attach refused")
+	}
+	<-client.Send           // consume ATTACH_HEAD
+	hub.ClosePane("closed") // removes the live owner and closes Send
+
+	// A missing live pane has no registration lock that can certify Send as
+	// open. Both late receipt paths must drop it rather than panic the server.
+	hub.dispatchTerminalRefresh("closed", &pty.PTYInstance{ID: "closed"}, client, "late")
+	hub.dispatchTerminalRefreshFailure("closed", client, "late-resize")
+}
+
 func TestTerminalRefreshReasonStaysFixed(t *testing.T) {
 	for _, tc := range []struct {
 		in, want string

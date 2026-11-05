@@ -86,13 +86,14 @@ func (p *paneActor) fallbackAfterRefresh() error {
 		return p.enterLimited("history could not be recovered: " + err.Error())
 	}
 	deadline := p.recoveryDeadline()
-	if p.attachHead > 0 {
-		if err := p.recoverFrom(deadline, p.floorValue(), p.attachHead, p.attachCursor); err != nil {
-			if p.exited {
-				return err
-			}
-			return p.enterLimited("history could not be recovered: " + err.Error())
+	// A zero-byte fence can still carry resize events. recoverFrom is a
+	// no-op when both byte and ordinal positions already match, so do not
+	// use attachHead as a proxy for whether the timeline needs replay.
+	if err := p.recoverFrom(deadline, p.floorValue(), p.attachHead, p.attachCursor); err != nil {
+		if p.exited {
+			return err
 		}
+		return p.enterLimited("history could not be recovered: " + err.Error())
 	}
 	if err := p.flushHeld(); err != nil {
 		return p.enterLimited("live output gap: " + err.Error())

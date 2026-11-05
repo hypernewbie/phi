@@ -292,7 +292,9 @@ func (h *Hub) deliverRefreshReceipt(ph *PaneHub, client *Client, requestID strin
 		return
 	}
 	if ph == nil {
-		h.deliverOrClose(client, frame)
+		// Without the pane's registration lock there is no safe way to know
+		// whether teardown already closed Send. A detached requester cannot
+		// receive this receipt anyway, so drop it instead of risking a panic.
 		return
 	}
 	ph.mu.Lock()
