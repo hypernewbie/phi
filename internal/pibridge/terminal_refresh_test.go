@@ -182,6 +182,32 @@ func TestRequestTerminalRefreshUncertain(t *testing.T) {
 	}
 }
 
+func TestTerminalRefreshRejectsBufferedReceiptAfterPeerLoss(t *testing.T) {
+	s, sock, cleanup := testServer(t)
+	defer cleanup()
+	stream, proc, _, cancel := openLeaseStream(t, s, sock, "pane-stale-refresh", CapabilityTerminalRefresh)
+	defer cancel()
+
+	done := make(chan TerminalRefreshResult, 1)
+	go func() { done <- s.RequestTerminalRefresh(context.Background(), proc) }()
+	id := recvRefreshRequest(t, stream)
+	l, _ := s.reg.lookupByProcess(proc)
+	l.mu.Lock()
+	p := l.peer
+	p.refreshMu.Lock()
+	op := p.refreshOp
+	p.refreshMu.Unlock()
+	// Model a receipt already buffered when the stream is detached. Keep
+	// p.done open so select cannot hide a missing consumption-time fence.
+	l.peer = nil
+	op.ch <- TerminalRefreshResult{RequestID: id, Outcome: refreshDispatched}
+	l.mu.Unlock()
+
+	if got := <-done; got.Outcome != pibridgepb.TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_UNKNOWN {
+		t.Fatalf("detached peer receipt = %+v, want UNKNOWN", got)
+	}
+}
+
 func TestRequestTerminalRefreshPeerLoss(t *testing.T) {
 	s, sock, cleanup := testServer(t)
 	defer cleanup()

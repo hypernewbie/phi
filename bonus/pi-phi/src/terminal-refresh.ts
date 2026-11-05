@@ -42,25 +42,22 @@ export function isTerminalRefreshAvailable(ui: unknown): boolean {
  * retry, and the one repair attempt below just keeps the renderer alive.
  */
 export function invokeTerminalRefresh(tui: TerminalRefreshTui): boolean {
-    let stopped = false;
     try {
         tui.stop({ preserveScreen: true });
-        stopped = true;
         tui.start();
         tui.requestRender(true);
         return true;
     } catch {
-        if (stopped) {
-            try {
-                tui.start();
-            } catch {
-                // The renderer is already lost; nothing else is safe here.
-            }
-            try {
-                tui.requestRender(true);
-            } catch {
-                // Forced repair is best-effort only.
-            }
+        // stop can throw after disabling input or cancelling the renderer.
+        try {
+            tui.start();
+        } catch {
+            // The renderer is already lost; nothing else is safe here.
+        }
+        try {
+            tui.requestRender(true);
+        } catch {
+            // Forced repair is best-effort only.
         }
         return false;
     }

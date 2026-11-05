@@ -135,17 +135,25 @@ describe('terminal refresh dispatch', () => {
         ]);
     });
 
-    it('never restarts a renderer whose stop itself threw', () => {
-        const start = vi.fn();
+    it('repairs a renderer when stop throws after disabling input', () => {
+        let acceptsInput = true;
+        const start = vi.fn(() => {
+            acceptsInput = true;
+        });
+        const requestRender = vi.fn();
         const { tui } = recordingTui({
             stop: () => {
-                throw new Error('stop failed');
+                acceptsInput = false;
+                throw new Error('terminal cleanup failed');
             },
             start,
+            requestRender,
         });
         const read = readRefreshTui(tuiUi(tui));
         if (!read) throw new Error('TUI not read');
         expect(invokeTerminalRefresh(read)).toBe(false);
-        expect(start).not.toHaveBeenCalled();
+        expect(acceptsInput).toBe(true);
+        expect(start).toHaveBeenCalledTimes(1);
+        expect(requestRender).toHaveBeenCalledExactlyOnceWith(true);
     });
 });

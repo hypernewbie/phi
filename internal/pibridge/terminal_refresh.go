@@ -118,6 +118,17 @@ func (s *Server) RequestTerminalRefresh(ctx context.Context, processID string) T
 	defer timer.Stop()
 	select {
 	case res := <-op.ch:
+		if ctx.Err() != nil {
+			return unknown()
+		}
+		// A receipt can be buffered before its peer is replaced or revoked.
+		// Recheck at consumption, like the other bridge mutation receipts.
+		l.mu.Lock()
+		current := l.peer == p && p.generation == l.maxGen && l.state != leaseRevoked
+		l.mu.Unlock()
+		if !current {
+			return unknown()
+		}
 		return res
 	case <-timer.C:
 		p.clearRefresh(op)
