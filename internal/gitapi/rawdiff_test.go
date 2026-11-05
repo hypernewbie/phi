@@ -368,3 +368,41 @@ func TestHandleRawDiffUntrackedBinaryUsesGitBinaryMarker(t *testing.T) {
 		t.Errorf("untracked text file lost its patch: %s", body)
 	}
 }
+
+// Git writes its binary marker uncolored even under --color=always. The
+// colored diff stream is what the terminal pane shows, and the marker has
+// to stay machine-detectable there too.
+func TestHandleRawDiffUntrackedBinaryMarkerStaysUncolored(t *testing.T) {
+	tempDir := t.TempDir()
+
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = tempDir
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("git %v failed: %v", args, err)
+		}
+	}
+	runGit("init")
+	runGit("config", "user.name", "Test User")
+	runGit("config", "user.email", "test@example.com")
+
+	if err := os.WriteFile(filepath.Join(tempDir, "blob.bin"), []byte("\x00\x01\x02\x03"), 0644); err != nil {
+		t.Fatalf("write untracked binary: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/git/raw-diff?cwd="+tempDir+"&commit=unstaged&context=3&ansi=1", nil)
+	w := httptest.NewRecorder()
+	testAPI().HandleRawDiff(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "Binary files /dev/null and b/blob.bin differ\n") {
+		t.Errorf("expected uncolored Git binary marker: %q", body)
+	}
+	if strings.Contains(body, "\x1b[1mBinary files") {
+		t.Errorf("binary marker must not be wrapped in escape codes: %q", body)
+	}
+}

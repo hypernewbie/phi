@@ -4415,6 +4415,17 @@ export class DiffController {
         });
     }
 
+    /** Destination path of a `diff --git` header, without the `b/`
+     *  prefix. Git quotes paths that need it:
+     *  `diff --git "a/caf\303\251.txt" "b/caf\303\251.txt"`. */
+    _diffHeaderName(line: string): string {
+        const rest = line.slice('diff --git '.length);
+        const quoted = /^"((?:[^"\\]|\\.)*)"\s+"((?:[^"\\]|\\.)*)"$/.exec(rest);
+        if (quoted) return quoted[2].replace(/^b\//, '');
+        const separator = rest.lastIndexOf(' b/');
+        return separator >= 0 ? rest.slice(separator + 3) : rest;
+    }
+
     /** Split a raw patch into per-file sections at each `diff --git`
      *  line; anything before the first header stays its own chunk. Each
      *  chunk records the binary markers diff2html recognises, so binary
@@ -4431,11 +4442,13 @@ export class DiffController {
             isBinary: boolean;
         }> = [];
         for (const line of rawDiffText.split('\n')) {
-            const header = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
-            if (header) {
+            // A content line never starts at column 0 with this text, so
+            // the header is a safe boundary. Matching the prefix (not a
+            // path shape) keeps quoted paths in their own section.
+            if (line.startsWith('diff --git ')) {
                 chunks.push({
                     lines: [line],
-                    name: header[2],
+                    name: this._diffHeaderName(line),
                     isBinary: false,
                 });
                 continue;
@@ -4453,11 +4466,19 @@ export class DiffController {
             }
             current.lines.push(line);
         }
-        return chunks.map((chunk) => ({
-            text: chunk.lines.join('\n'),
-            name: chunk.name,
-            isBinary: chunk.isBinary,
-        }));
+        return chunks.map((chunk) => {
+            const text = chunk.lines.join('\n');
+            // A NUL byte cannot occur in a text patch. Its presence means
+            // raw binary bytes leaked into the diff: a cache written
+            // before the server learned to mark binaries, or an older
+            // server paired with this frontend. Such a section has no
+            // line structure, so drop it like a marked binary section.
+            return {
+                text,
+                name: chunk.name,
+                isBinary: chunk.isBinary || text.includes('\u0000'),
+            };
+        });
     }
 
     /** One muted line above the diff naming the skipped binary files.

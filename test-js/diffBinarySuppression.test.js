@@ -208,4 +208,82 @@ describe('DiffController — _splitDiffChunks', () => {
         );
         expect(chunks[0].isBinary).toBe(true);
     });
+
+    it('starts a new section at a quoted path header', () => {
+        // Git quotes paths that need it. A quoted header that did not
+        // split would merge the file into the previous section — and a
+        // binary neighbour would swallow this file's diff.
+        const diffCtrl = buildController();
+        const quoted = `diff --git "a/caf\\303\\251.txt" "b/caf\\303\\251.txt"
+--- "a/caf\\303\\251.txt"
++++ "b/caf\\303\\251.txt"
+@@ -1 +1 @@
+-old
++new`;
+        const chunks = diffCtrl._splitDiffChunks(
+            `${BINARY_SECTION}\n${quoted}\n`,
+        );
+        expect(chunks.map((c) => [c.name, c.isBinary])).toEqual([
+            ['logo.png', true],
+            ['caf\\303\\251.txt', false],
+        ]);
+    });
+
+    it('keeps a quoted-path text file when a binary file precedes it', () => {
+        installDiff2HtmlSpy();
+        const diffCtrl = buildController();
+        const quoted = `diff --git "a/caf\\303\\251.txt" "b/caf\\303\\251.txt"
+--- "a/caf\\303\\251.txt"
++++ "b/caf\\303\\251.txt"
+@@ -1 +1 @@
+-old
++new`;
+        diffCtrl.renderRichDiff(`${BINARY_SECTION}\n${quoted}\n`);
+
+        const rendered = window.Diff2Html.html.mock.calls[0][0];
+        expect(rendered).toContain('caf');
+        expect(rendered).toContain('+new');
+        expect(rendered).not.toContain('logo.png');
+    });
+
+    it('drops a section whose bytes leaked in without a binary marker', () => {
+        // A cache written before the server marked binaries, or an older
+        // server, delivers raw bytes as added lines. A NUL byte cannot
+        // appear in a text patch, so its presence is proof the section
+        // has no line structure.
+        const diffCtrl = buildController();
+        const leaked = `diff --git a/logo.png b/logo.png
+new file mode 100644
+--- /dev/null
++++ b/logo.png
+@@ -0,0 +1,2 @@
++\u0000\u0089PNG
++IHDR`;
+        const chunks = diffCtrl._splitDiffChunks(
+            `${leaked}\n${TEXT_SECTION}\n`,
+        );
+        expect(chunks.map((c) => [c.name, c.isBinary])).toEqual([
+            ['logo.png', true],
+            ['src/main.go', false],
+        ]);
+    });
+
+    it('renders the leaked section as skipped, not as bytes', () => {
+        installDiff2HtmlSpy();
+        const diffCtrl = buildController();
+        const leaked = `diff --git a/logo.png b/logo.png
+new file mode 100644
+--- /dev/null
++++ b/logo.png
+@@ -0,0 +1,1 @@
++\u0000\u0089PNG`;
+        diffCtrl.renderRichDiff(`${leaked}\n${TEXT_SECTION}\n`);
+
+        const body = diffCtrl.diffModalBody;
+        expect(body.textContent).not.toContain('PNG');
+        expect(body.textContent).not.toContain('\u0000');
+        const note = body.querySelector('.git-binary-note');
+        expect(note.textContent).toBe('Skipped 1 binary file: logo.png');
+        expect(body.querySelectorAll('.d2h-file-wrapper').length).toBe(1);
+    });
 });

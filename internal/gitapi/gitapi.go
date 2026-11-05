@@ -282,8 +282,9 @@ func appendUntrackedDiff(out []byte, fname string, content []byte, ansi bool) []
 	if isBinaryContent(content) {
 		// Binary bytes are not lines. Emit the marker Git uses for
 		// binary blobs so the diff UI shows one "Binary file" row
-		// instead of raw bytes spread over added lines.
-		out = append(out, []byte(header(fmt.Sprintf("Binary files /dev/null and b/%s differ\n", fname)))...)
+		// instead of raw bytes spread over added lines. Git emits this
+		// line uncolored even under --color=always; match that.
+		out = append(out, []byte(fmt.Sprintf("Binary files /dev/null and b/%s differ\n", fname))...)
 		return out
 	}
 	out = append(out, []byte(oldFile("--- /dev/null\n"))...)
