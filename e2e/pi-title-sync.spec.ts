@@ -84,6 +84,10 @@ test('Pi terminal labels follow native file titles through reload and reconnect'
                 configToToml({
                     workspaces: [realpathSync(cwdA), realpathSync(cwdB)],
                     theme_color: 'purple',
+                    // The stand-in never loads the bridge extension, so it
+                    // reports no session ID: Phi keeps choosing one, which is
+                    // the identity these native title files are written under.
+                    pi_bridge_no_inject: true,
                 }),
             );
             const command = join(dir, 'fake-pi');
