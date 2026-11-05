@@ -115,6 +115,51 @@ func TestSlowSubscriberGetsGap(t *testing.T) {
 
 // TestCancelIsIdempotentAndStopsDelivery guards double-cancel, which would
 // otherwise close a channel twice and panic the publisher.
+// TestLiveOverflowGapBoundaryIsRecoverable pins the promise a gap marker makes:
+// resyncing from its sequence recovers every event the subscriber never saw.
+// The marker used to name the sequence of the event being published rather than
+// the one dropped from the head, so resuming from it stepped over events that
+// were already gone from the subscriber's queue.
+func TestLiveOverflowGapBoundaryIsRecoverable(t *testing.T) {
+	b := NewBroker()
+	ch, cancel := b.Subscribe(context.Background(), 0, WildcardRecipient)
+	defer cancel()
+
+	const total = subscriberQueue * 2
+	for i := 0; i < total; i++ {
+		b.Publish(&syncmeshb.SyncEvent{Recipient: WildcardRecipient, Value: []byte("x")})
+	}
+	events := drainN(t, ch, subscriberQueue)
+
+	delivered := make(map[uint64]bool, len(events))
+	boundary := uint64(0)
+	for _, ev := range events {
+		if ev.GetGap() {
+			if boundary == 0 || ev.GetSeq() < boundary {
+				boundary = ev.GetSeq()
+			}
+			continue
+		}
+		delivered[ev.GetSeq()] = true
+	}
+	if boundary == 0 {
+		t.Fatal("overflow produced no gap marker")
+	}
+	missing := uint64(0)
+	for seq := uint64(1); seq <= total; seq++ {
+		if !delivered[seq] {
+			missing = seq
+			break
+		}
+	}
+	if missing == 0 {
+		t.Fatal("overflow lost nothing; the test setup is wrong")
+	}
+	if boundary != missing {
+		t.Fatalf("gap marker names %d, but the first event this subscriber never saw is %d; refetching from the marker skips %d", boundary, missing, missing)
+	}
+}
+
 func TestCancelIsIdempotentAndStopsDelivery(t *testing.T) {
 	b := NewBroker()
 	ch, cancel := b.Subscribe(context.Background(), 0, WildcardRecipient)

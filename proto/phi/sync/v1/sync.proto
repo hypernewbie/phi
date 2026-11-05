@@ -18,9 +18,10 @@ option go_package = "github.com/hypernewbie/phi/internal/syncmesh/pb;syncmeshb";
 // Wire types
 // ---------------------------------------------------------------------------
 
-// SyncEvent is one ordered change from a single publisher. gap means every
-// event before this one is unavailable; the receiver refetches board state
-// instead of inferring a gap from a missing seq.
+// SyncEvent is one ordered change from a single publisher. gap marks a hole in
+// this stream and carries the first seq that was never delivered: a receiver
+// resyncs from gap.seq (cursor gap.seq-1) instead of inferring a hole from a
+// missing seq.
 message SyncEvent {
   uint64 seq = 1;
   string sender = 2;

@@ -32,9 +32,10 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// SyncEvent is one ordered change from a single publisher. gap means every
-// event before this one is unavailable; the receiver refetches board state
-// instead of inferring a gap from a missing seq.
+// SyncEvent is one ordered change from a single publisher. gap marks a hole in
+// this stream and carries the first seq that was never delivered: a receiver
+// resyncs from gap.seq (cursor gap.seq-1) instead of inferring a hole from a
+// missing seq.
 type SyncEvent struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Seq             uint64                 `protobuf:"varint,1,opt,name=seq,proto3" json:"seq,omitempty"`

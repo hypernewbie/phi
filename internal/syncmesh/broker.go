@@ -51,8 +51,9 @@ const WildcardRecipient = "*"
 // either in the replay or arrives live — never in the gap between them.
 // sinceSeq 0 replays the whole retained history.
 //
-// A gap event carries the sequence of the next event that will be delivered,
-// so the receiver knows exactly where its history is broken.
+// A gap event carries the first sequence this subscriber is missing. Refetching
+// from there (cursor gap.seq-1) recovers the hole; an event before the marker is
+// only a hole when history trimmed it, and the marker reports that same point.
 func (b *Broker) Subscribe(_ context.Context, sinceSeq uint64, recipient string) (<-chan *syncmeshb.SyncEvent, func()) {
 	b.mu.Lock()
 	ch := make(chan *syncmeshb.SyncEvent, subscriberQueue)
@@ -139,7 +140,7 @@ func (b *Broker) Publish(ev *syncmeshb.SyncEvent) uint64 {
 		if !matches(ev, sub.recipient) {
 			continue
 		}
-		deliver(sub.ch, ev, b.seq)
+		deliver(sub.ch, ev)
 	}
 	return b.seq
 }
@@ -153,21 +154,27 @@ func matches(ev *syncmeshb.SyncEvent, filter string) bool {
 	return ev.Recipient == filter || ev.Recipient == WildcardRecipient
 }
 
-// deliver never blocks. A full queue loses one queued event and receives a gap
-// marker in its place, so the receiver resynchronizes instead of silently
-// missing data.
-func deliver(ch chan *syncmeshb.SyncEvent, ev *syncmeshb.SyncEvent, seq uint64) {
+// deliver never blocks. A full queue loses its oldest event and receives a gap
+// marker in its place. The marker carries the first sequence this subscriber is
+// missing, so refetching from that point recovers the hole instead of stepping
+// over it. Naming the event being published would sit above the hole and hide
+// the dropped events below it.
+func deliver(ch chan *syncmeshb.SyncEvent, ev *syncmeshb.SyncEvent) {
 	select {
 	case ch <- ev:
 		return
 	default:
 	}
+	missing := ev.Seq
 	select {
-	case <-ch:
+	case dropped := <-ch:
+		if dropped != nil {
+			missing = dropped.Seq
+		}
 	default:
 	}
 	select {
-	case ch <- &syncmeshb.SyncEvent{Seq: seq, Recipient: ev.Recipient, Gap: true}:
+	case ch <- &syncmeshb.SyncEvent{Seq: missing, Recipient: ev.Recipient, Gap: true}:
 	default:
 	}
 }
