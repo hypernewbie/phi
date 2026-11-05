@@ -107,6 +107,9 @@ describe('main view page (web/index.html)', () => {
     expect(headerHtmlSource).toContain('id="workspace-select"');
     expect(headerHtmlSource).toContain('id="header-kanban-btn"');
     expect(headerHtmlSource).toContain('id="header-diff-toggle-btn"');
+    // The sessions/tabs drawer toggle: the shell hides the body's header, so
+    // its hamburger must exist in the vendored header to be relayed.
+    expect(headerHtmlSource).toContain('id="mobile-sidebar-toggle"');
     expect(headerHtmlSource).toContain('id="hostname-display"');
     expect(headerHtmlSource).toContain('class="app-header-drag-gap"');
     // Two action buttons are icon-only by class (`Get Clipboard`,
@@ -308,6 +311,7 @@ describe('main view page behaviors (web/mainview.js)', () => {
       'header-config-pill',
       'header-export-btn',
       'header-import-btn',
+      'mobile-sidebar-toggle',
       'add-workspace-btn',
       'remove-workspace-btn',
     ]) {

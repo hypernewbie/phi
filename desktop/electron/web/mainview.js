@@ -240,6 +240,9 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
     'header-diff-toggle-btn',
     'header-export-btn',
     'header-import-btn',
+    // The sessions/tabs drawer lives in the body page, whose own header is
+    // hidden here; relay the vendored header's hamburger to it.
+    'mobile-sidebar-toggle',
   ];
   for (const id of ACTION_BUTTONS) {
     const btn = document.getElementById(id);
