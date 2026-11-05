@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { setupDomHarness } from './_dom.js';
-import { TabManager } from '../web/terminal.js';
+import { TabManager, pinCharMetrics } from '../web/terminal.js';
 
 // Brute-force-correct fit path: a fit that changes no geometry must not
 // run scroll capture, _spamScroll timers, or a backend SIGWINCH
@@ -171,5 +171,94 @@ describe('fitActiveTerminal skips same-geometry fits', () => {
         const c2 = ctx(dead);
         c2.fitActiveTerminal();
         expect(dead.fitAddon.fit).not.toHaveBeenCalled();
+    });
+});
+
+// The DOM renderer keeps a fractional cell (8.4 px at 14 px) while the
+// WebGL renderer quantizes it to whole device pixels. Disposing the GL addon
+// on a tab switch therefore changed the proposed grid by five columns, which
+// resized the PTY and repainted the application on every switch. Quantizing
+// the measurement itself also preserves xterm's change-event semantics.
+describe('pinCharMetrics quantizes the shared cell measurement', () => {
+    function termWith(width, height = 18.2) {
+        const raw = { width, height };
+        const service = {
+            width: 0,
+            height: 0,
+            changes: 0,
+            _measureStrategy: {
+                measure: () => ({ ...raw }),
+            },
+            measure() {
+                const next = this._measureStrategy.measure();
+                if (next.width === this.width && next.height === this.height)
+                    return;
+                this.width = next.width;
+                this.height = next.height;
+                this.changes++;
+            },
+        };
+        return { _core: { _charSizeService: service } };
+    }
+
+    const originalDpr = Object.getOwnPropertyDescriptor(
+        window,
+        'devicePixelRatio',
+    );
+    function setDpr(value) {
+        Object.defineProperty(window, 'devicePixelRatio', {
+            configurable: true,
+            value,
+        });
+    }
+
+    afterEach(() => {
+        if (originalDpr)
+            Object.defineProperty(window, 'devicePixelRatio', originalDpr);
+    });
+
+    it('matches WebGL device-pixel quantization on both axes', () => {
+        setDpr(1);
+        const term = termWith(8.4);
+        pinCharMetrics(term);
+        const service = term._core._charSizeService;
+        expect(service.width).toBe(8);
+        expect(service.height).toBe(19);
+    });
+
+    it('floors width and ceils height on a 2x display', () => {
+        setDpr(2);
+        const term = termWith(8.4);
+        pinCharMetrics(term);
+        const service = term._core._charSizeService;
+        // WebGL: floor(8.4 * 2) / 2 and ceil(18.2 * 2) / 2.
+        expect(service.width).toBe(8);
+        expect(service.height).toBe(18.5);
+    });
+
+    it('does not report a font change when an unchanged font is measured again', () => {
+        setDpr(1);
+        const term = termWith(8.4);
+        pinCharMetrics(term);
+        const service = term._core._charSizeService;
+        const changes = service.changes;
+        service.measure();
+        expect(service.changes).toBe(changes);
+    });
+
+    it('requantizes the stored measurement when the display ratio changes', () => {
+        setDpr(1);
+        const term = termWith(8.6);
+        pinCharMetrics(term);
+        const service = term._core._charSizeService;
+        expect(service.width).toBe(8);
+        setDpr(2);
+        service.measure();
+        expect(service.width).toBe(8.5);
+        expect(service.height).toBe(18.5);
+    });
+
+    it('ignores terminals without a measurement strategy', () => {
+        expect(() => pinCharMetrics({})).not.toThrow();
     });
 });
