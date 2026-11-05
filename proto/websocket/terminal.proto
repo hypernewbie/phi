@@ -17,6 +17,9 @@ message TerminalClientFrame {
 message TerminalResize {
   optional uint32 cols = 1;
   optional uint32 rows = 2;
+  // Correlates an attach-time Pi repaint with its receipt. Absent or empty
+  // is an ordinary resize; a repaint request never travels as PTY input.
+  optional string refresh_request_id = 3;
 }
 
 message TerminalPing {}
@@ -33,6 +36,7 @@ message TerminalServerFrame {
     TerminalSettlement settlement = 23;
     phi.websocket.events.v1.Notification notification = 24;
     TerminalGeometry geometry = 25;
+    TerminalRefreshResult refresh_result = 26;
   }
 }
 
@@ -55,6 +59,8 @@ message TerminalAttach {
   optional uint32 floor_rows = 13;
   optional uint32 head_cols = 14;
   optional uint32 head_rows = 15;
+  // True when the attached Pi can redraw its own live screen on request.
+  optional bool terminal_refresh_available = 16;
 }
 
 message TerminalCheckpoint {
@@ -82,6 +88,23 @@ message TerminalGeometry {
 }
 
 message TerminalPong {}
+
+// TerminalRefreshOutcome is the repaint receipt vocabulary. UNSPECIFIED is
+// never sent; a client treats it as UNKNOWN.
+enum TerminalRefreshOutcome {
+  TERMINAL_REFRESH_OUTCOME_UNSPECIFIED = 0;
+  TERMINAL_REFRESH_OUTCOME_DISPATCHED = 1;
+  TERMINAL_REFRESH_OUTCOME_NOT_SENT = 2;
+  TERMINAL_REFRESH_OUTCOME_UNKNOWN = 3;
+}
+
+// TerminalRefreshResult is one repaint receipt, delivered only to the
+// socket that asked. The repainting terminal's PTY bytes stay pane-wide.
+message TerminalRefreshResult {
+  optional string request_id = 1;
+  optional TerminalRefreshOutcome outcome = 2;
+  optional string reason = 3;
+}
 
 message TerminalExit {
   optional sint32 code = 1;

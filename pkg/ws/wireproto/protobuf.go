@@ -215,6 +215,35 @@ func EncodeResizeFrame(cols, rows uint32) ([]byte, error) {
 	})
 }
 
+// EncodeRefreshResizeFrame marshals one resize request that also asks the
+// attached Pi to repaint at the new geometry. An empty requestID encodes
+// the ordinary resize. The request ID is a correlation token, never PTY
+// input.
+func EncodeRefreshResizeFrame(cols, rows uint32, requestID string) ([]byte, error) {
+	resize := &wspb.TerminalResize{
+		Cols: proto.Uint32(cols),
+		Rows: proto.Uint32(rows),
+	}
+	if requestID != "" {
+		resize.RefreshRequestId = proto.String(requestID)
+	}
+	return proto.Marshal(&wspb.TerminalClientFrame{
+		Payload: &wspb.TerminalClientFrame_Resize{Resize: resize},
+	})
+}
+
+// EncodeRefreshResultFrame marshals one repaint receipt for the socket that
+// requested it.
+func EncodeRefreshResultFrame(requestID string, outcome wspb.TerminalRefreshOutcome, reason string) ([]byte, error) {
+	return proto.Marshal(&wspb.TerminalServerFrame{
+		Payload: &wspb.TerminalServerFrame_RefreshResult{RefreshResult: &wspb.TerminalRefreshResult{
+			RequestId: proto.String(requestID),
+			Outcome:   outcome.Enum(),
+			Reason:    proto.String(reason),
+		}},
+	})
+}
+
 // EncodePingFrame marshals the application ping; the server answers pong.
 func EncodePingFrame() ([]byte, error) {
 	return proto.Marshal(&wspb.TerminalClientFrame{

@@ -1485,6 +1485,43 @@ for (const version of versions) {
                         (view.caps || []).join(','),
                     );
                 } else {
+                    // The live TUI can be stopped and restarted with the
+                    // screen preserved, so panes may repaint without a
+                    // replay. Requested while the peer is still up.
+                    const refresh = await control({
+                        op: 'refresh',
+                        process: tuiReg.process,
+                        timeoutMs: 10_000,
+                    });
+                    if (!refresh.ok) {
+                        fail(
+                            version.name,
+                            'repaint request failed',
+                            refresh.error,
+                        );
+                    } else {
+                        const ack = await control({
+                            op: 'refresh-wait',
+                            call: refresh.call,
+                            timeoutMs: 15_000,
+                        });
+                        if (!ack.ok) {
+                            fail(
+                                version.name,
+                                'repaint wait failed',
+                                ack.error,
+                            );
+                        } else if (
+                            ack.outcome !==
+                            'TERMINAL_REFRESH_OUTCOME_DISPATCHED'
+                        ) {
+                            fail(
+                                version.name,
+                                'interactive repaint',
+                                `${ack.outcome}/${ack.reason}`,
+                            );
+                        }
+                    }
                     const before = stubBodies.length;
                     holdNextProviderResponse = true;
                     const started = Date.now();
@@ -1703,7 +1740,7 @@ for (const version of versions) {
                 }
                 if (
                     (tuiView.caps || []).join(',') !==
-                    'pi.attachments.v3,pi.compact.v1,pi.context.v1,pi.history.v1,pi.lifecycle.v1,pi.models.v1,pi.reload.v1,pi.skills.v1,pi.state.v2,pi.syncboard.v1,pi.thinking.v1,pi.transcript-search.v2'
+                    'pi.attachments.v3,pi.compact.v1,pi.context.v1,pi.history.v1,pi.lifecycle.v1,pi.models.v1,pi.reload.v1,pi.skills.v1,pi.state.v2,pi.syncboard.v1,pi.terminal-refresh.v1,pi.thinking.v1,pi.transcript-search.v2'
                 ) {
                     fail(
                         version.name,
@@ -1741,5 +1778,5 @@ if (failures.length > 0) {
 }
 rmSync(tmp, { recursive: true, force: true });
 console.log(
-    'pi-phi-hosts: both pinned hosts load, identify, execute Syncboard, withdraw/re-expose its tool, prove Reload/getBranch/history, and retain interactive history, Reload capability, and native image dispatch; fallback runs contained',
+    'pi-phi-hosts: both pinned hosts load, identify, execute Syncboard, withdraw/re-expose its tool, prove Reload/getBranch/history/repaint, and retain interactive history, Reload and terminal-refresh capabilities, and native image dispatch; fallback runs contained',
 );

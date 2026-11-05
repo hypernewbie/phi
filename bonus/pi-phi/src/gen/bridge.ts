@@ -59,6 +59,18 @@ export enum LogicalState {
 }
 
 /**
+ * Terminal repaint request. The runtime redraws its live TUI in place and
+ * echoes request_id. It never submits a prompt or touches the editor draft.
+ */
+export enum TerminalRefreshOutcome {
+  TERMINAL_REFRESH_OUTCOME_UNSPECIFIED = 0,
+  TERMINAL_REFRESH_OUTCOME_DISPATCHED = 1,
+  TERMINAL_REFRESH_OUTCOME_NOT_SENT = 2,
+  TERMINAL_REFRESH_OUTCOME_UNKNOWN = 3,
+  UNRECOGNIZED = -1,
+}
+
+/**
  * Terminal compaction outcome. UNSPECIFIED means genuinely unknown:
  * never guess success, failure, or cancellation from absent evidence.
  * REFUSED means rejected before host invocation; FAILED and CANCELLED
@@ -157,6 +169,7 @@ export interface PiToPhi {
     | { $case: "attachmentPromptAck"; value: AttachmentPromptAck }
     | { $case: "transcriptSearchResponse"; value: TranscriptSearchResponse }
     | { $case: "syncboardPushAck"; value: SyncboardPushAck }
+    | { $case: "terminalRefreshAck"; value: TerminalRefreshAck }
     | undefined;
 }
 
@@ -187,6 +200,7 @@ export interface PhiToPi {
     | { $case: "stateRequest"; value: StateRequest }
     | { $case: "transcriptSearchRequest"; value: TranscriptSearchRequest }
     | { $case: "syncboardNotification"; value: SyncboardNotification }
+    | { $case: "terminalRefreshRequest"; value: TerminalRefreshRequest }
     | undefined;
 }
 
@@ -306,6 +320,21 @@ export interface StateSnapshot {
  */
 export interface StateRequest {
   requestId: string;
+}
+
+export interface TerminalRefreshRequest {
+  requestId: string;
+}
+
+/**
+ * TerminalRefreshAck reports entry only: DISPATCHED means the repaint ran,
+ * never that its bytes reached a viewer. reason uses a bounded safe
+ * vocabulary and is empty for DISPATCHED.
+ */
+export interface TerminalRefreshAck {
+  requestId: string;
+  outcome: TerminalRefreshOutcome;
+  reason: string;
 }
 
 /**
@@ -852,6 +881,9 @@ export const PiToPhi: MessageFns<PiToPhi> = {
       case "syncboardPushAck":
         SyncboardPushAck.encode(message.payload.value, writer.uint32(234).fork()).join();
         break;
+      case "terminalRefreshAck":
+        TerminalRefreshAck.encode(message.payload.value, writer.uint32(242).fork()).join();
+        break;
     }
     return writer;
   },
@@ -1046,6 +1078,17 @@ export const PiToPhi: MessageFns<PiToPhi> = {
             message.payload = { $case: "syncboardPushAck", value: SyncboardPushAck.decode(reader, reader.uint32()) };
             continue;
           }
+          case 30: {
+            if (tag !== 242) {
+              break;
+            }
+
+            message.payload = {
+              $case: "terminalRefreshAck",
+              value: TerminalRefreshAck.decode(reader, reader.uint32()),
+            };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1181,6 +1224,15 @@ export const PiToPhi: MessageFns<PiToPhi> = {
         }
         break;
       }
+      case "terminalRefreshAck": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = {
+            $case: "terminalRefreshAck",
+            value: TerminalRefreshAck.fromPartial(object.payload.value),
+          };
+        }
+        break;
+      }
     }
     return message;
   },
@@ -1255,6 +1307,9 @@ export const PhiToPi: MessageFns<PhiToPi> = {
         break;
       case "syncboardNotification":
         SyncboardNotification.encode(message.payload.value, writer.uint32(218).fork()).join();
+        break;
+      case "terminalRefreshRequest":
+        TerminalRefreshRequest.encode(message.payload.value, writer.uint32(226).fork()).join();
         break;
     }
     return writer;
@@ -1451,6 +1506,17 @@ export const PhiToPi: MessageFns<PhiToPi> = {
             };
             continue;
           }
+          case 28: {
+            if (tag !== 226) {
+              break;
+            }
+
+            message.payload = {
+              $case: "terminalRefreshRequest",
+              value: TerminalRefreshRequest.decode(reader, reader.uint32()),
+            };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1585,6 +1651,15 @@ export const PhiToPi: MessageFns<PhiToPi> = {
           message.payload = {
             $case: "syncboardNotification",
             value: SyncboardNotification.fromPartial(object.payload.value),
+          };
+        }
+        break;
+      }
+      case "terminalRefreshRequest": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = {
+            $case: "terminalRefreshRequest",
+            value: TerminalRefreshRequest.fromPartial(object.payload.value),
           };
         }
         break;
@@ -2444,6 +2519,140 @@ export const StateRequest: MessageFns<StateRequest> = {
   fromPartial<I extends Exact<DeepPartial<StateRequest>, I>>(object: I): StateRequest {
     const message = createBaseStateRequest();
     message.requestId = object.requestId ?? "";
+    return message;
+  },
+};
+
+function createBaseTerminalRefreshRequest(): TerminalRefreshRequest {
+  return { requestId: "" };
+}
+
+export const TerminalRefreshRequest: MessageFns<TerminalRefreshRequest> = {
+  encode(message: TerminalRefreshRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): TerminalRefreshRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseTerminalRefreshRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<TerminalRefreshRequest>, I>>(base?: I): TerminalRefreshRequest {
+    return TerminalRefreshRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TerminalRefreshRequest>, I>>(object: I): TerminalRefreshRequest {
+    const message = createBaseTerminalRefreshRequest();
+    message.requestId = object.requestId ?? "";
+    return message;
+  },
+};
+
+function createBaseTerminalRefreshAck(): TerminalRefreshAck {
+  return { requestId: "", outcome: 0, reason: "" };
+}
+
+export const TerminalRefreshAck: MessageFns<TerminalRefreshAck> = {
+  encode(message: TerminalRefreshAck, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.outcome !== 0) {
+      writer.uint32(16).int32(message.outcome);
+    }
+    if (message.reason !== "") {
+      writer.uint32(26).string(message.reason);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): TerminalRefreshAck {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseTerminalRefreshAck();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.outcome = reader.int32() as any;
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.reason = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<TerminalRefreshAck>, I>>(base?: I): TerminalRefreshAck {
+    return TerminalRefreshAck.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TerminalRefreshAck>, I>>(object: I): TerminalRefreshAck {
+    const message = createBaseTerminalRefreshAck();
+    message.requestId = object.requestId ?? "";
+    message.outcome = object.outcome ?? 0;
+    message.reason = object.reason ?? "";
     return message;
   },
 };

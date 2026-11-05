@@ -166,6 +166,11 @@ func (c *Client) readPump(ctx context.Context, inst *pty.PTYInstance, manager *p
 				c.closeWithCode(websocket.CloseProtocolError, "resize needs cols and rows")
 				return
 			}
+			refreshID := rs.GetRefreshRequestId()
+			if len(refreshID) > maxRefreshRequestIDBytes {
+				c.closeWithCode(websocket.CloseProtocolError, "refresh request id too large")
+				return
+			}
 			cols, rows := rs.GetCols(), rs.GetRows()
 			if cols == 0 || rows == 0 || cols > 65535 || rows > 65535 {
 				c.closeWithCode(websocket.CloseProtocolError, "resize out of range")
@@ -187,9 +192,19 @@ func (c *Client) readPump(ctx context.Context, inst *pty.PTYInstance, manager *p
 				endResize(resizeErr)
 				if resizeErr != nil {
 					logger.Error("ws pty resize error", "err", resizeErr)
-					// A refused geometry is not success. Reattach with an
-					// authoritative state instead of leaving a stale TUI.
+					// A refused geometry is not success. Answer the repaint
+					// request honestly, then reattach with an authoritative
+					// state instead of leaving a stale TUI.
+					if refreshID != "" {
+						hub.dispatchTerminalRefreshFailure(inst.ID, c, refreshID)
+					}
 					return
+				}
+				// A committed resize is the repaint boundary: geometry and
+				// the Pi redraw reach the viewer in that order. The repaint
+				// runs off the read loop, so typing and pongs continue.
+				if refreshID != "" {
+					hub.dispatchTerminalRefresh(inst.ID, inst, c, refreshID)
 				}
 			}
 		case *wspb.TerminalClientFrame_Ping:

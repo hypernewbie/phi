@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -189,6 +190,7 @@ func StartBridge(hub *ws.Hub, runtime func() ([]byte, error), version string, st
 	b.server.SetOnPeerDown(b.onPeerDown)
 	b.server.SetSyncboardHandler(b.handleSyncboard)
 	hub.SetBridgeAttach(b.encodeAttach)
+	hub.SetTerminalRefresh(b.DispatchTerminalRefresh, b.terminalRefreshHint)
 	hub.SetOnPaneExit(func(inst *pty.PTYInstance, _ int) { b.handlePaneExit(inst) })
 	go func() {
 		_ = b.server.GRPCServer().Serve(listener)
@@ -721,6 +723,51 @@ func (b *Bridge) RequestPaneCompact(ctx context.Context, paneID string, generati
 		return pibridge.CompactResult{}, fmt.Errorf("pi-bridge: pane not managed")
 	}
 	return b.server.RequestCompact(ctx, processID, generation, pubRev)
+}
+
+// terminalRefreshHint reports whether a pane's current Pi can repaint its own
+// screen. It is advisory only: dispatch rechecks the PTY owner, the process,
+// and the negotiated capability before anything is sent.
+func (b *Bridge) terminalRefreshHint(paneID string) bool {
+	st := b.PaneSnapshot(paneID)
+	if st.State != piBridgeManaged {
+		return false
+	}
+	if st.Connected != nil && !*st.Connected {
+		return false
+	}
+	return slices.Contains(st.Capabilities, pibridge.CapabilityTerminalRefresh)
+}
+
+// DispatchTerminalRefresh asks the pane's current Pi for one in-place repaint.
+// The requesting socket must still be the pane's PTY owner; a replaced owner,
+// an unmanaged pane, or a missing capability is unavailable. DISPATCHED comes
+// only from a host receipt, so a failed or silent host never looks like a
+// repaint. Nothing is retried and nothing is written to the PTY.
+func (b *Bridge) DispatchTerminalRefresh(ctx context.Context, paneID string, inst *pty.PTYInstance) (wspb.TerminalRefreshOutcome, string) {
+	if b == nil || inst == nil {
+		return wspb.TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_NOT_SENT, "unavailable"
+	}
+	b.mu.Lock()
+	p, ok := b.panes[paneID]
+	managed := ok && p.managed && p.inst == inst
+	processID := ""
+	if ok {
+		processID = p.processID
+	}
+	b.mu.Unlock()
+	if !managed {
+		return wspb.TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_NOT_SENT, "unavailable"
+	}
+	res := b.server.RequestTerminalRefresh(ctx, processID)
+	switch res.Outcome {
+	case pibridgepb.TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_DISPATCHED:
+		return wspb.TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_DISPATCHED, ""
+	case pibridgepb.TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_NOT_SENT:
+		return wspb.TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_NOT_SENT, res.Reason
+	default:
+		return wspb.TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_UNKNOWN, "error"
+	}
 }
 
 // RevokePane revokes a pane's lease and drops its record. Unknown panes
