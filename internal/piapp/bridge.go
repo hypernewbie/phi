@@ -440,11 +440,21 @@ func (b *Bridge) Complete(inst *pty.PTYInstance) {
 		b.mu.Unlock()
 		return
 	}
+	var bind func(*pty.PTYInstance, string)
+	var bindID string
 	if p.inst == nil {
 		p.inst = inst
+		// The runtime can state its identity before the spawn path
+		// registers the instance; onState defers to this side, so the
+		// first registration adopts an already reported identity.
+		bind = b.bindSession
+		bindID = p.sessionID
 	}
 	processID, managed := p.processID, p.managed
 	b.mu.Unlock()
+	if bindID != "" && bind != nil {
+		bind(inst, bindID)
+	}
 	if !managed {
 		return
 	}
@@ -1017,10 +1027,14 @@ func (b *Bridge) onState(paneID, processID string, generation, pubRev uint64, ru
 			p.lastConnected = &connected
 			// A reported identity that differs from the stored one is
 			// bound after the lock: the pane's saved identity is what a
-			// restore resumes.
+			// restore resumes. Before the spawn path registers the
+			// instance the identity is only recorded — Complete adopts
+			// it on registration — so the bind happens exactly once.
 			if sessionID != "" && sessionID != p.sessionID {
 				p.sessionID = sessionID
-				bindInst, bindID = p.inst, sessionID
+				if p.inst != nil {
+					bindInst, bindID = p.inst, sessionID
+				}
 			}
 			view = p.snapshot()
 		}
