@@ -15130,3 +15130,107 @@ html.desktop-sidebar-hidden #left-resize-handle {
 }
 
 /* stylelint-enable custom-property-pattern */
+
+/* Both sections share one scroll area; neither can crowd the other out. */
+.sync-sections {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.sync-sections .sync-messages-list {
+    overflow: visible;
+    flex-grow: 0;
+}
+
+#sync-panel > .sync-header,
+#sync-panel > .sync-form-container,
+.sync-sections .sync-card {
+    flex-shrink: 0;
+}
+.sync-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+}
+
+.sync-section + .sync-section {
+    border-top: 1px solid var(--bg-border);
+    margin-top: 16px;
+    padding-top: 12px;
+}
+
+.sync-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.sync-section-title {
+    font-family: var(--font-ui);
+    font-size: calc(11px * var(--ui-scale));
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.sync-card-push {
+    border-color: var(--bg-border);
+    background: var(--bg-panel);
+}
+
+.sync-card-push .sync-card-key {
+    color: var(--text-primary);
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.sync-push-summary {
+    display: block;
+    cursor: pointer;
+    min-height: 44px;
+}
+
+.sync-push-summary::-webkit-details-marker { display: none; }
+
+.sync-push-summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 4px;
+    border-radius: 2px;
+}
+
+.sync-push-disclosure { color: var(--text-muted); }
+.sync-card-push[open] .sync-push-disclosure { transform: rotate(90deg); }
+.sync-card-push[open] .sync-push-preview { display: none; }
+
+.sync-push-preview {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-family: var(--font-mono);
+    font-size: calc(12px * var(--ui-scale));
+    color: var(--text-primary);
+    margin: 6px 0;
+}
+
+.sync-card-push .sync-card-value {
+    cursor: text;
+    color: var(--text-primary);
+    word-break: normal;
+    overflow-wrap: anywhere;
+}
+
+.sync-card-push .sync-card-footer { display: block; }
+
+.sync-push-note {
+    font-family: var(--font-ui);
+    font-size: calc(12px * var(--ui-scale));
+    color: var(--text-muted);
+    padding: 8px 0;
+}
