@@ -110,6 +110,9 @@ type Bridge struct {
 	Syncboard http.Handler
 	// LoadConfig reads the live config for sync routing; nil refuses sync.
 	LoadConfig func() (config.Config, error)
+	// bindSession records a session ID the Pi runtime reported for a live
+	// pane. nil leaves the pane's stored identity untouched.
+	bindSession func(*pty.PTYInstance, string)
 
 	mu     sync.Mutex
 	panes  map[string]*bridgePane
@@ -121,6 +124,7 @@ type bridgePane struct {
 	managed           bool
 	reason            string
 	inst              *pty.PTYInstance
+	sessionID         string // identity last reported by the runtime
 	pubRev            uint64 // latest applied publication; 0 means unseeded
 	gen               uint64
 	hasGen            bool
@@ -409,6 +413,17 @@ func (b *Bridge) SetListenerAddr(addr net.Addr) {
 	if !b.closed {
 		b.listenerAddr = &copy
 	}
+	b.mu.Unlock()
+}
+
+// SetSessionBinder registers the sink for session IDs the runtime reports on
+// Hello. A nil bridge or nil fn leaves the launched identity untouched.
+func (b *Bridge) SetSessionBinder(fn func(*pty.PTYInstance, string)) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.bindSession = fn
 	b.mu.Unlock()
 }
 
@@ -945,9 +960,19 @@ func (b *Bridge) PaneSnapshot(paneID string) BridgePaneState {
 // the revision floor but keeps model/thinking unknown. It never calls
 // back into the Server; all live values arrive as arguments.
 func (b *Bridge) onState(paneID, processID string, generation, pubRev uint64, running, hasState bool, model, thinkingLevel string, caps []string, usage *pibridge.ContextUsage, readiness *pibridge.Readiness, reload *pibridge.ReloadReadiness) {
+	// The runtime states its own session identity on Hello, so a pane launched
+	// without a forced --session-id learns it here. Read outside b.mu: the
+	// lease lock is a separate domain.
+	sessionID := ""
+	if state, ok := b.server.PaneState(processID); ok {
+		sessionID = state.SessionID
+	}
 	b.mu.Lock()
 	p, ok := b.panes[paneID]
 	var view bridgeStateView
+	var bindInst *pty.PTYInstance
+	var bindID string
+	bind := b.bindSession
 	if ok && p.managed && p.processID == processID {
 		if p.hasGen && generation < p.gen {
 			ok = false
@@ -990,12 +1015,22 @@ func (b *Bridge) onState(paneID, processID string, generation, pubRev uint64, ru
 			}
 			connected := true
 			p.lastConnected = &connected
+			// A reported identity that differs from the stored one is
+			// bound after the lock: the pane's saved identity is what a
+			// restore resumes.
+			if sessionID != "" && sessionID != p.sessionID {
+				p.sessionID = sessionID
+				bindInst, bindID = p.inst, sessionID
+			}
 			view = p.snapshot()
 		}
 	} else {
 		ok = false
 	}
 	b.mu.Unlock()
+	if bindInst != nil && bind != nil {
+		bind(bindInst, bindID)
+	}
 	if !ok {
 		return
 	}
