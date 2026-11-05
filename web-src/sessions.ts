@@ -2483,7 +2483,8 @@ export class SessionsManager {
                 coder?.short_label ??
                 coder?.name ??
                 'Shell';
-            const launchMode = coderId === 'pi' ? this._piLaunchMode(mode) : null;
+            const launchMode =
+                coderId === 'pi' ? this._piLaunchMode(mode) : null;
             // With no known default the title is left to the server, which
             // reports the agent it actually launched.
             const title =
@@ -2580,7 +2581,8 @@ export class SessionsManager {
             const coderId = this.activeCoder,
                 cwd = this.activeCWD,
                 workspace = this.activeWorkspace;
-            const launchMode = coderId === 'pi' ? this._piLaunchMode(mode) : null;
+            const launchMode =
+                coderId === 'pi' ? this._piLaunchMode(mode) : null;
             const res = await fetch('/api/terminals', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

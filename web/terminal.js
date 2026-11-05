@@ -13720,9 +13720,7 @@ export class TabManager {
                 ...(tabInfo.coder === 'pi'
                     ? {
                         pi_mode: tabInfo.piMode === 'psi' ? 'psi' : 'pi',
-                        ...(tabInfo.piMode === 'psi'
-                            ? { pi_psi: true }
-                            : {}),
+                        ...(tabInfo.piMode === 'psi' ? { pi_psi: true } : {}),
                     }
                     : {}),
             }),

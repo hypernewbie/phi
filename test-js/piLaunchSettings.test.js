@@ -89,14 +89,13 @@ describe('PiLaunchStore keeps edits usable before the network answers', () => {
         const f = fixture();
         await f.store.refresh();
         const setItem = localStorage.setItem.bind(localStorage);
-        vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
-            key,
-            value,
-        ) {
-            if (String(key).startsWith(RECORD_PREFIX))
-                throw new Error('quota exceeded');
-            setItem(key, value);
-        });
+        vi.spyOn(Storage.prototype, 'setItem').mockImplementation(
+            function (key, value) {
+                if (String(key).startsWith(RECORD_PREFIX))
+                    throw new Error('quota exceeded');
+                setItem(key, value);
+            },
+        );
         f.store.choose('psi');
         await settleEdit();
         // A write that could be replayed after a reload must not leave without
@@ -283,7 +282,9 @@ describe('PiLaunchStore keeps each backend and document separate', () => {
         expect(records).toHaveLength(2);
         // The predecessor's record still holds its own draft.
         const firstRecord = JSON.parse(
-            localStorage.getItem(RECORD_PREFIX + first.store.owner + ':' + firstWriter),
+            localStorage.getItem(
+                RECORD_PREFIX + first.store.owner + ':' + firstWriter,
+            ),
         );
         expect(firstRecord.draft.fields.pi_default_mode).toBe('psi');
     });
@@ -359,11 +360,12 @@ describe('PiLaunchStore sends the Psi launch fields as one patch', () => {
     it('keeps a rejected draft for correction and saves the fix', async () => {
         const f = fixture();
         await f.store.refresh();
-        f.fetch.mockImplementationOnce(async () =>
-            new Response(
-                'psi_env key "PATH" is set by Phi and cannot be overridden',
-                { status: 400 },
-            ),
+        f.fetch.mockImplementationOnce(
+            async () =>
+                new Response(
+                    'psi_env key "PATH" is set by Phi and cannot be overridden',
+                    { status: 400 },
+                ),
         );
         f.store.setEnv({ PATH: '/tmp' });
         await settleEdit();

@@ -101,7 +101,8 @@ function validEnv(value: any): value is Record<string, string> {
 }
 
 function validFields(value: any): value is PiLaunchFields {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return false;
     for (const key of Object.keys(value)) {
         if (!FIELDS.includes(key as FieldKey)) return false;
     }
@@ -145,9 +146,14 @@ function validDraft(value: any): value is PiLaunchDraft {
     if (!value || typeof value !== 'object') return false;
     if (!validFields(value.fields)) return false;
     const base = value.base;
-    if (base !== null && (typeof base !== 'number' || !Number.isSafeInteger(base)))
+    if (
+        base !== null &&
+        (typeof base !== 'number' || !Number.isSafeInteger(base))
+    )
         return false;
-    return typeof value.version === 'number' && Number.isSafeInteger(value.version);
+    return (
+        typeof value.version === 'number' && Number.isSafeInteger(value.version)
+    );
 }
 
 function validAttempt(value: any): value is PiLaunchAttempt {
@@ -163,7 +169,8 @@ function validAttempt(value: any): value is PiLaunchAttempt {
     );
 }
 
-function sameValue(a: unknown, b: unknown): boolean {    if (Array.isArray(a) || Array.isArray(b)) {
+function sameValue(a: unknown, b: unknown): boolean {
+    if (Array.isArray(a) || Array.isArray(b)) {
         if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length)
             return false;
         return a.every((item, index) => item === b[index]);
@@ -180,13 +187,15 @@ function sameValue(a: unknown, b: unknown): boolean {    if (Array.isArray(a) ||
 
 // parsePsiArgs splits the textarea into argv entries. One entry per line, so
 // spaces inside a line are part of that argument; blank lines add nothing.
-export function parsePsiArgs(text: string):
-    | { value: string[] }
-    | { error: string } {
+export function parsePsiArgs(
+    text: string,
+): { value: string[] } | { error: string } {
     const args = text.split(/\r?\n/).filter((line) => line !== '');
     for (const [index, arg] of args.entries()) {
         if (arg.includes('\u0000'))
-            return { error: `Line ${index + 1}: an argument cannot contain NUL.` };
+            return {
+                error: `Line ${index + 1}: an argument cannot contain NUL.`,
+            };
     }
     return { value: args };
 }
@@ -195,9 +204,9 @@ const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 // parsePsiEnv reads KEY=VALUE lines. The value keeps every character after the
 // first '=', and a duplicate name is an error instead of a silent override.
-export function parsePsiEnv(text: string):
-    | { value: Record<string, string> }
-    | { error: string } {
+export function parsePsiEnv(
+    text: string,
+): { value: Record<string, string> } | { error: string } {
     const env: Record<string, string> = Object.create(null);
     const seen = new Set<string>();
     for (const [index, line] of text.split(/\r?\n/).entries()) {
@@ -238,7 +247,10 @@ export class PiLaunchStore {
     private inflight: Promise<boolean> | null = null;
     private retries = 0;
     private readonly listeners = new Set<() => void>();
-    private readonly fetch: (url: string, init?: RequestInit) => Promise<Response>;
+    private readonly fetch: (
+        url: string,
+        init?: RequestInit,
+    ) => Promise<Response>;
     private readonly onWake = () => {
         if (this.disposed) return;
         void this.refresh();
@@ -346,7 +358,9 @@ export class PiLaunchStore {
             case 'unknown':
                 return 'Save outcome unknown. Refreshing to check; this will not be resent automatically.';
             case 'conflict':
-                return this.error || 'Changed elsewhere. Review and save again.';
+                return (
+                    this.error || 'Changed elsewhere. Review and save again.'
+                );
             case 'rejected':
                 return this.error || 'The server rejected this setting.';
             case 'unavailable':
@@ -530,7 +544,8 @@ export class PiLaunchStore {
             // Never rebase a draft onto a revision it was not written for: the
             // explicit save is the user's decision to replace it.
             this.phase = 'conflict';
-            this.error = 'The default changed elsewhere. Review and save again.';
+            this.error =
+                'The default changed elsewhere. Review and save again.';
         } else {
             this.phase = 'pending';
             this.error = '';
@@ -540,7 +555,10 @@ export class PiLaunchStore {
         if (this.phase === 'pending') this.schedule();
     }
 
-    private attemptLanded(state: PiLaunchState, attempt: PiLaunchAttempt): boolean {
+    private attemptLanded(
+        state: PiLaunchState,
+        attempt: PiLaunchAttempt,
+    ): boolean {
         return Object.entries(attempt.fields).every(([key, value]) =>
             sameValue(state[key as FieldKey], value),
         );
@@ -594,7 +612,8 @@ export class PiLaunchStore {
         if (this.draft.base === null) this.draft.base = this.confirmed.revision;
         if (this.draft.base !== this.confirmed.revision) {
             this.phase = 'conflict';
-            this.error = 'The default changed elsewhere. Review and save again.';
+            this.error =
+                'The default changed elsewhere. Review and save again.';
             this.persist();
             this.notify();
             return;
@@ -641,7 +660,8 @@ export class PiLaunchStore {
             if (state && state.revision === base + 1) {
                 // A newer confirmed state rules out trusting this older reply.
                 const newer =
-                    !!this.confirmed && this.confirmed.revision > state.revision;
+                    !!this.confirmed &&
+                    this.confirmed.revision > state.revision;
                 this.attempt = null;
                 if (!newer) {
                     this.applyConfirmed(state);
@@ -742,7 +762,9 @@ export class PiLaunchStore {
         }
     }
 
-    private async parseState(response: Response): Promise<PiLaunchState | null> {
+    private async parseState(
+        response: Response,
+    ): Promise<PiLaunchState | null> {
         try {
             return normalizeState(await response.json());
         } catch {
@@ -799,12 +821,15 @@ export class PiLaunchStore {
         if (!writer) return null;
         try {
             const value = JSON.parse(
-                localStorage.getItem(RECORD_PREFIX + this.owner + ':' + writer) ||
-                    'null',
+                localStorage.getItem(
+                    RECORD_PREFIX + this.owner + ':' + writer,
+                ) || 'null',
             );
-            if (value?.schema !== SCHEMA || value.owner !== this.owner) return null;
+            if (value?.schema !== SCHEMA || value.owner !== this.owner)
+                return null;
             if (!validDraft(value.draft)) return null;
-            if (value.attempt !== null && !validAttempt(value.attempt)) return null;
+            if (value.attempt !== null && !validAttempt(value.attempt))
+                return null;
             return {
                 schema: SCHEMA,
                 owner: this.owner,

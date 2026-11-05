@@ -83,9 +83,10 @@ function validDraft(value) {
     if (!validFields(value.fields))
         return false;
     const base = value.base;
-    if (base !== null && (typeof base !== 'number' || !Number.isSafeInteger(base)))
+    if (base !== null &&
+        (typeof base !== 'number' || !Number.isSafeInteger(base)))
         return false;
-    return typeof value.version === 'number' && Number.isSafeInteger(value.version);
+    return (typeof value.version === 'number' && Number.isSafeInteger(value.version));
 }
 function validAttempt(value) {
     return (!!value &&
@@ -119,7 +120,9 @@ export function parsePsiArgs(text) {
     const args = text.split(/\r?\n/).filter((line) => line !== '');
     for (const [index, arg] of args.entries()) {
         if (arg.includes('\u0000'))
-            return { error: `Line ${index + 1}: an argument cannot contain NUL.` };
+            return {
+                error: `Line ${index + 1}: an argument cannot contain NUL.`,
+            };
     }
     return { value: args };
 }
@@ -264,7 +267,7 @@ export class PiLaunchStore {
             case 'unknown':
                 return 'Save outcome unknown. Refreshing to check; this will not be resent automatically.';
             case 'conflict':
-                return this.error || 'Changed elsewhere. Review and save again.';
+                return (this.error || 'Changed elsewhere. Review and save again.');
             case 'rejected':
                 return this.error || 'The server rejected this setting.';
             case 'unavailable':
@@ -455,7 +458,8 @@ export class PiLaunchStore {
             // Never rebase a draft onto a revision it was not written for: the
             // explicit save is the user's decision to replace it.
             this.phase = 'conflict';
-            this.error = 'The default changed elsewhere. Review and save again.';
+            this.error =
+                'The default changed elsewhere. Review and save again.';
         }
         else {
             this.phase = 'pending';
@@ -517,7 +521,8 @@ export class PiLaunchStore {
             this.draft.base = this.confirmed.revision;
         if (this.draft.base !== this.confirmed.revision) {
             this.phase = 'conflict';
-            this.error = 'The default changed elsewhere. Review and save again.';
+            this.error =
+                'The default changed elsewhere. Review and save again.';
             this.persist();
             this.notify();
             return;
@@ -560,7 +565,8 @@ export class PiLaunchStore {
             const state = await this.parseState(response);
             if (state && state.revision === base + 1) {
                 // A newer confirmed state rules out trusting this older reply.
-                const newer = !!this.confirmed && this.confirmed.revision > state.revision;
+                const newer = !!this.confirmed &&
+                    this.confirmed.revision > state.revision;
                 this.attempt = null;
                 if (!newer) {
                     this.applyConfirmed(state);
@@ -722,8 +728,7 @@ export class PiLaunchStore {
         if (!writer)
             return null;
         try {
-            const value = JSON.parse(localStorage.getItem(RECORD_PREFIX + this.owner + ':' + writer) ||
-                'null');
+            const value = JSON.parse(localStorage.getItem(RECORD_PREFIX + this.owner + ':' + writer) || 'null');
             if (value?.schema !== SCHEMA || value.owner !== this.owner)
                 return null;
             if (!validDraft(value.draft))

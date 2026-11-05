@@ -94,11 +94,9 @@ async function chooseDefault(page: Page, agent: 'Pi' | 'Psi', hint: string) {
     const select = page.locator('#settings-pi-default-mode');
     await select.selectOption(agent === 'Psi' ? 'psi' : 'pi');
     // The hint only says Saved once the server acknowledged this write.
-    await expect(
-        page.locator(
-            '.settings-pi-launch-status',
-        ),
-    ).toContainText(hint);
+    await expect(page.locator('.settings-pi-launch-status')).toContainText(
+        hint,
+    );
 }
 
 async function tabTitles(page: Page): Promise<string[]> {
@@ -254,8 +252,13 @@ test.describe('Pi launch default', () => {
             })
             .toBe(beforeClear + 1);
         const cleared = recordsFor(server, exeName('psi')).at(-1)!;
-        expect(cleared.executable).toBe(join(server.dir, 'bin', exeName('psi')));
-        expect(cleared.argv.slice(1)).toEqual(['--session-id', expect.any(String)]);
+        expect(cleared.executable).toBe(
+            join(server.dir, 'bin', exeName('psi')),
+        );
+        expect(cleared.argv.slice(1)).toEqual([
+            '--session-id',
+            expect.any(String),
+        ]);
         // The override is gone, so the inherited value must not leak in.
         expect(cleared.env.PHI_E2E_AGENT_MARK).toBeUndefined();
     });
@@ -269,15 +272,12 @@ test.describe('Pi launch default', () => {
         const current = await (
             await request.get(`${server.url}/api/config/pi-launch`)
         ).json();
-        const saved = await request.post(
-            `${server.url}/api/config/pi-launch`,
-            {
-                data: {
-                    revision: current.revision,
-                    fields: { pi_default_mode: 'psi' },
-                },
+        const saved = await request.post(`${server.url}/api/config/pi-launch`, {
+            data: {
+                revision: current.revision,
+                fields: { pi_default_mode: 'psi' },
             },
-        );
+        });
         expect(saved.status()).toBe(200);
         expect((await saved.json()).pi_default_mode).toBe('psi');
 

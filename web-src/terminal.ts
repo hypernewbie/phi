@@ -16434,11 +16434,8 @@ export class TabManager {
                 // running or restored tab to the other one.
                 ...(tabInfo.coder === 'pi'
                     ? {
-                          pi_mode:
-                              tabInfo.piMode === 'psi' ? 'psi' : 'pi',
-                          ...(tabInfo.piMode === 'psi'
-                              ? { pi_psi: true }
-                              : {}),
+                          pi_mode: tabInfo.piMode === 'psi' ? 'psi' : 'pi',
+                          ...(tabInfo.piMode === 'psi' ? { pi_psi: true } : {}),
                       }
                     : {}),
             }),

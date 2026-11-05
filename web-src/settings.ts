@@ -1116,18 +1116,16 @@ export function openSettingsModal(
         const store = app.piLaunchStore;
         if (!store || !piModeSelect) return;
         if (!store.known) {
-            let placeholder = piModeSelect.querySelector<HTMLOptionElement>(
-                'option[value=""]',
-            );
+            let placeholder =
+                piModeSelect.querySelector<HTMLOptionElement>(
+                    'option[value=""]',
+                );
             if (!placeholder) {
                 placeholder = document.createElement('option');
                 placeholder.value = '';
                 placeholder.textContent = 'Server default (not loaded)';
                 placeholder.disabled = true;
-                piModeSelect.insertBefore(
-                    placeholder,
-                    piModeSelect.firstChild,
-                );
+                piModeSelect.insertBefore(placeholder, piModeSelect.firstChild);
             }
             placeholder.selected = true;
         } else {
@@ -1139,7 +1137,8 @@ export function openSettingsModal(
         // Never rewrite text the user is editing: focus owns the control.
         if (piCommandInput && document.activeElement !== piCommandInput) {
             const command = store.value('psi_command') ?? '';
-            if (piCommandInput.value !== command) piCommandInput.value = command;
+            if (piCommandInput.value !== command)
+                piCommandInput.value = command;
         }
         if (piArgsInput && document.activeElement !== piArgsInput) {
             const text = (store.value('psi_args') ?? []).join('\n');

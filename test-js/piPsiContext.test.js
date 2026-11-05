@@ -77,20 +77,23 @@ describe('The opposite agent action follows the default', () => {
         '#coder-selector button',
         '#empty-quick-launch button',
         'new-session',
-    ])('offers Open with Psi when the default is Pi or unknown (%s)', async (selector) => {
-        const { ctx, button } = await harness();
-        const target =
-            selector === 'new-session'
-                ? button
-                : document.querySelector(selector);
-        const item = openMenu(target);
-        expect(item).not.toBeNull();
-        expect(item.textContent).toBe('Open with Psi');
-        expect(ctx.spawnNewSession).not.toHaveBeenCalled();
-        item.click();
-        expect(ctx.spawnNewSession).toHaveBeenCalledWith(false, 'psi');
-        expect(document.querySelector('.session-ctx-menu')).toBeNull();
-    });
+    ])(
+        'offers Open with Psi when the default is Pi or unknown (%s)',
+        async (selector) => {
+            const { ctx, button } = await harness();
+            const target =
+                selector === 'new-session'
+                    ? button
+                    : document.querySelector(selector);
+            const item = openMenu(target);
+            expect(item).not.toBeNull();
+            expect(item.textContent).toBe('Open with Psi');
+            expect(ctx.spawnNewSession).not.toHaveBeenCalled();
+            item.click();
+            expect(ctx.spawnNewSession).toHaveBeenCalledWith(false, 'psi');
+            expect(document.querySelector('.session-ctx-menu')).toBeNull();
+        },
+    );
 
     it.each([
         '#coder-selector button',
@@ -124,7 +127,9 @@ describe('The opposite agent action follows the default', () => {
             coder: 'pi',
         });
         const items = [...document.querySelectorAll('.session-ctx-item')];
-        const piItem = items.find((item) => item.textContent === 'Open with Pi');
+        const piItem = items.find(
+            (item) => item.textContent === 'Open with Pi',
+        );
         expect(piItem).toBeDefined();
         piItem.click();
         expect(ctx.launchSession).toHaveBeenCalledWith(
