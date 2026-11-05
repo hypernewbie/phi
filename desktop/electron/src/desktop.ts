@@ -5892,6 +5892,9 @@ export class DesktopHost {
       'header-config-pill',
       'header-export-btn',
       'header-import-btn',
+      // The body page's sessions/tabs drawer toggle: the desktop shell hides
+      // the body's header, so the vendored header's hamburger relays here.
+      'mobile-sidebar-toggle',
       'add-workspace-btn',
       'remove-workspace-btn',
     ]);
@@ -5918,7 +5921,11 @@ export class DesktopHost {
       ) {
         if (
           action.id === 'header-config-pill' ||
-          action.id === 'header-notifications-btn'
+          action.id === 'header-notifications-btn' ||
+          // The drawer opens inside the body view, and clicking the shell
+          // header moved keyboard focus out of it; hand focus back so the
+          // terminal keeps receiving keys once the drawer closes.
+          action.id === 'mobile-sidebar-toggle'
         ) {
           view.webContents.focus();
         }

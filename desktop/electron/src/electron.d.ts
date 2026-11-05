@@ -63,6 +63,7 @@ export type HeaderActionId =
   | 'header-config-pill'
   | 'header-export-btn'
   | 'header-import-btn'
+  | 'mobile-sidebar-toggle'
   | 'add-workspace-btn'
   | 'remove-workspace-btn';
 
