@@ -177,11 +177,27 @@ describe('fitActiveTerminal skips same-geometry fits', () => {
 // The DOM renderer keeps a fractional cell (8.4 px at 14 px) while the
 // WebGL renderer quantizes it to whole device pixels. Disposing the GL addon
 // on a tab switch therefore changed the proposed grid by five columns, which
-// resized the PTY and repainted the application on every switch. Applying
-// WebGL's quantization to the shared measurement makes both renderers agree.
+// resized the PTY and repainted the application on every switch. Quantizing
+// the measurement itself also preserves xterm's change-event semantics.
 describe('pinCharMetrics quantizes the shared cell measurement', () => {
     function termWith(width, height = 18.2) {
-        const service = { width, height, measure: vi.fn() };
+        const raw = { width, height };
+        const service = {
+            width: 0,
+            height: 0,
+            changes: 0,
+            _measureStrategy: {
+                measure: () => ({ ...raw }),
+            },
+            measure() {
+                const next = this._measureStrategy.measure();
+                if (next.width === this.width && next.height === this.height)
+                    return;
+                this.width = next.width;
+                this.height = next.height;
+                this.changes++;
+            },
+        };
         return { _core: { _charSizeService: service } };
     }
 
@@ -220,25 +236,29 @@ describe('pinCharMetrics quantizes the shared cell measurement', () => {
         expect(service.height).toBe(18.5);
     });
 
-    it('keeps quantizing what a later measure() stores', () => {
+    it('does not report a font change when an unchanged font is measured again', () => {
         setDpr(1);
         const term = termWith(8.4);
         pinCharMetrics(term);
         const service = term._core._charSizeService;
-        service.width = 9.2;
-        expect(service.width).toBe(9);
+        const changes = service.changes;
+        service.measure();
+        expect(service.changes).toBe(changes);
     });
 
-    it('is idempotent and leaves unmeasured values alone', () => {
+    it('requantizes the stored measurement when the display ratio changes', () => {
         setDpr(1);
-        const term = termWith(0, 0);
+        const term = termWith(8.6);
         pinCharMetrics(term);
-        pinCharMetrics(term);
-        expect(term._core._charSizeService.width).toBe(0);
-        expect(term._core._charSizeService.height).toBe(0);
+        const service = term._core._charSizeService;
+        expect(service.width).toBe(8);
+        setDpr(2);
+        service.measure();
+        expect(service.width).toBe(8.5);
+        expect(service.height).toBe(18.5);
     });
 
-    it('ignores terminals without a char size service', () => {
+    it('ignores terminals without a measurement strategy', () => {
         expect(() => pinCharMetrics({})).not.toThrow();
     });
 });

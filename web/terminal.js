@@ -633,32 +633,31 @@ function internals(term) {
  *  release its framebuffer and re-creates it on return, so each switch
  *  proposed the grid through the other renderer: five columns either way, a
  *  real PTY resize, SIGWINCH, and a full application repaint with no layout
- *  change behind it. Applying WebGL's floor-width/ceil-height quantization to
- *  the shared measurement makes both renderers propose the grid the visible
- *  one is already showing. */
+ *  change behind it. Quantize at the measurement boundary with WebGL's
+ *  floor-width/ceil-height rules. CharSizeService can then compare equal
+ *  values normally; accessor-based quantization would report a font change on
+ *  every measure because the raw result never equals the stored value. */
 export function pinCharMetrics(term) {
     const service = internals(term)._core?._charSizeService;
-    if (!service || typeof service.width !== 'number')
+    const strategy = service?._measureStrategy;
+    if (!service?.measure || !strategy?.measure)
         return;
-    if (Object.getOwnPropertyDescriptor(service, 'width')?.get)
-        return;
-    const quantize = (field, value) => {
-        if (!(value > 0))
-            return value;
+    const measure = strategy.measure.bind(strategy);
+    strategy.measure = () => {
+        const size = measure();
         const dpr = window.devicePixelRatio || 1;
-        const round = field === 'width' ? Math.floor : Math.ceil;
-        return round(value * dpr) / dpr;
+        return {
+            width: size.width > 0
+                ? Math.floor(size.width * dpr) / dpr
+                : size.width,
+            height: size.height > 0
+                ? Math.ceil(size.height * dpr) / dpr
+                : size.height,
+        };
     };
-    for (const field of ['width', 'height']) {
-        let measured = service[field] ?? 0;
-        Object.defineProperty(service, field, {
-            configurable: true,
-            get: () => quantize(field, measured),
-            set: (value) => {
-                measured = value;
-            },
-        });
-    }
+    // open() measured before this hook was installed. Replace those raw
+    // values now; later font and display changes use the wrapped strategy.
+    service.measure();
 }
 export class TabManager {
     // Declared explicitly: TypeScript does not infer instance fields from

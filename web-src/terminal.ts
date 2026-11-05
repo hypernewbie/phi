@@ -1451,29 +1451,32 @@ function internals(term: Terminal | null | undefined): TerminalInternals {
  *  release its framebuffer and re-creates it on return, so each switch
  *  proposed the grid through the other renderer: five columns either way, a
  *  real PTY resize, SIGWINCH, and a full application repaint with no layout
- *  change behind it. Applying WebGL's floor-width/ceil-height quantization to
- *  the shared measurement makes both renderers propose the grid the visible
- *  one is already showing. */
+ *  change behind it. Quantize at the measurement boundary with WebGL's
+ *  floor-width/ceil-height rules. CharSizeService can then compare equal
+ *  values normally; accessor-based quantization would report a font change on
+ *  every measure because the raw result never equals the stored value. */
 export function pinCharMetrics(term: Terminal): void {
     const service = internals(term)._core?._charSizeService;
-    if (!service || typeof service.width !== 'number') return;
-    if (Object.getOwnPropertyDescriptor(service, 'width')?.get) return;
-    const quantize = (field: 'width' | 'height', value: number) => {
-        if (!(value > 0)) return value;
+    const strategy = service?._measureStrategy;
+    if (!service?.measure || !strategy?.measure) return;
+    const measure = strategy.measure.bind(strategy);
+    strategy.measure = () => {
+        const size = measure();
         const dpr = window.devicePixelRatio || 1;
-        const round = field === 'width' ? Math.floor : Math.ceil;
-        return round(value * dpr) / dpr;
+        return {
+            width:
+                size.width > 0
+                    ? Math.floor(size.width * dpr) / dpr
+                    : size.width,
+            height:
+                size.height > 0
+                    ? Math.ceil(size.height * dpr) / dpr
+                    : size.height,
+        };
     };
-    for (const field of ['width', 'height'] as const) {
-        let measured = service[field] ?? 0;
-        Object.defineProperty(service, field, {
-            configurable: true,
-            get: () => quantize(field, measured),
-            set: (value: number) => {
-                measured = value;
-            },
-        });
-    }
+    // open() measured before this hook was installed. Replace those raw
+    // values now; later font and display changes use the wrapped strategy.
+    service.measure();
 }
 
 export class TabManager {

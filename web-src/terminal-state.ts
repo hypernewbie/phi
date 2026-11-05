@@ -159,8 +159,9 @@ export interface TerminalInternals {
         coreService?: { onUserInput?(cb: () => void): void };
         _charSizeService?: {
             measure?(): void;
-            width?: number;
-            height?: number;
+            _measureStrategy?: {
+                measure?(): { width: number; height: number };
+            };
         };
     };
 }
