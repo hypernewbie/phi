@@ -57,6 +57,12 @@ func (app *Server) Run(ctx context.Context) error {
 
 	log.Printf("[main] Starting Phi in CWD: %s", app.activeCWD)
 
+	// Migrate pre-feature configs to an explicit launch default once at
+	// startup. Read paths stay side-effect free after this.
+	if err := app.configStore().MigratePiDefault(); err != nil {
+		slog.Error("pi default migration failed", "path", app.configStore().PrimaryPath(), "err", err)
+		return err
+	}
 	// Ensure config directory exists and contains CWD as a workspace
 	cfg, err := app.configStore().LoadWithError()
 	if err != nil {

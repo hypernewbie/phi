@@ -142,6 +142,29 @@ type Config struct {
 	OpenCodeCommand       string `json:"opencode_command,omitempty" toml:"opencode_command,omitempty"`
 	OpenCodeLegacyCommand string `json:"opencode_legacy_command,omitempty" toml:"opencode_legacy_command,omitempty"`
 	PsiCommand            string `json:"psi_command,omitempty" toml:"psi_command,omitempty"`
+	// PsiCommand is the Psi executable; empty means "psi" on PATH.
+	// PsiArgs are extra base arguments for a Psi launch, one argv entry each.
+	// PsiEnv is a set of environment overrides, never removals.
+	PsiArgs []string          `json:"psi_args,omitempty" toml:"psi_args,omitempty"`
+	PsiEnv  map[string]string `json:"psi_env,omitempty" toml:"psi_env,omitempty"`
+
+	// PiCommand is the Pi executable; empty means "pi" on PATH. PiArgs and
+	// PiEnv apply to Pi launches only, mirroring the Psi settings, so each
+	// agent keeps its own launch configuration.
+	PiCommand string            `json:"pi_command,omitempty" toml:"pi_command,omitempty"`
+	PiArgs    []string          `json:"pi_args,omitempty" toml:"pi_args,omitempty"`
+	PiEnv     map[string]string `json:"pi_env,omitempty" toml:"pi_env,omitempty"`
+
+	// PiDefaultMode selects the agent a new Pi launch starts by default:
+	// "pi" or "psi", always explicit on disk. An empty value from an older
+	// config is migrated to "pi" on load.
+	// Empty means Pi, so an existing config file keeps its behaviour.
+	// Owned by the revisioned /api/config/pi-launch endpoint; saved tabs keep
+	// the mode they were created with.
+	PiDefaultMode string `json:"pi_default_mode,omitempty" toml:"pi_default_mode,omitempty"`
+	// PiLaunchRevision guards concurrent writes to the Pi launch settings.
+	// Only the feature endpoint advances it; SaveLegacy preserves it.
+	PiLaunchRevision uint64 `json:"pi_launch_revision,omitempty" toml:"pi_launch_revision,omitempty"`
 
 	// OpenCodeIdleStopMinutes stops the OpenCode background service after this
 	// many minutes of inactivity across all OpenCode tabs in Phi. 0 disables it.
@@ -289,6 +312,29 @@ func (s *Store) LoadWithError() (Config, error) {
 	return applyDefaults(cfg), nil
 }
 
+// MigratePiDefault persists the explicit launch default for primary configs
+// written before the feature existed. It runs once at startup, never on a
+// read path: reads must not rewrite the config file. A fresh install (no
+// primary file) and the legacy JSON fallback are left alone; applyDefaults
+// already reports the explicit value for them.
+func (s *Store) MigratePiDefault() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, present, err := s.readPrimary()
+	if err != nil || !present {
+		return err
+	}
+	cfg, err := s.readLocked()
+	if err != nil {
+		return err
+	}
+	if cfg.PiDefaultMode != "" {
+		return nil
+	}
+	cfg.PiDefaultMode = "pi"
+	return s.writeContentsLocked(cfg)
+}
+
 // ReadAuthoritative returns the config exactly as stored, without defaults.
 // An unreadable config is an error: authentication must become unavailable
 // rather than look like "no password set".
@@ -315,6 +361,14 @@ func (s *Store) SaveLegacy(cfg Config) {
 	cfg.MobileTerminalFontFamily = latest.MobileTerminalFontFamily
 	cfg.MobileTerminalFontSize = latest.MobileTerminalFontSize
 	cfg.MobileAppearanceRevision = latest.MobileAppearanceRevision
+	cfg.PiDefaultMode = latest.PiDefaultMode
+	cfg.PiLaunchRevision = latest.PiLaunchRevision
+	cfg.PsiCommand = latest.PsiCommand
+	cfg.PsiArgs = latest.PsiArgs
+	cfg.PsiEnv = latest.PsiEnv
+	cfg.PiCommand = latest.PiCommand
+	cfg.PiArgs = latest.PiArgs
+	cfg.PiEnv = latest.PiEnv
 	cfg.AccessPasswordHash = latest.AccessPasswordHash
 	cfg.AccessAuthMigration = latest.AccessAuthMigration
 	_ = s.writeContentsLocked(cfg)
@@ -403,6 +457,9 @@ func (s *Store) logReadError(err error) {
 }
 
 func applyDefaults(cfg Config) Config {
+	if cfg.PiDefaultMode == "" {
+		cfg.PiDefaultMode = "pi"
+	}
 	if cfg.Workspaces == nil {
 		cfg.Workspaces = []string{}
 	}
@@ -664,6 +721,10 @@ func cloneConfig(cfg Config) Config {
 	cfg.MobileTerminalFontFamily = clonePtr(cfg.MobileTerminalFontFamily)
 	cfg.MobileTerminalFontSize = clonePtr(cfg.MobileTerminalFontSize)
 	cfg.ReplayBufferBytes = clonePtr(cfg.ReplayBufferBytes)
+	cfg.PsiArgs = slices.Clone(cfg.PsiArgs)
+	cfg.PsiEnv = maps.Clone(cfg.PsiEnv)
+	cfg.PiArgs = slices.Clone(cfg.PiArgs)
+	cfg.PiEnv = maps.Clone(cfg.PiEnv)
 	cfg.Peers = slices.Clone(cfg.Peers)
 	cfg.AuthOrigins = slices.Clone(cfg.AuthOrigins)
 	cfg.AccessAuthMigration = clonePtr(cfg.AccessAuthMigration)
@@ -707,11 +768,19 @@ func (s *Store) writeContentsLocked(cfg Config) error {
 	// cheap reread beats reasoning about which failures leave disk stale.
 	s.cache = nil
 	cfg.Workspaces = filterOutTestPaths(cfg.Workspaces)
+	// The launch default is always explicit on disk; never write an empty
+	// value that readers would have to interpret.
+	if cfg.PiDefaultMode == "" {
+		cfg.PiDefaultMode = "pi"
+	}
 	before, present, err := s.readPrimary()
 	if err != nil {
 		return err
 	}
-	if present && reflect.DeepEqual(applyDefaults(before), applyDefaults(cfg)) {
+	// A legacy file with an empty default must be rewritten even when the
+	// defaulted forms compare equal, or the migration would never persist.
+	migratePiDefault := present && before.PiDefaultMode == ""
+	if !migratePiDefault && present && reflect.DeepEqual(applyDefaults(before), applyDefaults(cfg)) {
 		return nil
 	}
 	path := s.PrimaryPath()

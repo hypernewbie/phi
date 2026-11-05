@@ -3,11 +3,15 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/hypernewbie/phi/internal/config"
 	"github.com/hypernewbie/phi/pkg/coders"
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/ws"
@@ -152,6 +156,63 @@ func TestRestoreCorruptFileNeverAbortsStartup(t *testing.T) {
 	}
 }
 
+func TestRestoreKeepsSavedPiAgentUnderOppositeDefault(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		saved    string
+		def      string
+		noInject bool
+		want     string
+	}{
+		{"legacy pi pane under psi default", "", "psi", false, "pi"},
+		{"explicit pi pane under psi default", "pi", "psi", false, "pi"},
+		{"psi pane under pi default", "psi", "pi", false, "psi"},
+		{"psi pane under psi default", "psi", "psi", false, "psi"},
+		// The wrong mode must not be a fallback for an unavailable bridge: with
+		// injection disabled and no bridge attached, a saved Psi pane is still
+		// Psi.
+		{"psi pane with bridge injection disabled", "psi", "pi", true, "psi"},
+		{"psi pane under psi default with injection disabled", "psi", "psi", true, "psi"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := restoreHarness(t)
+			// The configured default only picks agents for new panes; a saved
+			// pane keeps the agent it was created with.
+			if _, err := testStore.Update(func(cfg *config.Config) error {
+				cfg.PiDefaultMode = test.def
+				cfg.PsiCommand = os.Args[0]
+				cfg.PiBridgeNoInject = test.noInject
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			pi := testServer.coders.MustGet("pi")
+			pi.Command = os.Args[0]
+			pi.Args = nil
+			argsPath := filepath.Join(home, "restored.args")
+			pi.Env = map[string]string{"PHI_TEST_RESTORE_CHILD": "1", "PHI_TEST_RESTORE_ARGS": argsPath}
+			testServer.coders.Add(pi)
+
+			tab := pty.SavedTab{PTYInstanceSnapshot: pty.PTYInstanceSnapshot{
+				ID: "restored-pi", Coder: "pi", PiMode: test.saved, Cwd: home, Title: "Saved title",
+			}}
+			testServer.restoreSavedTab(tab)
+			inst, ok := testServer.pty.Get(tab.ID)
+			if !ok || inst.IsPtyDead() {
+				t.Fatalf("restored pane is not live: ok=%v", ok)
+			}
+			// The child writes this file only when it really ran, so the mode
+			// assertion cannot pass on a pane whose process never started.
+			if _, err := os.Stat(argsPath); err != nil {
+				t.Fatalf("configured command did not run: %v", err)
+			}
+			if got := inst.Snapshot().PiMode; got != test.want {
+				t.Fatalf("saved mode %q under default %q restored as %q", test.saved, test.def, got)
+			}
+		})
+	}
+}
+
 func TestPiBridgeInjectsExtensionOnlyForForeignCoders(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -166,5 +227,98 @@ func TestPiBridgeInjectsExtensionOnlyForForeignCoders(t *testing.T) {
 		if got := piBridgeInjectsExtension(tc.coder); got != tc.inject {
 			t.Errorf("%s: got %v, want %v", tc.name, got, tc.inject)
 		}
+	}
+}
+
+// writePiSessionFile creates a Pi-format session that ListPiSessions accepts.
+func writePiSessionFile(t *testing.T, home, id string) {
+	t.Helper()
+	// Pi names the project directory from the absolute cwd as given, not its
+	// symlink-resolved form.
+	name := strings.ReplaceAll(strings.Trim(filepath.ToSlash(home), "/"), "/", "-")
+	dir := filepath.Join(home, ".pi", "agent", "sessions", "--"+name+"--")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	header := fmt.Sprintf("{\"type\":\"session\",\"id\":%q,\"cwd\":%q}\n", id, home)
+	if err := os.WriteFile(filepath.Join(dir, "2026-01-01T00-00-00_"+id+".jsonl"), []byte(header), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A pane opened with --session-id has no session file until its first message,
+// so a restart that sends the ID back must start fresh instead of running
+// `pi --session <id>` against a session that Pi never saved.
+func TestSpawnResumesOnlySavedPiSessions(t *testing.T) {
+	id := "11111111-2222-3333-4444-555555555555"
+	for _, test := range []struct {
+		name     string
+		saved    bool
+		wantFlag string
+	}{
+		{"saved session resumes", true, "--session"},
+		{"missing session starts fresh", false, "--session-id"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := restoreHarness(t)
+			if test.saved {
+				writePiSessionFile(t, home, id)
+			}
+			argsPath := filepath.Join(home, "spawn.args")
+			if _, err := testStore.Update(func(cfg *config.Config) error {
+				cfg.PiDefaultMode = "pi"
+				cfg.PiCommand = os.Args[0]
+				cfg.PiEnv = map[string]string{"PHI_TEST_RESTORE_CHILD": "1", "PHI_TEST_RESTORE_ARGS": argsPath}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			if cfg := testServer.loadConfig(); cfg.PiCommand != os.Args[0] || cfg.PiEnv["PHI_TEST_RESTORE_CHILD"] != "1" {
+				t.Fatalf("config not applied: cmd=%q env=%v", cfg.PiCommand, cfg.PiEnv)
+			}
+			body := fmt.Sprintf(`{"coder":"pi","pi_mode":"pi","cwd":%q,"session_id":%q}`, home, id)
+			reply := httptest.NewRecorder()
+			testServer.handleSpawnTerminal(reply, httptest.NewRequest(http.MethodPost, "/api/terminals", strings.NewReader(body)))
+			if reply.Code != http.StatusOK {
+				t.Fatalf("spawn: %d %s", reply.Code, reply.Body.String())
+			}
+			// The child writes the file after exec, so poll instead of racing it.
+			var data []byte
+			for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
+				var err error
+				if data, err = os.ReadFile(argsPath); err == nil {
+					break
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			if len(data) == 0 {
+				t.Fatal("configured command did not run")
+			}
+			var args []string
+			if err := json.Unmarshal(data, &args); err != nil {
+				t.Fatal(err)
+			}
+			if !contains(args, test.wantFlag) {
+				t.Fatalf("args=%q want %s", args, test.wantFlag)
+			}
+			if contains(args, "--session") && contains(args, "--session-id") {
+				t.Fatalf("both resume and fresh flags present: %q", args)
+			}
+			// Only a saved session may be resumed with the original ID.
+			if test.saved {
+				if !contains(args, id) {
+					t.Fatalf("saved ID not resumed: %q", args)
+				}
+			} else if contains(args, id) {
+				t.Fatalf("missing ID was used: %q", args)
+			}
+			// The pane must be live, not a process that already exited.
+			for _, inst := range testServer.pty.ListActive() {
+				if inst.IsPtyDead() {
+					t.Fatal("spawned pane is dead")
+				}
+			}
+		})
 	}
 }

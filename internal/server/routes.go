@@ -77,6 +77,7 @@ func (app *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/config/appearance", app.handleAppearanceUpdate)
 	mux.HandleFunc("/api/config/mobile-appearance", app.handleMobileAppearance)
 	mux.HandleFunc("/api/config/mobile-appearance/fence", app.handleMobileAppearanceFence)
+	mux.HandleFunc("/api/config/pi-launch", app.handlePiLaunch)
 	mux.HandleFunc("/api/git/worktrees", app.handleGetWorktrees)
 	mux.HandleFunc("/api/git/worktree-dirty", app.handleGetWorktreeDirtyStates)
 	mux.HandleFunc("/api/config/worktree-state", app.handleWorktreeStateUpdate)

@@ -32,9 +32,47 @@ func (app *Server) spawnTerminal(ctx context.Context, c coders.Coder, req SpawnR
 	if err := coders.VerifyOpenCode(ctx, c); err != nil {
 		return bad(err)
 	}
+	// The selected agent must fail rather than silently run the other one,
+	// and its settings must be launchable. This check sits in the shared spawn
+	// path so hand-edited config and restores are covered, and it runs before
+	// bridge provisioning or platform wrapping.
+	if c.ID == "pi" {
+		mode := effectivePiMode(c)
+		settings := launchSettingsFor(cfg, mode)
+		if err := validateLaunchFields(mode, settings); err != nil {
+			return bad(err)
+		}
+		// Psi must be installed before a pane claims to be Psi. Pi's empty
+		// setting keeps the registry default, which the existing spawn error
+		// already reports, so only a configured Pi command is looked up here.
+		if mode == piModePsi || settings.Command != "" {
+			if err := checkExecutable(mode, settings.Command); err != nil {
+				return bad(err)
+			}
+		}
+	}
 	if c.SessionSource == "opencode_v2" && req.SessionID != "" {
 		if err := session.ValidateOpenCodeV2Resume(ctx, c, req.SessionID); err != nil {
 			return bad(err)
+		}
+	}
+	// Pi writes its session file only once the first message is sent. A pane
+	// that was opened but never used keeps an ID that cannot be resumed, and
+	// `pi --session <id>` exits with "No session found matching". Treat a
+	// missing Pi session as fresh instead of launching a dead pane; the UI
+	// restart sends the pane's ID back through this same path. Psi keeps its
+	// own behaviour because its session storage is not Pi's file store.
+	if c.ID == "pi" && c.SessionSource == "pi_files" && effectivePiMode(c) == piModePi && req.SessionID != "" {
+		cwd := req.Cwd
+		if cwd == "" {
+			cwd = c.DefaultCwd
+		}
+		if cwd == "" {
+			cwd = app.activeCWD
+		}
+		if !piSessionExists(cwd, req.SessionID) {
+			log.Printf("[spawn] pi session %q is not saved for %s; starting fresh", req.SessionID, cwd)
+			req.SessionID = ""
 		}
 	}
 	id := req.SessionID
@@ -68,7 +106,13 @@ func (app *Server) spawnTerminal(ctx context.Context, c coders.Coder, req SpawnR
 		revokeBridge()
 		return bad(err)
 	}
-	opts.Title, opts.Workspace, opts.OpenCodeMode, opts.PiMode = req.Title, req.Workspace, c.OpenCodeMode, c.PiMode
+	opts.Title, opts.Workspace, opts.OpenCodeMode = req.Title, req.Workspace, c.OpenCodeMode
+	opts.PiMode = c.PiMode
+	if c.ID == "pi" {
+		// Store the resolved agent so a saved tab restores the same one even
+		// after the default changes.
+		opts.PiMode = effectivePiMode(c)
+	}
 	opts.Cols, opts.Rows = req.Cols, req.Rows
 	opts.ExtraArgs = req.ExtraArgs
 	var inst *pty.PTYInstance
@@ -208,10 +252,16 @@ func (app *Server) restoreSavedTab(tab pty.SavedTab) {
 		}
 	}
 	if known && c.ID == "pi" {
-		if tab.PiMode == "psi" {
-			if psiCoder, err := coders.PiPsi(c); err == nil {
-				c = psiCoder
-			}
+		// A saved pane keeps the agent it was created with; the configured
+		// default only affects new panes. Unknown saved modes fall back to Pi.
+		savedMode := tab.PiMode
+		if !validPiMode(savedMode) {
+			savedMode = piModePi
+		}
+		if selected, err := selectPiLaunch(c, savedMode, false, cfg); err == nil {
+			c = selected
+		} else {
+			log.Printf("[tabs] %s: saved agent unavailable (%v); restoring as Pi", tab.ID, err)
 		}
 	}
 	req := SpawnRequest{Coder: c.ID, Cwd: tab.Cwd, Workspace: tab.Workspace, Title: tab.Title, SessionID: tab.SessionID, ExtraArgs: tab.ExtraArgs}
@@ -286,3 +336,19 @@ func (app *Server) restoreSavedTab(tab pty.SavedTab) {
 // bridge extension argument. Native psi speaks the protocol itself, so it
 // gets the environment but never --extension.
 func piBridgeInjectsExtension(c coders.Coder) bool { return c.PiMode != "psi" }
+
+// piSessionExists reports whether Pi has a saved session with this exact ID
+// for the working directory. A listing failure counts as missing: a launch
+// must prefer a fresh session over a resume that cannot succeed.
+func piSessionExists(cwd, id string) bool {
+	sessions, err := session.ListPiSessions(cwd)
+	if err != nil {
+		return false
+	}
+	for _, candidate := range sessions {
+		if candidate.ID == id {
+			return true
+		}
+	}
+	return false
+}
