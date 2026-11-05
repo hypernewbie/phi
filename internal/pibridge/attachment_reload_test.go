@@ -35,7 +35,7 @@ func TestAttachmentReloadWireCompatibility(t *testing.T) {
 			}
 		})
 	}
-	caps := negotiateCapabilities([]string{CapabilityReload, "pi.attachments.v1", CapabilityAttachments}, false)
+	caps := negotiateCapabilities([]string{CapabilityReload, "pi.attachments.v1", CapabilityAttachments}, false, false)
 	if CapabilityAttachments != "pi.attachments.v3" || caps["pi.attachments.v1"] || !caps[CapabilityAttachments] || !caps[CapabilityReload] {
 		t.Fatalf("attachment versions must not alias: %v", caps)
 	}

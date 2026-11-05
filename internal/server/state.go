@@ -78,6 +78,7 @@ type Server struct {
 	startedAt                          int64
 	shuttingDown                       atomic.Bool
 	syncMesh                           *syncmesh.Server
+	syncPushCancel                     func()
 	diagnosticsProcessStartedAt        time.Time
 	serverStartedAt                    time.Time
 	cachedInstallMethod                string
@@ -155,6 +156,10 @@ func (app *Server) closeResources() {
 		}
 	}
 	app.accessManager.BeginRestart()
+	if app.syncPushCancel != nil {
+		app.syncPushCancel()
+		app.syncPushCancel = nil
+	}
 	if app.syncMesh != nil {
 		app.syncMesh.Stop()
 	}

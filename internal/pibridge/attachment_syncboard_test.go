@@ -20,7 +20,7 @@ func TestAttachmentSyncboardCapabilityVersions(t *testing.T) {
 			CapabilityLifecycle, CapabilityReload, CapabilitySyncboard,
 			"pi.attachments.v1", "pi.attachments.v2", "pi.state.v1",
 			CapabilityAttachments, CapabilityState,
-		}, enabled)
+		}, enabled, false)
 		for _, old := range []string{"pi.attachments.v1", "pi.attachments.v2", "pi.state.v1"} {
 			if caps[old] {
 				t.Fatalf("legacy review capability %s was aliased: %v", old, caps)

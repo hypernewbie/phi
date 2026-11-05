@@ -46,6 +46,7 @@ import {
     SyncboardOutcome,
     TerminalRefreshAck,
     TerminalRefreshOutcome,
+    SyncboardPushAck,
     TranscriptSearchMatch,
     TranscriptSearchResponse,
 } from './gen/bridge.js';
@@ -63,6 +64,12 @@ import { CAPABILITY_MODELS } from './protocol.js';
 import { CAPABILITY_RELOAD } from './protocol.js';
 import { CAPABILITY_SKILLS } from './protocol.js';
 import { CAPABILITY_SYNCBOARD } from './protocol.js';
+import { CAPABILITY_SYNCBOARD_PUSH } from './protocol.js';
+import {
+    createSyncboardPushHandler,
+    type SyncboardPushHandler,
+    type SyncboardPushState,
+} from './push.js';
 import { CAPABILITY_THINKING } from './protocol.js';
 import { CAPABILITY_TRANSCRIPT_SEARCH } from './protocol.js';
 import { MAX_COMPACT_IDENTITY_CHARS } from './protocol.js';
@@ -277,6 +284,15 @@ export interface RuntimeOptions {
     readonly invokeSkill?: ((name: string) => void) | undefined;
     /** True only when the bound host can register the native tool. */
     readonly syncboardEnabled?: boolean;
+    /**
+     * Host injection hook for a pushed addressed message. Present only when
+     * the host can render a custom message; absent keeps the push capability
+     * unadvertised.
+     */
+    readonly syncboardPushState?: SyncboardPushState;
+    readonly injectSyncboardMessage?:
+        | ((customType: string, content: string) => void)
+        | undefined;
     /** Called when this runtime's accepted stream exposes Syncboard. */
     readonly onSyncboardAvailability?: (available: boolean) => void;
     /** Base reconnect delay; doubles per attempt up to maxBackoffMs. */
@@ -556,6 +572,9 @@ export class Runtime {
     private syncboardAccepted = false;
     private syncboardSeq = 0n;
     private syncboardPending = new Map<string, SyncboardWaiter>();
+    private syncboardPushAccepted = false;
+    /** Created on first use: opts is assigned after field initializers. */
+    private syncboardPushHandler: SyncboardPushHandler | null = null;
     private attachmentsAccepted = false;
     private stateAccepted = false;
     private terminalRefreshAccepted = false;
@@ -1036,6 +1055,7 @@ export class Runtime {
         if (this.shutdownRequested) return;
         this.shutdownRequested = true;
         this.setSyncboardAccepted(false);
+        this.syncboardPushAccepted = false;
         // Shutdown releases active status, never unresolved native
         // work or duplicate protection: those stay process-owned.
         if (this.compact.active?.runtimeId === this.runtimeId) {
@@ -1395,6 +1415,11 @@ export class Runtime {
         if (this.opts.getSkills && this.opts.invokeSkill)
             caps.push(CAPABILITY_SKILLS);
         if (this.opts.syncboardEnabled) caps.push(CAPABILITY_SYNCBOARD);
+        // Injection needs the host hook; without it the capability is not
+        // advertised and Phi never sends a notification this runtime cannot
+        // apply.
+        if (this.opts.injectSyncboardMessage)
+            caps.push(CAPABILITY_SYNCBOARD_PUSH);
         if (this.attachmentApi)
             caps.push(CAPABILITY_ATTACHMENTS, CAPABILITY_STATE);
         if (readRefreshTui(this.ui)) caps.push(CAPABILITY_TERMINAL_REFRESH);
@@ -1463,6 +1488,7 @@ export class Runtime {
         this.reloadAccepted = false;
         this.skillsAccepted = false;
         this.setSyncboardAccepted(false);
+        this.syncboardPushAccepted = false;
         this.attachmentsAccepted = false;
         this.stateAccepted = false;
         this.terminalRefreshAccepted = false;
@@ -1500,6 +1526,9 @@ export class Runtime {
                     this.opts.syncboardEnabled === true &&
                         accepted.capabilities.includes(CAPABILITY_SYNCBOARD),
                 );
+                this.syncboardPushAccepted =
+                    this.opts.injectSyncboardMessage !== undefined &&
+                    accepted.capabilities.includes(CAPABILITY_SYNCBOARD_PUSH);
                 this.attachmentsAccepted = accepted.capabilities.includes(
                     CAPABILITY_ATTACHMENTS,
                 );
@@ -1596,6 +1625,11 @@ export class Runtime {
                 msg.payload.value.requestId,
                 msg.payload.value.name,
             );
+        } else if (
+            msg.payload?.$case === 'syncboardNotification' &&
+            this.syncboardPushAccepted
+        ) {
+            this.syncboardPush().accept(msg.payload.value);
         } else if (
             msg.payload?.$case === 'attachmentPromptRequest' &&
             this.attachmentsAccepted
@@ -1708,6 +1742,30 @@ export class Runtime {
                 },
             }) ?? false
         );
+    }
+
+    /** One handler per runtime, so deduplication survives reconnects. */
+    private syncboardPush(): SyncboardPushHandler {
+        if (this.syncboardPushHandler === null) {
+            this.syncboardPushHandler = createSyncboardPushHandler({
+                ...(this.opts.syncboardPushState
+                    ? { state: this.opts.syncboardPushState }
+                    : {}),
+                inject: this.opts.injectSyncboardMessage,
+                ack: (seq, messageId) => {
+                    this.channel?.sendNonfatal({
+                        paneId: this.opts.creds.pane,
+                        processId: this.opts.creds.process,
+                        runtimeGeneration: this.opts.generation,
+                        payload: {
+                            $case: 'syncboardPushAck',
+                            value: SyncboardPushAck.create({ seq, messageId }),
+                        },
+                    });
+                },
+            });
+        }
+        return this.syncboardPushHandler;
     }
 
     private onSyncboardResponse(response: SyncboardResponse): void {
@@ -3338,6 +3396,7 @@ export class Runtime {
 
     private onStreamEnd(status: ServiceError | null): void {
         this.setSyncboardAccepted(false);
+        this.syncboardPushAccepted = false;
         const channel = this.channel;
         this.cancelTranscriptSearches(channel ?? undefined);
         channel?.close();

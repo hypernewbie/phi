@@ -183,6 +183,15 @@ func peerSender(ctx context.Context) string {
 	return p.Addr.String()
 }
 
+// RecentAddressed returns the newest stored addressed messages, for the local
+// browser view. It is a read of local state only: no mesh call is made.
+func (s *Server) RecentAddressed(limit int) []*syncmeshb.SyncEvent {
+	if s == nil || s.hub == nil {
+		return nil
+	}
+	return s.hub.Recent(limit)
+}
+
 // SubscribePush registers a local subscriber for every addressed message this
 // Phi publishes. It is the seam the process uses to route mesh traffic into
 // pane runtimes; the returned cancel stops delivery.

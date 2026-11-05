@@ -228,6 +228,10 @@ func (app *Server) Run(ctx context.Context) error {
 	// the process keeps exactly its previous network face.
 	if cfg.SyncMesh {
 		app.syncMesh = syncmesh.New()
+		// Route addressed messages from the mesh into the pane runtimes. The
+		// subscriber is local: a follower dials out, so no inbound
+		// reachability is needed to receive a push.
+		app.startSyncboardPush()
 	}
 
 	// Start update checker (release builds only; dev builds hide the badge anyway).
