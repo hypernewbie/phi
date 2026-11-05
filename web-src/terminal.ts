@@ -1460,18 +1460,16 @@ export function pinCharMetrics(term: Terminal): void {
     const strategy = service?._measureStrategy;
     if (!service?.measure || !strategy?.measure) return;
     const measure = strategy.measure.bind(strategy);
+    const quantize = (value: number, round: (value: number) => number) => {
+        if (!(value > 0)) return value;
+        const dpr = window.devicePixelRatio || 1;
+        return round(value * dpr) / dpr;
+    };
     strategy.measure = () => {
         const size = measure();
-        const dpr = window.devicePixelRatio || 1;
         return {
-            width:
-                size.width > 0
-                    ? Math.floor(size.width * dpr) / dpr
-                    : size.width,
-            height:
-                size.height > 0
-                    ? Math.ceil(size.height * dpr) / dpr
-                    : size.height,
+            width: quantize(size.width, Math.floor),
+            height: quantize(size.height, Math.ceil),
         };
     };
     // open() measured before this hook was installed. Replace those raw
