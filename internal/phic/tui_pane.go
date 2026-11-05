@@ -734,6 +734,9 @@ func (p *paneActor) startRefreshFastPath(h *wspb.TerminalAttach) error {
 	if err := p.adoptHead(h); err != nil {
 		return err
 	}
+	// A fallback must not answer queries from before this HEAD, even
+	// when the pane was newly created for this viewer.
+	p.spec.Fresh = false
 	cols, rows := p.geometry()
 	p.beginRecovery()
 	if !p.requestRefresh(cols, rows) {
@@ -1091,6 +1094,7 @@ func (p *paneActor) admitReplay(h wireproto.ReplayHeader, b []byte, source terme
 	p.frontier = h.End
 	p.head = max(p.head, h.End)
 	p.mu.Unlock()
+	p.completeRefresh()
 	return nil
 }
 func (p *paneActor) feedRecording(h wireproto.RecordingHeader, b []byte, source termemu.Source) error {
@@ -1207,6 +1211,16 @@ func (p *paneActor) handleInput(in paneInput) error {
 	return nil
 }
 func (p *paneActor) refreshFrame() error {
+	if p.refreshID != "" {
+		p.mu.Lock()
+		waiting := p.frontier <= p.attachHead
+		p.mu.Unlock()
+		if waiting {
+			// A new parser, receipt or geometry alone is not a new screen.
+			p.dirty = false
+			return nil
+		}
+	}
 	target := p.emu
 	frame, err := target.Snapshot()
 	if err != nil {

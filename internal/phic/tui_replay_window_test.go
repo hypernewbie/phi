@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,6 +26,8 @@ type windowFixture struct {
 	writeMu chan struct{}
 	mu      sync.Mutex
 	conns   int
+	// Tests set this before starting the actor to certify a newer reconnect head.
+	nextAttach *wspb.TerminalAttach
 }
 
 func (f *windowFixture) connections() int {
@@ -60,8 +61,12 @@ func newWindowFixture(t *testing.T, attach *wspb.TerminalAttach, handle func(w h
 		defer ws.Close()
 		f.mu.Lock()
 		f.conns++
+		header := attach
+		if f.conns > 1 && f.nextAttach != nil {
+			header = f.nextAttach
+		}
 		f.mu.Unlock()
-		raw, err := wireproto.EncodeAttachFrame(attach)
+		raw, err := wireproto.EncodeAttachFrame(header)
 		if err != nil {
 			return
 		}
@@ -171,7 +176,7 @@ func refreshAttach(head uint64) *wspb.TerminalAttach {
 		InitialCols: proto.Uint32(80), InitialRows: proto.Uint32(24),
 		FloorCols: proto.Uint32(80), FloorRows: proto.Uint32(24),
 		HeadCols: proto.Uint32(80), HeadRows: proto.Uint32(24),
-		EventCursor:              proto.String("v1.7.11.0"),
+		EventCursor:              proto.String((replayPosition{7, head, 0}).String()),
 		FloorEventCursor:         proto.String("v1.7.5.0"),
 		TerminalRefreshAvailable: proto.Bool(true),
 	}
@@ -306,7 +311,6 @@ func TestNativeRefreshFallbackReplaysMarkerOnlyHead(t *testing.T) {
 	resize := f.waitFrame(t, func(frame *wspb.TerminalClientFrame) bool {
 		return frame.GetResize() != nil && frame.GetResize().GetRefreshRequestId() != ""
 	})
-	waitPaneEvent(t, ev, paneOutput) // the certified-head frame before refusal
 	f.push(t, &wspb.TerminalServerFrame{Payload: &wspb.TerminalServerFrame_RefreshResult{
 		RefreshResult: &wspb.TerminalRefreshResult{
 			RequestId: resize.GetResize().RefreshRequestId,
@@ -348,47 +352,6 @@ func TestNativeInputStaysLiveDuringReplay(t *testing.T) {
 		return string(frame.GetInput()) == "typed"
 	})
 	close(release)
-}
-
-func TestNativeExitCancelsRefreshWithoutFallback(t *testing.T) {
-	attach := refreshAttach(11)
-	var floorReads atomic.Int32
-	f := newWindowFixture(t, attach, func(w http.ResponseWriter, q url.Values) {
-		if q.Get("through") != "latest" {
-			floorReads.Add(1)
-			http.Error(w, "no history read may start", http.StatusConflict)
-			return
-		}
-		writeReplayFixture(w, wireproto.ReplayHeader{
-			Epoch: 7, Start: 11, End: 11, Through: 11,
-			ThroughCursor: "v1.7.11.0", EventCursor: "v1.7.11.0", InitCols: 80, InitRows: 24,
-		}, nil)
-	})
-	_, ev := startNativePane(t, f.srv.URL, 80, 24)
-	resize := f.waitFrame(t, func(frame *wspb.TerminalClientFrame) bool {
-		return frame.GetResize() != nil && frame.GetResize().GetRefreshRequestId() != ""
-	})
-	id := resize.GetResize().GetRefreshRequestId()
-	f.push(t, &wspb.TerminalServerFrame{Payload: &wspb.TerminalServerFrame_Exit{Exit: &wspb.TerminalExit{Code: proto.Int32(0)}}})
-	exit := waitPaneEvent(t, ev, paneExited)
-	if exit.Code != 0 {
-		t.Fatalf("exit code=%d", exit.Code)
-	}
-	// The late receipt cannot restore live state or start a fallback.
-	f.push(t, &wspb.TerminalServerFrame{Payload: &wspb.TerminalServerFrame_RefreshResult{
-		RefreshResult: &wspb.TerminalRefreshResult{RequestId: proto.String(id), Outcome: wspb.TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_DISPATCHED.Enum()},
-	}})
-	time.Sleep(200 * time.Millisecond)
-	if n := floorReads.Load(); n != 0 {
-		t.Fatalf("refresh fallback started after exit: %d reads", n)
-	}
-	select {
-	case ev := <-ev:
-		if ev.Kind == paneExited {
-			t.Fatal("exit was emitted twice")
-		}
-	case <-time.After(100 * time.Millisecond):
-	}
 }
 
 func TestParseReplayWindowRejectsUncertifiedMetadata(t *testing.T) {

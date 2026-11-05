@@ -1,6 +1,7 @@
 package phic
 
 import (
+	"errors"
 	"strconv"
 	"time"
 
@@ -73,38 +74,16 @@ func (p *paneActor) handleRefreshResult(res *wspb.TerminalRefreshResult) error {
 	return p.fallbackAfterRefresh()
 }
 
-// fallbackAfterRefresh performs the single bounded history replay an
-// episode is allowed. A spent budget or a failed replay latches live-only
-// mode instead of retrying.
+// fallbackAfterRefresh spends the remaining attempt on a fresh attach.
+// Its certified head covers output and geometry already consumed while
+// waiting for the receipt; replaying only to the old head would lose them.
 func (p *paneActor) fallbackAfterRefresh() error {
 	p.refreshBlocked = true
 	if p.recoveryExhausted() {
 		return p.enterLimited("Pi could not repaint; showing live output only")
 	}
-	p.beginRecovery()
-	if err := p.resetAtFloor(); err != nil {
-		return p.enterLimited("history could not be recovered: " + err.Error())
-	}
-	deadline := p.recoveryDeadline()
-	// A zero-byte fence can still carry resize events. recoverFrom is a
-	// no-op when both byte and ordinal positions already match, so do not
-	// use attachHead as a proxy for whether the timeline needs replay.
-	if err := p.recoverFrom(deadline, p.floorValue(), p.attachHead, p.attachCursor); err != nil {
-		if p.exited {
-			return err
-		}
-		return p.enterLimited("history could not be recovered: " + err.Error())
-	}
-	if err := p.flushHeld(); err != nil {
-		return p.enterLimited("live output gap: " + err.Error())
-	}
-	cols, rows := p.geometry()
-	if !p.enqueueResize(cols, rows) {
-		return errPaneResize
-	}
-	p.endRecovery()
-	p.dirty = true
-	return p.refreshFrame()
+	p.fallbackNeeded = true
+	return errors.New("phic: repaint unavailable; reconnecting for retained output")
 }
 
 // enterLimited latches live-only recovery at a certified head. It never
@@ -142,13 +121,6 @@ func (p *paneActor) adoptWindow(info replayWindow) error {
 	p.headCols, p.headRows = uint16(info.HeadCols), uint16(info.HeadRows)
 	p.attachHead, p.attachCursor = info.Head, info.EventCursor
 	return p.resetAt(info.Epoch, info.Oldest, info.Head, p.floorCols, p.floorRows, info.Oldest, floor.ordinal)
-}
-
-func (p *paneActor) resetAtFloor() error {
-	p.mu.Lock()
-	floor, epoch := p.oldest, p.epoch
-	p.mu.Unlock()
-	return p.resetAt(epoch, floor, p.attachHead, p.floorCols, p.floorRows, floor, p.floorOrdinal)
 }
 
 func (p *paneActor) floorValue() uint64 {
