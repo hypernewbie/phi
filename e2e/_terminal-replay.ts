@@ -145,6 +145,7 @@ export function replayAttachWithFloor(
         headCols,
         headRows,
         floorEventCursor: `v1.${epoch}.${floor}.0`,
+        terminalRefreshAvailable: false,
     };
 }
 

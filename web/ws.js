@@ -1,5 +1,6 @@
 /* Φ phi — Binary WebSocket Client */
 import { TerminalClientFrame, TerminalServerFrame } from './proto/terminal.js';
+import { TerminalRefreshOutcome, } from './proto/terminal.js';
 import { terminalSubprotocol } from './ws-protocols.js';
 import { wsUrl } from './util.js';
 export { terminalSubprotocol };
@@ -65,6 +66,7 @@ export class PTYWebSocket {
     onOpen;
     onAttachHead;
     onGap;
+    onRefreshResult;
     url;
     ws;
     decoder;
@@ -101,6 +103,7 @@ export class PTYWebSocket {
         this.onOpen = onOpen;
         this.onAttachHead = opts?.onAttachHead;
         this.onGap = opts?.onGap;
+        this.onRefreshResult = opts?.onRefreshResult;
         const socketURL = new URL(wsUrl(`/ws/pane/${paneId}?state=ansi-v1`));
         this.url = (window.phiAccessAuth?.webSocketURL?.(socketURL) ?? socketURL).href;
         this.ws = new WebSocket(this.url, terminalSubprotocol);
@@ -171,6 +174,9 @@ export class PTYWebSocket {
                 case 'geometry':
                     this._handleGeometry(payload.value);
                     break;
+                case 'refreshResult':
+                    this._handleRefreshResult(payload.value);
+                    break;
                 case 'pong':
                     // Pong received successfully
                     break;
@@ -217,6 +223,32 @@ export class PTYWebSocket {
             // the access token; log the pane only.
             console.error(`[ws] Connection error for pane: ${paneId}`);
         };
+    }
+    _handleRefreshResult(result) {
+        if (!this.onRefreshResult)
+            return;
+        const requestId = result.requestId ?? '';
+        if (!requestId || requestId.length > 64)
+            return;
+        let outcome;
+        switch (result.outcome) {
+            case TerminalRefreshOutcome.TERMINAL_REFRESH_OUTCOME_DISPATCHED:
+                outcome = 'dispatched';
+                break;
+            case TerminalRefreshOutcome.TERMINAL_REFRESH_OUTCOME_NOT_SENT:
+                outcome = 'not-sent';
+                break;
+            default:
+                // UNSPECIFIED and any unknown value mean the same thing here:
+                // the repaint may have run, so it is never resent.
+                outcome = 'unknown';
+                break;
+        }
+        this._notify(this.onRefreshResult, {
+            requestId,
+            outcome,
+            reason: result.reason ?? '',
+        }, this);
     }
     _handleTitle(title) {
         const revision = toSafeInt(title.revision);
@@ -521,6 +553,11 @@ export class PTYWebSocket {
             ...(headCols !== undefined && headRows !== undefined
                 ? { headCols, headRows }
                 : {}),
+            // Absent means an older server or a pane with no repaint
+            // capability; never synthesize an affirmative hint.
+            ...(attach.terminalRefreshAvailable === true
+                ? { terminalRefreshAvailable: true }
+                : {}),
             ...(replayFrom !== undefined &&
                 replayFrom >= oldest &&
                 replayFrom <= head
@@ -781,6 +818,35 @@ export class PTYWebSocket {
         }
         return true;
     }
+    // Sends the refresh-marked resize. The request ID is a correlation
+    // token, never PTY input: the server stages the resize, then runs one
+    // in-place Pi repaint and answers only this socket.
+    sendRefreshResize(cols, rows, requestId) {
+        if (this.ws.readyState !== WebSocket.OPEN)
+            return false;
+        if (!requestId || requestId.length > 64)
+            return false;
+        if (!Number.isInteger(cols) ||
+            !Number.isInteger(rows) ||
+            cols < 1 ||
+            rows < 1 ||
+            cols > 65535 ||
+            rows > 65535)
+            return false;
+        try {
+            const frame = TerminalClientFrame.encode(TerminalClientFrame.fromPartial({
+                payload: {
+                    $case: 'resize',
+                    value: { cols, rows, refreshRequestId: requestId },
+                },
+            })).finish();
+            this.ws.send(frame);
+        }
+        catch (_e) {
+            return false;
+        }
+        return true;
+    }
     close() {
         this.onClose = undefined;
         this.onOpen = undefined;
@@ -788,6 +854,7 @@ export class PTYWebSocket {
         this.onControl = undefined;
         this.onAttachHead = undefined;
         this.onGap = undefined;
+        this.onRefreshResult = undefined;
         if (this.ws) {
             this.ws.onclose = null;
             this.ws.onerror = null;

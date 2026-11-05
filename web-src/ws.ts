@@ -9,6 +9,10 @@ import type {
     TerminalTitle,
 } from './proto/terminal.js';
 import { TerminalClientFrame, TerminalServerFrame } from './proto/terminal.js';
+import {
+    TerminalRefreshOutcome,
+    type TerminalRefreshResult,
+} from './proto/terminal.js';
 import type {
     Notification,
     SyncChanged,
@@ -99,9 +103,19 @@ export interface AttachHeadInfo {
     floorEventCursor?: string;
     floorCols?: number;
     floorRows?: number;
-    // v3: geometry in effect at the certified head.
+    // v3: geometry in effect at the certified head. A Pi repaint path
+    // sizes its parser to this grid before asking the host to redraw.
     headCols?: number;
     headRows?: number;
+    // v3: the attached Pi can redraw its own live screen on request.
+    terminalRefreshAvailable?: boolean;
+}
+
+/** One repaint receipt for the socket that asked. */
+export interface RefreshReceipt {
+    requestId: string;
+    outcome: 'dispatched' | 'not-sent' | 'unknown';
+    reason: string;
 }
 
 export interface PTYWebSocketOptions {
@@ -114,6 +128,7 @@ export interface PTYWebSocketOptions {
     // a socket URL they can never connect to.
     onAttachHead?: (info: AttachHeadInfo, socket?: PTYWebSocket) => void;
     onGap?: (from: number, to: number, socket?: PTYWebSocket) => void;
+    onRefreshResult?: (result: RefreshReceipt, socket?: PTYWebSocket) => void;
 }
 
 // Narrow one 64-bit field to a safe integer. Absent and out-of-range
@@ -167,6 +182,7 @@ export class PTYWebSocket {
     onOpen?: () => void;
     onAttachHead?: PTYWebSocketOptions['onAttachHead'];
     onGap?: PTYWebSocketOptions['onGap'];
+    onRefreshResult?: PTYWebSocketOptions['onRefreshResult'];
     url: string;
     ws: WebSocket;
     decoder: TextDecoder;
@@ -217,6 +233,7 @@ export class PTYWebSocket {
         this.onOpen = onOpen as typeof this.onOpen;
         this.onAttachHead = opts?.onAttachHead;
         this.onGap = opts?.onGap;
+        this.onRefreshResult = opts?.onRefreshResult;
 
         const socketURL = new URL(wsUrl(`/ws/pane/${paneId}?state=ansi-v1`));
         this.url = (
@@ -291,6 +308,9 @@ export class PTYWebSocket {
                 case 'geometry':
                     this._handleGeometry(payload.value);
                     break;
+                case 'refreshResult':
+                    this._handleRefreshResult(payload.value);
+                    break;
                 case 'pong':
                     // Pong received successfully
                     break;
@@ -337,6 +357,35 @@ export class PTYWebSocket {
             // the access token; log the pane only.
             console.error(`[ws] Connection error for pane: ${paneId}`);
         };
+    }
+
+    private _handleRefreshResult(result: TerminalRefreshResult) {
+        if (!this.onRefreshResult) return;
+        const requestId = result.requestId ?? '';
+        if (!requestId || requestId.length > 64) return;
+        let outcome: RefreshReceipt['outcome'];
+        switch (result.outcome) {
+            case TerminalRefreshOutcome.TERMINAL_REFRESH_OUTCOME_DISPATCHED:
+                outcome = 'dispatched';
+                break;
+            case TerminalRefreshOutcome.TERMINAL_REFRESH_OUTCOME_NOT_SENT:
+                outcome = 'not-sent';
+                break;
+            default:
+                // UNSPECIFIED and any unknown value mean the same thing here:
+                // the repaint may have run, so it is never resent.
+                outcome = 'unknown';
+                break;
+        }
+        this._notify(
+            this.onRefreshResult,
+            {
+                requestId,
+                outcome,
+                reason: result.reason ?? '',
+            },
+            this,
+        );
     }
 
     private _handleTitle(title: TerminalTitle) {
@@ -634,6 +683,11 @@ export class PTYWebSocket {
                 ...(headCols !== undefined && headRows !== undefined
                     ? { headCols, headRows }
                     : {}),
+                // Absent means an older server or a pane with no repaint
+                // capability; never synthesize an affirmative hint.
+                ...(attach.terminalRefreshAvailable === true
+                    ? { terminalRefreshAvailable: true }
+                    : {}),
                 ...(replayFrom !== undefined &&
                 replayFrom >= oldest &&
                 replayFrom <= head
@@ -924,6 +978,37 @@ export class PTYWebSocket {
         return true;
     }
 
+    // Sends the refresh-marked resize. The request ID is a correlation
+    // token, never PTY input: the server stages the resize, then runs one
+    // in-place Pi repaint and answers only this socket.
+    sendRefreshResize(cols: number, rows: number, requestId: string): boolean {
+        if (this.ws.readyState !== WebSocket.OPEN) return false;
+        if (!requestId || requestId.length > 64) return false;
+        if (
+            !Number.isInteger(cols) ||
+            !Number.isInteger(rows) ||
+            cols < 1 ||
+            rows < 1 ||
+            cols > 65535 ||
+            rows > 65535
+        )
+            return false;
+        try {
+            const frame = TerminalClientFrame.encode(
+                TerminalClientFrame.fromPartial({
+                    payload: {
+                        $case: 'resize',
+                        value: { cols, rows, refreshRequestId: requestId },
+                    },
+                }),
+            ).finish();
+            this.ws.send(frame);
+        } catch (_e) {
+            return false;
+        }
+        return true;
+    }
+
     close(): void {
         this.onClose = undefined;
         this.onOpen = undefined;
@@ -931,6 +1016,7 @@ export class PTYWebSocket {
         this.onControl = undefined;
         this.onAttachHead = undefined;
         this.onGap = undefined;
+        this.onRefreshResult = undefined;
         if (this.ws) {
             this.ws.onclose = null;
             this.ws.onerror = null;
