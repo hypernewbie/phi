@@ -83,6 +83,15 @@ func (app *Server) servePiLaunch(w http.ResponseWriter, r *http.Request, update 
 	if patch.defaultMode != nil {
 		candidate.PiDefaultMode = *patch.defaultMode
 	}
+	if patch.piCommand != nil {
+		candidate.PiCommand = *patch.piCommand
+	}
+	if patch.piArgs != nil {
+		candidate.PiArgs = *patch.piArgs
+	}
+	if patch.piEnv != nil {
+		candidate.PiEnv = *patch.piEnv
+	}
 	if patch.psiCommand != nil {
 		candidate.PsiCommand = *patch.psiCommand
 	}
@@ -94,24 +103,53 @@ func (app *Server) servePiLaunch(w http.ResponseWriter, r *http.Request, update 
 	}
 	// Strict command-form rules apply only to a command the user changed: an
 	// existing relative command keeps working without a silent rewrite.
-	if patch.psiCommand != nil && *patch.psiCommand != base.PsiCommand {
-		if err := validatePsiCommandForm(*patch.psiCommand); err != nil {
+	for _, command := range []struct {
+		name    string
+		patched *string
+		stored  string
+	}{
+		{"pi_command", patch.piCommand, base.PiCommand},
+		{"psi_command", patch.psiCommand, base.PsiCommand},
+	} {
+		if command.patched == nil || *command.patched == command.stored {
+			continue
+		}
+		if err := validateCommandForm(command.name, *command.patched); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 	}
-	// A patch that selects default Pi must not require a working Psi
-	// installation, so recovery to Pi stays possible. A patch that edits any
-	// Psi field must leave a launchable command behind.
-	changedPsi := patch.psiCommand != nil || patch.psiArgs != nil || patch.psiEnv != nil
-	needLookup := changedPsi || (patch.defaultMode != nil && candidate.PiDefaultMode == piModePsi)
-	// Step 3: lookup outside the store lock.
-	if needLookup {
-		if err := validatePsiLaunch(candidate); err != nil {
+	// A patch that selects one agent must never require the other one to be
+	// installed, so switching the default always stays possible. A patch that
+	// edits an agent's fields must leave a launchable command behind.
+	// Selecting Pi needs no lookup: Pi is the built-in fallback, and an empty
+	// Pi command means the registry default.
+	changed := map[string]bool{
+		piModePi:  patch.piCommand != nil || patch.piArgs != nil || patch.piEnv != nil,
+		piModePsi: patch.psiCommand != nil || patch.psiArgs != nil || patch.psiEnv != nil,
+	}
+	needLookup := map[string]bool{
+		piModePi: changed[piModePi],
+		// Psi must be installed before it can become the default.
+		piModePsi: changed[piModePsi] || (patch.defaultMode != nil && candidate.PiDefaultMode == piModePsi),
+	}
+	// Step 3: lookup outside the store lock. Only the touched agent is
+	// checked: an uninstalled agent must not block the other one.
+	for _, mode := range []string{piModePi, piModePsi} {
+		if !needLookup[mode] {
+			continue
+		}
+		settings := launchSettingsFor(candidate, mode)
+		if err := validateLaunchFields(mode, settings); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := checkPsiExecutable(candidate.PsiCommand); err != nil {
+		// An empty Pi command means the registry default, which needs no
+		// lookup; clearing the field back to PATH still checks the name.
+		if mode == piModePi && settings.Command == "" {
+			continue
+		}
+		if err := checkExecutable(mode, settings.Command); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -143,6 +181,15 @@ func (app *Server) servePiLaunch(w http.ResponseWriter, r *http.Request, update 
 		if patch.defaultMode != nil {
 			cfg.PiDefaultMode = *patch.defaultMode
 		}
+		if patch.piCommand != nil {
+			cfg.PiCommand = *patch.piCommand
+		}
+		if patch.piArgs != nil {
+			cfg.PiArgs = *patch.piArgs
+		}
+		if patch.piEnv != nil {
+			cfg.PiEnv = *patch.piEnv
+		}
 		if patch.psiCommand != nil {
 			cfg.PsiCommand = *patch.psiCommand
 		}
@@ -173,6 +220,9 @@ func (app *Server) servePiLaunch(w http.ResponseWriter, r *http.Request, update 
 // field was omitted, which keeps the stored value.
 type piLaunchPatch struct {
 	defaultMode *string
+	piCommand   *string
+	piArgs      *[]string
+	piEnv       *map[string]string
 	psiCommand  *string
 	psiArgs     *[]string
 	psiEnv      *map[string]string
@@ -232,37 +282,36 @@ func decodePiLaunchPatch(w http.ResponseWriter, r *http.Request) (uint64, piLaun
 				return fail(`pi_default_mode must be "pi" or "psi"`, http.StatusBadRequest)
 			}
 			patch.defaultMode = mode
-		case "psi_command":
-			var command *string
-			if json.Unmarshal(raw, &command) != nil || command == nil {
-				return fail("psi_command must be a string", http.StatusBadRequest)
-			}
-			if err := validatePsiCommandText(*command); err != nil {
-				return fail(err.Error(), http.StatusBadRequest)
-			}
-			patch.psiCommand = command
-		case "psi_args":
-			var rawArgs []*string
-			if json.Unmarshal(raw, &rawArgs) != nil || rawArgs == nil {
-				return fail("psi_args must be an array of strings", http.StatusBadRequest)
-			}
-			args := make([]string, 0, len(rawArgs))
-			for i, arg := range rawArgs {
-				if arg == nil {
-					return fail(fmt.Sprintf("psi_args[%d] must be a string", i), http.StatusBadRequest)
-				}
-				args = append(args, *arg)
-			}
-			if err := validatePsiArgs(args); err != nil {
-				return fail(err.Error(), http.StatusBadRequest)
-			}
-			patch.psiArgs = &args
-		case "psi_env":
-			env, err := parsePsiEnv(raw)
+		case "pi_command", "psi_command":
+			command, err := decodeCommand(key, raw)
 			if err != nil {
 				return fail(err.Error(), http.StatusBadRequest)
 			}
-			patch.psiEnv = &env
+			if key == "pi_command" {
+				patch.piCommand = command
+			} else {
+				patch.psiCommand = command
+			}
+		case "pi_args", "psi_args":
+			args, err := decodeArgs(key, raw)
+			if err != nil {
+				return fail(err.Error(), http.StatusBadRequest)
+			}
+			if key == "pi_args" {
+				patch.piArgs = args
+			} else {
+				patch.psiArgs = args
+			}
+		case "pi_env", "psi_env":
+			env, err := parseLaunchEnv(key, raw)
+			if err != nil {
+				return fail(err.Error(), http.StatusBadRequest)
+			}
+			if key == "pi_env" {
+				patch.piEnv = &env
+			} else {
+				patch.psiEnv = &env
+			}
 		default:
 			return fail("Unknown field: "+key, http.StatusBadRequest)
 		}
@@ -270,144 +319,176 @@ func decodePiLaunchPatch(w http.ResponseWriter, r *http.Request) (uint64, piLaun
 	return revision, patch, 0
 }
 
-// validatePsiCommandText rejects characters that cannot survive the trip to a
+// decodeCommand accepts one executable setting. Both agents use the same rules.
+func decodeCommand(field string, raw json.RawMessage) (*string, error) {
+	var command *string
+	if json.Unmarshal(raw, &command) != nil || command == nil {
+		return nil, fmt.Errorf("%s must be a string", field)
+	}
+	if err := validateCommandText(field, *command); err != nil {
+		return nil, err
+	}
+	return command, nil
+}
+
+// decodeArgs accepts an argument list, rejecting null entries.
+func decodeArgs(field string, raw json.RawMessage) (*[]string, error) {
+	var rawArgs []*string
+	if json.Unmarshal(raw, &rawArgs) != nil || rawArgs == nil {
+		return nil, fmt.Errorf("%s must be an array of strings", field)
+	}
+	args := make([]string, 0, len(rawArgs))
+	for i, arg := range rawArgs {
+		if arg == nil {
+			return nil, fmt.Errorf("%s[%d] must be a string", field, i)
+		}
+		args = append(args, *arg)
+	}
+	if err := validateLaunchArgs(field, args); err != nil {
+		return nil, err
+	}
+	return &args, nil
+}
+
+// validateCommandText rejects characters that cannot survive the trip to a
 // process argument list.
-func validatePsiCommandText(command string) error {
+func validateCommandText(field, command string) error {
 	if strings.ContainsAny(command, "\x00\r\n") {
-		return errors.New("psi_command must not contain NUL or line breaks")
+		return fmt.Errorf("%s must not contain NUL or line breaks", field)
 	}
 	return nil
 }
 
-// validatePsiCommandForm enforces the stricter form for a changed command. A
+// validateCommandForm enforces the stricter form for a changed command. A
 // bare name is looked up on PATH; anything with a separator must be absolute,
 // because a relative path would resolve against whatever directory a launch
 // happens to use. Existing relative commands are not validated here so they
 // keep working unchanged.
-func validatePsiCommandForm(command string) error {
+func validateCommandForm(field, command string) error {
 	if command == "" || filepath.IsAbs(command) {
 		return nil
 	}
 	if strings.ContainsAny(command, `/\\`) {
-		return fmt.Errorf("psi_command %q must be an absolute path or a command name without a directory", command)
+		return fmt.Errorf("%s %q must be an absolute path or a command name without a directory", field, command)
 	}
 	if strings.HasPrefix(command, "~") {
-		return fmt.Errorf("psi_command %q must not start with ~; use an absolute path", command)
+		return fmt.Errorf("%s %q must not start with ~; use an absolute path", field, command)
 	}
 	return nil
 }
 
-// validatePsiArgs checks entries that arrive already split by the client.
-func validatePsiArgs(args []string) error {
+// validateLaunchArgs checks entries that arrive already split by the client.
+func validateLaunchArgs(field string, args []string) error {
 	for i, arg := range args {
 		if arg == "" {
-			return fmt.Errorf("psi_args[%d] is empty", i)
+			return fmt.Errorf("%s[%d] is empty", field, i)
 		}
 		if strings.ContainsAny(arg, "\x00\r\n") {
-			return fmt.Errorf("psi_args[%d] must not contain NUL or line breaks", i)
+			return fmt.Errorf("%s[%d] must not contain NUL or line breaks", field, i)
 		}
 	}
 	return nil
 }
 
-// psiEnvKeyPattern matches portable environment names.
-var psiEnvKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+// launchEnvKeyPattern matches portable environment names.
+var launchEnvKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// reservedPsiEnvPrefixes are matched case-insensitively: the PTY layer owns
+// reservedLaunchEnvPrefixes are matched case-insensitively: the PTY layer owns
 // these values, so an override would either be overwritten or break the pane.
-var reservedPsiEnvPrefixes = []string{"phi_pi_bridge_"}
+var reservedLaunchEnvPrefixes = []string{"phi_pi_bridge_"}
 
-var reservedPsiEnvKeys = map[string]struct{}{
+var reservedLaunchEnvKeys = map[string]struct{}{
 	"path":                   {},
 	"phi_clipboard_file":     {},
 	"colorterm":              {},
 	"phi_pi_attachment_root": {},
 }
 
-// parsePsiEnv decodes psi_env member by member so duplicate names are caught
-// rather than silently collapsed, which a plain map decode would do.
-func parsePsiEnv(raw json.RawMessage) (map[string]string, error) {
+// parseLaunchEnv decodes an env map member by member so duplicate names are
+// caught rather than silently collapsed, which a plain map decode would do.
+func parseLaunchEnv(field string, raw json.RawMessage) (map[string]string, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	token, err := decoder.Token()
 	if err != nil {
-		return nil, errors.New("psi_env must be an object of strings")
+		return nil, fmt.Errorf("%s must be an object of strings", field)
 	}
 	if delim, ok := token.(json.Delim); !ok || delim != '{' {
-		return nil, errors.New("psi_env must be an object of strings")
+		return nil, fmt.Errorf("%s must be an object of strings", field)
 	}
 	env := map[string]string{}
 	seen := map[string]string{}
 	for decoder.More() {
 		keyToken, err := decoder.Token()
 		if err != nil {
-			return nil, errors.New("psi_env must be an object of strings")
+			return nil, fmt.Errorf("%s must be an object of strings", field)
 		}
 		key, ok := keyToken.(string)
 		if !ok {
-			return nil, errors.New("psi_env must be an object of strings")
+			return nil, fmt.Errorf("%s must be an object of strings", field)
 		}
 		var value *string
 		if err := decoder.Decode(&value); err != nil || value == nil {
-			return nil, fmt.Errorf("psi_env[%q] must be a string", key)
+			return nil, fmt.Errorf("%s[%q] must be a string", field, key)
 		}
 		lower := strings.ToLower(key)
 		if previous, duplicate := seen[lower]; duplicate {
-			return nil, fmt.Errorf("psi_env declares %q and %q; environment names are case-insensitive", previous, key)
+			return nil, fmt.Errorf("%s declares %q and %q; environment names are case-insensitive", field, previous, key)
 		}
 		seen[lower] = key
-		if err := validatePsiEnvKey(key); err != nil {
+		if err := validateLaunchEnvKey(field, key); err != nil {
 			return nil, err
 		}
 		if strings.ContainsAny(*value, "\x00\r\n") {
-			return nil, fmt.Errorf("psi_env[%q] must not contain NUL or line breaks", key)
+			return nil, fmt.Errorf("%s[%q] must not contain NUL or line breaks", field, key)
 		}
 		env[key] = *value
 	}
 	if _, err := decoder.Token(); err != nil {
-		return nil, errors.New("psi_env must be an object of strings")
+		return nil, fmt.Errorf("%s must be an object of strings", field)
 	}
 	return env, nil
 }
 
-// validatePsiLaunch also guards hand-edited config before saving a Psi default
-// or creating a process. Errors name fields, never environment values.
-func validatePsiLaunch(cfg config.Config) error {
-	if err := validatePsiCommandText(cfg.PsiCommand); err != nil {
+// validateLaunchFields also guards hand-edited config before saving a default
+// or creating a process. Errors name fields, never environment values, and a
+// field's own name is derived from the agent so both agents report usefully.
+func validateLaunchFields(mode string, settings launchSettings) error {
+	if err := validateCommandText(mode+"_command", settings.Command); err != nil {
 		return err
 	}
-	if err := validatePsiArgs(cfg.PsiArgs); err != nil {
+	if err := validateLaunchArgs(mode+"_args", settings.Args); err != nil {
 		return err
 	}
 	seen := map[string]bool{}
-	for key, value := range cfg.PsiEnv {
-		if err := validatePsiEnvKey(key); err != nil {
+	for key, value := range settings.Env {
+		if err := validateLaunchEnvKey(mode+"_env", key); err != nil {
 			return err
 		}
 		lower := strings.ToLower(key)
 		if seen[lower] {
-			return errors.New("psi_env contains duplicate case-insensitive names")
+			return fmt.Errorf("%s_env contains duplicate case-insensitive names", mode)
 		}
 		seen[lower] = true
 		if strings.ContainsAny(value, "\x00\r\n") {
-			return fmt.Errorf("psi_env[%q] must not contain NUL or line breaks", key)
+			return fmt.Errorf("%s_env[%q] must not contain NUL or line breaks", mode, key)
 		}
 	}
 	return nil
 }
 
-// validatePsiEnvKey rejects names the PTY layer owns and names a POSIX shell
-// could not receive.
-func validatePsiEnvKey(key string) error {
-	if !psiEnvKeyPattern.MatchString(key) {
-		return fmt.Errorf("psi_env key %q must match [A-Za-z_][A-Za-z0-9_]*", key)
+// validateLaunchEnvKey rejects names the PTY layer owns and names a POSIX
+// shell could not receive.
+func validateLaunchEnvKey(field, key string) error {
+	if !launchEnvKeyPattern.MatchString(key) {
+		return fmt.Errorf("%s key %q must match [A-Za-z_][A-Za-z0-9_]*", field, key)
 	}
 	lower := strings.ToLower(key)
-	if _, reserved := reservedPsiEnvKeys[lower]; reserved {
-		return fmt.Errorf("psi_env key %q is set by Phi and cannot be overridden", key)
+	if _, reserved := reservedLaunchEnvKeys[lower]; reserved {
+		return fmt.Errorf("%s key %q is set by Phi and cannot be overridden", field, key)
 	}
-	for _, prefix := range reservedPsiEnvPrefixes {
+	for _, prefix := range reservedLaunchEnvPrefixes {
 		if strings.HasPrefix(lower, prefix) {
-			return fmt.Errorf("psi_env key %q is set by Phi and cannot be overridden", key)
+			return fmt.Errorf("%s key %q is set by Phi and cannot be overridden", field, key)
 		}
 	}
 	return nil

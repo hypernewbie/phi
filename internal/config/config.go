@@ -142,10 +142,18 @@ type Config struct {
 	OpenCodeCommand       string `json:"opencode_command,omitempty" toml:"opencode_command,omitempty"`
 	OpenCodeLegacyCommand string `json:"opencode_legacy_command,omitempty" toml:"opencode_legacy_command,omitempty"`
 	PsiCommand            string `json:"psi_command,omitempty" toml:"psi_command,omitempty"`
+	// PsiCommand is the Psi executable; empty means "psi" on PATH.
 	// PsiArgs are extra base arguments for a Psi launch, one argv entry each.
 	// PsiEnv is a set of environment overrides, never removals.
 	PsiArgs []string          `json:"psi_args,omitempty" toml:"psi_args,omitempty"`
 	PsiEnv  map[string]string `json:"psi_env,omitempty" toml:"psi_env,omitempty"`
+
+	// PiCommand is the Pi executable; empty means "pi" on PATH. PiArgs and
+	// PiEnv apply to Pi launches only, mirroring the Psi settings, so each
+	// agent keeps its own launch configuration.
+	PiCommand string            `json:"pi_command,omitempty" toml:"pi_command,omitempty"`
+	PiArgs    []string          `json:"pi_args,omitempty" toml:"pi_args,omitempty"`
+	PiEnv     map[string]string `json:"pi_env,omitempty" toml:"pi_env,omitempty"`
 
 	// PiDefaultMode selects the agent a new Pi launch starts by default:
 	// "pi" or "psi", always explicit on disk. An empty value from an older
@@ -358,6 +366,9 @@ func (s *Store) SaveLegacy(cfg Config) {
 	cfg.PsiCommand = latest.PsiCommand
 	cfg.PsiArgs = latest.PsiArgs
 	cfg.PsiEnv = latest.PsiEnv
+	cfg.PiCommand = latest.PiCommand
+	cfg.PiArgs = latest.PiArgs
+	cfg.PiEnv = latest.PiEnv
 	cfg.AccessPasswordHash = latest.AccessPasswordHash
 	cfg.AccessAuthMigration = latest.AccessAuthMigration
 	_ = s.writeContentsLocked(cfg)
@@ -705,6 +716,8 @@ func cloneConfig(cfg Config) Config {
 	cfg.ReplayBufferBytes = clonePtr(cfg.ReplayBufferBytes)
 	cfg.PsiArgs = slices.Clone(cfg.PsiArgs)
 	cfg.PsiEnv = maps.Clone(cfg.PsiEnv)
+	cfg.PiArgs = slices.Clone(cfg.PiArgs)
+	cfg.PiEnv = maps.Clone(cfg.PiEnv)
 	cfg.Peers = slices.Clone(cfg.Peers)
 	cfg.AuthOrigins = slices.Clone(cfg.AuthOrigins)
 	cfg.AccessAuthMigration = clonePtr(cfg.AccessAuthMigration)

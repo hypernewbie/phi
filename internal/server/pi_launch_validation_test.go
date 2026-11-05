@@ -64,3 +64,54 @@ func TestPiLaunchRejectsInvalidStoredPsiFields(t *testing.T) {
 		})
 	}
 }
+
+// A hand-edited Pi setting is checked at the process boundary too, and a broken
+// Pi setting never blocks switching back to Psi.
+func TestPiLaunchRejectsInvalidStoredPiFields(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*config.Config)
+	}{
+		{"reserved env", func(c *config.Config) { c.PiEnv = map[string]string{"cOlOrTeRm": "synthetic-private-value"} }},
+		{"duplicate env", func(c *config.Config) { c.PiEnv = map[string]string{"Foo": "a", "FOO": "b"} }},
+		{"newline arg", func(c *config.Config) { c.PiArgs = []string{"bad\narg"} }},
+		{"newline command", func(c *config.Config) { c.PiCommand = "pi\n" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := restoreHarness(t)
+			if _, err := testStore.Update(func(c *config.Config) error {
+				c.PiCommand = os.Args[0]
+				test.mutate(c)
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			reply := httptest.NewRecorder()
+			testServer.handleSpawnTerminal(reply, httptest.NewRequest(http.MethodPost, "/api/terminals", strings.NewReader(`{"coder":"pi","pi_mode":"pi"}`)))
+			if reply.Code != http.StatusBadRequest {
+				t.Fatalf("launch: %d %s", reply.Code, reply.Body.String())
+			}
+			if strings.Contains(reply.Body.String(), "synthetic-private-value") {
+				t.Fatal("launch leaked an env value")
+			}
+			if len(testServer.pty.ListActive()) != 0 {
+				t.Fatal("invalid Pi settings started a process")
+			}
+			// Psi recovery stays possible while the Pi settings are broken.
+			withFakePsi(t)
+			state := piLaunchRequest(t, http.MethodPost, `{"revision":0,"fields":{"pi_default_mode":"psi"}}`, "application/json", http.StatusOK)
+			if state.PiDefaultMode != "psi" {
+				t.Fatalf("Psi recovery blocked by broken Pi settings: %+v", state)
+			}
+			pi := testServer.coders.MustGet("pi")
+			pi.PsiCommand = os.Args[0]
+			pi.Env = map[string]string{"PHI_TEST_RESTORE_CHILD": "1", "PHI_TEST_RESTORE_ARGS": filepath.Join(home, "psi.args")}
+			testServer.coders.Add(pi)
+			psi := httptest.NewRecorder()
+			testServer.handleSpawnTerminal(psi, httptest.NewRequest(http.MethodPost, "/api/terminals", strings.NewReader(`{"coder":"pi","pi_mode":"psi"}`)))
+			if psi.Code != http.StatusOK {
+				t.Fatalf("Psi recovery launch: %d %s", psi.Code, psi.Body.String())
+			}
+		})
+	}
+}

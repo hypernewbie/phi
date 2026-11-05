@@ -230,12 +230,12 @@ func TestMergePsiEnv(t *testing.T) {
 	base := map[string]string{"PATH": "/usr/bin", "Foo": "base", "KEEP": "1"}
 	overrides := map[string]string{"FOO": "override", "ADDED": "2"}
 
-	unix := mergePsiEnv(base, overrides, false)
+	unix := mergeLaunchEnv(base, overrides, false)
 	if unix["Foo"] != "base" || unix["FOO"] != "override" {
 		t.Fatalf("unix merge must stay case-sensitive: %+v", unix)
 	}
 
-	windows := mergePsiEnv(base, overrides, true)
+	windows := mergeLaunchEnv(base, overrides, true)
 	if _, ok := windows["Foo"]; ok {
 		t.Fatalf("windows merge kept a differently cased base key: %+v", windows)
 	}
@@ -287,5 +287,133 @@ func TestSelectPiLaunchAppliesArgsAndEnv(t *testing.T) {
 	}
 	if len(piDefault.Args) != 0 || len(piDefault.Env) != 0 || piDefault.PiMode == "psi" {
 		t.Fatalf("Psi launch fields leaked into a Pi launch: %+v", piDefault)
+	}
+}
+
+// TestPiLaunchPiFieldsRoundTrip stores the Pi launch settings, proves they are
+// stored beside the Psi settings rather than replacing them, and that saving
+// one agent's fields leaves the other agent's fields untouched.
+func TestPiLaunchPiFieldsRoundTrip(t *testing.T) {
+	withTempConfig(t)
+	withFakePsi(t)
+
+	self := os.Args[0]
+	body, err := json.Marshal(map[string]any{
+		"revision": 0,
+		"fields": map[string]any{
+			"pi_command": self,
+			"pi_args":    []string{"--model", "space value"},
+			"pi_env":     map[string]string{"PI_LOG_LEVEL": "debug"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := piLaunchRequest(t, http.MethodPost, string(body), "application/json", http.StatusOK)
+	if state.Revision != 1 || state.PiDefaultMode != "pi" {
+		t.Fatalf("unexpected saved state: %+v", state)
+	}
+	if state.PiCommand != self || strings.Join(state.PiArgs, "\x00") != "--model\x00space value" {
+		t.Fatalf("pi fields not preserved: %+v", state)
+	}
+	if state.PiEnv["PI_LOG_LEVEL"] != "debug" {
+		t.Fatalf("pi env not preserved: %+v", state.PiEnv)
+	}
+	if state.PsiCommand != "" || len(state.PsiArgs) != 0 || len(state.PsiEnv) != 0 {
+		t.Fatalf("pi save wrote psi fields: %+v", state)
+	}
+
+	// Saving Psi fields later must not disturb the Pi fields.
+	state = piLaunchRequest(t, http.MethodPost, `{"revision":1,"fields":{"psi_command":"psi"}}`, "application/json", http.StatusOK)
+	if state.Revision != 2 || state.PsiCommand != "psi" {
+		t.Fatalf("psi save failed: %+v", state)
+	}
+	if state.PiCommand != self || len(state.PiArgs) != 2 || state.PiEnv["PI_LOG_LEVEL"] != "debug" {
+		t.Fatalf("psi save overwrote pi fields: %+v", state)
+	}
+	// A stale legacy save must not erase either set.
+	testStore.SaveLegacy(config.Config{})
+	reloaded := piLaunchRequest(t, http.MethodGet, "", "", http.StatusOK)
+	if reloaded.PiCommand != self || reloaded.PsiCommand != "psi" || len(reloaded.PiArgs) != 2 {
+		t.Fatalf("legacy save erased per-agent settings: %+v", reloaded)
+	}
+}
+
+// TestPiLaunchRejectsInvalidPiFields applies the same syntax rules to the Pi
+// settings and never reports an environment value.
+func TestPiLaunchRejectsInvalidPiFields(t *testing.T) {
+	withTempConfig(t)
+
+	for _, test := range []struct {
+		name   string
+		fields string
+		want   string
+	}{
+		{name: "reserved env", fields: `{"pi_env":{"PATH":"/tmp"}}`, want: "cannot be overridden"},
+		{name: "reserved bridge env", fields: `{"pi_env":{"PHI_PI_BRIDGE_MODE":"x"}}`, want: "cannot be overridden"},
+		{name: "duplicate env", fields: `{"pi_env":{"Foo":"a","FOO":"b"}}`, want: "case-insensitive"},
+		{name: "empty arg", fields: `{"pi_args":["--model",""]}`, want: "empty"},
+		{name: "relative command", fields: `{"pi_command":"other/pi"}`, want: "absolute path"},
+		{name: "missing command", fields: `{"pi_command":"/nonexistent/pi"}`, want: "is not available"},
+	} {
+		w := piLaunchRequestRaw(t, http.MethodPost, `{"revision":0,"fields":`+test.fields+`}`, "application/json")
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), test.want) {
+			t.Fatalf("%s: status=%d body=%s", test.name, w.Code, w.Body.String())
+		}
+	}
+	if cfg := testServer.loadConfig(); cfg.PiLaunchRevision != 0 || cfg.PiCommand != "" {
+		t.Fatalf("a rejected Pi save wrote config: %+v", cfg)
+	}
+}
+
+// TestSelectPiLaunchAppliesPiSettings proves each agent receives only its own
+// stored executable, arguments, and environment.
+func TestSelectPiLaunchAppliesPiSettings(t *testing.T) {
+	pi, _ := coders.NewManager().Get("pi")
+	cfg := config.Config{
+		PiDefaultMode: "pi",
+		PiCommand:     "/opt/pi",
+		PiArgs:        []string{"--model", "space value"},
+		PiEnv:         map[string]string{"PI_LOG_LEVEL": "debug"},
+		PsiCommand:    "/opt/psi",
+		PsiArgs:       []string{"--psi-only"},
+		PsiEnv:        map[string]string{"PSI_ONLY": "1"},
+	}
+
+	got, err := selectPiLaunch(pi, "pi", false, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Command != "/opt/pi" {
+		t.Fatalf("command=%q", got.Command)
+	}
+	if strings.Join(got.Args, "\x00") != "--model\x00space value" {
+		t.Fatalf("args=%q", got.Args)
+	}
+	if got.Env["PI_LOG_LEVEL"] != "debug" {
+		t.Fatalf("env=%+v", got.Env)
+	}
+	if _, leaked := got.Env["PSI_ONLY"]; leaked {
+		t.Fatalf("psi env leaked into a Pi launch: %+v", got.Env)
+	}
+
+	// An empty Pi command keeps the registry executable instead of blanking it;
+	// an empty Psi command still falls back to PATH lookup.
+	piDefault, err := selectPiLaunch(pi, "pi", false, config.Config{PiDefaultMode: "pi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if piDefault.Command != "pi" {
+		t.Fatalf("empty pi command replaced the registry value: %q", piDefault.Command)
+	}
+	psi, err := selectPiLaunch(pi, "psi", false, config.Config{PiDefaultMode: "pi", PsiCommand: "/opt/psi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if psi.Command != "/opt/psi" {
+		t.Fatalf("psi command=%q", psi.Command)
+	}
+	if len(pi.Args) != 0 || len(pi.Env) != 0 {
+		t.Fatalf("launch mutated the source coder: args=%q env=%+v", pi.Args, pi.Env)
 	}
 }

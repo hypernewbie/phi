@@ -32,15 +32,23 @@ func (app *Server) spawnTerminal(ctx context.Context, c coders.Coder, req SpawnR
 	if err := coders.VerifyOpenCode(ctx, c); err != nil {
 		return bad(err)
 	}
-	// A Psi launch must fail rather than silently run Pi. This check sits in
-	// the shared spawn path so hand-edited config and restores are covered,
-	// and it runs before bridge provisioning or platform wrapping.
-	if c.PiMode == piModePsi {
-		if err := validatePsiLaunch(cfg); err != nil {
+	// The selected agent must fail rather than silently run the other one,
+	// and its settings must be launchable. This check sits in the shared spawn
+	// path so hand-edited config and restores are covered, and it runs before
+	// bridge provisioning or platform wrapping.
+	if c.ID == "pi" {
+		mode := effectivePiMode(c)
+		settings := launchSettingsFor(cfg, mode)
+		if err := validateLaunchFields(mode, settings); err != nil {
 			return bad(err)
 		}
-		if err := checkPsiExecutable(c.PsiCommand); err != nil {
-			return bad(err)
+		// Psi must be installed before a pane claims to be Psi. Pi's empty
+		// setting keeps the registry default, which the existing spawn error
+		// already reports, so only a configured Pi command is looked up here.
+		if mode == piModePsi || settings.Command != "" {
+			if err := checkExecutable(mode, settings.Command); err != nil {
+				return bad(err)
+			}
 		}
 	}
 	if c.SessionSource == "opencode_v2" && req.SessionID != "" {
