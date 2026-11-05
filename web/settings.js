@@ -2,6 +2,33 @@ import { displayHostname, readLowPowerLocal, writeLowPowerLocal, } from './util.
 import { setAccessPassword, clearAccessPassword, bootstrapAccessAuth, } from './auth.js';
 import { tryNative } from './desktop.js';
 import { currentAppearanceProfile, readProfileOverride, writeProfileOverride, appearanceOwner, captureAppearanceScope, legacyAppearanceKey, } from './mobile-appearance.js';
+import { AGENT_FIELDS } from './pi-launch.js';
+// Launch field wording follows the selected agent: the rows edit one agent's
+// own settings, and the two agents are stored separately.
+const LAUNCH_TEXT = {
+    pi: {
+        command: {
+            label: 'Pi executable (blank = pi on PATH)',
+            placeholder: '/usr/local/bin/pi',
+        },
+        args: 'Extra Pi arguments (one per line)',
+        env: {
+            label: 'Extra Pi environment (KEY=VALUE per line)',
+            placeholder: 'PI_LOG_LEVEL=debug',
+        },
+    },
+    psi: {
+        command: {
+            label: 'Psi executable (blank = psi on PATH)',
+            placeholder: '/usr/local/bin/psi',
+        },
+        args: 'Extra Psi arguments (one per line)',
+        env: {
+            label: 'Extra Psi environment (KEY=VALUE per line)',
+            placeholder: 'PSI_LOG_LEVEL=debug',
+        },
+    },
+};
 export function broadcastConfigSync(type, payload = {}) {
     try {
         if (typeof BroadcastChannel !== 'undefined') {
@@ -774,21 +801,23 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     // not clear a draft.
     const piLaunchGroup = document.createElement('div');
     piLaunchGroup.className = 'settings-pi-launch';
+    const initialAgent = app.piLaunchStore?.mode ?? 'pi';
     const piModeRow = _buildSelectRow('Default agent for new Pi tabs', 'settings-pi-default-mode', [
         { value: 'pi', label: 'Pi' },
         { value: 'psi', label: 'Psi' },
     ], app.piLaunchStore?.mode ?? '');
     piLaunchGroup.appendChild(piModeRow);
-    // The three Psi launch fields. A pending edit stays visible in the control,
-    // but launches keep using the confirmed value until the save lands.
-    const piCommandRow = _buildTextRow('Psi executable (blank = psi on PATH)', 'settings-pi-command', app.piLaunchStore?.value('psi_command') ?? '', '/usr/local/bin/psi');
+    // One set of rows whose labels and values follow the selected agent. Each
+    // agent's settings are stored separately, so switching the default shows
+    // the other agent's own values, never a copy.
+    const piCommandRow = _buildTextRow(LAUNCH_TEXT.pi.command.label, 'settings-pi-command', app.piLaunchStore?.text(AGENT_FIELDS[initialAgent].command) ?? '', LAUNCH_TEXT.pi.command.placeholder);
     piLaunchGroup.appendChild(piCommandRow);
-    // The plan's argument example: the second line is one argument with two
-    // inner spaces, and no line is split further.
+    // The argument example: the second line is one argument with two inner
+    // spaces, and no line is split further.
     const piArgsExample = '--some-option\n/a/b/c  d/';
-    const piArgsRow = _buildTextAreaRow('Extra Psi arguments (one per line)', 'settings-pi-args', 2, piArgsExample);
+    const piArgsRow = _buildTextAreaRow(LAUNCH_TEXT.pi.args, 'settings-pi-args', 2, piArgsExample);
     piLaunchGroup.appendChild(piArgsRow);
-    const piEnvRow = _buildTextAreaRow('Extra Psi environment (KEY=VALUE per line)', 'settings-pi-env', 2, 'PSI_LOG_LEVEL=debug');
+    const piEnvRow = _buildTextAreaRow(LAUNCH_TEXT.pi.env.label, 'settings-pi-env', 2, LAUNCH_TEXT.pi.env.placeholder);
     piLaunchGroup.appendChild(piEnvRow);
     const piLaunchHint = document.createElement('p');
     piLaunchHint.className = 'settings-row-hint settings-pi-launch-status';
@@ -809,21 +838,33 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     piLaunchGroup.appendChild(piLaunchActions);
     behGroup.appendChild(piLaunchGroup);
     const piModeSelect = piModeRow.querySelector('select');
+    const piCommandLabel = piCommandRow.querySelector('label');
+    const piArgsLabel = piArgsRow.querySelector('label');
+    const piEnvLabel = piEnvRow.querySelector('label');
     const piCommandInput = piCommandRow.querySelector('input');
     const piArgsInput = piArgsRow.querySelector('textarea');
     const piEnvInput = piEnvRow.querySelector('textarea');
     piLaunchHint.id = 'settings-pi-launch-status';
     piLaunchHint.setAttribute('role', 'status');
-    const piFields = [
-        ['pi_default_mode', piModeSelect, piModeRow],
-        ['psi_command', piCommandInput, piCommandRow],
-        ['psi_args', piArgsInput, piArgsRow],
-        ['psi_env', piEnvInput, piEnvRow],
+    // Errors belong to a row, not to a key: the key changes with the agent.
+    const piRows = [
+        {
+            control: piModeSelect,
+            row: piModeRow,
+            id: 'settings-pi-default-mode-error',
+        },
+        {
+            control: piCommandInput,
+            row: piCommandRow,
+            id: 'settings-pi-command-error',
+        },
+        { control: piArgsInput, row: piArgsRow, id: 'settings-pi-args-error' },
+        { control: piEnvInput, row: piEnvRow, id: 'settings-pi-env-error' },
     ];
-    const piErrors = piFields.map(([key, control, row]) => {
+    const piErrors = piRows.map(({ control, row, id }) => {
         const error = document.createElement('p');
         error.className = 'settings-row-hint settings-pi-field-error';
-        error.id = `settings-${key}-error`;
+        error.id = id;
         error.hidden = true;
         error.setAttribute('aria-live', 'polite');
         row.after(error);
@@ -849,27 +890,45 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             piModeSelect.querySelector('option[value=""]')?.remove();
             piModeSelect.value = store.mode ?? '';
         }
+        const agent = store.mode ?? 'pi';
+        const keys = AGENT_FIELDS[agent];
+        if (piCommandLabel)
+            piCommandLabel.textContent = LAUNCH_TEXT[agent].command.label;
+        if (piCommandInput)
+            piCommandInput.placeholder = LAUNCH_TEXT[agent].command.placeholder;
+        if (piArgsLabel)
+            piArgsLabel.textContent = LAUNCH_TEXT[agent].args;
+        if (piEnvLabel)
+            piEnvLabel.textContent = LAUNCH_TEXT[agent].env.label;
+        if (piEnvInput)
+            piEnvInput.placeholder = LAUNCH_TEXT[agent].env.placeholder;
         piLaunchHint.textContent = store.status;
-        for (const [index, [key, control]] of piFields.entries()) {
+        const modeError = store.fieldError('pi_default_mode');
+        piErrors[0].textContent = modeError;
+        piErrors[0].hidden = !modeError;
+        piModeSelect.setAttribute('aria-invalid', String(!!modeError));
+        for (const [index, key] of [
+            keys.command,
+            keys.args,
+            keys.env,
+        ].entries()) {
             const message = store.fieldError(key);
-            piErrors[index].textContent = message;
-            piErrors[index].hidden = !message;
+            piErrors[index + 1].textContent = message;
+            piErrors[index + 1].hidden = !message;
+            const control = piRows[index + 1].control;
             control?.setAttribute('aria-invalid', String(!!message));
-            if (control && key !== 'pi_default_mode') {
-                const text = store.text(key);
-                if (control.value !== text)
-                    control.value = text;
-            }
+            if (control && control.value !== store.text(key))
+                control.value = store.text(key);
         }
         piSaveBtn.hidden = !store.needsManualSave;
         piDiscardBtn.hidden = !store.canDiscard;
         piLaunchActions.hidden = piSaveBtn.hidden && piDiscardBtn.hidden;
     };
-    for (const [key, control] of piFields) {
-        if (key === 'pi_default_mode')
-            continue;
-        control?.addEventListener('input', () => {
-            app.piLaunchStore?.editText(key, control.value);
+    const currentKeys = () => AGENT_FIELDS[app.piLaunchStore?.mode ?? 'pi'];
+    for (const [index, slot] of ['command', 'args', 'env'].entries()) {
+        piRows[index + 1].control?.addEventListener('input', (event) => {
+            const control = event.target;
+            app.piLaunchStore?.editText(currentKeys()[slot], control.value);
         });
     }
     piSaveBtn.addEventListener('click', () => {

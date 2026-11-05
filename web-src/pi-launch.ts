@@ -8,6 +8,9 @@ export type PiAgent = 'pi' | 'psi';
 export interface PiLaunchState {
     revision: number;
     pi_default_mode: PiAgent;
+    pi_command: string;
+    pi_args: string[];
+    pi_env: Record<string, string>;
     psi_command: string;
     psi_args: string[];
     psi_env: Record<string, string>;
@@ -53,11 +56,31 @@ const DEBOUNCE_MS = 300;
 const BACKOFF_MS = [1000, 2000, 4000, 8000, 15000];
 const FIELDS: FieldKey[] = [
     'pi_default_mode',
+    'pi_command',
+    'pi_args',
+    'pi_env',
     'psi_command',
     'psi_args',
     'psi_env',
 ];
-const TEXT_FIELDS: TextKey[] = ['psi_command', 'psi_args', 'psi_env'];
+const TEXT_FIELDS: TextKey[] = [
+    'pi_command',
+    'pi_args',
+    'pi_env',
+    'psi_command',
+    'psi_args',
+    'psi_env',
+];
+// Each agent stores its own executable, arguments and environment.
+export const AGENT_FIELDS: Record<
+    PiAgent,
+    { command: TextKey; args: TextKey; env: TextKey }
+> = {
+    pi: { command: 'pi_command', args: 'pi_args', env: 'pi_env' },
+    psi: { command: 'psi_command', args: 'psi_args', env: 'psi_env' },
+};
+const agentOf = (key: TextKey): PiAgent =>
+    key.startsWith('pi_') ? 'pi' : 'psi';
 const emptyDraft = (): PiLaunchDraft => ({
     fields: {},
     raw: {},
@@ -94,9 +117,15 @@ function validFields(value: unknown): value is PiLaunchFields {
         (!('pi_default_mode' in value) ||
             value.pi_default_mode === 'pi' ||
             value.pi_default_mode === 'psi') &&
-        (!('psi_command' in value) || typeof value.psi_command === 'string') &&
-        (!('psi_args' in value) || validArgs(value.psi_args)) &&
-        (!('psi_env' in value) || validEnv(value.psi_env))
+        TEXT_FIELDS.every(
+            (key) =>
+                !(key in value) ||
+                (key.endsWith('_args')
+                    ? validArgs(value[key])
+                    : key.endsWith('_env')
+                      ? validEnv(value[key])
+                      : typeof value[key] === 'string'),
+        )
     );
 }
 // Shape checks are deliberately separate from editor validation: malformed
@@ -111,6 +140,9 @@ function normalizeState(value: unknown): PiLaunchState | null {
     return {
         revision,
         pi_default_mode: selected.pi_default_mode,
+        pi_command: selected.pi_command ?? '',
+        pi_args: selected.pi_args ?? [],
+        pi_env: selected.pi_env ?? {},
         psi_command: selected.psi_command ?? '',
         psi_args: selected.psi_args ?? [],
         psi_env: selected.psi_env ?? {},
@@ -185,8 +217,8 @@ function parseText(
     key: TextKey,
     text: string,
 ): { value: string | string[] | Record<string, string> } | { error: string } {
-    if (key === 'psi_args') return parsePsiArgs(text);
-    if (key === 'psi_env') return parsePsiEnv(text);
+    if (key.endsWith('_args')) return parsePsiArgs(text);
+    if (key.endsWith('_env')) return parsePsiEnv(text);
     return text.includes('\0') || /[\r\n]/.test(text)
         ? { error: 'The executable cannot contain NUL or line breaks.' }
         : { value: text };
@@ -297,15 +329,6 @@ export class PiLaunchStore {
     get known(): boolean {
         return this.mode !== null;
     }
-    get psiCommand(): string {
-        return this.confirmed?.psi_command ?? '';
-    }
-    get psiArgs(): string[] {
-        return this.confirmed?.psi_args ?? [];
-    }
-    get psiEnv(): Record<string, string> {
-        return this.confirmed?.psi_env ?? {};
-    }
     value<K extends FieldKey>(key: K): PiLaunchState[K] | undefined {
         return (this.draft.fields[key] ?? this.confirmed?.[key]) as
             | PiLaunchState[K]
@@ -314,9 +337,9 @@ export class PiLaunchStore {
     text(key: TextKey): string {
         if (Object.hasOwn(this.draft.raw, key)) return this.draft.raw[key]!;
         const value = this.value(key);
-        if (key === 'psi_args')
+        if (key.endsWith('_args'))
             return (value as string[] | undefined)?.join('\n') ?? '';
-        if (key === 'psi_env')
+        if (key.endsWith('_env'))
             return Object.entries(value ?? {})
                 .map(([name, entry]) => `${name}=${entry}`)
                 .join('\n');
@@ -353,7 +376,7 @@ export class PiLaunchStore {
         if (this.storageWarning) return this.storageWarning;
         if (this.phase === 'saved') return 'Saved. Applies to new Pi tabs.';
         if (this.phase === 'pending')
-            return 'Pending. The default applies in this browser now; launches use saved Psi settings until confirmed.';
+            return 'Pending. The default applies in this browser now; launches use saved settings until confirmed.';
         if (this.phase === 'unknown')
             return 'Save outcome unknown. Checking the server; this will not be resent automatically.';
         if (this.phase === 'conflict')
@@ -510,18 +533,28 @@ export class PiLaunchStore {
                   : 'loading';
     }
     private eligibleFields(explicit = false): PiLaunchFields {
-        // Recovery to Pi must never be bundled with invalid Psi settings.
-        if (
-            this.draft.fields.pi_default_mode === 'pi' &&
-            (explicit || !this.fieldError('pi_default_mode'))
-        )
-            return { pi_default_mode: 'pi' };
+        // A mode change carries only the selected agent's own settings. A
+        // draft or rejection for the other agent must never block switching,
+        // and the two agents' settings are stored separately.
+        const mode = this.draft.fields.pi_default_mode;
+        if (mode && (explicit || !this.fieldError('pi_default_mode'))) {
+            const fields: PiLaunchFields = { pi_default_mode: mode };
+            for (const key of TEXT_FIELDS)
+                if (
+                    agentOf(key) === mode &&
+                    key in this.draft.fields &&
+                    typeof this.draft.versions[key] === 'number'
+                )
+                    (fields as Record<string, unknown>)[key] =
+                        this.draft.fields[key];
+            return fields;
+        }
         const fields = { ...this.draft.fields };
-        const invalidPsi = TEXT_FIELDS.some((key) => {
+        const invalid = TEXT_FIELDS.some((key) => {
             const raw = this.draft.raw[key];
             return raw !== undefined && 'error' in parseText(key, raw);
         });
-        if (invalidPsi) return {};
+        if (invalid) return {};
         for (const key of FIELDS)
             if (!explicit && this.fieldError(key)) delete fields[key];
         return fields;

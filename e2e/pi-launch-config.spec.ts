@@ -122,6 +122,9 @@ test.describe('Pi launch default', () => {
                 // A distinct executable for the configured path, so a record
                 // proves which one the server actually ran.
                 copyStub(stub, join(dir, 'psi legacy dir', exeName('psi')));
+                // A distinct Pi executable, so a Pi launch can also be traced
+                // to the configured path rather than the PATH stub.
+                copyStub(stub, join(dir, 'pi custom dir', exeName('pi')));
             },
             env: (dir) => ({
                 PATH: `${join(dir, 'bin')}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH || ''}`,
@@ -275,7 +278,7 @@ test.describe('Pi launch default', () => {
         await env.fill(rawEnv);
         await args.fill(rawArgs);
         await expect(env).toHaveAttribute('aria-invalid', 'true');
-        await expect(page.locator('#settings-psi_env-error')).toContainText(
+        await expect(page.locator('#settings-pi-env-error')).toContainText(
             'Line 3',
         );
         await closeSettings(page);
@@ -290,7 +293,7 @@ test.describe('Pi launch default', () => {
             await request.get(`${server.url}/api/config/pi-launch`)
         ).json();
         expect(before.revision).toBe(0);
-        expect(before.psi_env).toEqual({});
+        expect(before.pi_env).toEqual({});
         await env.fill('FIRST=1');
         await expect(page.locator('.settings-pi-launch-status')).toContainText(
             'Saved',
@@ -298,8 +301,8 @@ test.describe('Pi launch default', () => {
         const after = await (
             await request.get(`${server.url}/api/config/pi-launch`)
         ).json();
-        expect(after.psi_args).toEqual(['--model', '  space value  ']);
-        expect(after.psi_env).toEqual({ FIRST: '1' });
+        expect(after.pi_args).toEqual(['--model', '  space value  ']);
+        expect(after.pi_env).toEqual({ FIRST: '1' });
     });
 
     test('a request without a mode uses the saved default', async ({
@@ -333,5 +336,128 @@ test.describe('Pi launch default', () => {
                 timeout: 60_000,
             })
             .toBe(before + 1);
+    });
+});
+
+test.describe('Pi launch fields', () => {
+    test.setTimeout(240_000);
+
+    let server: PhiServer;
+
+    test.beforeEach(async () => {
+        server = await startPhi({
+            setup: (dir) => {
+                const stub = buildStub(dir);
+                mkdirSync(join(dir, 'children'), { recursive: true });
+                const bin = join(dir, 'bin');
+                copyStub(stub, join(bin, exeName('pi')));
+                copyStub(stub, join(bin, exeName('psi')));
+                copyStub(stub, join(dir, 'pi custom dir', exeName('pi')));
+            },
+            env: (dir) => ({
+                PATH: `${join(dir, 'bin')}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH || ''}`,
+                PHI_E2E_PI_LAUNCH_DIR: join(dir, 'children'),
+            }),
+        });
+    });
+
+    test.afterEach(async () => {
+        await server?.stop();
+    });
+
+    test('labels follow the default and each agent keeps its own fields', async ({
+        page,
+    }) => {
+        await page.goto(server.url);
+        await page.locator('.coder-tab[data-coder="pi"]').click();
+        await expect(page.locator('#new-session-btn')).toBeVisible();
+        await openSettings(page);
+        const labels = page.locator('.settings-pi-launch label');
+        const command = page.locator('#settings-pi-command');
+        const args = page.locator('#settings-pi-args');
+        const env = page.locator('#settings-pi-env');
+        const hint = page.locator('.settings-pi-launch-status');
+
+        // Pi is the migrated default, so the rows describe Pi.
+        await expect(labels.nth(1)).toHaveText(
+            'Pi executable (blank = pi on PATH)',
+        );
+        await expect(labels.nth(2)).toHaveText(
+            'Extra Pi arguments (one per line)',
+        );
+        await expect(labels.nth(3)).toHaveText(
+            'Extra Pi environment (KEY=VALUE per line)',
+        );
+        await expect(command).toHaveAttribute(
+            'placeholder',
+            '/usr/local/bin/pi',
+        );
+        await expect(env).toHaveAttribute('placeholder', 'PI_LOG_LEVEL=debug');
+
+        const piPath = join(server.dir, 'pi custom dir', exeName('pi'));
+        await command.fill(piPath);
+        await command.blur();
+        await args.fill('--pi-flag\nspace value');
+        await env.fill('PHI_E2E_SECOND_MARK=pi-mark');
+        await expect(hint).toContainText('Saved');
+
+        // Switching the default shows the other agent's own, still empty rows.
+        await chooseDefault(page, 'Psi', 'Saved');
+        await expect(labels.nth(1)).toHaveText(
+            'Psi executable (blank = psi on PATH)',
+        );
+        await expect(labels.nth(2)).toHaveText(
+            'Extra Psi arguments (one per line)',
+        );
+        await expect(labels.nth(3)).toHaveText(
+            'Extra Psi environment (KEY=VALUE per line)',
+        );
+        await expect(command).toHaveValue('');
+        await expect(args).toHaveValue('');
+        await expect(env).toHaveValue('');
+
+        // Back to Pi: the values saved before the switch are still there.
+        await chooseDefault(page, 'Pi', 'Saved');
+        await expect(labels.nth(1)).toHaveText(
+            'Pi executable (blank = pi on PATH)',
+        );
+        await expect(command).toHaveValue(piPath);
+        await expect(args).toHaveValue('--pi-flag\nspace value');
+        await expect(env).toHaveValue('PHI_E2E_SECOND_MARK=pi-mark');
+        await closeSettings(page);
+
+        const before = recordsFor(server, exeName('pi')).length;
+        await page.locator('#new-session-btn').click();
+        await expect
+            .poll(() => recordsFor(server, exeName('pi')).length, {
+                timeout: 60_000,
+            })
+            .toBe(before + 1);
+        const record = recordsFor(server, exeName('pi')).find(
+            (entry) => entry.executable === piPath,
+        )!;
+        expect(record).toBeDefined();
+        expect(record.argv.slice(1, 3)).toEqual(['--pi-flag', 'space value']);
+        expect(record.env.PHI_E2E_SECOND_MARK).toBe('pi-mark');
+        await expect.poll(() => tabTitles(page)).toContain('+ Pi');
+
+        // The Psi launch still uses PATH psi with no Pi extras.
+        await page.locator('#new-session-btn').click({ button: 'right' });
+        await expect(page.locator('.session-ctx-item')).toHaveText(
+            'Open with Psi',
+        );
+        await page.locator('.session-ctx-item').click();
+        await expect
+            .poll(
+                () =>
+                    recordsFor(server, exeName('psi')).filter((entry) =>
+                        entry.executable.includes('bin'),
+                    ).length,
+                { timeout: 60_000 },
+            )
+            .toBeGreaterThan(0);
+        const psiRecord = recordsFor(server, exeName('psi')).at(-1)!;
+        expect(psiRecord.argv).not.toContain('--pi-flag');
+        expect(psiRecord.env.PHI_E2E_SECOND_MARK).toBeUndefined();
     });
 });

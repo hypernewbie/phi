@@ -9,11 +9,27 @@ const DEBOUNCE_MS = 300;
 const BACKOFF_MS = [1000, 2000, 4000, 8000, 15000];
 const FIELDS = [
     'pi_default_mode',
+    'pi_command',
+    'pi_args',
+    'pi_env',
     'psi_command',
     'psi_args',
     'psi_env',
 ];
-const TEXT_FIELDS = ['psi_command', 'psi_args', 'psi_env'];
+const TEXT_FIELDS = [
+    'pi_command',
+    'pi_args',
+    'pi_env',
+    'psi_command',
+    'psi_args',
+    'psi_env',
+];
+// Each agent stores its own executable, arguments and environment.
+export const AGENT_FIELDS = {
+    pi: { command: 'pi_command', args: 'pi_args', env: 'pi_env' },
+    psi: { command: 'psi_command', args: 'psi_args', env: 'psi_env' },
+};
+const agentOf = (key) => key.startsWith('pi_') ? 'pi' : 'psi';
 const emptyDraft = () => ({
     fields: {},
     raw: {},
@@ -42,9 +58,12 @@ function validFields(value) {
     return ((!('pi_default_mode' in value) ||
         value.pi_default_mode === 'pi' ||
         value.pi_default_mode === 'psi') &&
-        (!('psi_command' in value) || typeof value.psi_command === 'string') &&
-        (!('psi_args' in value) || validArgs(value.psi_args)) &&
-        (!('psi_env' in value) || validEnv(value.psi_env)));
+        TEXT_FIELDS.every((key) => !(key in value) ||
+            (key.endsWith('_args')
+                ? validArgs(value[key])
+                : key.endsWith('_env')
+                    ? validEnv(value[key])
+                    : typeof value[key] === 'string')));
 }
 // Shape checks are deliberately separate from editor validation: malformed
 // stored Psi syntax must not hide the revision needed for Pi-only recovery.
@@ -58,6 +77,9 @@ function normalizeState(value) {
     return {
         revision,
         pi_default_mode: selected.pi_default_mode,
+        pi_command: selected.pi_command ?? '',
+        pi_args: selected.pi_args ?? [],
+        pi_env: selected.pi_env ?? {},
         psi_command: selected.psi_command ?? '',
         psi_args: selected.psi_args ?? [],
         psi_env: selected.psi_env ?? {},
@@ -119,9 +141,9 @@ export function parsePsiEnv(text) {
     return { value: { ...env } };
 }
 function parseText(key, text) {
-    if (key === 'psi_args')
+    if (key.endsWith('_args'))
         return parsePsiArgs(text);
-    if (key === 'psi_env')
+    if (key.endsWith('_env'))
         return parsePsiEnv(text);
     return text.includes('\0') || /[\r\n]/.test(text)
         ? { error: 'The executable cannot contain NUL or line breaks.' }
@@ -212,15 +234,6 @@ export class PiLaunchStore {
     get known() {
         return this.mode !== null;
     }
-    get psiCommand() {
-        return this.confirmed?.psi_command ?? '';
-    }
-    get psiArgs() {
-        return this.confirmed?.psi_args ?? [];
-    }
-    get psiEnv() {
-        return this.confirmed?.psi_env ?? {};
-    }
     value(key) {
         return (this.draft.fields[key] ?? this.confirmed?.[key]);
     }
@@ -228,9 +241,9 @@ export class PiLaunchStore {
         if (Object.hasOwn(this.draft.raw, key))
             return this.draft.raw[key];
         const value = this.value(key);
-        if (key === 'psi_args')
+        if (key.endsWith('_args'))
             return value?.join('\n') ?? '';
-        if (key === 'psi_env')
+        if (key.endsWith('_env'))
             return Object.entries(value ?? {})
                 .map(([name, entry]) => `${name}=${entry}`)
                 .join('\n');
@@ -268,7 +281,7 @@ export class PiLaunchStore {
         if (this.phase === 'saved')
             return 'Saved. Applies to new Pi tabs.';
         if (this.phase === 'pending')
-            return 'Pending. The default applies in this browser now; launches use saved Psi settings until confirmed.';
+            return 'Pending. The default applies in this browser now; launches use saved settings until confirmed.';
         if (this.phase === 'unknown')
             return 'Save outcome unknown. Checking the server; this will not be resent automatically.';
         if (this.phase === 'conflict')
@@ -429,16 +442,26 @@ export class PiLaunchStore {
                     : 'loading';
     }
     eligibleFields(explicit = false) {
-        // Recovery to Pi must never be bundled with invalid Psi settings.
-        if (this.draft.fields.pi_default_mode === 'pi' &&
-            (explicit || !this.fieldError('pi_default_mode')))
-            return { pi_default_mode: 'pi' };
+        // A mode change carries only the selected agent's own settings. A
+        // draft or rejection for the other agent must never block switching,
+        // and the two agents' settings are stored separately.
+        const mode = this.draft.fields.pi_default_mode;
+        if (mode && (explicit || !this.fieldError('pi_default_mode'))) {
+            const fields = { pi_default_mode: mode };
+            for (const key of TEXT_FIELDS)
+                if (agentOf(key) === mode &&
+                    key in this.draft.fields &&
+                    typeof this.draft.versions[key] === 'number')
+                    fields[key] =
+                        this.draft.fields[key];
+            return fields;
+        }
         const fields = { ...this.draft.fields };
-        const invalidPsi = TEXT_FIELDS.some((key) => {
+        const invalid = TEXT_FIELDS.some((key) => {
             const raw = this.draft.raw[key];
             return raw !== undefined && 'error' in parseText(key, raw);
         });
-        if (invalidPsi)
+        if (invalid)
             return {};
         for (const key of FIELDS)
             if (!explicit && this.fieldError(key))

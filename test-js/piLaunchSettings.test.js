@@ -29,6 +29,9 @@ function fixture(profile = 'a', origin = 'http://a.test') {
     let server = {
         revision: 0,
         pi_default_mode: 'pi',
+        pi_command: '',
+        pi_args: [],
+        pi_env: {},
         psi_command: '',
         psi_args: [],
         psi_env: {},
@@ -330,9 +333,9 @@ describe('PiLaunchStore sends the Psi launch fields as one patch', () => {
         f.store.setEnv({ PSI_TRACE: '1' });
 
         // Before confirmation a launch keeps the saved settings.
-        expect(f.store.psiCommand).toBe('');
-        expect(f.store.psiArgs).toEqual([]);
-        expect(f.store.psiEnv).toEqual({});
+        expect(f.store.confirmed.psi_command).toBe('');
+        expect(f.store.confirmed.psi_args).toEqual([]);
+        expect(f.store.confirmed.psi_env).toEqual({});
         expect(f.store.changedFields).toEqual({
             psi_command: '/opt/psi',
             psi_args: ['--model', 'space value'],
@@ -351,9 +354,9 @@ describe('PiLaunchStore sends the Psi launch fields as one patch', () => {
             },
         });
         expect(f.store.phase).toBe('saved');
-        expect(f.store.psiCommand).toBe('/opt/psi');
-        expect(f.store.psiArgs).toEqual(['--model', 'space value']);
-        expect(f.store.psiEnv).toEqual({ PSI_TRACE: '1' });
+        expect(f.store.confirmed.psi_command).toBe('/opt/psi');
+        expect(f.store.confirmed.psi_args).toEqual(['--model', 'space value']);
+        expect(f.store.confirmed.psi_env).toEqual({ PSI_TRACE: '1' });
         expect(f.store.pending).toBe(false);
     });
 
@@ -395,5 +398,62 @@ describe('parsePsiArgs and parsePsiEnv keep typed input predictable', () => {
         expect(parsePsiEnv('FOO=1\nfoo=2')).toEqual({
             error: 'Line 2: foo is already set above.',
         });
+    });
+});
+
+describe('PiLaunchStore keeps each agent settings separate', () => {
+    it("edits the selected agent's fields without touching the other agent", async () => {
+        const f = fixture();
+        f.server = {
+            revision: 0,
+            pi_default_mode: 'psi',
+            pi_command: '/opt/pi',
+            pi_args: ['--pi-flag'],
+            pi_env: { PI_LOG_LEVEL: 'debug' },
+            psi_command: '/opt/psi',
+            psi_args: ['--psi-flag'],
+            psi_env: { PSI_TRACE: '1' },
+        };
+        await f.store.refresh();
+        expect(f.store.text('pi_args')).toBe('--pi-flag');
+        expect(f.store.text('psi_args')).toBe('--psi-flag');
+        expect(f.store.text('pi_env')).toBe('PI_LOG_LEVEL=debug');
+
+        // A Pi edit is saved even while Psi is the default, and switching the
+        // default afterwards sends only the mode.
+        f.store.editText('pi_args', '--pi-flag\n--extra');
+        await settleEdit();
+        expect(JSON.parse(posts(f.fetch)[0][1].body)).toEqual({
+            revision: 0,
+            fields: { pi_args: ['--pi-flag', '--extra'] },
+        });
+        expect(f.store.text('psi_args')).toBe('--psi-flag');
+
+        f.store.choose('pi');
+        await settleEdit();
+        expect(JSON.parse(posts(f.fetch)[1][1].body)).toEqual({
+            revision: 1,
+            fields: { pi_default_mode: 'pi' },
+        });
+        expect(f.store.text('pi_args')).toBe('--pi-flag\n--extra');
+        expect(f.store.text('psi_args')).toBe('--psi-flag');
+    });
+
+    it("switches the default even when the other agent's draft is invalid", async () => {
+        const f = fixture();
+        f.server = { revision: 0, pi_default_mode: 'psi' };
+        await f.store.refresh();
+        f.store.editText('pi_env', 'A=1\nA=2');
+        expect(f.store.fieldError('pi_env')).toContain('already set');
+
+        f.store.choose('pi');
+        await settleEdit();
+        expect(JSON.parse(posts(f.fetch)[0][1].body)).toEqual({
+            revision: 0,
+            fields: { pi_default_mode: 'pi' },
+        });
+        expect(f.store.mode).toBe('pi');
+        // The rejected draft is kept for the user, not silently dropped.
+        expect(f.store.text('pi_env')).toBe('A=1\nA=2');
     });
 });
