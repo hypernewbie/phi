@@ -59,8 +59,9 @@ const (
 	// one without the other.
 	CapabilitySyncboardPush = "pi.syncboard.push.v1"
 	// maxPendingPushes bounds unacknowledged pushes retained per lease for a
-	// post-reconnect resend. Beyond this the oldest entry is dropped and the
-	// drop is logged: bounded memory outranks a silent backlog.
+	// post-reconnect resend. At the limit new work is refused rather than
+	// queued or evicted: an unacknowledged message is the one thing this path
+	// must not silently drop, and the caller keeps its own copy.
 	maxPendingPushes = 32
 	// maxPushMessageIDBytes bounds the idempotency key carried on the wire.
 	maxPushMessageIDBytes = 128
