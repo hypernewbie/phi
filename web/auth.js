@@ -1722,10 +1722,20 @@ export async function completeHostSession(context) {
         pendingOverlay.finish({ enabled: true });
     return true;
 }
+// A logout answer can arrive after the session moved underneath it. A refresh
+// rotation keeps the refresh family and replaces the access token, so the
+// answer still belongs to the logged-out session. A newer sign-in replaces the
+// family as well, and keeps its credential.
+function logoutOwnsSession(state, epoch, token, family) {
+    if (family !== 0 && state.refreshAbsoluteExpiresAt === family)
+        return true;
+    return epoch === state.epoch && state.accessToken === token;
+}
 export async function logoutAccess(all = false, context) {
     const state = stateFor(context);
     if (state.hostSession) {
         const epoch = state.epoch;
+        const family = state.refreshAbsoluteExpiresAt;
         const answerOK = await withAuthDeadline(async (signal) => {
             const res = await authFetch(context, '/api/auth/v2/logout', {
                 method: 'POST',
@@ -1742,7 +1752,7 @@ export async function logoutAccess(all = false, context) {
         });
         if (!answerOK)
             throw new Error('Unable to logout');
-        if (epoch === state.epoch) {
+        if (logoutOwnsSession(state, epoch, null, family)) {
             state.hostSession = false;
             state.loggedOut = true;
             state.epoch++;
@@ -1756,6 +1766,7 @@ export async function logoutAccess(all = false, context) {
     if (!token)
         throw new Error('Sign in to continue');
     const epoch = state.epoch;
+    const sessionFamily = state.refreshAbsoluteExpiresAt;
     const result = await withAuthDeadline(async (signal) => {
         const res = await authFetch(context, '/api/auth/v2/logout', {
             method: 'POST',
@@ -1780,7 +1791,7 @@ export async function logoutAccess(all = false, context) {
     });
     if (!result.ok || !result.payload || result.payload.ok !== true)
         throw new Error('Unable to logout');
-    if (epoch === state.epoch && state.accessToken === token) {
+    if (logoutOwnsSession(state, epoch, token, sessionFamily)) {
         const family = state.refreshAbsoluteExpiresAt;
         state.loggedOut = true;
         clearTokenState(state);
@@ -1878,7 +1889,7 @@ function setReload(fn) {
     reloadPage = fn;
 }
 function getAccessState() {
-    const { selectedProtocol, accessEnabled, accessToken, persistedToken, memoryOnly, hostSession, accessExpiresAt, loggedOut, } = activeAuthState();
+    const { selectedProtocol, accessEnabled, accessToken, persistedToken, memoryOnly, hostSession, accessExpiresAt, refreshAbsoluteExpiresAt, loggedOut, } = activeAuthState();
     return {
         selectedProtocol,
         accessEnabled,
@@ -1887,6 +1898,7 @@ function getAccessState() {
         memoryOnly,
         hostSession,
         accessExpiresAt,
+        refreshAbsoluteExpiresAt,
         loggedOut,
     };
 }

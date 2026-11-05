@@ -2375,6 +2375,62 @@ test.describe('session lifecycle and precedence', () => {
         await context.close();
     });
 
+    test('a rotation that lands during the logout still drops the credential', async ({
+        browser,
+    }) => {
+        const context = await browser.newContext();
+        const page = await context.newPage();
+        await page.goto(phi.url);
+        await unlock(page, PASSWORD);
+        await expectSignedIn(page);
+
+        // Hold the logout answer and rotate the token underneath it. The
+        // rotation belongs to the session being logged out, so the answer must
+        // still clear the credential it replaced.
+        let release!: () => void;
+        const held = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        await page.route('**/api/auth/v2/logout', async (route) => {
+            await held;
+            await route.continue();
+        });
+        const rotation = await page.evaluate(async () => {
+            const auth = await import(new URL('./auth.js', location.href).href);
+            const before = window.phiAccessAuth.getAccessToken();
+            // Kept on the page so the test can release the held answer and
+            // then settle this logout.
+            const slot = window as unknown as {
+                phiPendingLogout?: Promise<unknown>;
+            };
+            slot.phiPendingLogout = auth.logoutAccess(false).catch(() => null);
+            await auth.__test__.refreshSession();
+            return { before, after: window.phiAccessAuth.getAccessToken() };
+        });
+        // The ordering only exists when the rotation replaces the token.
+        expect(rotation.after).not.toBe(rotation.before);
+        expect(rotation.after).not.toBeNull();
+
+        release();
+        expect(
+            await page.evaluate(async () => {
+                const slot = window as unknown as {
+                    phiPendingLogout?: Promise<unknown>;
+                };
+                await slot.phiPendingLogout;
+                // Read at once. A later 401 may clean the page up on its own,
+                // which must not hide the credential it still holds here.
+                return window.phiAccessAuth.getAccessToken();
+            }),
+        ).toBeNull();
+        expect(
+            await page.evaluate(
+                async () => (await fetch('/api/coders')).status,
+            ),
+        ).toBe(401);
+        await context.close();
+    });
+
     test('a valid family refreshes without a new sign-in, then clearing the password disables auth', async ({
         browser,
     }) => {
