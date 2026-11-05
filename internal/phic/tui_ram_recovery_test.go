@@ -17,8 +17,8 @@ import (
 // TestPaneRAMRecovery holds a replay response behind a barrier and proves
 // that the actor keeps working: input and resize reach the child, the
 // last good frame stays on screen, one worker fetches pages, a stale
-// generation cannot mutate the replacement parser, and an exit admits no
-// new PTY traffic.
+// generation cannot mutate the replacement parser, and an exit cancels
+// refresh work without admitting new PTY traffic.
 func TestPaneRAMRecovery(t *testing.T) {
 	t.Run("bootstrap keeps input and resize live behind a held page", func(t *testing.T) {
 		var mu sync.Mutex
@@ -115,6 +115,57 @@ func TestPaneRAMRecovery(t *testing.T) {
 		}
 		if frontier, _, _, _, _, _ := p.state(); frontier != 29 {
 			t.Fatalf("frontier=%d, want 29", frontier)
+		}
+	})
+
+	t.Run("exit cancels refresh and admits no new PTY traffic", func(t *testing.T) {
+		f := newWindowFixture(t, refreshAttach(11), func(w http.ResponseWriter, q url.Values) {
+			if q.Get("through") != "latest" {
+				http.Error(w, "history must not restart after exit", http.StatusConflict)
+				return
+			}
+			writeReplayFixture(w, wireproto.ReplayHeader{
+				Epoch: 7, Start: 11, End: 11, Through: 11,
+				ThroughCursor: "v1.7.11.0", EventCursor: "v1.7.11.0", InitCols: 80, InitRows: 24,
+			}, nil)
+		})
+		p, ev := startNativePane(t, f.srv.URL, 80, 24)
+		resize := f.waitFrame(t, func(fr *wspb.TerminalClientFrame) bool {
+			return fr.GetResize() != nil && fr.GetResize().GetRefreshRequestId() != ""
+		})
+		id := resize.GetResize().GetRefreshRequestId()
+		f.push(t, outputFrame(t, 11, "KEEP-ME"))
+		deadline := time.After(3 * time.Second)
+		for {
+			if frame, ok := p.snapshotCopy(); ok && strings.Contains(frameText(frame), "KEEP-ME") {
+				break
+			}
+			select {
+			case <-deadline:
+				t.Fatal("pre-exit frame never painted")
+			case <-time.After(5 * time.Millisecond):
+			}
+		}
+		f.push(t, &wspb.TerminalServerFrame{Payload: &wspb.TerminalServerFrame_Exit{Exit: &wspb.TerminalExit{Code: proto.Int32(7)}}})
+		if exit := waitPaneEvent(t, ev, paneExited); exit.Code != 7 {
+			t.Fatalf("exit code=%d, want 7", exit.Code)
+		}
+		<-p.done
+		f.drainPages() // the finite exit drain already ran
+		p.sendRaw([]byte("after-exit"))
+		p.resize(120, 40)
+		f.drainFrames()
+		f.noFrameWithin(t, 150*time.Millisecond)
+		if f.connections() != 1 {
+			t.Fatalf("connections=%d, a dead pane must not reconnect", f.connections())
+		}
+		// A late receipt cannot reopen the pane or start a fallback read.
+		f.push(t, &wspb.TerminalServerFrame{Payload: &wspb.TerminalServerFrame_RefreshResult{
+			RefreshResult: &wspb.TerminalRefreshResult{RequestId: proto.String(id), Outcome: wspb.TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_DISPATCHED.Enum()},
+		}})
+		f.noPage(t, 150*time.Millisecond)
+		if frame, ok := p.snapshotCopy(); !ok || !strings.Contains(frameText(frame), "KEEP-ME") {
+			t.Fatalf("last frame lost on exit: %q", frameText(frame))
 		}
 	})
 
@@ -253,13 +304,27 @@ func TestNativeRecoveryBudgetDoesNotRenewAfterExpiry(t *testing.T) {
 	p := &paneActor{recoveryUntil: time.Now().Add(-time.Second), recoveryAttempts: 1}
 	deadline := p.recoveryUntil
 	p.beginRecovery()
-	if p.recoveryUntil != deadline || !p.recoveryExhausted() {
+	if p.recoveryUntil != deadline || !p.recoveryExhausted() || p.canFastPath(refreshAttach(11)) {
 		t.Fatal("expired episode was renewed")
+	}
+	p.refreshID, p.attachHead = "1", 11
+	if err := p.handleRefreshResult(&wspb.TerminalRefreshResult{RequestId: proto.String("1"), Outcome: wspb.TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_DISPATCHED.Enum()}); err != nil {
+		t.Fatal(err)
+	}
+	if p.refreshID == "" || p.recoveryUntil != deadline {
+		t.Fatal("DISPATCHED completed an unpainted refresh")
+	}
+	p.frontier = 12
+	p.completeRefresh()
+	if p.refreshID != "" || !p.recoveryUntil.IsZero() {
+		t.Fatal("usable output did not finish the episode")
 	}
 }
 
 func floorAttach() *wspb.TerminalAttach {
-	return windowAttach(11)
+	a := refreshAttach(11)
+	a.TerminalRefreshAvailable = proto.Bool(false)
+	return a
 }
 
 func floorPage(start, end uint64) wireproto.ReplayHeader {

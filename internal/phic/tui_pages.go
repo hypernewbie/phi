@@ -185,6 +185,7 @@ func (p *paneActor) beginRecovery() {
 	if p.recoveryUntil.IsZero() {
 		p.recoveryUntil = now.Add(paneRecoveryBudget)
 		p.recoveryAttempts = 0
+		p.refreshBlocked = false
 	}
 	p.recoveryAttempts++
 }
@@ -193,6 +194,7 @@ func (p *paneActor) beginRecovery() {
 func (p *paneActor) endRecovery() {
 	p.recoveryUntil = time.Time{}
 	p.recoveryAttempts = 0
+	p.refreshBlocked = false
 }
 
 func (p *paneActor) recoveryDeadline() time.Time {
