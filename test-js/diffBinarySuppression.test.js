@@ -246,6 +246,68 @@ describe('DiffController — _splitDiffChunks', () => {
         expect(rendered).not.toContain('logo.png');
     });
 
+    it('splits merge-commit sections at diff --cc headers', () => {
+        // `git show <merge>` writes combined diffs: `diff --cc` headers,
+        // and just `Binary files differ` for a binary blob. Without the
+        // boundary, that marker marked the whole commit binary and the
+        // merge's text diffs vanished from the viewer.
+        const diffCtrl = buildController();
+        const mergeDiff = `commit 0000000000000000000000000000000000000000
+Merge: 1111111 2222222
+Author: t <t@example.com>
+
+    merge side
+
+diff --cc b.bin
+index 1111111,2222222..3333333
+Binary files differ
+diff --cc f.txt
+index 4444444,5555555..6666666 100644
+--- a/f.txt
++++ b/f.txt
+@@@ -1,3 -1,3 +1,4 @@@
+ l1
++ SIDE
+  l3
+`;
+        const chunks = diffCtrl._splitDiffChunks(mergeDiff);
+        expect(chunks.map((c) => [c.name, c.isBinary])).toEqual([
+            ['', false],
+            ['b.bin', true],
+            ['f.txt', false],
+        ]);
+    });
+
+    it('keeps a merge commit text diff when a binary blob is in it', () => {
+        installDiff2HtmlSpy();
+        const diffCtrl = buildController();
+        const mergeDiff = `commit 0000000000000000000000000000000000000000
+
+    merge side
+
+diff --cc b.bin
+index 1111111,2222222..3333333
+Binary files differ
+diff --cc f.txt
+--- a/f.txt
++++ b/f.txt
+@@@ -1,3 -1,3 +1,4 @@@
+ l1
++ SIDE
+  l3
+`;
+        diffCtrl.renderRichDiff(mergeDiff);
+
+        const rendered = window.Diff2Html.html.mock.calls[0][0];
+        expect(rendered).toContain('diff --cc f.txt');
+        expect(rendered).toContain('+ SIDE');
+        expect(rendered).not.toContain('Binary files differ');
+        expect(
+            diffCtrl.diffModalBody.querySelector('.git-binary-note')
+                .textContent,
+        ).toBe('Skipped 1 binary file: b.bin');
+    });
+
     it('drops a section whose bytes leaked in without a binary marker', () => {
         // A cache written before the server marked binaries, or an older
         // server, delivers raw bytes as added lines. A NUL byte cannot

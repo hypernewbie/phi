@@ -4415,11 +4415,13 @@ export class DiffController {
         });
     }
 
-    /** Destination path of a `diff --git` header, without the `b/`
-     *  prefix. Git quotes paths that need it:
-     *  `diff --git "a/caf\303\251.txt" "b/caf\303\251.txt"`. */
+    /** Destination path of a `diff --git`/`diff --cc` header, without
+     *  the `b/` prefix. Git quotes paths that need it:
+     *  `diff --git "a/caf\303\251.txt" "b/caf\303\251.txt"`. Combined
+     *  headers carry a bare path: `diff --cc f.txt`. */
     _diffHeaderName(line: string): string {
-        const rest = line.slice('diff --git '.length);
+        const afterKind = line.slice('diff '.length);
+        const rest = afterKind.slice(afterKind.indexOf(' ') + 1);
         const quoted = /^"((?:[^"\\]|\\.)*)"\s+"((?:[^"\\]|\\.)*)"$/.exec(rest);
         if (quoted) return quoted[2].replace(/^b\//, '');
         const separator = rest.lastIndexOf(' b/');
@@ -4442,10 +4444,16 @@ export class DiffController {
             isBinary: boolean;
         }> = [];
         for (const line of rawDiffText.split('\n')) {
-            // A content line never starts at column 0 with this text, so
-            // the header is a safe boundary. Matching the prefix (not a
-            // path shape) keeps quoted paths in their own section.
-            if (line.startsWith('diff --git ')) {
+            // `git show` writes merge commits with `diff --cc`/`--combined`
+            // headers instead of `diff --git`. A content line never starts
+            // at column 0 with any of these, so the prefixes are safe
+            // boundaries; matching prefixes (not path shapes) keeps quoted
+            // paths in their own section too.
+            if (
+                line.startsWith('diff --git ') ||
+                line.startsWith('diff --cc ') ||
+                line.startsWith('diff --combined ')
+            ) {
                 chunks.push({
                     lines: [line],
                     name: this._diffHeaderName(line),
@@ -4458,8 +4466,10 @@ export class DiffController {
                 continue;
             }
             const current = chunks[chunks.length - 1];
+            // Full form names both paths; the combined-diff form (merge
+            // commits) is just `Binary files differ`.
             if (
-                /^Binary files .* differ/.test(line) ||
+                /^Binary files( .*|) differ/.test(line) ||
                 /^GIT binary patch/.test(line)
             ) {
                 current.isBinary = true;
