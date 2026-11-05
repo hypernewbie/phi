@@ -58,6 +58,12 @@ const (
 	// CapabilityState is the read-only live snapshot refresh capability.
 	CapabilityState = "pi.state.v2"
 	maxStatePending = 4
+	// CapabilityTerminalRefresh is the live TUI repaint capability name.
+	CapabilityTerminalRefresh = "pi.terminal-refresh.v1"
+	// terminalRefreshDeadline bounds one repaint receipt wait. A repaint
+	// is a local TUI operation, so a host silent for this long is
+	// unknown, never a reason to wait or retry.
+	terminalRefreshDeadline = time.Second
 	// CapabilityTranscriptSearch is the bounded active-branch search capability.
 	CapabilityTranscriptSearch = "pi.transcript-search.v2"
 

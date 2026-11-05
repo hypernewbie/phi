@@ -830,7 +830,7 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 // advertised in /api/version. v2 clients refuse servers that report a
 // different version (or none); v1 clients are blocked by HTTP 426 on
 // the pane socket and the retired recovery endpoints.
-const terminalProtocolVersion = "2"
+const terminalProtocolVersion = "3"
 
 func (app *Server) handleGetVersion(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")

@@ -5,6 +5,7 @@ import { TabManager } from '../web/terminal.js';
 import { PTYWebSocket, terminalSubprotocol } from '../web/ws.js';
 import {
     TerminalClientFrame,
+    TerminalRefreshOutcome,
     TerminalServerFrame,
 } from '../web/proto/terminal.js';
 
@@ -96,6 +97,45 @@ class FakeWebSocket {
                                 : {}),
                             ...(hdr.ephemeral !== undefined
                                 ? { ephemeral: hdr.ephemeral }
+                                : {}),
+                            ...(hdr.floorEventCursor !== undefined
+                                ? {
+                                      floorEventCursor: hdr.floorEventCursor,
+                                  }
+                                : {}),
+                            ...(hdr.headCols !== undefined
+                                ? { headCols: hdr.headCols }
+                                : {}),
+                            ...(hdr.headRows !== undefined
+                                ? { headRows: hdr.headRows }
+                                : {}),
+                            ...(hdr.terminalRefreshAvailable !== undefined
+                                ? {
+                                      terminalRefreshAvailable:
+                                          hdr.terminalRefreshAvailable,
+                                  }
+                                : {}),
+                        },
+                    },
+                }),
+            ).finish(),
+        );
+    }
+    emitRefreshResult(result) {
+        this.emitFrame(
+            TerminalServerFrame.encode(
+                TerminalServerFrame.fromPartial({
+                    payload: {
+                        $case: 'refreshResult',
+                        value: {
+                            ...(result.requestId !== undefined
+                                ? { requestId: result.requestId }
+                                : {}),
+                            ...(result.outcome !== undefined
+                                ? { outcome: result.outcome }
+                                : {}),
+                            ...(result.reason !== undefined
+                                ? { reason: result.reason }
                                 : {}),
                         },
                     },
@@ -961,5 +1001,82 @@ describe('a held live queue is bounded', () => {
 
         expect(close).toHaveBeenCalled();
         expect(data).not.toHaveBeenCalled();
+    });
+});
+
+describe('PTYWebSocket terminal refresh framing', () => {
+    it('parses head geometry and the repaint hint only when the server sends them', () => {
+        const pty = new PTYWebSocket('p', () => {}, null, null, null, {
+            onAttachHead: () => {},
+        });
+        const seen = [];
+        pty.onAttachHead = (info) => seen.push(info);
+        pty.ws.emitAttachHead({ epoch: 7, oldest: 300, head: 400 });
+        expect(seen[0].terminalRefreshAvailable).toBeUndefined();
+        expect(seen[0].headCols).toBeUndefined();
+
+        pty.ws.emitAttachHead({
+            epoch: 7,
+            oldest: 300,
+            head: 400,
+            headCols: 100,
+            headRows: 40,
+            terminalRefreshAvailable: true,
+        });
+        expect(seen[1].headCols).toBe(100);
+        expect(seen[1].headRows).toBe(40);
+        expect(seen[1].terminalRefreshAvailable).toBe(true);
+    });
+
+    it('sends the refresh request as a resize correlation, never as input', () => {
+        const pty = new PTYWebSocket('p', () => {});
+        expect(pty.sendRefreshResize(100, 40, '7')).toBe(true);
+        const framed = TerminalClientFrame.decode(pty.ws.sent.at(-1));
+        expect(framed.payload?.$case).toBe('resize');
+        expect(framed.payload.value).toMatchObject({
+            cols: 100,
+            rows: 40,
+            refreshRequestId: '7',
+        });
+
+        // An ordinary resize keeps an absent request id.
+        expect(pty.sendResize(100, 40)).toBe(true);
+        const plain = TerminalClientFrame.decode(pty.ws.sent.at(-1));
+        expect(plain.payload.value.refreshRequestId).toBeUndefined();
+
+        // Bounded correlation ids and refused geometry never reach the wire.
+        const before = pty.ws.sent.length;
+        expect(pty.sendRefreshResize(100, 40, '')).toBe(false);
+        expect(pty.sendRefreshResize(100, 40, 'x'.repeat(65))).toBe(false);
+        expect(pty.sendRefreshResize(0, 40, '1')).toBe(false);
+        expect(pty.ws.sent.length).toBe(before);
+    });
+
+    it('maps receipts and drops malformed or unspecified ones as unknown', () => {
+        const receipts = [];
+        const pty = new PTYWebSocket('p', () => {}, null, null, null, {
+            onRefreshResult: (r) => receipts.push(r),
+        });
+        pty.ws.emitRefreshResult({
+            requestId: '11',
+            outcome: TerminalRefreshOutcome.TERMINAL_REFRESH_OUTCOME_DISPATCHED,
+        });
+        pty.ws.emitRefreshResult({
+            requestId: '12',
+            outcome: TerminalRefreshOutcome.TERMINAL_REFRESH_OUTCOME_NOT_SENT,
+            reason: 'unavailable',
+        });
+        pty.ws.emitRefreshResult({
+            requestId: '13',
+            outcome:
+                TerminalRefreshOutcome.TERMINAL_REFRESH_OUTCOME_UNSPECIFIED,
+        });
+        pty.ws.emitRefreshResult({ requestId: '', outcome: 1 });
+        pty.ws.emitRefreshResult({ requestId: 'x'.repeat(65), outcome: 1 });
+        expect(receipts).toEqual([
+            { requestId: '11', outcome: 'dispatched', reason: '' },
+            { requestId: '12', outcome: 'not-sent', reason: 'unavailable' },
+            { requestId: '13', outcome: 'unknown', reason: '' },
+        ]);
     });
 });

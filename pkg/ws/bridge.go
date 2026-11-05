@@ -104,7 +104,7 @@ func (c *Client) readPump(ctx context.Context, inst *pty.PTYInstance, manager *p
 	logger := c.logger()
 	defer func() {
 		hub.Unregister(inst.ID, c)
-		manager.UnregisterWS(inst.ID, fmt.Sprintf("%p", c))
+		manager.UnregisterWSForInstance(inst, fmt.Sprintf("%p", c))
 		_ = c.Ws.Close()
 		if endSpan != nil {
 			endSpan(nil)
@@ -166,6 +166,11 @@ func (c *Client) readPump(ctx context.Context, inst *pty.PTYInstance, manager *p
 				c.closeWithCode(websocket.CloseProtocolError, "resize needs cols and rows")
 				return
 			}
+			refreshID := rs.GetRefreshRequestId()
+			if len(refreshID) > maxRefreshRequestIDBytes {
+				c.closeWithCode(websocket.CloseProtocolError, "refresh request id too large")
+				return
+			}
 			cols, rows := rs.GetCols(), rs.GetRows()
 			if cols == 0 || rows == 0 || cols > 65535 || rows > 65535 {
 				c.closeWithCode(websocket.CloseProtocolError, "resize out of range")
@@ -187,9 +192,19 @@ func (c *Client) readPump(ctx context.Context, inst *pty.PTYInstance, manager *p
 				endResize(resizeErr)
 				if resizeErr != nil {
 					logger.Error("ws pty resize error", "err", resizeErr)
-					// A refused geometry/refresh is not success. Reattach with
-					// an authoritative state instead of leaving a stale TUI.
+					// A refused geometry is not success. Answer the repaint
+					// request honestly, then reattach with an authoritative
+					// state instead of leaving a stale TUI.
+					if refreshID != "" {
+						hub.dispatchTerminalRefreshFailure(inst.ID, c, refreshID)
+					}
 					return
+				}
+				// A committed resize is the repaint boundary: geometry and
+				// the Pi redraw reach the viewer in that order. The repaint
+				// runs off the read loop, so typing and pongs continue.
+				if refreshID != "" {
+					hub.dispatchTerminalRefresh(inst.ID, inst, c, refreshID)
 				}
 			}
 		case *wspb.TerminalClientFrame_Ping:
@@ -223,13 +238,13 @@ func StartPTYReadLoop(inst *pty.PTYInstance, hub *Hub) {
 		return
 	}
 	// Register the owner before the goroutine starts: a same-ID retry
-	// must win over a delayed old exit that is still draining.
-	hub.notePaneOwner(inst)
-	// Open the journal with the actual spawn geometry before the read
-	// loop admits bytes. A failure here is not fatal: Ingest retries
-	// the open (and backpressures the reader) until it succeeds.
-	if err := hub.InitPaneJournal(inst.ID, inst.Pty.Cols, inst.Pty.Rows); err != nil {
-		componentLogger().With("pane", inst.ID).Error("terminal journal open failed; ingest will retry", "err", err)
+	// must win over a delayed old exit that is still draining. This also
+	// seeds the pane's RAM window geometry synchronously.
+	if err := hub.InitPaneForOwner(inst); err != nil {
+		componentLogger().With("pane", inst.ID).Error("terminal pane init failed", "err", err)
+		inst.RetireReadOwner()
+		close(done)
+		return
 	}
 	logger := componentLogger().With("pane", inst.ID)
 	go obs.DoFeature("terminal", func(_ context.Context) {
@@ -238,6 +253,10 @@ func StartPTYReadLoop(inst *pty.PTYInstance, hub *Hub) {
 		// 64 KiB journal appends instead of line-sized ones.
 		buf := make([]byte, 64*1024)
 		for {
+			// A retired owner must never feed a replacement's window.
+			if inst.ReadOwnerRetired() {
+				break
+			}
 			n, err := inst.Pty.ReadBatch(buf)
 			if n > 0 {
 				if inst.ObserveOutput != nil {
@@ -251,7 +270,7 @@ func StartPTYReadLoop(inst *pty.PTYInstance, hub *Hub) {
 					if err := hub.Ingest(inst.ID, buf[:n]); err == nil {
 						break
 					} else {
-						logger.Error("recording write failed; holding PTY output for retry", "err", err)
+						logger.Error("terminal ingest failed; holding PTY output for retry", "err", err)
 						time.Sleep(100 * time.Millisecond)
 					}
 				}
@@ -265,6 +284,9 @@ func StartPTYReadLoop(inst *pty.PTYInstance, hub *Hub) {
 		<-inst.Pty.Closed
 		code := inst.Pty.ExitCode()
 		hub.exitPaneForOwner(inst, code)
+		// Sticky retirement: even if the owner check above refused, this
+		// instance must never archive or admit work again.
+		inst.RetireReadOwner()
 	})
 }
 
@@ -336,6 +358,11 @@ func (h *Hub) enqueuePiTitleSnapshot(snapshot pty.PTYInstanceSnapshot, client *C
 	}
 }
 
+// terminalSendQueueFrames bounds one terminal attachment's send queue in
+// frames. A v3 client that overflows is closed for reconnect instead of
+// having queued geometry or control frames evicted.
+const terminalSendQueueFrames = 256
+
 func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, manager *pty.Manager, hub *Hub) {
 	// Correlation is via the structured comp=ws + pane=<id> attrs on this
 	// connection's logger (both builds) — no hand-minted conn id. Under
@@ -369,7 +396,7 @@ func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, man
 
 	client := &Client{
 		Ws:     conn,
-		Send:   make(chan []byte, 65536),
+		Send:   make(chan []byte, terminalSendQueueFrames),
 		Logger: logger,
 	}
 	// Refuse a socket authenticated at a generation a password change already
@@ -384,13 +411,22 @@ func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, man
 	// leaves a timer behind that could close a later one.
 	defer hub.ForgetAuth(conn)
 
-	manager.RegisterWS(inst.ID, fmt.Sprintf("%p", client))
+	if !manager.RegisterWSForInstance(inst, fmt.Sprintf("%p", client)) {
+		logger.Warn("ws attach rejected: pane instance was replaced")
+		endSpan(errors.New("pane instance replaced"))
+		_ = conn.Close()
+		return
+	}
 	client.NativeState = r.URL.Query().Get("state") == "ghostty-ready-v1"
 	client.AnsiState = r.URL.Query().Get("state") == "ansi-v1"
 	// Live-only attach: no replay enters the live terminal. The client
-	// bootstraps its screen from the opaque checkpoint in the attach
-	// frame plus a bounded recording delta fetched over HTTP.
-	hub.AttachHot(inst.ID, client)
+	// bootstraps its retained window over HTTP from the RAM ring.
+	if !hub.AttachHot(inst.ID, client) {
+		manager.UnregisterWSForInstance(inst, fmt.Sprintf("%p", client))
+		endSpan(errors.New("attach frame not queued"))
+		_ = conn.Close()
+		return
+	}
 	// Snapshot manager state only; the asynchronous title service supplies a
 	// later push after any cold file read completes. ATTACH_HEAD remains first.
 	hub.enqueuePiTitleSnapshot(inst.Snapshot(), client)
@@ -413,7 +449,7 @@ func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, man
 		go func() {
 			time.Sleep(100 * time.Millisecond)
 			hub.Unregister(inst.ID, client)
-			manager.UnregisterWS(inst.ID, fmt.Sprintf("%p", client))
+			manager.UnregisterWSForInstance(inst, fmt.Sprintf("%p", client))
 			_ = conn.Close()
 			endSpan(nil)
 		}()

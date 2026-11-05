@@ -44,6 +44,8 @@ import {
     SyncboardRequest,
     SyncboardResponse,
     SyncboardOutcome,
+    TerminalRefreshAck,
+    TerminalRefreshOutcome,
     TranscriptSearchMatch,
     TranscriptSearchResponse,
 } from './gen/bridge.js';
@@ -52,6 +54,7 @@ import { BridgeChannel, type ChannelCreds } from './channel.js';
 import { InvalidTargetError } from './endpoint.js';
 import { PROTOCOL_VERSION } from './protocol.js';
 import { CAPABILITY_ATTACHMENTS, CAPABILITY_STATE } from './protocol.js';
+import { CAPABILITY_TERMINAL_REFRESH } from './protocol.js';
 import { CAPABILITY_COMPACT } from './protocol.js';
 import { CAPABILITY_CONTEXT } from './protocol.js';
 import { CAPABILITY_HISTORY } from './protocol.js';
@@ -81,6 +84,8 @@ import { SHUTDOWN_DRAIN_MS } from './protocol.js';
 import { RECONNECT_MAX_MS } from './protocol.js';
 import { RECONNECT_STABLE_MS } from './protocol.js';
 import { isHistoryReaderAvailable } from './history-reader.js';
+import { invokeTerminalRefresh } from './terminal-refresh.js';
+import { readRefreshTui } from './terminal-refresh.js';
 import { readEditorHistory } from './history-reader.js';
 import { invokeNativeReload } from './native-reload.js';
 import type { ReloadLatchState } from './native-reload.js';
@@ -553,6 +558,12 @@ export class Runtime {
     private syncboardPending = new Map<string, SyncboardWaiter>();
     private attachmentsAccepted = false;
     private stateAccepted = false;
+    private terminalRefreshAccepted = false;
+    /**
+     * Newest accepted repaint request ID. Server IDs are monotonic, so an
+     * older or repeated ID is stale and never repaints twice.
+     */
+    private terminalRefreshHighWater: bigint | null = null;
     private transcriptSearchAccepted = false;
     private readonly transcriptSearchReads =
         new Set<TranscriptSearchOperation>();
@@ -1386,6 +1397,7 @@ export class Runtime {
         if (this.opts.syncboardEnabled) caps.push(CAPABILITY_SYNCBOARD);
         if (this.attachmentApi)
             caps.push(CAPABILITY_ATTACHMENTS, CAPABILITY_STATE);
+        if (readRefreshTui(this.ui)) caps.push(CAPABILITY_TERMINAL_REFRESH);
         return caps;
     }
 
@@ -1453,6 +1465,7 @@ export class Runtime {
         this.setSyncboardAccepted(false);
         this.attachmentsAccepted = false;
         this.stateAccepted = false;
+        this.terminalRefreshAccepted = false;
         this.transcriptSearchAccepted = false;
         // Reconnect carries a fresh baseline: resample through the
         // latest context so the Hello never replays a stale reading.
@@ -1494,6 +1507,9 @@ export class Runtime {
                     accepted.capabilities.includes(CAPABILITY_STATE);
                 this.transcriptSearchAccepted = accepted.capabilities.includes(
                     CAPABILITY_TRANSCRIPT_SEARCH,
+                );
+                this.terminalRefreshAccepted = accepted.capabilities.includes(
+                    CAPABILITY_TERMINAL_REFRESH,
                 );
             }
         } catch (err) {
@@ -1626,7 +1642,72 @@ export class Runtime {
             this.transcriptSearchAccepted
         ) {
             this.onTranscriptSearchRequest(msg.payload.value);
+        } else if (
+            msg.payload?.$case === 'terminalRefreshRequest' &&
+            this.terminalRefreshAccepted
+        ) {
+            this.onTerminalRefreshRequest(msg.payload.value.requestId);
         }
+    }
+
+    /**
+     * Run one accepted repaint and answer with a receipt. The host TUI is
+     * probed again here: a Hello capability is stale the moment the UI
+     * surface changes, and a missing method must never be called.
+     */
+    private onTerminalRefreshRequest(requestId: string): void {
+        const id = parseMutationId(requestId);
+        // Malformed IDs drop silently, like other empty request ids.
+        if (id === null || !this.channel) return;
+        if (
+            this.terminalRefreshHighWater !== null &&
+            id <= this.terminalRefreshHighWater
+        ) {
+            this.sendTerminalRefreshAck(requestId, 'not-sent', 'stale');
+            return;
+        }
+        const tui = readRefreshTui(this.ui);
+        if (!tui) {
+            this.sendTerminalRefreshAck(requestId, 'not-sent', 'unavailable');
+            return;
+        }
+        // From here the repaint may run: the ID is spent even if it fails,
+        // so a late or repeated request can never repaint a second time.
+        this.terminalRefreshHighWater = id;
+        if (invokeTerminalRefresh(tui)) {
+            this.sendTerminalRefreshAck(requestId, 'dispatched', '');
+            return;
+        }
+        this.sendTerminalRefreshAck(requestId, 'unknown', 'error');
+    }
+
+    private sendTerminalRefreshAck(
+        requestId: string,
+        outcome: 'dispatched' | 'not-sent' | 'unknown',
+        reason: string,
+    ): boolean {
+        const wire = {
+            dispatched:
+                TerminalRefreshOutcome.TERMINAL_REFRESH_OUTCOME_DISPATCHED,
+            'not-sent':
+                TerminalRefreshOutcome.TERMINAL_REFRESH_OUTCOME_NOT_SENT,
+            unknown: TerminalRefreshOutcome.TERMINAL_REFRESH_OUTCOME_UNKNOWN,
+        }[outcome];
+        return (
+            this.channel?.sendNonfatal({
+                paneId: this.opts.creds.pane,
+                processId: this.opts.creds.process,
+                runtimeGeneration: this.opts.generation,
+                payload: {
+                    $case: 'terminalRefreshAck',
+                    value: TerminalRefreshAck.create({
+                        requestId,
+                        outcome: wire,
+                        reason,
+                    }),
+                },
+            }) ?? false
+        );
     }
 
     private onSyncboardResponse(response: SyncboardResponse): void {

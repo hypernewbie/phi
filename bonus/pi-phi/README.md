@@ -98,6 +98,20 @@ keeps the operation uncertain and never triggers an automatic retry. If the
 request was admitted but never reached Pi, the server cannot prove release;
 the record stays pending until the Pi process exits.
 
+## Terminal refresh
+
+A connected interactive Pi pane with `pi.terminal-refresh.v1` can repaint its
+live TUI in place. Phi asks for one repaint when a viewer opens or the user
+presses Refresh Console, so the viewer can start at the certified head instead
+of downloading terminal history. The repaint stops the TUI with the screen
+preserved and starts it again; it never writes to the PTY, so it cannot submit,
+cancel, or duplicate a turn and leaves the editor draft alone.
+
+The receipt means only that the repaint started. At most one repaint is in
+flight per pane; a second request is refused rather than queued. A refusal,
+lost receipt, or silence falls back to Phi's bounded history replay, and a
+missing capability or a disconnected bridge keeps that replay path unchanged.
+
 ## Syncboard tool
 
 A Pi session with the negotiated `pi.syncboard.v1` capability exposes the

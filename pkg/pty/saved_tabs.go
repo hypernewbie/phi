@@ -72,6 +72,22 @@ func (inst *PTYInstance) BeginReadLoop() chan struct{} {
 	return inst.readLoopDone
 }
 
+// RetireReadOwner marks this instance as no longer owning its pane ID.
+// Called when a replacement instance takes over the ID and after a read
+// loop's final drain. Sticky and idempotent.
+func (inst *PTYInstance) RetireReadOwner() {
+	inst.mu.Lock()
+	inst.retired = true
+	inst.mu.Unlock()
+}
+
+// ReadOwnerRetired reports whether this instance lost ownership.
+func (inst *PTYInstance) ReadOwnerRetired() bool {
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+	return inst.retired
+}
+
 func (m *Manager) WaitForReadLoops(ctx context.Context) {
 	m.mu.RLock()
 	list := append([]*PTYInstance(nil), m.shutdownTabs...)

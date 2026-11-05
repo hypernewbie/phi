@@ -95,6 +95,15 @@ func (app *Server) handleTerminalReplay(w http.ResponseWriter, r *http.Request) 
 		switch {
 		case errors.Is(rerr, ws.ErrReplayNoHistory):
 			http.Error(w, rerr.Error(), http.StatusNotFound)
+		case errors.Is(rerr, ws.ErrReplayExpired):
+			// The client lost bytes below the floor. Send the exact window
+			// it can still certify so it resumes there instead of guessing.
+			if info, ok := app.hub.ReplayWindow(id); ok {
+				if meta, err := json.Marshal(info); err == nil && len(meta) <= 2048 {
+					w.Header().Set("X-Phi-Replay-Window", string(meta))
+				}
+			}
+			http.Error(w, rerr.Error(), http.StatusConflict)
 		case errors.Is(rerr, ws.ErrReplayEpoch), errors.Is(rerr, ws.ErrReplayFuture):
 			http.Error(w, rerr.Error(), http.StatusConflict)
 		case errors.Is(rerr, ws.ErrReplayUnavailable):
@@ -116,6 +125,9 @@ func (app *Server) handleTerminalReplay(w http.ResponseWriter, r *http.Request) 
 		Epoch: page.Epoch, Start: page.Start, End: page.End, Resizes: resizes, EventCursor: page.EndCursor,
 		InitCols: uint32(page.InitCols), InitRows: uint32(page.InitRows),
 		HistoryIncomplete: page.Incomplete, Ephemeral: page.Ephemeral,
+		FloorEventCursor: page.FloorEventCursor,
+		FloorCols:        uint32(page.FloorCols), FloorRows: uint32(page.FloorRows),
+		HeadCols: uint32(page.HeadCols), HeadRows: uint32(page.HeadRows),
 	})
 	writeRecordingResponse(w, r, hdr, page.Data)
 }

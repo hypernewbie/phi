@@ -50,6 +50,9 @@ type Server struct {
 	// reloadSeq allocates monotonic server-side Reload request
 	// IDs with the same uniqueness contract as compactSeq.
 	reloadSeq atomic.Uint64
+	// refreshSeq allocates monotonic server-side terminal-repaint
+	// request IDs with the same uniqueness contract as compactSeq.
+	refreshSeq atomic.Uint64
 	// pubSeq is the server-owned publication sequence behind
 	// telemetry_revision. It is allocated at lease creation and at
 	// each accepted Hello/state change, so delayed stream callbacks
@@ -855,6 +858,9 @@ func (s *Server) dispatchMessage(ctx context.Context, l *lease, p *peer, msg *pi
 		return nil
 	case msg.GetReloadAck() != nil:
 		s.deliverReload(l, p, msg.GetReloadAck())
+		return nil
+	case msg.GetTerminalRefreshAck() != nil:
+		s.deliverTerminalRefresh(l, p, msg.GetTerminalRefreshAck())
 		return nil
 	case msg.GetSkillsResponse() != nil:
 		s.deliverSkills(l, p, msg.GetSkillsResponse())

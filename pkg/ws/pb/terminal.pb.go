@@ -21,6 +21,60 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// TerminalRefreshOutcome is the repaint receipt vocabulary. UNSPECIFIED is
+// never sent; a client treats it as UNKNOWN.
+type TerminalRefreshOutcome int32
+
+const (
+	TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_UNSPECIFIED TerminalRefreshOutcome = 0
+	TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_DISPATCHED  TerminalRefreshOutcome = 1
+	TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_NOT_SENT    TerminalRefreshOutcome = 2
+	TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_UNKNOWN     TerminalRefreshOutcome = 3
+)
+
+// Enum value maps for TerminalRefreshOutcome.
+var (
+	TerminalRefreshOutcome_name = map[int32]string{
+		0: "TERMINAL_REFRESH_OUTCOME_UNSPECIFIED",
+		1: "TERMINAL_REFRESH_OUTCOME_DISPATCHED",
+		2: "TERMINAL_REFRESH_OUTCOME_NOT_SENT",
+		3: "TERMINAL_REFRESH_OUTCOME_UNKNOWN",
+	}
+	TerminalRefreshOutcome_value = map[string]int32{
+		"TERMINAL_REFRESH_OUTCOME_UNSPECIFIED": 0,
+		"TERMINAL_REFRESH_OUTCOME_DISPATCHED":  1,
+		"TERMINAL_REFRESH_OUTCOME_NOT_SENT":    2,
+		"TERMINAL_REFRESH_OUTCOME_UNKNOWN":     3,
+	}
+)
+
+func (x TerminalRefreshOutcome) Enum() *TerminalRefreshOutcome {
+	p := new(TerminalRefreshOutcome)
+	*p = x
+	return p
+}
+
+func (x TerminalRefreshOutcome) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TerminalRefreshOutcome) Descriptor() protoreflect.EnumDescriptor {
+	return file_terminal_proto_enumTypes[0].Descriptor()
+}
+
+func (TerminalRefreshOutcome) Type() protoreflect.EnumType {
+	return &file_terminal_proto_enumTypes[0]
+}
+
+func (x TerminalRefreshOutcome) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TerminalRefreshOutcome.Descriptor instead.
+func (TerminalRefreshOutcome) EnumDescriptor() ([]byte, []int) {
+	return file_terminal_proto_rawDescGZIP(), []int{0}
+}
+
 type TerminalClientFrame struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Payload:
@@ -120,11 +174,14 @@ func (*TerminalClientFrame_Resize) isTerminalClientFrame_Payload() {}
 func (*TerminalClientFrame_Ping) isTerminalClientFrame_Payload() {}
 
 type TerminalResize struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Cols          *uint32                `protobuf:"varint,1,opt,name=cols,proto3,oneof" json:"cols,omitempty"`
-	Rows          *uint32                `protobuf:"varint,2,opt,name=rows,proto3,oneof" json:"rows,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Cols  *uint32                `protobuf:"varint,1,opt,name=cols,proto3,oneof" json:"cols,omitempty"`
+	Rows  *uint32                `protobuf:"varint,2,opt,name=rows,proto3,oneof" json:"rows,omitempty"`
+	// Correlates an attach-time Pi repaint with its receipt. Absent or empty
+	// is an ordinary resize; a repaint request never travels as PTY input.
+	RefreshRequestId *string `protobuf:"bytes,3,opt,name=refresh_request_id,json=refreshRequestId,proto3,oneof" json:"refresh_request_id,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *TerminalResize) Reset() {
@@ -169,6 +226,13 @@ func (x *TerminalResize) GetRows() uint32 {
 		return *x.Rows
 	}
 	return 0
+}
+
+func (x *TerminalResize) GetRefreshRequestId() string {
+	if x != nil && x.RefreshRequestId != nil {
+		return *x.RefreshRequestId
+	}
+	return ""
 }
 
 type TerminalPing struct {
@@ -221,6 +285,7 @@ type TerminalServerFrame struct {
 	//	*TerminalServerFrame_Settlement
 	//	*TerminalServerFrame_Notification
 	//	*TerminalServerFrame_Geometry
+	//	*TerminalServerFrame_RefreshResult
 	Payload       isTerminalServerFrame_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -353,6 +418,15 @@ func (x *TerminalServerFrame) GetGeometry() *TerminalGeometry {
 	return nil
 }
 
+func (x *TerminalServerFrame) GetRefreshResult() *TerminalRefreshResult {
+	if x != nil {
+		if x, ok := x.Payload.(*TerminalServerFrame_RefreshResult); ok {
+			return x.RefreshResult
+		}
+	}
+	return nil
+}
+
 type isTerminalServerFrame_Payload interface {
 	isTerminalServerFrame_Payload()
 }
@@ -397,6 +471,10 @@ type TerminalServerFrame_Geometry struct {
 	Geometry *TerminalGeometry `protobuf:"bytes,25,opt,name=geometry,proto3,oneof"`
 }
 
+type TerminalServerFrame_RefreshResult struct {
+	RefreshResult *TerminalRefreshResult `protobuf:"bytes,26,opt,name=refresh_result,json=refreshResult,proto3,oneof"`
+}
+
 func (*TerminalServerFrame_Attach) isTerminalServerFrame_Payload() {}
 
 func (*TerminalServerFrame_Output) isTerminalServerFrame_Payload() {}
@@ -417,6 +495,8 @@ func (*TerminalServerFrame_Notification) isTerminalServerFrame_Payload() {}
 
 func (*TerminalServerFrame_Geometry) isTerminalServerFrame_Payload() {}
 
+func (*TerminalServerFrame_RefreshResult) isTerminalServerFrame_Payload() {}
+
 type TerminalAttach struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	Epoch             *uint64                `protobuf:"varint,1,opt,name=epoch,proto3,oneof" json:"epoch,omitempty"`
@@ -429,8 +509,18 @@ type TerminalAttach struct {
 	EventCursor       *string                `protobuf:"bytes,8,opt,name=event_cursor,json=eventCursor,proto3,oneof" json:"event_cursor,omitempty"`
 	HistoryIncomplete *bool                  `protobuf:"varint,9,opt,name=history_incomplete,json=historyIncomplete,proto3,oneof" json:"history_incomplete,omitempty"`
 	Ephemeral         *bool                  `protobuf:"varint,10,opt,name=ephemeral,proto3,oneof" json:"ephemeral,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Certified RAM-window floor. Byte positions below floor are gone and
+	// a replay from there is refused. The geometry fields are the grid the
+	// server had in effect at the floor and at the head.
+	FloorEventCursor *string `protobuf:"bytes,11,opt,name=floor_event_cursor,json=floorEventCursor,proto3,oneof" json:"floor_event_cursor,omitempty"`
+	FloorCols        *uint32 `protobuf:"varint,12,opt,name=floor_cols,json=floorCols,proto3,oneof" json:"floor_cols,omitempty"`
+	FloorRows        *uint32 `protobuf:"varint,13,opt,name=floor_rows,json=floorRows,proto3,oneof" json:"floor_rows,omitempty"`
+	HeadCols         *uint32 `protobuf:"varint,14,opt,name=head_cols,json=headCols,proto3,oneof" json:"head_cols,omitempty"`
+	HeadRows         *uint32 `protobuf:"varint,15,opt,name=head_rows,json=headRows,proto3,oneof" json:"head_rows,omitempty"`
+	// True when the attached Pi can redraw its own live screen on request.
+	TerminalRefreshAvailable *bool `protobuf:"varint,16,opt,name=terminal_refresh_available,json=terminalRefreshAvailable,proto3,oneof" json:"terminal_refresh_available,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *TerminalAttach) Reset() {
@@ -529,6 +619,48 @@ func (x *TerminalAttach) GetHistoryIncomplete() bool {
 func (x *TerminalAttach) GetEphemeral() bool {
 	if x != nil && x.Ephemeral != nil {
 		return *x.Ephemeral
+	}
+	return false
+}
+
+func (x *TerminalAttach) GetFloorEventCursor() string {
+	if x != nil && x.FloorEventCursor != nil {
+		return *x.FloorEventCursor
+	}
+	return ""
+}
+
+func (x *TerminalAttach) GetFloorCols() uint32 {
+	if x != nil && x.FloorCols != nil {
+		return *x.FloorCols
+	}
+	return 0
+}
+
+func (x *TerminalAttach) GetFloorRows() uint32 {
+	if x != nil && x.FloorRows != nil {
+		return *x.FloorRows
+	}
+	return 0
+}
+
+func (x *TerminalAttach) GetHeadCols() uint32 {
+	if x != nil && x.HeadCols != nil {
+		return *x.HeadCols
+	}
+	return 0
+}
+
+func (x *TerminalAttach) GetHeadRows() uint32 {
+	if x != nil && x.HeadRows != nil {
+		return *x.HeadRows
+	}
+	return 0
+}
+
+func (x *TerminalAttach) GetTerminalRefreshAvailable() bool {
+	if x != nil && x.TerminalRefreshAvailable != nil {
+		return *x.TerminalRefreshAvailable
 	}
 	return false
 }
@@ -776,6 +908,68 @@ func (*TerminalPong) Descriptor() ([]byte, []int) {
 	return file_terminal_proto_rawDescGZIP(), []int{8}
 }
 
+// TerminalRefreshResult is one repaint receipt, delivered only to the
+// socket that asked. The repainting terminal's PTY bytes stay pane-wide.
+type TerminalRefreshResult struct {
+	state         protoimpl.MessageState  `protogen:"open.v1"`
+	RequestId     *string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3,oneof" json:"request_id,omitempty"`
+	Outcome       *TerminalRefreshOutcome `protobuf:"varint,2,opt,name=outcome,proto3,enum=phi.websocket.terminal.v1.TerminalRefreshOutcome,oneof" json:"outcome,omitempty"`
+	Reason        *string                 `protobuf:"bytes,3,opt,name=reason,proto3,oneof" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TerminalRefreshResult) Reset() {
+	*x = TerminalRefreshResult{}
+	mi := &file_terminal_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TerminalRefreshResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TerminalRefreshResult) ProtoMessage() {}
+
+func (x *TerminalRefreshResult) ProtoReflect() protoreflect.Message {
+	mi := &file_terminal_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TerminalRefreshResult.ProtoReflect.Descriptor instead.
+func (*TerminalRefreshResult) Descriptor() ([]byte, []int) {
+	return file_terminal_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *TerminalRefreshResult) GetRequestId() string {
+	if x != nil && x.RequestId != nil {
+		return *x.RequestId
+	}
+	return ""
+}
+
+func (x *TerminalRefreshResult) GetOutcome() TerminalRefreshOutcome {
+	if x != nil && x.Outcome != nil {
+		return *x.Outcome
+	}
+	return TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_UNSPECIFIED
+}
+
+func (x *TerminalRefreshResult) GetReason() string {
+	if x != nil && x.Reason != nil {
+		return *x.Reason
+	}
+	return ""
+}
+
 type TerminalExit struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Code          *int32                 `protobuf:"zigzag32,1,opt,name=code,proto3,oneof" json:"code,omitempty"`
@@ -785,7 +979,7 @@ type TerminalExit struct {
 
 func (x *TerminalExit) Reset() {
 	*x = TerminalExit{}
-	mi := &file_terminal_proto_msgTypes[9]
+	mi := &file_terminal_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -797,7 +991,7 @@ func (x *TerminalExit) String() string {
 func (*TerminalExit) ProtoMessage() {}
 
 func (x *TerminalExit) ProtoReflect() protoreflect.Message {
-	mi := &file_terminal_proto_msgTypes[9]
+	mi := &file_terminal_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -810,7 +1004,7 @@ func (x *TerminalExit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalExit.ProtoReflect.Descriptor instead.
 func (*TerminalExit) Descriptor() ([]byte, []int) {
-	return file_terminal_proto_rawDescGZIP(), []int{9}
+	return file_terminal_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *TerminalExit) GetCode() int32 {
@@ -830,7 +1024,7 @@ type TerminalDropNotice struct {
 
 func (x *TerminalDropNotice) Reset() {
 	*x = TerminalDropNotice{}
-	mi := &file_terminal_proto_msgTypes[10]
+	mi := &file_terminal_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -842,7 +1036,7 @@ func (x *TerminalDropNotice) String() string {
 func (*TerminalDropNotice) ProtoMessage() {}
 
 func (x *TerminalDropNotice) ProtoReflect() protoreflect.Message {
-	mi := &file_terminal_proto_msgTypes[10]
+	mi := &file_terminal_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -855,7 +1049,7 @@ func (x *TerminalDropNotice) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalDropNotice.ProtoReflect.Descriptor instead.
 func (*TerminalDropNotice) Descriptor() ([]byte, []int) {
-	return file_terminal_proto_rawDescGZIP(), []int{10}
+	return file_terminal_proto_rawDescGZIP(), []int{11}
 }
 
 // TerminalTitle carries one Pi session-title push. Revision is capped
@@ -872,7 +1066,7 @@ type TerminalTitle struct {
 
 func (x *TerminalTitle) Reset() {
 	*x = TerminalTitle{}
-	mi := &file_terminal_proto_msgTypes[11]
+	mi := &file_terminal_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -884,7 +1078,7 @@ func (x *TerminalTitle) String() string {
 func (*TerminalTitle) ProtoMessage() {}
 
 func (x *TerminalTitle) ProtoReflect() protoreflect.Message {
-	mi := &file_terminal_proto_msgTypes[11]
+	mi := &file_terminal_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -897,7 +1091,7 @@ func (x *TerminalTitle) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalTitle.ProtoReflect.Descriptor instead.
 func (*TerminalTitle) Descriptor() ([]byte, []int) {
-	return file_terminal_proto_rawDescGZIP(), []int{11}
+	return file_terminal_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *TerminalTitle) GetPaneId() string {
@@ -968,7 +1162,7 @@ type TerminalBridgeState struct {
 
 func (x *TerminalBridgeState) Reset() {
 	*x = TerminalBridgeState{}
-	mi := &file_terminal_proto_msgTypes[12]
+	mi := &file_terminal_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -980,7 +1174,7 @@ func (x *TerminalBridgeState) String() string {
 func (*TerminalBridgeState) ProtoMessage() {}
 
 func (x *TerminalBridgeState) ProtoReflect() protoreflect.Message {
-	mi := &file_terminal_proto_msgTypes[12]
+	mi := &file_terminal_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -993,7 +1187,7 @@ func (x *TerminalBridgeState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalBridgeState.ProtoReflect.Descriptor instead.
 func (*TerminalBridgeState) Descriptor() ([]byte, []int) {
-	return file_terminal_proto_rawDescGZIP(), []int{12}
+	return file_terminal_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *TerminalBridgeState) GetState() string {
@@ -1205,7 +1399,7 @@ type TerminalSettlement struct {
 
 func (x *TerminalSettlement) Reset() {
 	*x = TerminalSettlement{}
-	mi := &file_terminal_proto_msgTypes[13]
+	mi := &file_terminal_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1217,7 +1411,7 @@ func (x *TerminalSettlement) String() string {
 func (*TerminalSettlement) ProtoMessage() {}
 
 func (x *TerminalSettlement) ProtoReflect() protoreflect.Message {
-	mi := &file_terminal_proto_msgTypes[13]
+	mi := &file_terminal_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1230,7 +1424,7 @@ func (x *TerminalSettlement) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalSettlement.ProtoReflect.Descriptor instead.
 func (*TerminalSettlement) Descriptor() ([]byte, []int) {
-	return file_terminal_proto_rawDescGZIP(), []int{13}
+	return file_terminal_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *TerminalSettlement) GetGeneration() uint64 {
@@ -1270,13 +1464,15 @@ const file_terminal_proto_rawDesc = "" +
 	"\x05input\x18\x01 \x01(\fH\x00R\x05input\x12C\n" +
 	"\x06resize\x18\x02 \x01(\v2).phi.websocket.terminal.v1.TerminalResizeH\x00R\x06resize\x12=\n" +
 	"\x04ping\x18\x03 \x01(\v2'.phi.websocket.terminal.v1.TerminalPingH\x00R\x04pingB\t\n" +
-	"\apayload\"T\n" +
+	"\apayload\"\x9e\x01\n" +
 	"\x0eTerminalResize\x12\x17\n" +
 	"\x04cols\x18\x01 \x01(\rH\x00R\x04cols\x88\x01\x01\x12\x17\n" +
-	"\x04rows\x18\x02 \x01(\rH\x01R\x04rows\x88\x01\x01B\a\n" +
+	"\x04rows\x18\x02 \x01(\rH\x01R\x04rows\x88\x01\x01\x121\n" +
+	"\x12refresh_request_id\x18\x03 \x01(\tH\x02R\x10refreshRequestId\x88\x01\x01B\a\n" +
 	"\x05_colsB\a\n" +
-	"\x05_rows\"\x0e\n" +
-	"\fTerminalPing\"\xfa\x05\n" +
+	"\x05_rowsB\x15\n" +
+	"\x13_refresh_request_id\"\x0e\n" +
+	"\fTerminalPing\"\xd5\x06\n" +
 	"\x13TerminalServerFrame\x12C\n" +
 	"\x06attach\x18\x10 \x01(\v2).phi.websocket.terminal.v1.TerminalAttachH\x00R\x06attach\x12C\n" +
 	"\x06output\x18\x11 \x01(\v2).phi.websocket.terminal.v1.TerminalOutputH\x00R\x06output\x12=\n" +
@@ -1290,8 +1486,9 @@ const file_terminal_proto_rawDesc = "" +
 	"settlement\x18\x17 \x01(\v2-.phi.websocket.terminal.v1.TerminalSettlementH\x00R\n" +
 	"settlement\x12K\n" +
 	"\fnotification\x18\x18 \x01(\v2%.phi.websocket.events.v1.NotificationH\x00R\fnotification\x12I\n" +
-	"\bgeometry\x18\x19 \x01(\v2+.phi.websocket.terminal.v1.TerminalGeometryH\x00R\bgeometryB\t\n" +
-	"\apayload\"\xab\x04\n" +
+	"\bgeometry\x18\x19 \x01(\v2+.phi.websocket.terminal.v1.TerminalGeometryH\x00R\bgeometry\x12Y\n" +
+	"\x0erefresh_result\x18\x1a \x01(\v20.phi.websocket.terminal.v1.TerminalRefreshResultH\x00R\rrefreshResultB\t\n" +
+	"\apayload\"\x9d\a\n" +
 	"\x0eTerminalAttach\x12\x19\n" +
 	"\x05epoch\x18\x01 \x01(\x04H\x00R\x05epoch\x88\x01\x01\x12\x1b\n" +
 	"\x06oldest\x18\x02 \x01(\x04H\x01R\x06oldest\x88\x01\x01\x12\x17\n" +
@@ -1306,7 +1503,16 @@ const file_terminal_proto_rawDesc = "" +
 	"\fevent_cursor\x18\b \x01(\tH\x06R\veventCursor\x88\x01\x01\x122\n" +
 	"\x12history_incomplete\x18\t \x01(\bH\aR\x11historyIncomplete\x88\x01\x01\x12!\n" +
 	"\tephemeral\x18\n" +
-	" \x01(\bH\bR\tephemeral\x88\x01\x01B\b\n" +
+	" \x01(\bH\bR\tephemeral\x88\x01\x01\x121\n" +
+	"\x12floor_event_cursor\x18\v \x01(\tH\tR\x10floorEventCursor\x88\x01\x01\x12\"\n" +
+	"\n" +
+	"floor_cols\x18\f \x01(\rH\n" +
+	"R\tfloorCols\x88\x01\x01\x12\"\n" +
+	"\n" +
+	"floor_rows\x18\r \x01(\rH\vR\tfloorRows\x88\x01\x01\x12 \n" +
+	"\thead_cols\x18\x0e \x01(\rH\fR\bheadCols\x88\x01\x01\x12 \n" +
+	"\thead_rows\x18\x0f \x01(\rH\rR\bheadRows\x88\x01\x01\x12A\n" +
+	"\x1aterminal_refresh_available\x18\x10 \x01(\bH\x0eR\x18terminalRefreshAvailable\x88\x01\x01B\b\n" +
 	"\x06_epochB\t\n" +
 	"\a_oldestB\a\n" +
 	"\x05_headB\x0e\n" +
@@ -1316,7 +1522,15 @@ const file_terminal_proto_rawDesc = "" +
 	"\r_event_cursorB\x15\n" +
 	"\x13_history_incompleteB\f\n" +
 	"\n" +
-	"_ephemeral\"\xf2\x01\n" +
+	"_ephemeralB\x15\n" +
+	"\x13_floor_event_cursorB\r\n" +
+	"\v_floor_colsB\r\n" +
+	"\v_floor_rowsB\f\n" +
+	"\n" +
+	"_head_colsB\f\n" +
+	"\n" +
+	"_head_rowsB\x1d\n" +
+	"\x1b_terminal_refresh_available\"\xf2\x01\n" +
 	"\x12TerminalCheckpoint\x12\x17\n" +
 	"\x04kind\x18\x01 \x01(\tH\x00R\x04kind\x88\x01\x01\x12\x1d\n" +
 	"\athrough\x18\x02 \x01(\x04H\x01R\athrough\x88\x01\x01\x12\x17\n" +
@@ -1343,7 +1557,16 @@ const file_terminal_proto_rawDesc = "" +
 	"\x05_colsB\a\n" +
 	"\x05_rowsB\x0f\n" +
 	"\r_event_cursor\"\x0e\n" +
-	"\fTerminalPong\"0\n" +
+	"\fTerminalPong\"\xd0\x01\n" +
+	"\x15TerminalRefreshResult\x12\"\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tH\x00R\trequestId\x88\x01\x01\x12P\n" +
+	"\aoutcome\x18\x02 \x01(\x0e21.phi.websocket.terminal.v1.TerminalRefreshOutcomeH\x01R\aoutcome\x88\x01\x01\x12\x1b\n" +
+	"\x06reason\x18\x03 \x01(\tH\x02R\x06reason\x88\x01\x01B\r\n" +
+	"\v_request_idB\n" +
+	"\n" +
+	"\b_outcomeB\t\n" +
+	"\a_reason\"0\n" +
 	"\fTerminalExit\x12\x17\n" +
 	"\x04code\x18\x01 \x01(\x11H\x00R\x04code\x88\x01\x01B\a\n" +
 	"\x05_code\"\x14\n" +
@@ -1436,7 +1659,12 @@ const file_terminal_proto_rawDesc = "" +
 	"\n" +
 	"\b_outcomeB\n" +
 	"\n" +
-	"\b_pane_idB+Z)github.com/hypernewbie/phi/pkg/ws/pb;wspbb\x06proto3"
+	"\b_pane_id*\xb8\x01\n" +
+	"\x16TerminalRefreshOutcome\x12(\n" +
+	"$TERMINAL_REFRESH_OUTCOME_UNSPECIFIED\x10\x00\x12'\n" +
+	"#TERMINAL_REFRESH_OUTCOME_DISPATCHED\x10\x01\x12%\n" +
+	"!TERMINAL_REFRESH_OUTCOME_NOT_SENT\x10\x02\x12$\n" +
+	" TERMINAL_REFRESH_OUTCOME_UNKNOWN\x10\x03B+Z)github.com/hypernewbie/phi/pkg/ws/pb;wspbb\x06proto3"
 
 var (
 	file_terminal_proto_rawDescOnce sync.Once
@@ -1450,43 +1678,48 @@ func file_terminal_proto_rawDescGZIP() []byte {
 	return file_terminal_proto_rawDescData
 }
 
-var file_terminal_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_terminal_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_terminal_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_terminal_proto_goTypes = []any{
-	(*TerminalClientFrame)(nil), // 0: phi.websocket.terminal.v1.TerminalClientFrame
-	(*TerminalResize)(nil),      // 1: phi.websocket.terminal.v1.TerminalResize
-	(*TerminalPing)(nil),        // 2: phi.websocket.terminal.v1.TerminalPing
-	(*TerminalServerFrame)(nil), // 3: phi.websocket.terminal.v1.TerminalServerFrame
-	(*TerminalAttach)(nil),      // 4: phi.websocket.terminal.v1.TerminalAttach
-	(*TerminalCheckpoint)(nil),  // 5: phi.websocket.terminal.v1.TerminalCheckpoint
-	(*TerminalOutput)(nil),      // 6: phi.websocket.terminal.v1.TerminalOutput
-	(*TerminalGeometry)(nil),    // 7: phi.websocket.terminal.v1.TerminalGeometry
-	(*TerminalPong)(nil),        // 8: phi.websocket.terminal.v1.TerminalPong
-	(*TerminalExit)(nil),        // 9: phi.websocket.terminal.v1.TerminalExit
-	(*TerminalDropNotice)(nil),  // 10: phi.websocket.terminal.v1.TerminalDropNotice
-	(*TerminalTitle)(nil),       // 11: phi.websocket.terminal.v1.TerminalTitle
-	(*TerminalBridgeState)(nil), // 12: phi.websocket.terminal.v1.TerminalBridgeState
-	(*TerminalSettlement)(nil),  // 13: phi.websocket.terminal.v1.TerminalSettlement
-	(*Notification)(nil),        // 14: phi.websocket.events.v1.Notification
+	(TerminalRefreshOutcome)(0),   // 0: phi.websocket.terminal.v1.TerminalRefreshOutcome
+	(*TerminalClientFrame)(nil),   // 1: phi.websocket.terminal.v1.TerminalClientFrame
+	(*TerminalResize)(nil),        // 2: phi.websocket.terminal.v1.TerminalResize
+	(*TerminalPing)(nil),          // 3: phi.websocket.terminal.v1.TerminalPing
+	(*TerminalServerFrame)(nil),   // 4: phi.websocket.terminal.v1.TerminalServerFrame
+	(*TerminalAttach)(nil),        // 5: phi.websocket.terminal.v1.TerminalAttach
+	(*TerminalCheckpoint)(nil),    // 6: phi.websocket.terminal.v1.TerminalCheckpoint
+	(*TerminalOutput)(nil),        // 7: phi.websocket.terminal.v1.TerminalOutput
+	(*TerminalGeometry)(nil),      // 8: phi.websocket.terminal.v1.TerminalGeometry
+	(*TerminalPong)(nil),          // 9: phi.websocket.terminal.v1.TerminalPong
+	(*TerminalRefreshResult)(nil), // 10: phi.websocket.terminal.v1.TerminalRefreshResult
+	(*TerminalExit)(nil),          // 11: phi.websocket.terminal.v1.TerminalExit
+	(*TerminalDropNotice)(nil),    // 12: phi.websocket.terminal.v1.TerminalDropNotice
+	(*TerminalTitle)(nil),         // 13: phi.websocket.terminal.v1.TerminalTitle
+	(*TerminalBridgeState)(nil),   // 14: phi.websocket.terminal.v1.TerminalBridgeState
+	(*TerminalSettlement)(nil),    // 15: phi.websocket.terminal.v1.TerminalSettlement
+	(*Notification)(nil),          // 16: phi.websocket.events.v1.Notification
 }
 var file_terminal_proto_depIdxs = []int32{
-	1,  // 0: phi.websocket.terminal.v1.TerminalClientFrame.resize:type_name -> phi.websocket.terminal.v1.TerminalResize
-	2,  // 1: phi.websocket.terminal.v1.TerminalClientFrame.ping:type_name -> phi.websocket.terminal.v1.TerminalPing
-	4,  // 2: phi.websocket.terminal.v1.TerminalServerFrame.attach:type_name -> phi.websocket.terminal.v1.TerminalAttach
-	6,  // 3: phi.websocket.terminal.v1.TerminalServerFrame.output:type_name -> phi.websocket.terminal.v1.TerminalOutput
-	8,  // 4: phi.websocket.terminal.v1.TerminalServerFrame.pong:type_name -> phi.websocket.terminal.v1.TerminalPong
-	9,  // 5: phi.websocket.terminal.v1.TerminalServerFrame.exit:type_name -> phi.websocket.terminal.v1.TerminalExit
-	10, // 6: phi.websocket.terminal.v1.TerminalServerFrame.drop_notice:type_name -> phi.websocket.terminal.v1.TerminalDropNotice
-	11, // 7: phi.websocket.terminal.v1.TerminalServerFrame.title:type_name -> phi.websocket.terminal.v1.TerminalTitle
-	12, // 8: phi.websocket.terminal.v1.TerminalServerFrame.bridge_state:type_name -> phi.websocket.terminal.v1.TerminalBridgeState
-	13, // 9: phi.websocket.terminal.v1.TerminalServerFrame.settlement:type_name -> phi.websocket.terminal.v1.TerminalSettlement
-	14, // 10: phi.websocket.terminal.v1.TerminalServerFrame.notification:type_name -> phi.websocket.events.v1.Notification
-	7,  // 11: phi.websocket.terminal.v1.TerminalServerFrame.geometry:type_name -> phi.websocket.terminal.v1.TerminalGeometry
-	5,  // 12: phi.websocket.terminal.v1.TerminalAttach.checkpoint:type_name -> phi.websocket.terminal.v1.TerminalCheckpoint
-	13, // [13:13] is the sub-list for method output_type
-	13, // [13:13] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	2,  // 0: phi.websocket.terminal.v1.TerminalClientFrame.resize:type_name -> phi.websocket.terminal.v1.TerminalResize
+	3,  // 1: phi.websocket.terminal.v1.TerminalClientFrame.ping:type_name -> phi.websocket.terminal.v1.TerminalPing
+	5,  // 2: phi.websocket.terminal.v1.TerminalServerFrame.attach:type_name -> phi.websocket.terminal.v1.TerminalAttach
+	7,  // 3: phi.websocket.terminal.v1.TerminalServerFrame.output:type_name -> phi.websocket.terminal.v1.TerminalOutput
+	9,  // 4: phi.websocket.terminal.v1.TerminalServerFrame.pong:type_name -> phi.websocket.terminal.v1.TerminalPong
+	11, // 5: phi.websocket.terminal.v1.TerminalServerFrame.exit:type_name -> phi.websocket.terminal.v1.TerminalExit
+	12, // 6: phi.websocket.terminal.v1.TerminalServerFrame.drop_notice:type_name -> phi.websocket.terminal.v1.TerminalDropNotice
+	13, // 7: phi.websocket.terminal.v1.TerminalServerFrame.title:type_name -> phi.websocket.terminal.v1.TerminalTitle
+	14, // 8: phi.websocket.terminal.v1.TerminalServerFrame.bridge_state:type_name -> phi.websocket.terminal.v1.TerminalBridgeState
+	15, // 9: phi.websocket.terminal.v1.TerminalServerFrame.settlement:type_name -> phi.websocket.terminal.v1.TerminalSettlement
+	16, // 10: phi.websocket.terminal.v1.TerminalServerFrame.notification:type_name -> phi.websocket.events.v1.Notification
+	8,  // 11: phi.websocket.terminal.v1.TerminalServerFrame.geometry:type_name -> phi.websocket.terminal.v1.TerminalGeometry
+	10, // 12: phi.websocket.terminal.v1.TerminalServerFrame.refresh_result:type_name -> phi.websocket.terminal.v1.TerminalRefreshResult
+	6,  // 13: phi.websocket.terminal.v1.TerminalAttach.checkpoint:type_name -> phi.websocket.terminal.v1.TerminalCheckpoint
+	0,  // 14: phi.websocket.terminal.v1.TerminalRefreshResult.outcome:type_name -> phi.websocket.terminal.v1.TerminalRefreshOutcome
+	15, // [15:15] is the sub-list for method output_type
+	15, // [15:15] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_terminal_proto_init() }
@@ -1512,27 +1745,30 @@ func file_terminal_proto_init() {
 		(*TerminalServerFrame_Settlement)(nil),
 		(*TerminalServerFrame_Notification)(nil),
 		(*TerminalServerFrame_Geometry)(nil),
+		(*TerminalServerFrame_RefreshResult)(nil),
 	}
 	file_terminal_proto_msgTypes[4].OneofWrappers = []any{}
 	file_terminal_proto_msgTypes[5].OneofWrappers = []any{}
 	file_terminal_proto_msgTypes[6].OneofWrappers = []any{}
 	file_terminal_proto_msgTypes[7].OneofWrappers = []any{}
 	file_terminal_proto_msgTypes[9].OneofWrappers = []any{}
-	file_terminal_proto_msgTypes[11].OneofWrappers = []any{}
+	file_terminal_proto_msgTypes[10].OneofWrappers = []any{}
 	file_terminal_proto_msgTypes[12].OneofWrappers = []any{}
 	file_terminal_proto_msgTypes[13].OneofWrappers = []any{}
+	file_terminal_proto_msgTypes[14].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_terminal_proto_rawDesc), len(file_terminal_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   14,
+			NumEnums:      1,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_terminal_proto_goTypes,
 		DependencyIndexes: file_terminal_proto_depIdxs,
+		EnumInfos:         file_terminal_proto_enumTypes,
 		MessageInfos:      file_terminal_proto_msgTypes,
 	}.Build()
 	File_terminal_proto = out.File

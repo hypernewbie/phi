@@ -54,6 +54,7 @@ message PiToPhi {
     AttachmentPromptAck attachment_prompt_ack = 27;
     TranscriptSearchResponse transcript_search_response = 28;
     SyncboardPushAck syncboard_push_ack = 29;
+    TerminalRefreshAck terminal_refresh_ack = 30;
   }
 }
 
@@ -84,6 +85,7 @@ message PhiToPi {
     StateRequest state_request = 25;
     TranscriptSearchRequest transcript_search_request = 26;
     SyncboardNotification syncboard_notification = 27;
+    TerminalRefreshRequest terminal_refresh_request = 28;
   }
 }
 
@@ -202,6 +204,28 @@ message StateSnapshot {
 // then answers with a StateSnapshot echoing request_id. Never dispatches input.
 message StateRequest {
   string request_id = 1;
+}
+
+// Terminal repaint request. The runtime redraws its live TUI in place and
+// echoes request_id. It never submits a prompt or touches the editor draft.
+enum TerminalRefreshOutcome {
+  TERMINAL_REFRESH_OUTCOME_UNSPECIFIED = 0;
+  TERMINAL_REFRESH_OUTCOME_DISPATCHED = 1;
+  TERMINAL_REFRESH_OUTCOME_NOT_SENT = 2;
+  TERMINAL_REFRESH_OUTCOME_UNKNOWN = 3;
+}
+
+message TerminalRefreshRequest {
+  string request_id = 1;
+}
+
+// TerminalRefreshAck reports entry only: DISPATCHED means the repaint ran,
+// never that its bytes reached a viewer. reason uses a bounded safe
+// vocabulary and is empty for DISPATCHED.
+message TerminalRefreshAck {
+  string request_id = 1;
+  TerminalRefreshOutcome outcome = 2;
+  string reason = 3;
 }
 
 // Optional context telemetry. Scalar presence is explicit: an absent

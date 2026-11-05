@@ -137,6 +137,60 @@ func (LogicalState) EnumDescriptor() ([]byte, []int) {
 	return file_bridge_proto_rawDescGZIP(), []int{1}
 }
 
+// Terminal repaint request. The runtime redraws its live TUI in place and
+// echoes request_id. It never submits a prompt or touches the editor draft.
+type TerminalRefreshOutcome int32
+
+const (
+	TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_UNSPECIFIED TerminalRefreshOutcome = 0
+	TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_DISPATCHED  TerminalRefreshOutcome = 1
+	TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_NOT_SENT    TerminalRefreshOutcome = 2
+	TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_UNKNOWN     TerminalRefreshOutcome = 3
+)
+
+// Enum value maps for TerminalRefreshOutcome.
+var (
+	TerminalRefreshOutcome_name = map[int32]string{
+		0: "TERMINAL_REFRESH_OUTCOME_UNSPECIFIED",
+		1: "TERMINAL_REFRESH_OUTCOME_DISPATCHED",
+		2: "TERMINAL_REFRESH_OUTCOME_NOT_SENT",
+		3: "TERMINAL_REFRESH_OUTCOME_UNKNOWN",
+	}
+	TerminalRefreshOutcome_value = map[string]int32{
+		"TERMINAL_REFRESH_OUTCOME_UNSPECIFIED": 0,
+		"TERMINAL_REFRESH_OUTCOME_DISPATCHED":  1,
+		"TERMINAL_REFRESH_OUTCOME_NOT_SENT":    2,
+		"TERMINAL_REFRESH_OUTCOME_UNKNOWN":     3,
+	}
+)
+
+func (x TerminalRefreshOutcome) Enum() *TerminalRefreshOutcome {
+	p := new(TerminalRefreshOutcome)
+	*p = x
+	return p
+}
+
+func (x TerminalRefreshOutcome) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TerminalRefreshOutcome) Descriptor() protoreflect.EnumDescriptor {
+	return file_bridge_proto_enumTypes[2].Descriptor()
+}
+
+func (TerminalRefreshOutcome) Type() protoreflect.EnumType {
+	return &file_bridge_proto_enumTypes[2]
+}
+
+func (x TerminalRefreshOutcome) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TerminalRefreshOutcome.Descriptor instead.
+func (TerminalRefreshOutcome) EnumDescriptor() ([]byte, []int) {
+	return file_bridge_proto_rawDescGZIP(), []int{2}
+}
+
 // Terminal compaction outcome. UNSPECIFIED means genuinely unknown:
 // never guess success, failure, or cancellation from absent evidence.
 // REFUSED means rejected before host invocation; FAILED and CANCELLED
@@ -181,11 +235,11 @@ func (x CompactOutcome) String() string {
 }
 
 func (CompactOutcome) Descriptor() protoreflect.EnumDescriptor {
-	return file_bridge_proto_enumTypes[2].Descriptor()
+	return file_bridge_proto_enumTypes[3].Descriptor()
 }
 
 func (CompactOutcome) Type() protoreflect.EnumType {
-	return &file_bridge_proto_enumTypes[2]
+	return &file_bridge_proto_enumTypes[3]
 }
 
 func (x CompactOutcome) Number() protoreflect.EnumNumber {
@@ -194,7 +248,7 @@ func (x CompactOutcome) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use CompactOutcome.Descriptor instead.
 func (CompactOutcome) EnumDescriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{2}
+	return file_bridge_proto_rawDescGZIP(), []int{3}
 }
 
 type ReloadDispatchOutcome int32
@@ -230,11 +284,11 @@ func (x ReloadDispatchOutcome) String() string {
 }
 
 func (ReloadDispatchOutcome) Descriptor() protoreflect.EnumDescriptor {
-	return file_bridge_proto_enumTypes[3].Descriptor()
+	return file_bridge_proto_enumTypes[4].Descriptor()
 }
 
 func (ReloadDispatchOutcome) Type() protoreflect.EnumType {
-	return &file_bridge_proto_enumTypes[3]
+	return &file_bridge_proto_enumTypes[4]
 }
 
 func (x ReloadDispatchOutcome) Number() protoreflect.EnumNumber {
@@ -243,7 +297,7 @@ func (x ReloadDispatchOutcome) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ReloadDispatchOutcome.Descriptor instead.
 func (ReloadDispatchOutcome) EnumDescriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{3}
+	return file_bridge_proto_rawDescGZIP(), []int{4}
 }
 
 type AttachmentPromptOutcome int32
@@ -282,11 +336,11 @@ func (x AttachmentPromptOutcome) String() string {
 }
 
 func (AttachmentPromptOutcome) Descriptor() protoreflect.EnumDescriptor {
-	return file_bridge_proto_enumTypes[4].Descriptor()
+	return file_bridge_proto_enumTypes[5].Descriptor()
 }
 
 func (AttachmentPromptOutcome) Type() protoreflect.EnumType {
-	return &file_bridge_proto_enumTypes[4]
+	return &file_bridge_proto_enumTypes[5]
 }
 
 func (x AttachmentPromptOutcome) Number() protoreflect.EnumNumber {
@@ -295,7 +349,7 @@ func (x AttachmentPromptOutcome) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use AttachmentPromptOutcome.Descriptor instead.
 func (AttachmentPromptOutcome) EnumDescriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{4}
+	return file_bridge_proto_rawDescGZIP(), []int{5}
 }
 
 // SyncboardOperation selects one fixed Syncboard API operation. The
@@ -339,11 +393,11 @@ func (x SyncboardOperation) String() string {
 }
 
 func (SyncboardOperation) Descriptor() protoreflect.EnumDescriptor {
-	return file_bridge_proto_enumTypes[5].Descriptor()
+	return file_bridge_proto_enumTypes[6].Descriptor()
 }
 
 func (SyncboardOperation) Type() protoreflect.EnumType {
-	return &file_bridge_proto_enumTypes[5]
+	return &file_bridge_proto_enumTypes[6]
 }
 
 func (x SyncboardOperation) Number() protoreflect.EnumNumber {
@@ -352,7 +406,7 @@ func (x SyncboardOperation) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use SyncboardOperation.Descriptor instead.
 func (SyncboardOperation) EnumDescriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{5}
+	return file_bridge_proto_rawDescGZIP(), []int{6}
 }
 
 // SyncboardOutcome distinguishes a complete API response from a request
@@ -393,11 +447,11 @@ func (x SyncboardOutcome) String() string {
 }
 
 func (SyncboardOutcome) Descriptor() protoreflect.EnumDescriptor {
-	return file_bridge_proto_enumTypes[6].Descriptor()
+	return file_bridge_proto_enumTypes[7].Descriptor()
 }
 
 func (SyncboardOutcome) Type() protoreflect.EnumType {
-	return &file_bridge_proto_enumTypes[6]
+	return &file_bridge_proto_enumTypes[7]
 }
 
 func (x SyncboardOutcome) Number() protoreflect.EnumNumber {
@@ -406,7 +460,7 @@ func (x SyncboardOutcome) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use SyncboardOutcome.Descriptor instead.
 func (SyncboardOutcome) EnumDescriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{6}
+	return file_bridge_proto_rawDescGZIP(), []int{7}
 }
 
 type ProtocolErrorCode int32
@@ -451,11 +505,11 @@ func (x ProtocolErrorCode) String() string {
 }
 
 func (ProtocolErrorCode) Descriptor() protoreflect.EnumDescriptor {
-	return file_bridge_proto_enumTypes[7].Descriptor()
+	return file_bridge_proto_enumTypes[8].Descriptor()
 }
 
 func (ProtocolErrorCode) Type() protoreflect.EnumType {
-	return &file_bridge_proto_enumTypes[7]
+	return &file_bridge_proto_enumTypes[8]
 }
 
 func (x ProtocolErrorCode) Number() protoreflect.EnumNumber {
@@ -464,7 +518,7 @@ func (x ProtocolErrorCode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ProtocolErrorCode.Descriptor instead.
 func (ProtocolErrorCode) EnumDescriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{7}
+	return file_bridge_proto_rawDescGZIP(), []int{8}
 }
 
 // Envelope for every Pi → Phi message. The identity fields are repeated on
@@ -498,6 +552,7 @@ type PiToPhi struct {
 	//	*PiToPhi_AttachmentPromptAck
 	//	*PiToPhi_TranscriptSearchResponse
 	//	*PiToPhi_SyncboardPushAck
+	//	*PiToPhi_TerminalRefreshAck
 	Payload       isPiToPhi_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -721,6 +776,15 @@ func (x *PiToPhi) GetSyncboardPushAck() *SyncboardPushAck {
 	return nil
 }
 
+func (x *PiToPhi) GetTerminalRefreshAck() *TerminalRefreshAck {
+	if x != nil {
+		if x, ok := x.Payload.(*PiToPhi_TerminalRefreshAck); ok {
+			return x.TerminalRefreshAck
+		}
+	}
+	return nil
+}
+
 type isPiToPhi_Payload interface {
 	isPiToPhi_Payload()
 }
@@ -793,6 +857,10 @@ type PiToPhi_SyncboardPushAck struct {
 	SyncboardPushAck *SyncboardPushAck `protobuf:"bytes,29,opt,name=syncboard_push_ack,json=syncboardPushAck,proto3,oneof"`
 }
 
+type PiToPhi_TerminalRefreshAck struct {
+	TerminalRefreshAck *TerminalRefreshAck `protobuf:"bytes,30,opt,name=terminal_refresh_ack,json=terminalRefreshAck,proto3,oneof"`
+}
+
 func (*PiToPhi_Hello) isPiToPhi_Payload() {}
 
 func (*PiToPhi_AgentStarted) isPiToPhi_Payload() {}
@@ -827,6 +895,8 @@ func (*PiToPhi_TranscriptSearchResponse) isPiToPhi_Payload() {}
 
 func (*PiToPhi_SyncboardPushAck) isPiToPhi_Payload() {}
 
+func (*PiToPhi_TerminalRefreshAck) isPiToPhi_Payload() {}
+
 // Envelope for every Phi → Pi message.
 type PhiToPi struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
@@ -854,6 +924,7 @@ type PhiToPi struct {
 	//	*PhiToPi_StateRequest
 	//	*PhiToPi_TranscriptSearchRequest
 	//	*PhiToPi_SyncboardNotification
+	//	*PhiToPi_TerminalRefreshRequest
 	Payload       isPhiToPi_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1068,6 +1139,15 @@ func (x *PhiToPi) GetSyncboardNotification() *SyncboardNotification {
 	return nil
 }
 
+func (x *PhiToPi) GetTerminalRefreshRequest() *TerminalRefreshRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*PhiToPi_TerminalRefreshRequest); ok {
+			return x.TerminalRefreshRequest
+		}
+	}
+	return nil
+}
+
 type isPhiToPi_Payload interface {
 	isPhiToPi_Payload()
 }
@@ -1136,6 +1216,10 @@ type PhiToPi_SyncboardNotification struct {
 	SyncboardNotification *SyncboardNotification `protobuf:"bytes,27,opt,name=syncboard_notification,json=syncboardNotification,proto3,oneof"`
 }
 
+type PhiToPi_TerminalRefreshRequest struct {
+	TerminalRefreshRequest *TerminalRefreshRequest `protobuf:"bytes,28,opt,name=terminal_refresh_request,json=terminalRefreshRequest,proto3,oneof"`
+}
+
 func (*PhiToPi_Accepted) isPhiToPi_Payload() {}
 
 func (*PhiToPi_ProtocolError) isPhiToPi_Payload() {}
@@ -1167,6 +1251,8 @@ func (*PhiToPi_StateRequest) isPhiToPi_Payload() {}
 func (*PhiToPi_TranscriptSearchRequest) isPhiToPi_Payload() {}
 
 func (*PhiToPi_SyncboardNotification) isPhiToPi_Payload() {}
+
+func (*PhiToPi_TerminalRefreshRequest) isPhiToPi_Payload() {}
 
 // Hello is the first application message on every stream. Protocol version,
 // identities, capabilities, and the replay range of the retained journal.
@@ -1772,6 +1858,113 @@ func (x *StateRequest) GetRequestId() string {
 	return ""
 }
 
+type TerminalRefreshRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TerminalRefreshRequest) Reset() {
+	*x = TerminalRefreshRequest{}
+	mi := &file_bridge_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TerminalRefreshRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TerminalRefreshRequest) ProtoMessage() {}
+
+func (x *TerminalRefreshRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TerminalRefreshRequest.ProtoReflect.Descriptor instead.
+func (*TerminalRefreshRequest) Descriptor() ([]byte, []int) {
+	return file_bridge_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *TerminalRefreshRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+// TerminalRefreshAck reports entry only: DISPATCHED means the repaint ran,
+// never that its bytes reached a viewer. reason uses a bounded safe
+// vocabulary and is empty for DISPATCHED.
+type TerminalRefreshAck struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Outcome       TerminalRefreshOutcome `protobuf:"varint,2,opt,name=outcome,proto3,enum=phi.pi.v1.TerminalRefreshOutcome" json:"outcome,omitempty"`
+	Reason        string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TerminalRefreshAck) Reset() {
+	*x = TerminalRefreshAck{}
+	mi := &file_bridge_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TerminalRefreshAck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TerminalRefreshAck) ProtoMessage() {}
+
+func (x *TerminalRefreshAck) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TerminalRefreshAck.ProtoReflect.Descriptor instead.
+func (*TerminalRefreshAck) Descriptor() ([]byte, []int) {
+	return file_bridge_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *TerminalRefreshAck) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *TerminalRefreshAck) GetOutcome() TerminalRefreshOutcome {
+	if x != nil {
+		return x.Outcome
+	}
+	return TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_UNSPECIFIED
+}
+
+func (x *TerminalRefreshAck) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
 // Optional context telemetry. Scalar presence is explicit: an absent
 // tokens/percent means the host reports unknown (null), never zero.
 // context_window stays present when known, including right after a
@@ -1795,7 +1988,7 @@ type ContextUsageSnapshot struct {
 
 func (x *ContextUsageSnapshot) Reset() {
 	*x = ContextUsageSnapshot{}
-	mi := &file_bridge_proto_msgTypes[10]
+	mi := &file_bridge_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1807,7 +2000,7 @@ func (x *ContextUsageSnapshot) String() string {
 func (*ContextUsageSnapshot) ProtoMessage() {}
 
 func (x *ContextUsageSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[10]
+	mi := &file_bridge_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1820,7 +2013,7 @@ func (x *ContextUsageSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ContextUsageSnapshot.ProtoReflect.Descriptor instead.
 func (*ContextUsageSnapshot) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{10}
+	return file_bridge_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ContextUsageSnapshot) GetTokens() float64 {
@@ -1863,7 +2056,7 @@ type CompactReadiness struct {
 
 func (x *CompactReadiness) Reset() {
 	*x = CompactReadiness{}
-	mi := &file_bridge_proto_msgTypes[11]
+	mi := &file_bridge_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1875,7 +2068,7 @@ func (x *CompactReadiness) String() string {
 func (*CompactReadiness) ProtoMessage() {}
 
 func (x *CompactReadiness) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[11]
+	mi := &file_bridge_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1888,7 +2081,7 @@ func (x *CompactReadiness) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactReadiness.ProtoReflect.Descriptor instead.
 func (*CompactReadiness) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{11}
+	return file_bridge_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *CompactReadiness) GetIdle() bool {
@@ -1932,7 +2125,7 @@ type HistoryRequest struct {
 
 func (x *HistoryRequest) Reset() {
 	*x = HistoryRequest{}
-	mi := &file_bridge_proto_msgTypes[12]
+	mi := &file_bridge_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1944,7 +2137,7 @@ func (x *HistoryRequest) String() string {
 func (*HistoryRequest) ProtoMessage() {}
 
 func (x *HistoryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[12]
+	mi := &file_bridge_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1957,7 +2150,7 @@ func (x *HistoryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HistoryRequest.ProtoReflect.Descriptor instead.
 func (*HistoryRequest) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{12}
+	return file_bridge_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *HistoryRequest) GetRequestId() string {
@@ -1983,7 +2176,7 @@ type HistoryResponse struct {
 
 func (x *HistoryResponse) Reset() {
 	*x = HistoryResponse{}
-	mi := &file_bridge_proto_msgTypes[13]
+	mi := &file_bridge_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1995,7 +2188,7 @@ func (x *HistoryResponse) String() string {
 func (*HistoryResponse) ProtoMessage() {}
 
 func (x *HistoryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[13]
+	mi := &file_bridge_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2008,7 +2201,7 @@ func (x *HistoryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HistoryResponse.ProtoReflect.Descriptor instead.
 func (*HistoryResponse) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{13}
+	return file_bridge_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *HistoryResponse) GetRequestId() string {
@@ -2044,7 +2237,7 @@ type ModelRef struct {
 
 func (x *ModelRef) Reset() {
 	*x = ModelRef{}
-	mi := &file_bridge_proto_msgTypes[14]
+	mi := &file_bridge_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2056,7 +2249,7 @@ func (x *ModelRef) String() string {
 func (*ModelRef) ProtoMessage() {}
 
 func (x *ModelRef) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[14]
+	mi := &file_bridge_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2069,7 +2262,7 @@ func (x *ModelRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModelRef.ProtoReflect.Descriptor instead.
 func (*ModelRef) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{14}
+	return file_bridge_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ModelRef) GetProvider() string {
@@ -2099,7 +2292,7 @@ type ModelsRequest struct {
 
 func (x *ModelsRequest) Reset() {
 	*x = ModelsRequest{}
-	mi := &file_bridge_proto_msgTypes[15]
+	mi := &file_bridge_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2111,7 +2304,7 @@ func (x *ModelsRequest) String() string {
 func (*ModelsRequest) ProtoMessage() {}
 
 func (x *ModelsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[15]
+	mi := &file_bridge_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2124,7 +2317,7 @@ func (x *ModelsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModelsRequest.ProtoReflect.Descriptor instead.
 func (*ModelsRequest) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{15}
+	return file_bridge_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ModelsRequest) GetRequestId() string {
@@ -2152,7 +2345,7 @@ type ModelsResponse struct {
 
 func (x *ModelsResponse) Reset() {
 	*x = ModelsResponse{}
-	mi := &file_bridge_proto_msgTypes[16]
+	mi := &file_bridge_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2164,7 +2357,7 @@ func (x *ModelsResponse) String() string {
 func (*ModelsResponse) ProtoMessage() {}
 
 func (x *ModelsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[16]
+	mi := &file_bridge_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2177,7 +2370,7 @@ func (x *ModelsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModelsResponse.ProtoReflect.Descriptor instead.
 func (*ModelsResponse) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{16}
+	return file_bridge_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ModelsResponse) GetRequestId() string {
@@ -2222,7 +2415,7 @@ type SetModelRequest struct {
 
 func (x *SetModelRequest) Reset() {
 	*x = SetModelRequest{}
-	mi := &file_bridge_proto_msgTypes[17]
+	mi := &file_bridge_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2234,7 +2427,7 @@ func (x *SetModelRequest) String() string {
 func (*SetModelRequest) ProtoMessage() {}
 
 func (x *SetModelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[17]
+	mi := &file_bridge_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2247,7 +2440,7 @@ func (x *SetModelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetModelRequest.ProtoReflect.Descriptor instead.
 func (*SetModelRequest) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{17}
+	return file_bridge_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *SetModelRequest) GetRequestId() string {
@@ -2288,7 +2481,7 @@ type SetModelAck struct {
 
 func (x *SetModelAck) Reset() {
 	*x = SetModelAck{}
-	mi := &file_bridge_proto_msgTypes[18]
+	mi := &file_bridge_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2300,7 +2493,7 @@ func (x *SetModelAck) String() string {
 func (*SetModelAck) ProtoMessage() {}
 
 func (x *SetModelAck) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[18]
+	mi := &file_bridge_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2313,7 +2506,7 @@ func (x *SetModelAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetModelAck.ProtoReflect.Descriptor instead.
 func (*SetModelAck) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{18}
+	return file_bridge_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *SetModelAck) GetRequestId() string {
@@ -2347,7 +2540,7 @@ type ThinkingLevelsRequest struct {
 
 func (x *ThinkingLevelsRequest) Reset() {
 	*x = ThinkingLevelsRequest{}
-	mi := &file_bridge_proto_msgTypes[19]
+	mi := &file_bridge_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2359,7 +2552,7 @@ func (x *ThinkingLevelsRequest) String() string {
 func (*ThinkingLevelsRequest) ProtoMessage() {}
 
 func (x *ThinkingLevelsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[19]
+	mi := &file_bridge_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2372,7 +2565,7 @@ func (x *ThinkingLevelsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ThinkingLevelsRequest.ProtoReflect.Descriptor instead.
 func (*ThinkingLevelsRequest) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{19}
+	return file_bridge_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ThinkingLevelsRequest) GetRequestId() string {
@@ -2397,7 +2590,7 @@ type ThinkingLevelsResponse struct {
 
 func (x *ThinkingLevelsResponse) Reset() {
 	*x = ThinkingLevelsResponse{}
-	mi := &file_bridge_proto_msgTypes[20]
+	mi := &file_bridge_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2409,7 +2602,7 @@ func (x *ThinkingLevelsResponse) String() string {
 func (*ThinkingLevelsResponse) ProtoMessage() {}
 
 func (x *ThinkingLevelsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[20]
+	mi := &file_bridge_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2422,7 +2615,7 @@ func (x *ThinkingLevelsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ThinkingLevelsResponse.ProtoReflect.Descriptor instead.
 func (*ThinkingLevelsResponse) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{20}
+	return file_bridge_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ThinkingLevelsResponse) GetRequestId() string {
@@ -2473,7 +2666,7 @@ type SetThinkingRequest struct {
 
 func (x *SetThinkingRequest) Reset() {
 	*x = SetThinkingRequest{}
-	mi := &file_bridge_proto_msgTypes[21]
+	mi := &file_bridge_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2485,7 +2678,7 @@ func (x *SetThinkingRequest) String() string {
 func (*SetThinkingRequest) ProtoMessage() {}
 
 func (x *SetThinkingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[21]
+	mi := &file_bridge_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2498,7 +2691,7 @@ func (x *SetThinkingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetThinkingRequest.ProtoReflect.Descriptor instead.
 func (*SetThinkingRequest) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{21}
+	return file_bridge_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *SetThinkingRequest) GetRequestId() string {
@@ -2542,7 +2735,7 @@ type SetThinkingAck struct {
 
 func (x *SetThinkingAck) Reset() {
 	*x = SetThinkingAck{}
-	mi := &file_bridge_proto_msgTypes[22]
+	mi := &file_bridge_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2554,7 +2747,7 @@ func (x *SetThinkingAck) String() string {
 func (*SetThinkingAck) ProtoMessage() {}
 
 func (x *SetThinkingAck) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[22]
+	mi := &file_bridge_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2567,7 +2760,7 @@ func (x *SetThinkingAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetThinkingAck.ProtoReflect.Descriptor instead.
 func (*SetThinkingAck) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{22}
+	return file_bridge_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *SetThinkingAck) GetRequestId() string {
@@ -2625,7 +2818,7 @@ type CompactRequest struct {
 
 func (x *CompactRequest) Reset() {
 	*x = CompactRequest{}
-	mi := &file_bridge_proto_msgTypes[23]
+	mi := &file_bridge_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2637,7 +2830,7 @@ func (x *CompactRequest) String() string {
 func (*CompactRequest) ProtoMessage() {}
 
 func (x *CompactRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[23]
+	mi := &file_bridge_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2650,7 +2843,7 @@ func (x *CompactRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactRequest.ProtoReflect.Descriptor instead.
 func (*CompactRequest) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{23}
+	return file_bridge_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *CompactRequest) GetRequestId() string {
@@ -2709,7 +2902,7 @@ type CompactResult struct {
 
 func (x *CompactResult) Reset() {
 	*x = CompactResult{}
-	mi := &file_bridge_proto_msgTypes[24]
+	mi := &file_bridge_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2721,7 +2914,7 @@ func (x *CompactResult) String() string {
 func (*CompactResult) ProtoMessage() {}
 
 func (x *CompactResult) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[24]
+	mi := &file_bridge_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2734,7 +2927,7 @@ func (x *CompactResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactResult.ProtoReflect.Descriptor instead.
 func (*CompactResult) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{24}
+	return file_bridge_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *CompactResult) GetRequestId() string {
@@ -2775,7 +2968,7 @@ type ReloadRequest struct {
 
 func (x *ReloadRequest) Reset() {
 	*x = ReloadRequest{}
-	mi := &file_bridge_proto_msgTypes[25]
+	mi := &file_bridge_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2787,7 +2980,7 @@ func (x *ReloadRequest) String() string {
 func (*ReloadRequest) ProtoMessage() {}
 
 func (x *ReloadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[25]
+	mi := &file_bridge_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2800,7 +2993,7 @@ func (x *ReloadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReloadRequest.ProtoReflect.Descriptor instead.
 func (*ReloadRequest) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{25}
+	return file_bridge_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *ReloadRequest) GetRequestId() string {
@@ -2858,7 +3051,7 @@ type ReloadAck struct {
 
 func (x *ReloadAck) Reset() {
 	*x = ReloadAck{}
-	mi := &file_bridge_proto_msgTypes[26]
+	mi := &file_bridge_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2870,7 +3063,7 @@ func (x *ReloadAck) String() string {
 func (*ReloadAck) ProtoMessage() {}
 
 func (x *ReloadAck) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[26]
+	mi := &file_bridge_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2883,7 +3076,7 @@ func (x *ReloadAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReloadAck.ProtoReflect.Descriptor instead.
 func (*ReloadAck) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{26}
+	return file_bridge_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ReloadAck) GetRequestId() string {
@@ -2925,7 +3118,7 @@ type ReloadReadiness struct {
 
 func (x *ReloadReadiness) Reset() {
 	*x = ReloadReadiness{}
-	mi := &file_bridge_proto_msgTypes[27]
+	mi := &file_bridge_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2937,7 +3130,7 @@ func (x *ReloadReadiness) String() string {
 func (*ReloadReadiness) ProtoMessage() {}
 
 func (x *ReloadReadiness) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[27]
+	mi := &file_bridge_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2950,7 +3143,7 @@ func (x *ReloadReadiness) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReloadReadiness.ProtoReflect.Descriptor instead.
 func (*ReloadReadiness) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{27}
+	return file_bridge_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ReloadReadiness) GetRunId() uint64 {
@@ -3024,7 +3217,7 @@ type SkillRef struct {
 
 func (x *SkillRef) Reset() {
 	*x = SkillRef{}
-	mi := &file_bridge_proto_msgTypes[28]
+	mi := &file_bridge_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3036,7 +3229,7 @@ func (x *SkillRef) String() string {
 func (*SkillRef) ProtoMessage() {}
 
 func (x *SkillRef) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[28]
+	mi := &file_bridge_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3049,7 +3242,7 @@ func (x *SkillRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SkillRef.ProtoReflect.Descriptor instead.
 func (*SkillRef) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{28}
+	return file_bridge_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *SkillRef) GetName() string {
@@ -3079,7 +3272,7 @@ type SkillsRequest struct {
 
 func (x *SkillsRequest) Reset() {
 	*x = SkillsRequest{}
-	mi := &file_bridge_proto_msgTypes[29]
+	mi := &file_bridge_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3091,7 +3284,7 @@ func (x *SkillsRequest) String() string {
 func (*SkillsRequest) ProtoMessage() {}
 
 func (x *SkillsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[29]
+	mi := &file_bridge_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3104,7 +3297,7 @@ func (x *SkillsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SkillsRequest.ProtoReflect.Descriptor instead.
 func (*SkillsRequest) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{29}
+	return file_bridge_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *SkillsRequest) GetRequestId() string {
@@ -3131,7 +3324,7 @@ type SkillsResponse struct {
 
 func (x *SkillsResponse) Reset() {
 	*x = SkillsResponse{}
-	mi := &file_bridge_proto_msgTypes[30]
+	mi := &file_bridge_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3143,7 +3336,7 @@ func (x *SkillsResponse) String() string {
 func (*SkillsResponse) ProtoMessage() {}
 
 func (x *SkillsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[30]
+	mi := &file_bridge_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3156,7 +3349,7 @@ func (x *SkillsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SkillsResponse.ProtoReflect.Descriptor instead.
 func (*SkillsResponse) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{30}
+	return file_bridge_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *SkillsResponse) GetRequestId() string {
@@ -3200,7 +3393,7 @@ type InvokeSkillRequest struct {
 
 func (x *InvokeSkillRequest) Reset() {
 	*x = InvokeSkillRequest{}
-	mi := &file_bridge_proto_msgTypes[31]
+	mi := &file_bridge_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3212,7 +3405,7 @@ func (x *InvokeSkillRequest) String() string {
 func (*InvokeSkillRequest) ProtoMessage() {}
 
 func (x *InvokeSkillRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[31]
+	mi := &file_bridge_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3225,7 +3418,7 @@ func (x *InvokeSkillRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvokeSkillRequest.ProtoReflect.Descriptor instead.
 func (*InvokeSkillRequest) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{31}
+	return file_bridge_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *InvokeSkillRequest) GetRequestId() string {
@@ -3260,7 +3453,7 @@ type InvokeSkillAck struct {
 
 func (x *InvokeSkillAck) Reset() {
 	*x = InvokeSkillAck{}
-	mi := &file_bridge_proto_msgTypes[32]
+	mi := &file_bridge_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3272,7 +3465,7 @@ func (x *InvokeSkillAck) String() string {
 func (*InvokeSkillAck) ProtoMessage() {}
 
 func (x *InvokeSkillAck) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[32]
+	mi := &file_bridge_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3285,7 +3478,7 @@ func (x *InvokeSkillAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvokeSkillAck.ProtoReflect.Descriptor instead.
 func (*InvokeSkillAck) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{32}
+	return file_bridge_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *InvokeSkillAck) GetRequestId() string {
@@ -3324,7 +3517,7 @@ type AttachmentReadiness struct {
 
 func (x *AttachmentReadiness) Reset() {
 	*x = AttachmentReadiness{}
-	mi := &file_bridge_proto_msgTypes[33]
+	mi := &file_bridge_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3336,7 +3529,7 @@ func (x *AttachmentReadiness) String() string {
 func (*AttachmentReadiness) ProtoMessage() {}
 
 func (x *AttachmentReadiness) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[33]
+	mi := &file_bridge_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3349,7 +3542,7 @@ func (x *AttachmentReadiness) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachmentReadiness.ProtoReflect.Descriptor instead.
 func (*AttachmentReadiness) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{33}
+	return file_bridge_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *AttachmentReadiness) GetIdle() bool {
@@ -3402,7 +3595,7 @@ type AttachmentRef struct {
 
 func (x *AttachmentRef) Reset() {
 	*x = AttachmentRef{}
-	mi := &file_bridge_proto_msgTypes[34]
+	mi := &file_bridge_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3414,7 +3607,7 @@ func (x *AttachmentRef) String() string {
 func (*AttachmentRef) ProtoMessage() {}
 
 func (x *AttachmentRef) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[34]
+	mi := &file_bridge_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3427,7 +3620,7 @@ func (x *AttachmentRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachmentRef.ProtoReflect.Descriptor instead.
 func (*AttachmentRef) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{34}
+	return file_bridge_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *AttachmentRef) GetBasename() string {
@@ -3481,7 +3674,7 @@ type AttachmentPromptRequest struct {
 
 func (x *AttachmentPromptRequest) Reset() {
 	*x = AttachmentPromptRequest{}
-	mi := &file_bridge_proto_msgTypes[35]
+	mi := &file_bridge_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3493,7 +3686,7 @@ func (x *AttachmentPromptRequest) String() string {
 func (*AttachmentPromptRequest) ProtoMessage() {}
 
 func (x *AttachmentPromptRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[35]
+	mi := &file_bridge_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3506,7 +3699,7 @@ func (x *AttachmentPromptRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachmentPromptRequest.ProtoReflect.Descriptor instead.
 func (*AttachmentPromptRequest) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{35}
+	return file_bridge_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *AttachmentPromptRequest) GetRequestId() string {
@@ -3564,7 +3757,7 @@ type AttachmentPromptAck struct {
 
 func (x *AttachmentPromptAck) Reset() {
 	*x = AttachmentPromptAck{}
-	mi := &file_bridge_proto_msgTypes[36]
+	mi := &file_bridge_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3576,7 +3769,7 @@ func (x *AttachmentPromptAck) String() string {
 func (*AttachmentPromptAck) ProtoMessage() {}
 
 func (x *AttachmentPromptAck) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[36]
+	mi := &file_bridge_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3589,7 +3782,7 @@ func (x *AttachmentPromptAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachmentPromptAck.ProtoReflect.Descriptor instead.
 func (*AttachmentPromptAck) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{36}
+	return file_bridge_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *AttachmentPromptAck) GetRequestId() string {
@@ -3627,7 +3820,7 @@ type SyncboardRequest struct {
 
 func (x *SyncboardRequest) Reset() {
 	*x = SyncboardRequest{}
-	mi := &file_bridge_proto_msgTypes[37]
+	mi := &file_bridge_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3639,7 +3832,7 @@ func (x *SyncboardRequest) String() string {
 func (*SyncboardRequest) ProtoMessage() {}
 
 func (x *SyncboardRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[37]
+	mi := &file_bridge_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3652,7 +3845,7 @@ func (x *SyncboardRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncboardRequest.ProtoReflect.Descriptor instead.
 func (*SyncboardRequest) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{37}
+	return file_bridge_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *SyncboardRequest) GetRequestId() string {
@@ -3698,7 +3891,7 @@ type SyncboardResponse struct {
 
 func (x *SyncboardResponse) Reset() {
 	*x = SyncboardResponse{}
-	mi := &file_bridge_proto_msgTypes[38]
+	mi := &file_bridge_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3710,7 +3903,7 @@ func (x *SyncboardResponse) String() string {
 func (*SyncboardResponse) ProtoMessage() {}
 
 func (x *SyncboardResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[38]
+	mi := &file_bridge_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3723,7 +3916,7 @@ func (x *SyncboardResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncboardResponse.ProtoReflect.Descriptor instead.
 func (*SyncboardResponse) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{38}
+	return file_bridge_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *SyncboardResponse) GetRequestId() string {
@@ -3780,7 +3973,7 @@ type SyncboardNotification struct {
 
 func (x *SyncboardNotification) Reset() {
 	*x = SyncboardNotification{}
-	mi := &file_bridge_proto_msgTypes[39]
+	mi := &file_bridge_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3792,7 +3985,7 @@ func (x *SyncboardNotification) String() string {
 func (*SyncboardNotification) ProtoMessage() {}
 
 func (x *SyncboardNotification) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[39]
+	mi := &file_bridge_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3805,7 +3998,7 @@ func (x *SyncboardNotification) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncboardNotification.ProtoReflect.Descriptor instead.
 func (*SyncboardNotification) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{39}
+	return file_bridge_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *SyncboardNotification) GetSeq() uint64 {
@@ -3863,7 +4056,7 @@ type SyncboardPushAck struct {
 
 func (x *SyncboardPushAck) Reset() {
 	*x = SyncboardPushAck{}
-	mi := &file_bridge_proto_msgTypes[40]
+	mi := &file_bridge_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3875,7 +4068,7 @@ func (x *SyncboardPushAck) String() string {
 func (*SyncboardPushAck) ProtoMessage() {}
 
 func (x *SyncboardPushAck) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[40]
+	mi := &file_bridge_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3888,7 +4081,7 @@ func (x *SyncboardPushAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncboardPushAck.ProtoReflect.Descriptor instead.
 func (*SyncboardPushAck) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{40}
+	return file_bridge_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *SyncboardPushAck) GetSeq() uint64 {
@@ -3924,7 +4117,7 @@ type TranscriptSearchRequest struct {
 
 func (x *TranscriptSearchRequest) Reset() {
 	*x = TranscriptSearchRequest{}
-	mi := &file_bridge_proto_msgTypes[41]
+	mi := &file_bridge_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3936,7 +4129,7 @@ func (x *TranscriptSearchRequest) String() string {
 func (*TranscriptSearchRequest) ProtoMessage() {}
 
 func (x *TranscriptSearchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[41]
+	mi := &file_bridge_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3949,7 +4142,7 @@ func (x *TranscriptSearchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TranscriptSearchRequest.ProtoReflect.Descriptor instead.
 func (*TranscriptSearchRequest) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{41}
+	return file_bridge_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *TranscriptSearchRequest) GetRequestId() string {
@@ -4008,7 +4201,7 @@ type TranscriptSearchMatch struct {
 
 func (x *TranscriptSearchMatch) Reset() {
 	*x = TranscriptSearchMatch{}
-	mi := &file_bridge_proto_msgTypes[42]
+	mi := &file_bridge_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4020,7 +4213,7 @@ func (x *TranscriptSearchMatch) String() string {
 func (*TranscriptSearchMatch) ProtoMessage() {}
 
 func (x *TranscriptSearchMatch) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[42]
+	mi := &file_bridge_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4033,7 +4226,7 @@ func (x *TranscriptSearchMatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TranscriptSearchMatch.ProtoReflect.Descriptor instead.
 func (*TranscriptSearchMatch) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{42}
+	return file_bridge_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *TranscriptSearchMatch) GetEntryId() string {
@@ -4077,7 +4270,7 @@ type TranscriptSearchResponse struct {
 
 func (x *TranscriptSearchResponse) Reset() {
 	*x = TranscriptSearchResponse{}
-	mi := &file_bridge_proto_msgTypes[43]
+	mi := &file_bridge_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4089,7 +4282,7 @@ func (x *TranscriptSearchResponse) String() string {
 func (*TranscriptSearchResponse) ProtoMessage() {}
 
 func (x *TranscriptSearchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[43]
+	mi := &file_bridge_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4102,7 +4295,7 @@ func (x *TranscriptSearchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TranscriptSearchResponse.ProtoReflect.Descriptor instead.
 func (*TranscriptSearchResponse) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{43}
+	return file_bridge_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *TranscriptSearchResponse) GetRequestId() string {
@@ -4165,7 +4358,7 @@ type ProtocolError struct {
 
 func (x *ProtocolError) Reset() {
 	*x = ProtocolError{}
-	mi := &file_bridge_proto_msgTypes[44]
+	mi := &file_bridge_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4177,7 +4370,7 @@ func (x *ProtocolError) String() string {
 func (*ProtocolError) ProtoMessage() {}
 
 func (x *ProtocolError) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[44]
+	mi := &file_bridge_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4190,7 +4383,7 @@ func (x *ProtocolError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProtocolError.ProtoReflect.Descriptor instead.
 func (*ProtocolError) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{44}
+	return file_bridge_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *ProtocolError) GetCode() ProtocolErrorCode {
@@ -4211,7 +4404,7 @@ var File_bridge_proto protoreflect.FileDescriptor
 
 const file_bridge_proto_rawDesc = "" +
 	"\n" +
-	"\fbridge.proto\x12\tphi.pi.v1\"\xb3\v\n" +
+	"\fbridge.proto\x12\tphi.pi.v1\"\x86\f\n" +
 	"\aPiToPhi\x12\x17\n" +
 	"\apane_id\x18\x01 \x01(\tR\x06paneId\x12\x1d\n" +
 	"\n" +
@@ -4236,9 +4429,10 @@ const file_bridge_proto_rawDesc = "" +
 	"\x11syncboard_request\x18\x1a \x01(\v2\x1b.phi.pi.v1.SyncboardRequestH\x00R\x10syncboardRequest\x12T\n" +
 	"\x15attachment_prompt_ack\x18\x1b \x01(\v2\x1e.phi.pi.v1.AttachmentPromptAckH\x00R\x13attachmentPromptAck\x12c\n" +
 	"\x1atranscript_search_response\x18\x1c \x01(\v2#.phi.pi.v1.TranscriptSearchResponseH\x00R\x18transcriptSearchResponse\x12K\n" +
-	"\x12syncboard_push_ack\x18\x1d \x01(\v2\x1b.phi.pi.v1.SyncboardPushAckH\x00R\x10syncboardPushAckB\t\n" +
+	"\x12syncboard_push_ack\x18\x1d \x01(\v2\x1b.phi.pi.v1.SyncboardPushAckH\x00R\x10syncboardPushAck\x12Q\n" +
+	"\x14terminal_refresh_ack\x18\x1e \x01(\v2\x1d.phi.pi.v1.TerminalRefreshAckH\x00R\x12terminalRefreshAckB\t\n" +
 	"\apayloadB\x0e\n" +
-	"\f_traceparentJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10J\x04\b\x10\x10\x11R\x0esummary_resultR\rcommand_errorR\x13cancel_acknowledged\"\x96\v\n" +
+	"\f_traceparentJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10J\x04\b\x10\x10\x11R\x0esummary_resultR\rcommand_errorR\x13cancel_acknowledged\"\xf5\v\n" +
 	"\aPhiToPi\x12\x17\n" +
 	"\apane_id\x18\x01 \x01(\tR\x06paneId\x12\x1d\n" +
 	"\n" +
@@ -4261,7 +4455,8 @@ const file_bridge_proto_rawDesc = "" +
 	"\x19attachment_prompt_request\x18\x18 \x01(\v2\".phi.pi.v1.AttachmentPromptRequestH\x00R\x17attachmentPromptRequest\x12>\n" +
 	"\rstate_request\x18\x19 \x01(\v2\x17.phi.pi.v1.StateRequestH\x00R\fstateRequest\x12`\n" +
 	"\x19transcript_search_request\x18\x1a \x01(\v2\".phi.pi.v1.TranscriptSearchRequestH\x00R\x17transcriptSearchRequest\x12Y\n" +
-	"\x16syncboard_notification\x18\x1b \x01(\v2 .phi.pi.v1.SyncboardNotificationH\x00R\x15syncboardNotificationB\t\n" +
+	"\x16syncboard_notification\x18\x1b \x01(\v2 .phi.pi.v1.SyncboardNotificationH\x00R\x15syncboardNotification\x12]\n" +
+	"\x18terminal_refresh_request\x18\x1c \x01(\v2!.phi.pi.v1.TerminalRefreshRequestH\x00R\x16terminalRefreshRequestB\t\n" +
 	"\apayloadB\x0e\n" +
 	"\f_traceparentJ\x04\b\v\x10\fJ\x04\b\f\x10\rR\tsummarizeR\x06cancel\"\xe8\x02\n" +
 	"\x05Hello\x12)\n" +
@@ -4315,7 +4510,15 @@ const file_bridge_proto_rawDesc = "" +
 	"request_id\x18\r \x01(\tR\trequestIdJ\x04\b\b\x10\tR\x15outstanding_summaries\"-\n" +
 	"\fStateRequest\x12\x1d\n" +
 	"\n" +
-	"request_id\x18\x01 \x01(\tR\trequestId\"\xa8\x01\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\"7\n" +
+	"\x16TerminalRefreshRequest\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\"\x88\x01\n" +
+	"\x12TerminalRefreshAck\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12;\n" +
+	"\aoutcome\x18\x02 \x01(\x0e2!.phi.pi.v1.TerminalRefreshOutcomeR\aoutcome\x12\x16\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\"\xa8\x01\n" +
 	"\x14ContextUsageSnapshot\x12\x1b\n" +
 	"\x06tokens\x18\x01 \x01(\x01H\x00R\x06tokens\x88\x01\x01\x12*\n" +
 	"\x0econtext_window\x18\x02 \x01(\x01H\x01R\rcontextWindow\x88\x01\x01\x12\x1d\n" +
@@ -4531,7 +4734,12 @@ const file_bridge_proto_rawDesc = "" +
 	"\fLogicalState\x12\x1d\n" +
 	"\x19LOGICAL_STATE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12LOGICAL_STATE_IDLE\x10\x01\x12\x19\n" +
-	"\x15LOGICAL_STATE_RUNNING\x10\x02*\xa8\x01\n" +
+	"\x15LOGICAL_STATE_RUNNING\x10\x02*\xb8\x01\n" +
+	"\x16TerminalRefreshOutcome\x12(\n" +
+	"$TERMINAL_REFRESH_OUTCOME_UNSPECIFIED\x10\x00\x12'\n" +
+	"#TERMINAL_REFRESH_OUTCOME_DISPATCHED\x10\x01\x12%\n" +
+	"!TERMINAL_REFRESH_OUTCOME_NOT_SENT\x10\x02\x12$\n" +
+	" TERMINAL_REFRESH_OUTCOME_UNKNOWN\x10\x03*\xa8\x01\n" +
 	"\x0eCompactOutcome\x12\x1f\n" +
 	"\x1bCOMPACT_OUTCOME_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19COMPACT_OUTCOME_COMPLETED\x10\x01\x12\x1b\n" +
@@ -4580,127 +4788,133 @@ func file_bridge_proto_rawDescGZIP() []byte {
 	return file_bridge_proto_rawDescData
 }
 
-var file_bridge_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
-var file_bridge_proto_msgTypes = make([]protoimpl.MessageInfo, 45)
+var file_bridge_proto_enumTypes = make([]protoimpl.EnumInfo, 9)
+var file_bridge_proto_msgTypes = make([]protoimpl.MessageInfo, 47)
 var file_bridge_proto_goTypes = []any{
 	(RunOutcome)(0),                  // 0: phi.pi.v1.RunOutcome
 	(LogicalState)(0),                // 1: phi.pi.v1.LogicalState
-	(CompactOutcome)(0),              // 2: phi.pi.v1.CompactOutcome
-	(ReloadDispatchOutcome)(0),       // 3: phi.pi.v1.ReloadDispatchOutcome
-	(AttachmentPromptOutcome)(0),     // 4: phi.pi.v1.AttachmentPromptOutcome
-	(SyncboardOperation)(0),          // 5: phi.pi.v1.SyncboardOperation
-	(SyncboardOutcome)(0),            // 6: phi.pi.v1.SyncboardOutcome
-	(ProtocolErrorCode)(0),           // 7: phi.pi.v1.ProtocolErrorCode
-	(*PiToPhi)(nil),                  // 8: phi.pi.v1.PiToPhi
-	(*PhiToPi)(nil),                  // 9: phi.pi.v1.PhiToPi
-	(*Hello)(nil),                    // 10: phi.pi.v1.Hello
-	(*Accepted)(nil),                 // 11: phi.pi.v1.Accepted
-	(*AgentStarted)(nil),             // 12: phi.pi.v1.AgentStarted
-	(*AgentSettled)(nil),             // 13: phi.pi.v1.AgentSettled
-	(*LifecycleRecord)(nil),          // 14: phi.pi.v1.LifecycleRecord
-	(*ModelSnapshot)(nil),            // 15: phi.pi.v1.ModelSnapshot
-	(*StateSnapshot)(nil),            // 16: phi.pi.v1.StateSnapshot
-	(*StateRequest)(nil),             // 17: phi.pi.v1.StateRequest
-	(*ContextUsageSnapshot)(nil),     // 18: phi.pi.v1.ContextUsageSnapshot
-	(*CompactReadiness)(nil),         // 19: phi.pi.v1.CompactReadiness
-	(*HistoryRequest)(nil),           // 20: phi.pi.v1.HistoryRequest
-	(*HistoryResponse)(nil),          // 21: phi.pi.v1.HistoryResponse
-	(*ModelRef)(nil),                 // 22: phi.pi.v1.ModelRef
-	(*ModelsRequest)(nil),            // 23: phi.pi.v1.ModelsRequest
-	(*ModelsResponse)(nil),           // 24: phi.pi.v1.ModelsResponse
-	(*SetModelRequest)(nil),          // 25: phi.pi.v1.SetModelRequest
-	(*SetModelAck)(nil),              // 26: phi.pi.v1.SetModelAck
-	(*ThinkingLevelsRequest)(nil),    // 27: phi.pi.v1.ThinkingLevelsRequest
-	(*ThinkingLevelsResponse)(nil),   // 28: phi.pi.v1.ThinkingLevelsResponse
-	(*SetThinkingRequest)(nil),       // 29: phi.pi.v1.SetThinkingRequest
-	(*SetThinkingAck)(nil),           // 30: phi.pi.v1.SetThinkingAck
-	(*CompactRequest)(nil),           // 31: phi.pi.v1.CompactRequest
-	(*CompactResult)(nil),            // 32: phi.pi.v1.CompactResult
-	(*ReloadRequest)(nil),            // 33: phi.pi.v1.ReloadRequest
-	(*ReloadAck)(nil),                // 34: phi.pi.v1.ReloadAck
-	(*ReloadReadiness)(nil),          // 35: phi.pi.v1.ReloadReadiness
-	(*SkillRef)(nil),                 // 36: phi.pi.v1.SkillRef
-	(*SkillsRequest)(nil),            // 37: phi.pi.v1.SkillsRequest
-	(*SkillsResponse)(nil),           // 38: phi.pi.v1.SkillsResponse
-	(*InvokeSkillRequest)(nil),       // 39: phi.pi.v1.InvokeSkillRequest
-	(*InvokeSkillAck)(nil),           // 40: phi.pi.v1.InvokeSkillAck
-	(*AttachmentReadiness)(nil),      // 41: phi.pi.v1.AttachmentReadiness
-	(*AttachmentRef)(nil),            // 42: phi.pi.v1.AttachmentRef
-	(*AttachmentPromptRequest)(nil),  // 43: phi.pi.v1.AttachmentPromptRequest
-	(*AttachmentPromptAck)(nil),      // 44: phi.pi.v1.AttachmentPromptAck
-	(*SyncboardRequest)(nil),         // 45: phi.pi.v1.SyncboardRequest
-	(*SyncboardResponse)(nil),        // 46: phi.pi.v1.SyncboardResponse
-	(*SyncboardNotification)(nil),    // 47: phi.pi.v1.SyncboardNotification
-	(*SyncboardPushAck)(nil),         // 48: phi.pi.v1.SyncboardPushAck
-	(*TranscriptSearchRequest)(nil),  // 49: phi.pi.v1.TranscriptSearchRequest
-	(*TranscriptSearchMatch)(nil),    // 50: phi.pi.v1.TranscriptSearchMatch
-	(*TranscriptSearchResponse)(nil), // 51: phi.pi.v1.TranscriptSearchResponse
-	(*ProtocolError)(nil),            // 52: phi.pi.v1.ProtocolError
+	(TerminalRefreshOutcome)(0),      // 2: phi.pi.v1.TerminalRefreshOutcome
+	(CompactOutcome)(0),              // 3: phi.pi.v1.CompactOutcome
+	(ReloadDispatchOutcome)(0),       // 4: phi.pi.v1.ReloadDispatchOutcome
+	(AttachmentPromptOutcome)(0),     // 5: phi.pi.v1.AttachmentPromptOutcome
+	(SyncboardOperation)(0),          // 6: phi.pi.v1.SyncboardOperation
+	(SyncboardOutcome)(0),            // 7: phi.pi.v1.SyncboardOutcome
+	(ProtocolErrorCode)(0),           // 8: phi.pi.v1.ProtocolErrorCode
+	(*PiToPhi)(nil),                  // 9: phi.pi.v1.PiToPhi
+	(*PhiToPi)(nil),                  // 10: phi.pi.v1.PhiToPi
+	(*Hello)(nil),                    // 11: phi.pi.v1.Hello
+	(*Accepted)(nil),                 // 12: phi.pi.v1.Accepted
+	(*AgentStarted)(nil),             // 13: phi.pi.v1.AgentStarted
+	(*AgentSettled)(nil),             // 14: phi.pi.v1.AgentSettled
+	(*LifecycleRecord)(nil),          // 15: phi.pi.v1.LifecycleRecord
+	(*ModelSnapshot)(nil),            // 16: phi.pi.v1.ModelSnapshot
+	(*StateSnapshot)(nil),            // 17: phi.pi.v1.StateSnapshot
+	(*StateRequest)(nil),             // 18: phi.pi.v1.StateRequest
+	(*TerminalRefreshRequest)(nil),   // 19: phi.pi.v1.TerminalRefreshRequest
+	(*TerminalRefreshAck)(nil),       // 20: phi.pi.v1.TerminalRefreshAck
+	(*ContextUsageSnapshot)(nil),     // 21: phi.pi.v1.ContextUsageSnapshot
+	(*CompactReadiness)(nil),         // 22: phi.pi.v1.CompactReadiness
+	(*HistoryRequest)(nil),           // 23: phi.pi.v1.HistoryRequest
+	(*HistoryResponse)(nil),          // 24: phi.pi.v1.HistoryResponse
+	(*ModelRef)(nil),                 // 25: phi.pi.v1.ModelRef
+	(*ModelsRequest)(nil),            // 26: phi.pi.v1.ModelsRequest
+	(*ModelsResponse)(nil),           // 27: phi.pi.v1.ModelsResponse
+	(*SetModelRequest)(nil),          // 28: phi.pi.v1.SetModelRequest
+	(*SetModelAck)(nil),              // 29: phi.pi.v1.SetModelAck
+	(*ThinkingLevelsRequest)(nil),    // 30: phi.pi.v1.ThinkingLevelsRequest
+	(*ThinkingLevelsResponse)(nil),   // 31: phi.pi.v1.ThinkingLevelsResponse
+	(*SetThinkingRequest)(nil),       // 32: phi.pi.v1.SetThinkingRequest
+	(*SetThinkingAck)(nil),           // 33: phi.pi.v1.SetThinkingAck
+	(*CompactRequest)(nil),           // 34: phi.pi.v1.CompactRequest
+	(*CompactResult)(nil),            // 35: phi.pi.v1.CompactResult
+	(*ReloadRequest)(nil),            // 36: phi.pi.v1.ReloadRequest
+	(*ReloadAck)(nil),                // 37: phi.pi.v1.ReloadAck
+	(*ReloadReadiness)(nil),          // 38: phi.pi.v1.ReloadReadiness
+	(*SkillRef)(nil),                 // 39: phi.pi.v1.SkillRef
+	(*SkillsRequest)(nil),            // 40: phi.pi.v1.SkillsRequest
+	(*SkillsResponse)(nil),           // 41: phi.pi.v1.SkillsResponse
+	(*InvokeSkillRequest)(nil),       // 42: phi.pi.v1.InvokeSkillRequest
+	(*InvokeSkillAck)(nil),           // 43: phi.pi.v1.InvokeSkillAck
+	(*AttachmentReadiness)(nil),      // 44: phi.pi.v1.AttachmentReadiness
+	(*AttachmentRef)(nil),            // 45: phi.pi.v1.AttachmentRef
+	(*AttachmentPromptRequest)(nil),  // 46: phi.pi.v1.AttachmentPromptRequest
+	(*AttachmentPromptAck)(nil),      // 47: phi.pi.v1.AttachmentPromptAck
+	(*SyncboardRequest)(nil),         // 48: phi.pi.v1.SyncboardRequest
+	(*SyncboardResponse)(nil),        // 49: phi.pi.v1.SyncboardResponse
+	(*SyncboardNotification)(nil),    // 50: phi.pi.v1.SyncboardNotification
+	(*SyncboardPushAck)(nil),         // 51: phi.pi.v1.SyncboardPushAck
+	(*TranscriptSearchRequest)(nil),  // 52: phi.pi.v1.TranscriptSearchRequest
+	(*TranscriptSearchMatch)(nil),    // 53: phi.pi.v1.TranscriptSearchMatch
+	(*TranscriptSearchResponse)(nil), // 54: phi.pi.v1.TranscriptSearchResponse
+	(*ProtocolError)(nil),            // 55: phi.pi.v1.ProtocolError
 }
 var file_bridge_proto_depIdxs = []int32{
-	10, // 0: phi.pi.v1.PiToPhi.hello:type_name -> phi.pi.v1.Hello
-	12, // 1: phi.pi.v1.PiToPhi.agent_started:type_name -> phi.pi.v1.AgentStarted
-	13, // 2: phi.pi.v1.PiToPhi.agent_settled:type_name -> phi.pi.v1.AgentSettled
-	16, // 3: phi.pi.v1.PiToPhi.state_snapshot:type_name -> phi.pi.v1.StateSnapshot
-	21, // 4: phi.pi.v1.PiToPhi.history_response:type_name -> phi.pi.v1.HistoryResponse
-	24, // 5: phi.pi.v1.PiToPhi.models_response:type_name -> phi.pi.v1.ModelsResponse
-	26, // 6: phi.pi.v1.PiToPhi.set_model_ack:type_name -> phi.pi.v1.SetModelAck
-	28, // 7: phi.pi.v1.PiToPhi.thinking_levels_response:type_name -> phi.pi.v1.ThinkingLevelsResponse
-	30, // 8: phi.pi.v1.PiToPhi.set_thinking_ack:type_name -> phi.pi.v1.SetThinkingAck
-	32, // 9: phi.pi.v1.PiToPhi.compact_result:type_name -> phi.pi.v1.CompactResult
-	38, // 10: phi.pi.v1.PiToPhi.skills_response:type_name -> phi.pi.v1.SkillsResponse
-	40, // 11: phi.pi.v1.PiToPhi.invoke_skill_ack:type_name -> phi.pi.v1.InvokeSkillAck
-	34, // 12: phi.pi.v1.PiToPhi.reload_ack:type_name -> phi.pi.v1.ReloadAck
-	45, // 13: phi.pi.v1.PiToPhi.syncboard_request:type_name -> phi.pi.v1.SyncboardRequest
-	44, // 14: phi.pi.v1.PiToPhi.attachment_prompt_ack:type_name -> phi.pi.v1.AttachmentPromptAck
-	51, // 15: phi.pi.v1.PiToPhi.transcript_search_response:type_name -> phi.pi.v1.TranscriptSearchResponse
-	48, // 16: phi.pi.v1.PiToPhi.syncboard_push_ack:type_name -> phi.pi.v1.SyncboardPushAck
-	11, // 17: phi.pi.v1.PhiToPi.accepted:type_name -> phi.pi.v1.Accepted
-	52, // 18: phi.pi.v1.PhiToPi.protocol_error:type_name -> phi.pi.v1.ProtocolError
-	20, // 19: phi.pi.v1.PhiToPi.history_request:type_name -> phi.pi.v1.HistoryRequest
-	23, // 20: phi.pi.v1.PhiToPi.models_request:type_name -> phi.pi.v1.ModelsRequest
-	25, // 21: phi.pi.v1.PhiToPi.set_model_request:type_name -> phi.pi.v1.SetModelRequest
-	27, // 22: phi.pi.v1.PhiToPi.thinking_levels_request:type_name -> phi.pi.v1.ThinkingLevelsRequest
-	29, // 23: phi.pi.v1.PhiToPi.set_thinking_request:type_name -> phi.pi.v1.SetThinkingRequest
-	31, // 24: phi.pi.v1.PhiToPi.compact_request:type_name -> phi.pi.v1.CompactRequest
-	37, // 25: phi.pi.v1.PhiToPi.skills_request:type_name -> phi.pi.v1.SkillsRequest
-	39, // 26: phi.pi.v1.PhiToPi.invoke_skill_request:type_name -> phi.pi.v1.InvokeSkillRequest
-	33, // 27: phi.pi.v1.PhiToPi.reload_request:type_name -> phi.pi.v1.ReloadRequest
-	46, // 28: phi.pi.v1.PhiToPi.syncboard_response:type_name -> phi.pi.v1.SyncboardResponse
-	43, // 29: phi.pi.v1.PhiToPi.attachment_prompt_request:type_name -> phi.pi.v1.AttachmentPromptRequest
-	17, // 30: phi.pi.v1.PhiToPi.state_request:type_name -> phi.pi.v1.StateRequest
-	49, // 31: phi.pi.v1.PhiToPi.transcript_search_request:type_name -> phi.pi.v1.TranscriptSearchRequest
-	47, // 32: phi.pi.v1.PhiToPi.syncboard_notification:type_name -> phi.pi.v1.SyncboardNotification
-	16, // 33: phi.pi.v1.Hello.current_state:type_name -> phi.pi.v1.StateSnapshot
-	0,  // 34: phi.pi.v1.AgentSettled.outcome:type_name -> phi.pi.v1.RunOutcome
-	0,  // 35: phi.pi.v1.LifecycleRecord.outcome:type_name -> phi.pi.v1.RunOutcome
-	1,  // 36: phi.pi.v1.StateSnapshot.state:type_name -> phi.pi.v1.LogicalState
-	15, // 37: phi.pi.v1.StateSnapshot.model:type_name -> phi.pi.v1.ModelSnapshot
-	14, // 38: phi.pi.v1.StateSnapshot.journal:type_name -> phi.pi.v1.LifecycleRecord
-	18, // 39: phi.pi.v1.StateSnapshot.context_usage:type_name -> phi.pi.v1.ContextUsageSnapshot
-	19, // 40: phi.pi.v1.StateSnapshot.compact_readiness:type_name -> phi.pi.v1.CompactReadiness
-	35, // 41: phi.pi.v1.StateSnapshot.reload_readiness:type_name -> phi.pi.v1.ReloadReadiness
-	41, // 42: phi.pi.v1.StateSnapshot.attachment_readiness:type_name -> phi.pi.v1.AttachmentReadiness
-	22, // 43: phi.pi.v1.ModelsResponse.models:type_name -> phi.pi.v1.ModelRef
-	15, // 44: phi.pi.v1.CompactRequest.expected_model:type_name -> phi.pi.v1.ModelSnapshot
-	2,  // 45: phi.pi.v1.CompactResult.outcome:type_name -> phi.pi.v1.CompactOutcome
-	15, // 46: phi.pi.v1.ReloadRequest.expected_model:type_name -> phi.pi.v1.ModelSnapshot
-	3,  // 47: phi.pi.v1.ReloadAck.outcome:type_name -> phi.pi.v1.ReloadDispatchOutcome
-	36, // 48: phi.pi.v1.SkillsResponse.skills:type_name -> phi.pi.v1.SkillRef
-	15, // 49: phi.pi.v1.AttachmentPromptRequest.expected_model:type_name -> phi.pi.v1.ModelSnapshot
-	42, // 50: phi.pi.v1.AttachmentPromptRequest.attachments:type_name -> phi.pi.v1.AttachmentRef
-	4,  // 51: phi.pi.v1.AttachmentPromptAck.outcome:type_name -> phi.pi.v1.AttachmentPromptOutcome
-	5,  // 52: phi.pi.v1.SyncboardRequest.operation:type_name -> phi.pi.v1.SyncboardOperation
-	6,  // 53: phi.pi.v1.SyncboardResponse.outcome:type_name -> phi.pi.v1.SyncboardOutcome
-	50, // 54: phi.pi.v1.TranscriptSearchResponse.matches:type_name -> phi.pi.v1.TranscriptSearchMatch
-	7,  // 55: phi.pi.v1.ProtocolError.code:type_name -> phi.pi.v1.ProtocolErrorCode
-	8,  // 56: phi.pi.v1.Integration.Connect:input_type -> phi.pi.v1.PiToPhi
-	9,  // 57: phi.pi.v1.Integration.Connect:output_type -> phi.pi.v1.PhiToPi
-	57, // [57:58] is the sub-list for method output_type
-	56, // [56:57] is the sub-list for method input_type
-	56, // [56:56] is the sub-list for extension type_name
-	56, // [56:56] is the sub-list for extension extendee
-	0,  // [0:56] is the sub-list for field type_name
+	11, // 0: phi.pi.v1.PiToPhi.hello:type_name -> phi.pi.v1.Hello
+	13, // 1: phi.pi.v1.PiToPhi.agent_started:type_name -> phi.pi.v1.AgentStarted
+	14, // 2: phi.pi.v1.PiToPhi.agent_settled:type_name -> phi.pi.v1.AgentSettled
+	17, // 3: phi.pi.v1.PiToPhi.state_snapshot:type_name -> phi.pi.v1.StateSnapshot
+	24, // 4: phi.pi.v1.PiToPhi.history_response:type_name -> phi.pi.v1.HistoryResponse
+	27, // 5: phi.pi.v1.PiToPhi.models_response:type_name -> phi.pi.v1.ModelsResponse
+	29, // 6: phi.pi.v1.PiToPhi.set_model_ack:type_name -> phi.pi.v1.SetModelAck
+	31, // 7: phi.pi.v1.PiToPhi.thinking_levels_response:type_name -> phi.pi.v1.ThinkingLevelsResponse
+	33, // 8: phi.pi.v1.PiToPhi.set_thinking_ack:type_name -> phi.pi.v1.SetThinkingAck
+	35, // 9: phi.pi.v1.PiToPhi.compact_result:type_name -> phi.pi.v1.CompactResult
+	41, // 10: phi.pi.v1.PiToPhi.skills_response:type_name -> phi.pi.v1.SkillsResponse
+	43, // 11: phi.pi.v1.PiToPhi.invoke_skill_ack:type_name -> phi.pi.v1.InvokeSkillAck
+	37, // 12: phi.pi.v1.PiToPhi.reload_ack:type_name -> phi.pi.v1.ReloadAck
+	48, // 13: phi.pi.v1.PiToPhi.syncboard_request:type_name -> phi.pi.v1.SyncboardRequest
+	47, // 14: phi.pi.v1.PiToPhi.attachment_prompt_ack:type_name -> phi.pi.v1.AttachmentPromptAck
+	54, // 15: phi.pi.v1.PiToPhi.transcript_search_response:type_name -> phi.pi.v1.TranscriptSearchResponse
+	51, // 16: phi.pi.v1.PiToPhi.syncboard_push_ack:type_name -> phi.pi.v1.SyncboardPushAck
+	20, // 17: phi.pi.v1.PiToPhi.terminal_refresh_ack:type_name -> phi.pi.v1.TerminalRefreshAck
+	12, // 18: phi.pi.v1.PhiToPi.accepted:type_name -> phi.pi.v1.Accepted
+	55, // 19: phi.pi.v1.PhiToPi.protocol_error:type_name -> phi.pi.v1.ProtocolError
+	23, // 20: phi.pi.v1.PhiToPi.history_request:type_name -> phi.pi.v1.HistoryRequest
+	26, // 21: phi.pi.v1.PhiToPi.models_request:type_name -> phi.pi.v1.ModelsRequest
+	28, // 22: phi.pi.v1.PhiToPi.set_model_request:type_name -> phi.pi.v1.SetModelRequest
+	30, // 23: phi.pi.v1.PhiToPi.thinking_levels_request:type_name -> phi.pi.v1.ThinkingLevelsRequest
+	32, // 24: phi.pi.v1.PhiToPi.set_thinking_request:type_name -> phi.pi.v1.SetThinkingRequest
+	34, // 25: phi.pi.v1.PhiToPi.compact_request:type_name -> phi.pi.v1.CompactRequest
+	40, // 26: phi.pi.v1.PhiToPi.skills_request:type_name -> phi.pi.v1.SkillsRequest
+	42, // 27: phi.pi.v1.PhiToPi.invoke_skill_request:type_name -> phi.pi.v1.InvokeSkillRequest
+	36, // 28: phi.pi.v1.PhiToPi.reload_request:type_name -> phi.pi.v1.ReloadRequest
+	49, // 29: phi.pi.v1.PhiToPi.syncboard_response:type_name -> phi.pi.v1.SyncboardResponse
+	46, // 30: phi.pi.v1.PhiToPi.attachment_prompt_request:type_name -> phi.pi.v1.AttachmentPromptRequest
+	18, // 31: phi.pi.v1.PhiToPi.state_request:type_name -> phi.pi.v1.StateRequest
+	52, // 32: phi.pi.v1.PhiToPi.transcript_search_request:type_name -> phi.pi.v1.TranscriptSearchRequest
+	50, // 33: phi.pi.v1.PhiToPi.syncboard_notification:type_name -> phi.pi.v1.SyncboardNotification
+	19, // 34: phi.pi.v1.PhiToPi.terminal_refresh_request:type_name -> phi.pi.v1.TerminalRefreshRequest
+	17, // 35: phi.pi.v1.Hello.current_state:type_name -> phi.pi.v1.StateSnapshot
+	0,  // 36: phi.pi.v1.AgentSettled.outcome:type_name -> phi.pi.v1.RunOutcome
+	0,  // 37: phi.pi.v1.LifecycleRecord.outcome:type_name -> phi.pi.v1.RunOutcome
+	1,  // 38: phi.pi.v1.StateSnapshot.state:type_name -> phi.pi.v1.LogicalState
+	16, // 39: phi.pi.v1.StateSnapshot.model:type_name -> phi.pi.v1.ModelSnapshot
+	15, // 40: phi.pi.v1.StateSnapshot.journal:type_name -> phi.pi.v1.LifecycleRecord
+	21, // 41: phi.pi.v1.StateSnapshot.context_usage:type_name -> phi.pi.v1.ContextUsageSnapshot
+	22, // 42: phi.pi.v1.StateSnapshot.compact_readiness:type_name -> phi.pi.v1.CompactReadiness
+	38, // 43: phi.pi.v1.StateSnapshot.reload_readiness:type_name -> phi.pi.v1.ReloadReadiness
+	44, // 44: phi.pi.v1.StateSnapshot.attachment_readiness:type_name -> phi.pi.v1.AttachmentReadiness
+	2,  // 45: phi.pi.v1.TerminalRefreshAck.outcome:type_name -> phi.pi.v1.TerminalRefreshOutcome
+	25, // 46: phi.pi.v1.ModelsResponse.models:type_name -> phi.pi.v1.ModelRef
+	16, // 47: phi.pi.v1.CompactRequest.expected_model:type_name -> phi.pi.v1.ModelSnapshot
+	3,  // 48: phi.pi.v1.CompactResult.outcome:type_name -> phi.pi.v1.CompactOutcome
+	16, // 49: phi.pi.v1.ReloadRequest.expected_model:type_name -> phi.pi.v1.ModelSnapshot
+	4,  // 50: phi.pi.v1.ReloadAck.outcome:type_name -> phi.pi.v1.ReloadDispatchOutcome
+	39, // 51: phi.pi.v1.SkillsResponse.skills:type_name -> phi.pi.v1.SkillRef
+	16, // 52: phi.pi.v1.AttachmentPromptRequest.expected_model:type_name -> phi.pi.v1.ModelSnapshot
+	45, // 53: phi.pi.v1.AttachmentPromptRequest.attachments:type_name -> phi.pi.v1.AttachmentRef
+	5,  // 54: phi.pi.v1.AttachmentPromptAck.outcome:type_name -> phi.pi.v1.AttachmentPromptOutcome
+	6,  // 55: phi.pi.v1.SyncboardRequest.operation:type_name -> phi.pi.v1.SyncboardOperation
+	7,  // 56: phi.pi.v1.SyncboardResponse.outcome:type_name -> phi.pi.v1.SyncboardOutcome
+	53, // 57: phi.pi.v1.TranscriptSearchResponse.matches:type_name -> phi.pi.v1.TranscriptSearchMatch
+	8,  // 58: phi.pi.v1.ProtocolError.code:type_name -> phi.pi.v1.ProtocolErrorCode
+	9,  // 59: phi.pi.v1.Integration.Connect:input_type -> phi.pi.v1.PiToPhi
+	10, // 60: phi.pi.v1.Integration.Connect:output_type -> phi.pi.v1.PhiToPi
+	60, // [60:61] is the sub-list for method output_type
+	59, // [59:60] is the sub-list for method input_type
+	59, // [59:59] is the sub-list for extension type_name
+	59, // [59:59] is the sub-list for extension extendee
+	0,  // [0:59] is the sub-list for field type_name
 }
 
 func init() { file_bridge_proto_init() }
@@ -4726,6 +4940,7 @@ func file_bridge_proto_init() {
 		(*PiToPhi_AttachmentPromptAck)(nil),
 		(*PiToPhi_TranscriptSearchResponse)(nil),
 		(*PiToPhi_SyncboardPushAck)(nil),
+		(*PiToPhi_TerminalRefreshAck)(nil),
 	}
 	file_bridge_proto_msgTypes[1].OneofWrappers = []any{
 		(*PhiToPi_Accepted)(nil),
@@ -4744,18 +4959,19 @@ func file_bridge_proto_init() {
 		(*PhiToPi_StateRequest)(nil),
 		(*PhiToPi_TranscriptSearchRequest)(nil),
 		(*PhiToPi_SyncboardNotification)(nil),
+		(*PhiToPi_TerminalRefreshRequest)(nil),
 	}
-	file_bridge_proto_msgTypes[10].OneofWrappers = []any{}
-	file_bridge_proto_msgTypes[25].OneofWrappers = []any{}
+	file_bridge_proto_msgTypes[12].OneofWrappers = []any{}
 	file_bridge_proto_msgTypes[27].OneofWrappers = []any{}
-	file_bridge_proto_msgTypes[33].OneofWrappers = []any{}
+	file_bridge_proto_msgTypes[29].OneofWrappers = []any{}
+	file_bridge_proto_msgTypes[35].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bridge_proto_rawDesc), len(file_bridge_proto_rawDesc)),
-			NumEnums:      8,
-			NumMessages:   45,
+			NumEnums:      9,
+			NumMessages:   47,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

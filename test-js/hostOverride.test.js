@@ -36,7 +36,7 @@ describe('socket URLs use the page origin', () => {
         expect(pty.url).toBe(
             `${window.location.origin}/ws/pane/p1?state=ansi-v1`,
         );
-        expect(seen[0][1]).toBe('phi.terminal.protobuf.v2');
+        expect(seen[0][1]).toBe('phi.terminal.protobuf.v3');
         pty.ws?.close?.();
     });
 });

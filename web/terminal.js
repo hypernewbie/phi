@@ -458,6 +458,13 @@ const BURST_PAINT_SKIP_MIN_VISIBLE_MS = 1200;
 // Full live scrollback, desktop and unset-mobile alike. The mobile lane
 // below references this — never a second literal.
 const LIVE_SCROLLBACK_ROWS = 10000;
+/**
+ * One background history/refresh recovery episode: a 10-second budget and
+ * two bootstrap attempts, including the first. Replacement sockets and
+ * HEAD adoptions never renew it; only a new episode does.
+ */
+const REPLAY_RECOVERY_BUDGET_MS = 10_000;
+const REPLAY_RECOVERY_ATTEMPTS = 2;
 // A phone checkpoint is an instant screen restore, not an archive copy.
 // Older output remains in the recording and arrives through raw replay.
 const PHONE_CHECKPOINT_ROWS = 256;
@@ -2673,6 +2680,32 @@ export class TabManager {
         }
         return null;
     }
+    /** Parses the certified-window header, or null when it is absent or
+        malformed. A bad header never authorizes guessing a floor. */
+    _parseReplayWindow(raw) {
+        if (!raw || raw.length > 2048)
+            return null;
+        try {
+            const v = JSON.parse(raw);
+            const seq = (n) => Number.isSafeInteger(n) && n >= 0;
+            const size = (n) => Number.isInteger(n) &&
+                n > 0 &&
+                n <= 65535;
+            if (!seq(v.epoch) ||
+                !seq(v.oldest) ||
+                !seq(v.head) ||
+                v.oldest > v.head ||
+                !size(v.floor_cols) ||
+                !size(v.floor_rows) ||
+                !size(v.head_cols) ||
+                !size(v.head_rows))
+                return null;
+            return v;
+        }
+        catch (_e) {
+            return null;
+        }
+    }
     _historyPermanentError(message) {
         const error = new Error(message);
         error.historyPermanent = true;
@@ -2681,20 +2714,21 @@ export class TabManager {
     async _fetchReplayPagesOnce(paneId, from, through, epoch, requestSignal, fences = {}) {
         const { throughCursor, afterCursor, latest } = fences;
         try {
-            // Bound each attempt. Failure never authorizes skipping bytes:
-            // callers keep the stream held and reconnect for a fresh head.
-            // 30 s admits a full 2 MiB page on links down to ~70 KiB/s;
-            // gzip usually compresses text far below that. Old Chromium
-            // lacks AbortSignal.timeout: degrade to an unbounded fetch
-            // there (as before) rather than failing every delta closed.
-            const timeout = typeof AbortSignal.timeout === 'function'
-                ? AbortSignal.timeout(30000)
-                : undefined;
-            const signal = requestSignal &&
-                timeout &&
-                typeof AbortSignal.any === 'function'
-                ? AbortSignal.any([requestSignal, timeout])
-                : requestSignal || timeout;
+            // Bound each attempt with a timer-driven controller, so old
+            // browsers without AbortSignal.timeout/any still get a deadline
+            // instead of an unbounded fetch. Failure never authorizes
+            // skipping bytes: callers keep the stream held and reconnect
+            // for a fresh head.
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 10000);
+            const abortOuter = () => controller.abort();
+            if (requestSignal) {
+                if (requestSignal.aborted)
+                    controller.abort();
+                else
+                    requestSignal.addEventListener('abort', abortOuter);
+            }
+            const signal = controller.signal;
             const validCursor = (v) => typeof v === 'string' &&
                 v.length <= 128 &&
                 /^v1\.\d+\.\d+\.\d+$/.test(v);
@@ -2734,7 +2768,13 @@ export class TabManager {
                 if (res.status === 204)
                     return null;
                 if ([400, 404, 409, 413].includes(res.status)) {
-                    throw this._historyPermanentError(`Terminal history unavailable (${res.status}); the requested range was not skipped.`);
+                    // An expired position carries the certified window, so
+                    // the caller can resume at a floor instead of guessing.
+                    const window = this._parseReplayWindow(res.headers?.get?.('X-Phi-Replay-Window') ?? null);
+                    const error = this._historyPermanentError(`Terminal history unavailable (${res.status}); the requested range was not skipped.`);
+                    if (window)
+                        error.replayWindow = window;
+                    throw error;
                 }
                 if (!res.ok)
                     return null;
@@ -2942,12 +2982,19 @@ export class TabManager {
             hot: true,
             onAttachHead: (info) => this._onAttachHead(tabInfo, info),
             onGap: (from, to) => this._onLiveGap(tabInfo, from, to),
+            onRefreshResult: (result) => this._onRefreshResult(tabInfo, tabInfo.ws, result),
         };
     }
     async _onAttachHead(tabInfo, info) {
         const pty = tabInfo.ws;
         if (!pty || pty.mode !== 'hot')
             return;
+        // A receipt from a replaced socket can never satisfy this attach.
+        if (tabInfo._refreshRequest && tabInfo._refreshRequest.socket !== pty) {
+            if (tabInfo._refreshRequest.timer)
+                clearTimeout(tabInfo._refreshRequest.timer);
+            tabInfo._refreshRequest = null;
+        }
         const prevEpoch = tabInfo.paneEpoch;
         const samePane = prevEpoch !== undefined && prevEpoch === info.epoch;
         if (!samePane || !tabInfo._termOpened) {
@@ -2979,6 +3026,25 @@ export class TabManager {
         // Surface them once per pane lifetime, beside the terminal.
         if (!samePane)
             this._noteReplayDurability(tabInfo, info);
+        if (this._piRefreshEligible(tabInfo, info, samePane)) {
+            if (!tabInfo._termOpened) {
+                tabInfo._streamDecoder = pty.decoder ?? null;
+                try {
+                    tabInfo.term.resize(info.headCols, info.headRows);
+                }
+                catch (_e) {
+                    /* default size; post-open fit corrects it */
+                }
+                tabInfo.paneEpoch = info.epoch;
+                tabInfo.paneOldest = info.oldest;
+                tabInfo._floorCursor = info.floorEventCursor;
+                tabInfo.queuedSeq = 0;
+                tabInfo.drainedSeq = 0;
+                this._openTermAndViewport(tabInfo);
+            }
+            this._startRefreshFastPath(tabInfo, pty, info);
+            return;
+        }
         if (!tabInfo._termOpened) {
             tabInfo._streamDecoder = pty.decoder ?? null;
             // Fresh tab: size the parser to the replay baseline and open
@@ -2992,6 +3058,7 @@ export class TabManager {
             }
             tabInfo.paneEpoch = info.epoch;
             tabInfo.paneOldest = info.oldest;
+            tabInfo._floorCursor = info.floorEventCursor;
             tabInfo.queuedSeq = 0;
             tabInfo.drainedSeq = 0;
             tabInfo._replayCursor = `v1.${info.epoch}.0.0`;
@@ -3046,6 +3113,7 @@ export class TabManager {
             tabInfo._streamDecoder = pty.decoder ?? null;
             tabInfo.paneEpoch = info.epoch;
             tabInfo.paneOldest = info.oldest;
+            tabInfo._floorCursor = info.floorEventCursor;
             if (from >= 0 && from <= info.head) {
                 this._bootstrappedRelease(tabInfo, pty, from, info.head, info.eventCursor);
             }
@@ -3069,10 +3137,169 @@ export class TabManager {
         };
         tabInfo.paneEpoch = info.epoch;
         tabInfo.paneOldest = info.oldest;
+        tabInfo._floorCursor = info.floorEventCursor;
         tabInfo.queuedSeq = 0;
         tabInfo.drainedSeq = 0;
         tabInfo._replayCursor = `v1.${info.epoch}.0.0`;
         this._bootstrappedRelease(tabInfo, pty, 0, info.head, info.eventCursor);
+    }
+    // True when this attach may skip history and ask Pi for one repaint.
+    // The hint is advisory: the receipt decides. A same-epoch reconnect
+    // with a usable local frontier repairs only its missing range, and a
+    // manual Refresh Console is an explicit repaint request.
+    _piRefreshEligible(tabInfo, info, samePane) {
+        if (info.terminalRefreshAvailable !== true)
+            return false;
+        if (!info.headCols || !info.headRows)
+            return false;
+        if (tabInfo.isDead || tabInfo.finalizing)
+            return false;
+        if (this._terminalPanelVisible?.(tabInfo) === false)
+            return false;
+        const rec = tabInfo._recovery;
+        if (rec &&
+            (rec.suppressFastPath ||
+                rec.attempts >= REPLAY_RECOVERY_ATTEMPTS ||
+                Date.now() > rec.deadline))
+            return false;
+        if (tabInfo._termOpened && samePane)
+            return tabInfo._forceRedraw === true;
+        return true;
+    }
+    // One recovery episode carries its deadline and attempt count across
+    // replacement sockets: a WS open or a HEAD adoption never renews it.
+    _beginRecoveryEpisode(tabInfo) {
+        const rec = tabInfo._recovery;
+        if (rec &&
+            Date.now() <= rec.deadline &&
+            rec.attempts < REPLAY_RECOVERY_ATTEMPTS)
+            return rec;
+        tabInfo._recovery = {
+            deadline: Date.now() + REPLAY_RECOVERY_BUDGET_MS,
+            attempts: 1,
+            suppressFastPath: false,
+        };
+        return tabInfo._recovery;
+    }
+    _finishRecoveryEpisode(tabInfo) {
+        const pending = tabInfo._refreshRequest;
+        if (pending?.timer)
+            clearTimeout(pending.timer);
+        tabInfo._refreshRequest = null;
+        tabInfo._recovery = null;
+    }
+    // Starts one repaint-based attach. The parser is reset at the certified
+    // head grid and no retained bytes are replayed: the Pi repaint is the
+    // screen. Live delivery stays held until the refresh-marked resize goes
+    // out, so the repaint and the geometry reach the viewer in that order.
+    _startRefreshFastPath(tabInfo, pty, info) {
+        this._beginRecoveryEpisode(tabInfo);
+        pty.decoder = new TextDecoder('utf-8');
+        tabInfo._streamDecoder = pty.decoder;
+        try {
+            this._resetPaneBuffer(tabInfo);
+        }
+        catch (e) {
+            console.error('[term] reset before repaint failed:', e);
+        }
+        try {
+            tabInfo.term.resize(info.headCols, info.headRows);
+        }
+        catch (_e) {
+            /* the post-release fit corrects the grid */
+        }
+        tabInfo.queuedSeq = info.head;
+        tabInfo.drainedSeq = info.head;
+        tabInfo._replayCursor =
+            info.eventCursor || `v1.${info.epoch}.${info.head}.0`;
+        tabInfo._forceRedraw = false;
+        tabInfo._piRefreshNext = true;
+        this._bootstrappedRelease(tabInfo, pty, info.head, info.head, info.eventCursor);
+    }
+    // Bounds the receipt wait with what is left of the episode budget. A
+    // silent host is UNKNOWN: it is never resent.
+    _armRefreshDeadline(tabInfo) {
+        const pending = tabInfo._refreshRequest;
+        if (!pending)
+            return;
+        if (pending.timer)
+            clearTimeout(pending.timer);
+        const remaining = Math.max(0, (tabInfo._recovery?.deadline ?? Date.now()) - Date.now());
+        pending.timer = setTimeout(() => {
+            if (tabInfo._refreshRequest !== pending)
+                return;
+            tabInfo._refreshRequest = null;
+            this._fallbackAfterRefresh(tabInfo);
+        }, remaining);
+    }
+    // One receipt decides. A late or foreign receipt can never complete a
+    // different request; NOT_SENT and UNKNOWN are never resent.
+    _onRefreshResult(tabInfo, socket, receipt) {
+        const pending = tabInfo._refreshRequest;
+        if (!pending || pending.id !== receipt.requestId)
+            return;
+        if (pending.socket !== socket)
+            return;
+        if (pending.gen !== tabInfo._bootstrapGen)
+            return;
+        if (pending.timer)
+            clearTimeout(pending.timer);
+        pending.timer = null;
+        if (receipt.outcome === 'dispatched') {
+            // One accepted repaint for this window. Live delivery continues;
+            // the episode ends only once a drained frame passes the head.
+            pending.dispatched = true;
+            const key = `${tabInfo.paneEpoch}:${pending.head}:${tabInfo.term?.cols}x${tabInfo.term?.rows}`;
+            tabInfo._redrawnKey = key;
+            tabInfo._redraws = (tabInfo._redraws ?? 0) + 1;
+            this._debugRedraw(tabInfo, 'painted', key);
+            return;
+        }
+        tabInfo._refreshRequest = null;
+        this._fallbackAfterRefresh(tabInfo);
+    }
+    // A refused or uncertain repaint falls back to one finite history
+    // replay inside the episode budget. The fast path stays suppressed for
+    // the rest of the episode, and a spent budget leaves the last view in
+    // place with a bounded live-only note instead of an empty screen.
+    _fallbackAfterRefresh(tabInfo) {
+        const rec = tabInfo._recovery;
+        if (!rec)
+            return;
+        if (rec.attempts >= REPLAY_RECOVERY_ATTEMPTS ||
+            Date.now() > rec.deadline) {
+            this._enterLimitedRecovery(tabInfo);
+            return;
+        }
+        rec.suppressFastPath = true;
+        rec.attempts += 1;
+        this.reconnectTab(tabInfo, { auto: true });
+    }
+    // Limited recovery: keep the last view and input, stop automatic
+    // history recovery, and continue from the certified head. This is an
+    // explicit fallback, never a claim that missing bytes were parsed.
+    _enterLimitedRecovery(tabInfo) {
+        const head = tabInfo._refreshRequest?.head ?? tabInfo.queuedSeq ?? 0;
+        const pty = tabInfo.ws;
+        this._finishRecoveryEpisode(tabInfo);
+        try {
+            this._resetPaneBuffer(tabInfo);
+        }
+        catch (e) {
+            console.error('[term] limited-recovery reset failed:', e);
+        }
+        tabInfo.queuedSeq = head;
+        tabInfo.drainedSeq = head;
+        if (pty) {
+            pty.decoder = new TextDecoder('utf-8');
+            tabInfo._streamDecoder = pty.decoder;
+            try {
+                pty.release?.();
+            }
+            catch (_e) { }
+        }
+        this._fitVisibleTerminal(tabInfo);
+        this.app?.showToast?.('History could not be recovered; showing live output only.', { type: 'info', title: 'Terminal' });
     }
     // Replays the raw journal from `from` to the attach head in the
     // background, then releases live delivery. Aborted silently when the
@@ -3090,6 +3317,18 @@ export class TabManager {
         const gen = (tabInfo._bootstrapGen ?? 0) + 1;
         tabInfo._bootstrapGen = gen;
         tabInfo._gapInFlight = false;
+        if (tabInfo._piRefreshNext) {
+            tabInfo._piRefreshNext = false;
+            tabInfo._refreshSeq = (tabInfo._refreshSeq ?? 0) + 1;
+            tabInfo._refreshRequest = {
+                id: String(tabInfo._refreshSeq),
+                socket: pty,
+                gen,
+                head,
+                dispatched: false,
+                timer: null,
+            };
+        }
         // One barrier owns replay and sizing. Release is idempotent and
         // happens only after the parser and current geometry are settled.
         const releaseOnce = () => {
@@ -3385,11 +3624,44 @@ export class TabManager {
             if (!current())
                 return { kind: 'cancelled', reason: 'stale' };
         }
+        // A fresh viewer, or one whose cursor fell below the certified floor,
+        // cannot replay evicted bytes. Start at the floor instead of asking
+        // for a prefix the server refuses (409) and repainting nothing.
+        const certifiedFloor = Number(tabInfo.paneOldest ?? 0);
+        let startOrdinal = null;
+        if (certifiedFloor > from) {
+            from = certifiedFloor;
+            // The floor can sit inside a resize timeline: take its ordinal
+            // from the attach cursor instead of assuming zero.
+            startOrdinal = tabInfo._floorCursor?.split('.').at(-1) ?? '0';
+            tabInfo._replayBaseline = tabInfo._replayBaseline ?? {
+                cols: tabInfo.term?.cols ?? 80,
+                rows: tabInfo.term?.rows ?? 24,
+            };
+            this._noteReplayTruncated(tabInfo, certifiedFloor);
+        }
         let cursor = from;
         const target = head;
+        // Bounded redraw. A cold attach repaints by resetting the pane buffer
+        // and replaying the window. Repeating that for the same window appends
+        // scrollback and moves the viewport, so a repeat is suppressed: the
+        // screen already holds those bytes and live output continues from the
+        // same head. Only an explicit Refresh Console overrides this.
+        let redrawKey = null;
+        const baselineForRedraw = tabInfo._replayBaseline;
+        if (baselineForRedraw) {
+            redrawKey = `${epoch}:${target}:${baselineForRedraw.cols}x${baselineForRedraw.rows}`;
+            const repeated = !tabInfo._forceRedraw && tabInfo._redrawnKey === redrawKey;
+            tabInfo._forceRedraw = false;
+            if (repeated) {
+                tabInfo._replayBaseline = null;
+                this._debugRedraw(tabInfo, 'suppressed', redrawKey);
+                return { kind: 'live-now' };
+            }
+        }
         // Cursor position includes the last parsed resize, not merely
         // the byte frontier. A zero-byte delta can still change geometry.
-        const ordinal = tabInfo._replayCursor?.split('.').at(-1) ?? '0';
+        const ordinal = startOrdinal ?? tabInfo._replayCursor?.split('.').at(-1) ?? '0';
         let chained = `v1.${epoch}.${from}.${ordinal}`;
         tabInfo._replayCancel = false;
         const abort = new AbortController();
@@ -3530,9 +3802,34 @@ export class TabManager {
         // Every attachment needs a real resize, including equal-size and
         // zero-delta reconnects. Only the current socket may own this sizing.
         // A dead pane keeps its final grid: no resize to a gone process.
-        if (!tabInfo.isDead &&
+        const pendingRefresh = tabInfo._refreshRequest &&
+            tabInfo._refreshRequest.socket === ws &&
+            tabInfo._refreshRequest.gen === expectGen
+            ? tabInfo._refreshRequest
+            : null;
+        const canSize = !tabInfo.isDead &&
             this._terminalPanelVisible?.(tabInfo) !== false &&
-            tabInfo.ws === ws &&
+            tabInfo.ws === ws;
+        const refreshSent = pendingRefresh !== null &&
+            canSize &&
+            typeof ws?.sendRefreshResize === 'function' &&
+            ws.sendRefreshResize(tabInfo.term.cols, tabInfo.term.rows, pendingRefresh.id);
+        if (refreshSent) {
+            // The refresh-marked resize is this attach's sizing, and the
+            // repaint that follows paints the current screen at that grid.
+            tabInfo._sizedWs = ws;
+            this._armRefreshDeadline(tabInfo);
+        }
+        else if (pendingRefresh !== null &&
+            tabInfo._refreshRequest === pendingRefresh) {
+            // Nothing was sent for this request: never park a fresh viewer
+            // at HEAD with an empty screen. Fall back inside the budget.
+            if (pendingRefresh.timer)
+                clearTimeout(pendingRefresh.timer);
+            tabInfo._refreshRequest = null;
+            this._fallbackAfterRefresh(tabInfo);
+        }
+        else if (canSize &&
             typeof ws?.sendResize === 'function' &&
             ws.sendResize(tabInfo.term.cols, tabInfo.term.rows) !== false) {
             tabInfo._sizedWs = ws;
@@ -3547,8 +3844,29 @@ export class TabManager {
         tabInfo._freshReplay = false;
         tabInfo._replayHistorical = false;
         tabInfo._historicalReplayFence = null;
+        if (redrawKey) {
+            tabInfo._redrawnKey = redrawKey;
+            tabInfo._redraws = (tabInfo._redraws ?? 0) + 1;
+            this._debugRedraw(tabInfo, 'painted', redrawKey);
+        }
         this._scheduleCheckpointUpload(tabInfo);
         return { kind: 'applied', through: cursor };
+    }
+    /** Tells the user once per attach that older output is no longer held. */
+    _noteReplayTruncated(tabInfo, floor) {
+        if (tabInfo._truncationShown === floor)
+            return;
+        tabInfo._truncationShown = floor;
+        this.app?.showToast?.('Older output is no longer retained on the server.', { type: 'info', title: 'Terminal' });
+    }
+    /** Records one redraw decision so a test can count repaints exactly. */
+    _debugRedraw(tabInfo, outcome, key) {
+        if (!tabInfo._redrawLog)
+            tabInfo._redrawLog = [];
+        const log = tabInfo._redrawLog;
+        log.push({ outcome, key });
+        if (log.length > 16)
+            log.shift();
     }
     async _onLiveGap(tabInfo, from, to) {
         const pty = tabInfo.ws;
@@ -4051,6 +4369,11 @@ export class TabManager {
         if (frontier <= (tabInfo.drainedSeq ?? 0))
             return;
         tabInfo.drainedSeq = frontier;
+        // A repaint episode ends only after DISPATCHED and a drained frame
+        // that passes the captured head; output alone never ends it either.
+        const pending = tabInfo._refreshRequest;
+        if (pending?.dispatched && frontier > pending.head)
+            this._finishRecoveryEpisode(tabInfo);
     }
     // Splits the run list at the batch boundary without mutating it: the
     // caller commits `rest` only when the batch is admitted.
@@ -8638,6 +8961,9 @@ export class TabManager {
         // A closed pane drops the Reload waiter too; a stored
         // marker revalidates against the next press's target.
         this._invalidatePiBridgeReload?.(tab);
+        // A pending repaint episode dies with the pane: its timer must
+        // not reconnect or paint after the tab is gone.
+        this._finishRecoveryEpisode(tab);
         tab._panelObserver?.disconnect();
         if (tab._panelFitRAF != null &&
             typeof cancelAnimationFrame === 'function') {
@@ -12817,17 +13143,17 @@ export class TabManager {
             this._piReloadPersist(tabInfo);
         }
     }
-    // Upgrade-or-block: a version response without terminal protocol 2
-    // means a v1 server this client cannot replay. No response yet
+    // Upgrade-or-block: a version response without terminal protocol 3
+    // means an older server this client cannot replay. No response yet
     // means unknown, not old: connect, and let the late version close us.
     _serverProtocolBlocked() {
         const v = this.app?.versionInfo;
-        return Boolean(v && typeof v === 'object' && v.terminal_protocol !== '2');
+        return Boolean(v && typeof v === 'object' && v.terminal_protocol !== '3');
     }
     onServerVersion(data) {
         if (!data)
             return;
-        if (data.terminal_protocol === '2') {
+        if (data.terminal_protocol === '3') {
             if (!this._protocolBlockedTabs?.size)
                 return;
             for (const tabInfo of this._protocolBlockedTabs) {
@@ -12868,7 +13194,7 @@ export class TabManager {
         overlay.className = 'reconnect-overlay';
         overlay.innerHTML = `
             <div class="reconnect-box">
-                <span class="reconnect-msg">Server speaks terminal protocol v1; this client needs v2. Update phi, then reload.</span>
+                <span class="reconnect-msg">Server speaks an older terminal protocol; this client needs v3. Update phi, then reload.</span>
                 <div class="reconnect-buttons">
                     <button class="restart-btn">&#10227; Reload page</button>
                 </div>
@@ -13504,6 +13830,12 @@ export class TabManager {
             ['pi-rpc', 'review', 'kanban'].includes(tab.coder))
             return;
         tab.userFollowBottom = true;
+        // A manual refresh is an explicit request for one more repaint, even
+        // when the window is unchanged. It also starts a new recovery
+        // episode, so a spent budget never blocks an explicit action.
+        tab._forceRedraw = true;
+        tab._redraws = 0;
+        this._finishRecoveryEpisode(tab);
         this._clearReaderAnchor(tab);
         this.reconnectTab(tab);
     }

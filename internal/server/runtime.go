@@ -23,7 +23,6 @@ import (
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/restart"
 	"github.com/hypernewbie/phi/pkg/rpc"
-	"github.com/hypernewbie/phi/pkg/system"
 	"github.com/hypernewbie/phi/pkg/update"
 	"github.com/hypernewbie/phi/pkg/ws"
 	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
@@ -153,9 +152,9 @@ func (app *Server) Run(ctx context.Context) error {
 	// revocation or an expiring token between the middleware decision and the
 	// upgrade must refuse the connection rather than serve it.
 	app.hub.SetAuthValidator(app.accessManager.AdmitsFence)
-	if err := app.hub.SetRecordingDirectory(filepath.Join(system.PhiDataDir(), "recordings")); err != nil {
-		slog.Error("terminal recording directory unavailable", "err", err)
-	}
+	// Terminal history is RAM-only. No recording directory, journal or
+	// parser is opened here; an existing recordings namespace is left
+	// untouched and never adopted.
 	app.attachmentStore, err = attachments.OpenAttachmentStore()
 	if err != nil {
 		slog.Warn("Pi attachments unavailable", "err", err)

@@ -12,6 +12,18 @@ export const protobufPackage = "phi.websocket.terminal.v1";
 
 export const protobufFileName = "terminal.proto";
 
+/**
+ * TerminalRefreshOutcome is the repaint receipt vocabulary. UNSPECIFIED is
+ * never sent; a client treats it as UNKNOWN.
+ */
+export enum TerminalRefreshOutcome {
+  TERMINAL_REFRESH_OUTCOME_UNSPECIFIED = 0,
+  TERMINAL_REFRESH_OUTCOME_DISPATCHED = 1,
+  TERMINAL_REFRESH_OUTCOME_NOT_SENT = 2,
+  TERMINAL_REFRESH_OUTCOME_UNKNOWN = 3,
+  UNRECOGNIZED = -1,
+}
+
 export interface TerminalClientFrame {
   payload: { $case: "input"; value: Uint8Array } | { $case: "resize"; value: TerminalResize } | {
     $case: "ping";
@@ -21,7 +33,14 @@ export interface TerminalClientFrame {
 
 export interface TerminalResize {
   cols?: number | undefined;
-  rows?: number | undefined;
+  rows?:
+    | number
+    | undefined;
+  /**
+   * Correlates an attach-time Pi repaint with its receipt. Absent or empty
+   * is an ordinary resize; a repaint request never travels as PTY input.
+   */
+  refreshRequestId?: string | undefined;
 }
 
 export interface TerminalPing {
@@ -39,6 +58,7 @@ export interface TerminalServerFrame {
     | { $case: "settlement"; value: TerminalSettlement }
     | { $case: "notification"; value: Notification }
     | { $case: "geometry"; value: TerminalGeometry }
+    | { $case: "refreshResult"; value: TerminalRefreshResult }
     | undefined;
 }
 
@@ -52,7 +72,23 @@ export interface TerminalAttach {
   initialRows?: number | undefined;
   eventCursor?: string | undefined;
   historyIncomplete?: boolean | undefined;
-  ephemeral?: boolean | undefined;
+  ephemeral?:
+    | boolean
+    | undefined;
+  /**
+   * Certified RAM-window floor. Byte positions below floor are gone and
+   * a replay from there is refused. The geometry fields are the grid the
+   * server had in effect at the floor and at the head.
+   */
+  floorEventCursor?: string | undefined;
+  floorCols?: number | undefined;
+  floorRows?: number | undefined;
+  headCols?: number | undefined;
+  headRows?:
+    | number
+    | undefined;
+  /** True when the attached Pi can redraw its own live screen on request. */
+  terminalRefreshAvailable?: boolean | undefined;
 }
 
 export interface TerminalCheckpoint {
@@ -82,6 +118,16 @@ export interface TerminalGeometry {
 }
 
 export interface TerminalPong {
+}
+
+/**
+ * TerminalRefreshResult is one repaint receipt, delivered only to the
+ * socket that asked. The repainting terminal's PTY bytes stay pane-wide.
+ */
+export interface TerminalRefreshResult {
+  requestId?: string | undefined;
+  outcome?: TerminalRefreshOutcome | undefined;
+  reason?: string | undefined;
 }
 
 export interface TerminalExit {
@@ -250,7 +296,7 @@ export const TerminalClientFrame: MessageFns<TerminalClientFrame> = {
 };
 
 function createBaseTerminalResize(): TerminalResize {
-  return { cols: undefined, rows: undefined };
+  return { cols: undefined, rows: undefined, refreshRequestId: undefined };
 }
 
 export const TerminalResize: MessageFns<TerminalResize> = {
@@ -260,6 +306,9 @@ export const TerminalResize: MessageFns<TerminalResize> = {
     }
     if (message.rows !== undefined) {
       writer.uint32(16).uint32(message.rows);
+    }
+    if (message.refreshRequestId !== undefined) {
+      writer.uint32(26).string(message.refreshRequestId);
     }
     return writer;
   },
@@ -293,6 +342,14 @@ export const TerminalResize: MessageFns<TerminalResize> = {
             message.rows = reader.uint32();
             continue;
           }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.refreshRequestId = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -312,6 +369,7 @@ export const TerminalResize: MessageFns<TerminalResize> = {
     const message = createBaseTerminalResize();
     message.cols = object.cols ?? undefined;
     message.rows = object.rows ?? undefined;
+    message.refreshRequestId = object.refreshRequestId ?? undefined;
     return message;
   },
 };
@@ -395,6 +453,9 @@ export const TerminalServerFrame: MessageFns<TerminalServerFrame> = {
         break;
       case "geometry":
         TerminalGeometry.encode(message.payload.value, writer.uint32(202).fork()).join();
+        break;
+      case "refreshResult":
+        TerminalRefreshResult.encode(message.payload.value, writer.uint32(210).fork()).join();
         break;
     }
     return writer;
@@ -493,6 +554,14 @@ export const TerminalServerFrame: MessageFns<TerminalServerFrame> = {
             message.payload = { $case: "geometry", value: TerminalGeometry.decode(reader, reader.uint32()) };
             continue;
           }
+          case 26: {
+            if (tag !== 210) {
+              break;
+            }
+
+            message.payload = { $case: "refreshResult", value: TerminalRefreshResult.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -571,6 +640,12 @@ export const TerminalServerFrame: MessageFns<TerminalServerFrame> = {
         }
         break;
       }
+      case "refreshResult": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = { $case: "refreshResult", value: TerminalRefreshResult.fromPartial(object.payload.value) };
+        }
+        break;
+      }
     }
     return message;
   },
@@ -588,6 +663,12 @@ function createBaseTerminalAttach(): TerminalAttach {
     eventCursor: undefined,
     historyIncomplete: undefined,
     ephemeral: undefined,
+    floorEventCursor: undefined,
+    floorCols: undefined,
+    floorRows: undefined,
+    headCols: undefined,
+    headRows: undefined,
+    terminalRefreshAvailable: undefined,
   };
 }
 
@@ -634,6 +715,24 @@ export const TerminalAttach: MessageFns<TerminalAttach> = {
     }
     if (message.ephemeral !== undefined) {
       writer.uint32(80).bool(message.ephemeral);
+    }
+    if (message.floorEventCursor !== undefined) {
+      writer.uint32(90).string(message.floorEventCursor);
+    }
+    if (message.floorCols !== undefined) {
+      writer.uint32(96).uint32(message.floorCols);
+    }
+    if (message.floorRows !== undefined) {
+      writer.uint32(104).uint32(message.floorRows);
+    }
+    if (message.headCols !== undefined) {
+      writer.uint32(112).uint32(message.headCols);
+    }
+    if (message.headRows !== undefined) {
+      writer.uint32(120).uint32(message.headRows);
+    }
+    if (message.terminalRefreshAvailable !== undefined) {
+      writer.uint32(128).bool(message.terminalRefreshAvailable);
     }
     return writer;
   },
@@ -731,6 +830,54 @@ export const TerminalAttach: MessageFns<TerminalAttach> = {
             message.ephemeral = reader.bool();
             continue;
           }
+          case 11: {
+            if (tag !== 90) {
+              break;
+            }
+
+            message.floorEventCursor = reader.string();
+            continue;
+          }
+          case 12: {
+            if (tag !== 96) {
+              break;
+            }
+
+            message.floorCols = reader.uint32();
+            continue;
+          }
+          case 13: {
+            if (tag !== 104) {
+              break;
+            }
+
+            message.floorRows = reader.uint32();
+            continue;
+          }
+          case 14: {
+            if (tag !== 112) {
+              break;
+            }
+
+            message.headCols = reader.uint32();
+            continue;
+          }
+          case 15: {
+            if (tag !== 120) {
+              break;
+            }
+
+            message.headRows = reader.uint32();
+            continue;
+          }
+          case 16: {
+            if (tag !== 128) {
+              break;
+            }
+
+            message.terminalRefreshAvailable = reader.bool();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -762,6 +909,12 @@ export const TerminalAttach: MessageFns<TerminalAttach> = {
     message.eventCursor = object.eventCursor ?? undefined;
     message.historyIncomplete = object.historyIncomplete ?? undefined;
     message.ephemeral = object.ephemeral ?? undefined;
+    message.floorEventCursor = object.floorEventCursor ?? undefined;
+    message.floorCols = object.floorCols ?? undefined;
+    message.floorRows = object.floorRows ?? undefined;
+    message.headCols = object.headCols ?? undefined;
+    message.headRows = object.headRows ?? undefined;
+    message.terminalRefreshAvailable = object.terminalRefreshAvailable ?? undefined;
     return message;
   },
 };
@@ -1094,6 +1247,85 @@ export const TerminalPong: MessageFns<TerminalPong> = {
   },
   fromPartial<I extends Exact<DeepPartial<TerminalPong>, I>>(_: I): TerminalPong {
     const message = createBaseTerminalPong();
+    return message;
+  },
+};
+
+function createBaseTerminalRefreshResult(): TerminalRefreshResult {
+  return { requestId: undefined, outcome: undefined, reason: undefined };
+}
+
+export const TerminalRefreshResult: MessageFns<TerminalRefreshResult> = {
+  encode(message: TerminalRefreshResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== undefined) {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.outcome !== undefined) {
+      writer.uint32(16).int32(message.outcome);
+    }
+    if (message.reason !== undefined) {
+      writer.uint32(26).string(message.reason);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): TerminalRefreshResult {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseTerminalRefreshResult();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.outcome = reader.int32() as any;
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.reason = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<TerminalRefreshResult>, I>>(base?: I): TerminalRefreshResult {
+    return TerminalRefreshResult.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TerminalRefreshResult>, I>>(object: I): TerminalRefreshResult {
+    const message = createBaseTerminalRefreshResult();
+    message.requestId = object.requestId ?? undefined;
+    message.outcome = object.outcome ?? undefined;
+    message.reason = object.reason ?? undefined;
     return message;
   },
 };

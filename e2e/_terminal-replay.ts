@@ -11,7 +11,7 @@ const ServerCodec = TerminalServerFrame as unknown as MessageFns<ServerMessage>;
 export async function terminalHead(url: string, pane: string) {
     const socket = new WebSocket(
         `${url.replace(/^http/, 'ws')}/ws/pane/${encodeURIComponent(pane)}`,
-        'phi.terminal.protobuf.v2',
+        'phi.terminal.protobuf.v3',
     );
     socket.binaryType = 'arraybuffer';
     let timer: ReturnType<typeof setTimeout>;
@@ -118,6 +118,30 @@ export function replayAttach(
         initialCols: cols,
         initialRows: rows,
         eventCursor: `v1.${epoch}.${head}.0`,
+    };
+}
+
+// v3 attach after eviction: the certified window starts at `floor`, and the
+// geometry at that floor can differ from the head geometry. A client must
+// adopt the head geometry and treat bytes below `floor` as lost.
+export function replayAttachWithFloor(
+    epoch: number,
+    floor: number,
+    head: number,
+    headCols = 80,
+    headRows = 24,
+    floorCols = headCols,
+    floorRows = headRows,
+) {
+    return {
+        ...replayAttach(epoch, head, headCols, headRows),
+        oldest: BigInt(floor),
+        floorCols,
+        floorRows,
+        headCols,
+        headRows,
+        floorEventCursor: `v1.${epoch}.${floor}.0`,
+        terminalRefreshAvailable: false,
     };
 }
 
