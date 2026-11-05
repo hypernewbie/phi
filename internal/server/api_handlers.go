@@ -344,8 +344,12 @@ type SpawnRequest struct {
 	Workspace    string   `json:"workspace"`
 	OpenCodeMini bool     `json:"opencode_mini,omitempty"`
 	PiPsi        bool     `json:"pi_psi,omitempty"`
-	Cols         uint16   `json:"cols,omitempty"`
-	Rows         uint16   `json:"rows,omitempty"`
+	// PiMode is the explicit agent for one Pi launch. Empty means no override,
+	// so the saved default decides. PiPsi stays authoritative for older
+	// clients that only know the boolean.
+	PiMode string `json:"pi_mode,omitempty"`
+	Cols   uint16 `json:"cols,omitempty"`
+	Rows   uint16 `json:"rows,omitempty"`
 }
 
 func (app *Server) terminalOpenCodeMode(inst *pty.PTYInstance) string {
@@ -423,12 +427,41 @@ func (app *Server) handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if req.PiPsi {
-		var err error
-		c, err = coders.PiPsi(c)
+	cfg := app.loadConfig()
+	if req.Coder == "pi" {
+		// A read failure must not silently launch Pi from defaults.
+		snapshot, err := app.loadConfigWithError()
+		if err != nil {
+			http.Error(w, "Failed to read config", http.StatusInternalServerError)
+			return
+		}
+		cfg = snapshot
+		c, err = selectPiLaunch(c, req.PiMode, req.PiPsi, cfg)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
+		}
+		// A client that does not know the saved default yet omits the title so
+		// the server can name the pane after the agent it actually launches.
+		if req.Title == "" {
+			if effectivePiMode(c) == piModePsi {
+				req.Title = "+ Psi"
+			} else {
+				req.Title = "+ Pi"
+			}
+		}
+	} else {
+		if req.PiMode != "" {
+			http.Error(w, "pi_mode requires the Pi backend", http.StatusBadRequest)
+			return
+		}
+		if req.PiPsi {
+			var err error
+			c, err = coders.PiPsi(c)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
 		}
 	}
 
@@ -442,8 +475,10 @@ func (app *Server) handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 				if req.Coder == "opencode" && ok && c.OpenCodeMode != "" && mode != c.OpenCodeMode {
 					continue
 				}
+				// Compare in both directions: a Pi request must never attach
+				// to a Psi pane, or the reverse.
 				piMode := app.terminalPiMode(inst)
-				if req.Coder == "pi" && ok && c.PiMode != "" && piMode != c.PiMode {
+				if req.Coder == "pi" && ok && effectiveDefaultMode(piMode) != effectivePiMode(c) {
 					continue
 				}
 				w.Header().Set("Content-Type", "application/json")
@@ -451,7 +486,11 @@ func (app *Server) handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 				if mode != "" {
 					payload["opencode_mode"] = mode
 				}
-				if piMode != "" {
+				if req.Coder == "pi" {
+					// Report the effective mode, so a legacy pane with no stored
+					// mode still titles itself as Pi.
+					payload["pi_mode"] = effectiveDefaultMode(piMode)
+				} else if piMode != "" {
 					payload["pi_mode"] = piMode
 				}
 				if piapp.ForCoder(snapshot.Coder) {
@@ -468,7 +507,7 @@ func (app *Server) handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	inst, err := app.spawnTerminal(r.Context(), c, req, app.loadConfig(), pty.SpawnOptions{}, false)
+	inst, err := app.spawnTerminal(r.Context(), c, req, cfg, pty.SpawnOptions{}, false)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if launchErr, ok := err.(terminalLaunchError); ok {
@@ -489,8 +528,10 @@ func (app *Server) handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 	if c.OpenCodeMode != "" {
 		payload["opencode_mode"] = c.OpenCodeMode
 	}
-	if c.PiMode != "" {
-		payload["pi_mode"] = c.PiMode
+	if req.Coder == "pi" {
+		// Report the effective mode so the client titles a cold-start pane
+		// from what the server actually launched.
+		payload["pi_mode"] = effectivePiMode(c)
 	}
 	if piapp.ForCoder(inst.Coder) {
 		payload["pi_bridge"] = app.bridgeOrNil().PaneSnapshot(inst.ID)

@@ -32,6 +32,17 @@ func (app *Server) spawnTerminal(ctx context.Context, c coders.Coder, req SpawnR
 	if err := coders.VerifyOpenCode(ctx, c); err != nil {
 		return bad(err)
 	}
+	// A Psi launch must fail rather than silently run Pi. This check sits in
+	// the shared spawn path so hand-edited config and restores are covered,
+	// and it runs before bridge provisioning or platform wrapping.
+	if c.PiMode == piModePsi {
+		if err := validatePsiLaunch(cfg); err != nil {
+			return bad(err)
+		}
+		if err := checkPsiExecutable(c.PsiCommand); err != nil {
+			return bad(err)
+		}
+	}
 	if c.SessionSource == "opencode_v2" && req.SessionID != "" {
 		if err := session.ValidateOpenCodeV2Resume(ctx, c, req.SessionID); err != nil {
 			return bad(err)
@@ -68,7 +79,13 @@ func (app *Server) spawnTerminal(ctx context.Context, c coders.Coder, req SpawnR
 		revokeBridge()
 		return bad(err)
 	}
-	opts.Title, opts.Workspace, opts.OpenCodeMode, opts.PiMode = req.Title, req.Workspace, c.OpenCodeMode, c.PiMode
+	opts.Title, opts.Workspace, opts.OpenCodeMode = req.Title, req.Workspace, c.OpenCodeMode
+	opts.PiMode = c.PiMode
+	if c.ID == "pi" {
+		// Store the resolved agent so a saved tab restores the same one even
+		// after the default changes.
+		opts.PiMode = effectivePiMode(c)
+	}
 	opts.Cols, opts.Rows = req.Cols, req.Rows
 	opts.ExtraArgs = req.ExtraArgs
 	var inst *pty.PTYInstance
@@ -205,10 +222,16 @@ func (app *Server) restoreSavedTab(tab pty.SavedTab) {
 		}
 	}
 	if known && c.ID == "pi" {
-		if tab.PiMode == "psi" {
-			if psiCoder, err := coders.PiPsi(c); err == nil {
-				c = psiCoder
-			}
+		// A saved pane keeps the agent it was created with; the configured
+		// default only affects new panes. Unknown saved modes fall back to Pi.
+		savedMode := tab.PiMode
+		if !validPiMode(savedMode) {
+			savedMode = piModePi
+		}
+		if selected, err := selectPiLaunch(c, savedMode, false, cfg); err == nil {
+			c = selected
+		} else {
+			log.Printf("[tabs] %s: saved agent unavailable (%v); restoring as Pi", tab.ID, err)
 		}
 	}
 	req := SpawnRequest{Coder: c.ID, Cwd: tab.Cwd, Workspace: tab.Workspace, Title: tab.Title, SessionID: tab.SessionID, ExtraArgs: tab.ExtraArgs}
