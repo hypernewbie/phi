@@ -131,9 +131,7 @@ func selectPiLaunch(c coders.Coder, explicitMode string, legacyPsi bool, cfg con
 	return psi, nil
 }
 
-// piEnvCaseInsensitive is true where the platform treats environment names
-// without case. It is a variable so tests can exercise both platforms.
-var piEnvCaseInsensitive = runtime.GOOS == "windows"
+const piEnvCaseInsensitive = runtime.GOOS == "windows"
 
 // mergePsiEnv applies overrides on top of a copy of base. It only sets or
 // replaces values: an inherited variable never disappears.

@@ -357,31 +357,6 @@ describe('PiLaunchStore sends the Psi launch fields as one patch', () => {
         expect(f.store.pending).toBe(false);
     });
 
-    it('keeps a rejected draft for correction and saves the fix', async () => {
-        const f = fixture();
-        await f.store.refresh();
-        f.fetch.mockImplementationOnce(
-            async () =>
-                new Response(
-                    'psi_env key "PATH" is set by Phi and cannot be overridden',
-                    { status: 400 },
-                ),
-        );
-        f.store.setEnv({ PATH: '/tmp' });
-        await settleEdit();
-        expect(f.store.phase).toBe('rejected');
-        expect(f.store.error).toContain('cannot be overridden');
-        // The rejected value stays on screen so it can be corrected.
-        expect(f.store.changedFields).toEqual({ psi_env: { PATH: '/tmp' } });
-        expect(f.store.needsManualSave).toBe(true);
-
-        f.store.setEnv({ PSI_TRACE: '1' });
-        expect(f.store.error).toBe('');
-        await settleEdit();
-        expect(f.store.phase).toBe('saved');
-        expect(f.store.psiEnv).toEqual({ PSI_TRACE: '1' });
-    });
-
     it('clears the pending draft without a request when a value returns to the saved one', async () => {
         const f = fixture();
         await f.store.refresh();

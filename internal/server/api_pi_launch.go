@@ -107,6 +107,10 @@ func (app *Server) servePiLaunch(w http.ResponseWriter, r *http.Request, update 
 	needLookup := changedPsi || (patch.defaultMode != nil && effectiveDefaultMode(candidate.PiDefaultMode) == piModePsi)
 	// Step 3: lookup outside the store lock.
 	if needLookup {
+		if err := validatePsiLaunch(candidate); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		if err := checkPsiExecutable(candidate.PsiCommand); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -365,6 +369,32 @@ func parsePsiEnv(raw json.RawMessage) (map[string]string, error) {
 		return nil, errors.New("psi_env must be an object of strings")
 	}
 	return env, nil
+}
+
+// validatePsiLaunch also guards hand-edited config before saving a Psi default
+// or creating a process. Errors name fields, never environment values.
+func validatePsiLaunch(cfg config.Config) error {
+	if err := validatePsiCommandText(cfg.PsiCommand); err != nil {
+		return err
+	}
+	if err := validatePsiArgs(cfg.PsiArgs); err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	for key, value := range cfg.PsiEnv {
+		if err := validatePsiEnvKey(key); err != nil {
+			return err
+		}
+		lower := strings.ToLower(key)
+		if seen[lower] {
+			return errors.New("psi_env contains duplicate case-insensitive names")
+		}
+		seen[lower] = true
+		if strings.ContainsAny(value, "\x00\r\n") {
+			return fmt.Errorf("psi_env[%q] must not contain NUL or line breaks", key)
+		}
+	}
+	return nil
 }
 
 // validatePsiEnvKey rejects names the PTY layer owns and names a POSIX shell

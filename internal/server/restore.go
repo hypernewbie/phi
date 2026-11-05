@@ -36,6 +36,9 @@ func (app *Server) spawnTerminal(ctx context.Context, c coders.Coder, req SpawnR
 	// the shared spawn path so hand-edited config and restores are covered,
 	// and it runs before bridge provisioning or platform wrapping.
 	if c.PiMode == piModePsi {
+		if err := validatePsiLaunch(cfg); err != nil {
+			return bad(err)
+		}
 		if err := checkPsiExecutable(c.PsiCommand); err != nil {
 			return bad(err)
 		}
@@ -228,7 +231,7 @@ func (app *Server) restoreSavedTab(tab pty.SavedTab) {
 		if selected, err := selectPiLaunch(c, savedMode, false, cfg); err == nil {
 			c = selected
 		} else {
-			log.Printf("[tabs] %s: psi unavailable (%v); restoring as Pi", tab.ID, err)
+			log.Printf("[tabs] %s: saved agent unavailable (%v); restoring as Pi", tab.ID, err)
 		}
 	}
 	req := SpawnRequest{Coder: c.ID, Cwd: tab.Cwd, Workspace: tab.Workspace, Title: tab.Title, SessionID: tab.SessionID, ExtraArgs: tab.ExtraArgs}

@@ -152,8 +152,12 @@ func TestPiLaunchUnchangedRelativeCommandStillWorks(t *testing.T) {
 	if _, err := testStore.Update(func(cfg *config.Config) error { cfg.PsiCommand = relative; return nil }); err != nil {
 		t.Fatal(err)
 	}
-	state := piLaunchRequest(t, http.MethodPost, `{"revision":0,"fields":{"psi_command":"`+filepath.ToSlash(relative)+`"}}`, "application/json", http.StatusOK)
-	if state.PsiCommand != filepath.ToSlash(relative) {
+	body, err := json.Marshal(map[string]any{"revision": 0, "fields": map[string]string{"psi_command": relative}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := piLaunchRequest(t, http.MethodPost, string(body), "application/json", http.StatusOK)
+	if state.PsiCommand != relative {
 		t.Fatalf("unchanged relative command was not kept: %+v", state)
 	}
 

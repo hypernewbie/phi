@@ -2258,9 +2258,10 @@ export class App {
     // is separate from generic config so a config refresh can never clear a
     // draft or acknowledge a write this document did not confirm.
     initPiLaunch() {
+        const writer = this.piLaunchStore?.writer;
         this.piLaunchStore?.dispose();
         this.scope ||= captureAppearanceScope();
-        const store = new PiLaunchStore(this.scope);
+        const store = new PiLaunchStore(this.scope, writer);
         this.piLaunchStore = store;
         store.subscribe(() => {
             if (this.piLaunchStore === store)

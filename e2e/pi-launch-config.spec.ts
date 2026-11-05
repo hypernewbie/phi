@@ -73,8 +73,7 @@ function childRecords(server: PhiServer): ChildRecord[] {
 function recordsFor(server: PhiServer, name: string): ChildRecord[] {
     return childRecords(server).filter(
         (record) =>
-            record.executable.replace(/\\/g, '/').split('/').at(-1) ===
-            exeName(name),
+            record.executable.replace(/\\/g, '/').split('/').at(-1) === name,
     );
 }
 
@@ -108,7 +107,7 @@ test.describe('Pi launch default', () => {
 
     let server: PhiServer;
 
-    test.beforeAll(async () => {
+    test.beforeEach(async () => {
         server = await startPhi({
             // The startup Psi command is a relative path containing spaces, so
             // the save-time check and the launch both exercise the configured
@@ -131,7 +130,7 @@ test.describe('Pi launch default', () => {
         });
     });
 
-    test.afterAll(async () => {
+    test.afterEach(async () => {
         await server?.stop();
     });
 
@@ -261,6 +260,46 @@ test.describe('Pi launch default', () => {
         ]);
         // The override is gone, so the inherited value must not leak in.
         expect(cleared.env.PHI_E2E_AGENT_MARK).toBeUndefined();
+    });
+
+    test('invalid raw input survives reopening and reload without saving a valid prefix', async ({
+        page,
+        request,
+    }) => {
+        await page.goto(server.url);
+        await openSettings(page);
+        const env = page.locator('#settings-pi-env');
+        const args = page.locator('#settings-pi-args');
+        const rawEnv = 'FIRST=1\n\nBROKEN';
+        const rawArgs = '--model\n\n  space value  \n';
+        await env.fill(rawEnv);
+        await args.fill(rawArgs);
+        await expect(env).toHaveAttribute('aria-invalid', 'true');
+        await expect(page.locator('#settings-psi_env-error')).toContainText(
+            'Line 3',
+        );
+        await closeSettings(page);
+        await openSettings(page);
+        await expect(env).toHaveValue(rawEnv);
+        await expect(args).toHaveValue(rawArgs);
+        await page.reload();
+        await openSettings(page);
+        await expect(env).toHaveValue(rawEnv);
+        await expect(args).toHaveValue(rawArgs);
+        const before = await (
+            await request.get(`${server.url}/api/config/pi-launch`)
+        ).json();
+        expect(before.revision).toBe(0);
+        expect(before.psi_env).toEqual({});
+        await env.fill('FIRST=1');
+        await expect(page.locator('.settings-pi-launch-status')).toContainText(
+            'Saved',
+        );
+        const after = await (
+            await request.get(`${server.url}/api/config/pi-launch`)
+        ).json();
+        expect(after.psi_args).toEqual(['--model', '  space value  ']);
+        expect(after.psi_env).toEqual({ FIRST: '1' });
     });
 
     test('a request without a mode uses the saved default', async ({

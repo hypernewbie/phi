@@ -1370,7 +1370,7 @@ func TestAccessSocketTokenHeaderIsNotAnHTTPCredential(t *testing.T) {
 
 	// Static UI paths are public by design and authorize nothing, so only the
 	// protected API routes can prove the carrier is refused.
-	for _, path := range []string{"/api/config", "/api/config/providers", "/api/file/asset"} {
+	for _, path := range []string{"/api/config", "/api/config/providers", "/api/config/pi-launch", "/api/file/asset"} {
 		t.Run(path, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, path, nil)
 			request.Header.Set(accessSocketTokenHeader, token)

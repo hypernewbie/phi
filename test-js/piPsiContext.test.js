@@ -164,7 +164,9 @@ describe('Pi launch requests carry the resolved agent', () => {
             pi_mode: 'psi',
             pi_psi: true,
         });
-        complete({ pane_id: 'pane-psi', session_id: '', pi_mode: 'psi' });
+        // An older server omits pi_mode. Preserve the captured request mode
+        // in the title and restart metadata instead of silently reverting Pi.
+        complete({ pane_id: 'pane-psi', session_id: '' });
         await launch;
         expect(createTab.mock.calls[0].slice(3, 6)).toEqual([
             'pi',

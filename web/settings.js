@@ -2,7 +2,6 @@ import { displayHostname, readLowPowerLocal, writeLowPowerLocal, } from './util.
 import { setAccessPassword, clearAccessPassword, bootstrapAccessAuth, } from './auth.js';
 import { tryNative } from './desktop.js';
 import { currentAppearanceProfile, readProfileOverride, writeProfileOverride, appearanceOwner, captureAppearanceScope, legacyAppearanceKey, } from './mobile-appearance.js';
-import { parsePsiArgs, parsePsiEnv } from './pi-launch.js';
 export function broadcastConfigSync(type, payload = {}) {
     try {
         if (typeof BroadcastChannel !== 'undefined') {
@@ -799,11 +798,11 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     const piLaunchActions = document.createElement('div');
     piLaunchActions.className = 'settings-row';
     const piSaveBtn = document.createElement('button');
-    piSaveBtn.className = 'btn';
+    piSaveBtn.className = 'btn btn-accent';
     piSaveBtn.type = 'button';
     piSaveBtn.textContent = 'Save my changes';
     const piDiscardBtn = document.createElement('button');
-    piDiscardBtn.className = 'btn';
+    piDiscardBtn.className = 'btn btn-primary';
     piDiscardBtn.type = 'button';
     piDiscardBtn.textContent = 'Use server values';
     piLaunchActions.append(piSaveBtn, piDiscardBtn);
@@ -813,14 +812,24 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     const piCommandInput = piCommandRow.querySelector('input');
     const piArgsInput = piArgsRow.querySelector('textarea');
     const piEnvInput = piEnvRow.querySelector('textarea');
-    const piArgsError = document.createElement('p');
-    piArgsError.className = 'settings-row-hint settings-pi-field-error';
-    piArgsError.hidden = true;
-    piArgsRow.after(piArgsError);
-    const piEnvError = document.createElement('p');
-    piEnvError.className = 'settings-row-hint settings-pi-field-error';
-    piEnvError.hidden = true;
-    piEnvRow.after(piEnvError);
+    piLaunchHint.id = 'settings-pi-launch-status';
+    piLaunchHint.setAttribute('role', 'status');
+    const piFields = [
+        ['pi_default_mode', piModeSelect, piModeRow],
+        ['psi_command', piCommandInput, piCommandRow],
+        ['psi_args', piArgsInput, piArgsRow],
+        ['psi_env', piEnvInput, piEnvRow],
+    ];
+    const piErrors = piFields.map(([key, control, row]) => {
+        const error = document.createElement('p');
+        error.className = 'settings-row-hint settings-pi-field-error';
+        error.id = `settings-${key}-error`;
+        error.hidden = true;
+        error.setAttribute('aria-live', 'polite');
+        row.after(error);
+        control?.setAttribute('aria-describedby', `${error.id} ${piLaunchHint.id}`);
+        return error;
+    });
     const renderPiLaunch = () => {
         const store = app.piLaunchStore;
         if (!store || !piModeSelect)
@@ -838,58 +847,31 @@ export function openSettingsModal(app, accentColors, opts = {}) {
         }
         else {
             piModeSelect.querySelector('option[value=""]')?.remove();
-            if (document.activeElement !== piModeSelect)
-                piModeSelect.value = store.mode ?? '';
+            piModeSelect.value = store.mode ?? '';
         }
         piLaunchHint.textContent = store.status;
-        // Never rewrite text the user is editing: focus owns the control.
-        if (piCommandInput && document.activeElement !== piCommandInput) {
-            const command = store.value('psi_command') ?? '';
-            if (piCommandInput.value !== command)
-                piCommandInput.value = command;
-        }
-        if (piArgsInput && document.activeElement !== piArgsInput) {
-            const text = (store.value('psi_args') ?? []).join('\n');
-            if (piArgsInput.value !== text)
-                piArgsInput.value = text;
-        }
-        if (piEnvInput && document.activeElement !== piEnvInput) {
-            const text = envText(store.value('psi_env') ?? {});
-            if (piEnvInput.value !== text)
-                piEnvInput.value = text;
+        for (const [index, [key, control]] of piFields.entries()) {
+            const message = store.fieldError(key);
+            piErrors[index].textContent = message;
+            piErrors[index].hidden = !message;
+            control?.setAttribute('aria-invalid', String(!!message));
+            if (control && key !== 'pi_default_mode') {
+                const text = store.text(key);
+                if (control.value !== text)
+                    control.value = text;
+            }
         }
         piSaveBtn.hidden = !store.needsManualSave;
         piDiscardBtn.hidden = !store.canDiscard;
         piLaunchActions.hidden = piSaveBtn.hidden && piDiscardBtn.hidden;
     };
-    const envText = (env) => Object.entries(env)
-        .map(([key, value]) => `${key}=${value}`)
-        .join('\n');
-    // A field the user is still typing must not be saved half-written, so the
-    // parser decides: invalid input shows an error and leaves the draft alone.
-    const applyArgs = () => {
-        if (!piArgsInput)
-            return;
-        const parsed = parsePsiArgs(piArgsInput.value);
-        piArgsError.hidden = 'error' in parsed ? false : true;
-        piArgsError.textContent = 'error' in parsed ? parsed.error : '';
-        if ('value' in parsed)
-            app.piLaunchStore?.setArgs(parsed.value);
-    };
-    const applyEnv = () => {
-        if (!piEnvInput)
-            return;
-        const parsed = parsePsiEnv(piEnvInput.value);
-        piEnvError.hidden = 'error' in parsed ? false : true;
-        piEnvError.textContent = 'error' in parsed ? parsed.error : '';
-        if ('value' in parsed)
-            app.piLaunchStore?.setEnv(parsed.value);
-    };
-    piCommandInput?.addEventListener('change', () => {
-        app.piLaunchStore?.setCommand(piCommandInput.value.trim());
-    });
-    piArgsInput?.addEventListener('input', applyArgs);
-    piEnvInput?.addEventListener('input', applyEnv);
+    for (const [key, control] of piFields) {
+        if (key === 'pi_default_mode')
+            continue;
+        control?.addEventListener('input', () => {
+            app.piLaunchStore?.editText(key, control.value);
+        });
+    }
     piSaveBtn.addEventListener('click', () => {
         piSaveBtn.disabled = true;
         void app.piLaunchStore?.saveNow().finally(() => {
@@ -906,6 +888,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     });
     stopPiLaunch = app.piLaunchStore?.subscribe(renderPiLaunch) || (() => { });
     renderPiLaunch();
+    void app.piLaunchStore?.refresh();
     const piOfflineRow = _buildCheckboxRow('Start pi with --offline (new tabs only)', 'settings-pi-offline', !!app.config?.pi_offline);
     behGroup.appendChild(piOfflineRow);
     piOfflineRow

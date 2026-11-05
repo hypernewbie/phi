@@ -1987,7 +1987,7 @@ export class SessionsManager {
             // The returned agent is authoritative: a cold start with no known
             // default can come back as Psi.
             const tabTitle = coderId === 'pi'
-                ? data.pi_mode === 'psi'
+                ? (data.pi_mode ?? launchMode) === 'psi'
                     ? '+ Psi'
                     : '+ Pi'
                 : title;
@@ -2011,7 +2011,9 @@ export class SessionsManager {
                     null,
                     data.pi_bridge,
                     {
-                        piMode: data.pi_mode,
+                        piMode: coderId === 'pi'
+                            ? (data.pi_mode ?? launchMode ?? 'pi')
+                            : undefined,
                         ...(data.new_pane === true
                             ? { fresh: true }
                             : {}),
@@ -2072,7 +2074,9 @@ export class SessionsManager {
                     null,
                     data.pi_bridge,
                     {
-                        piMode: data.pi_mode,
+                        piMode: coderId === 'pi'
+                            ? (data.pi_mode ?? launchMode ?? 'pi')
+                            : undefined,
                         ...(data.new_pane === true
                             ? { fresh: true }
                             : {}),
