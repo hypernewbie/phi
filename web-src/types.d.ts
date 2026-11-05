@@ -108,6 +108,10 @@ export interface AppLike {
     } | null;
     syncRemoteClipboard?: () => void | Promise<void>;
     codersPresetRegistry?: Record<string, unknown>;
+    /** Launch-settings store for the current backend. */
+    piLaunchStore?: {
+        readonly mode: 'pi' | 'psi' | null;
+    } | null;
     exportModelsConfig?: (btn: HTMLElement | null) => void;
     importModelsConfig?: (btn: HTMLElement | null) => void;
     exportQuickCommandsConfig?: (btn: HTMLElement | null) => void;

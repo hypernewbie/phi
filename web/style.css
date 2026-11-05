@@ -5408,6 +5408,46 @@ html[data-appearance-profile="mobile"] .settings-modal :is(input, select, textar
     color: var(--red);
 }
 
+/* Pi launch fields. A textarea reuses the row-input tokens so the extra Psi
+   arguments and environment read as part of the same settings list. */
+.settings-pi-launch .settings-row label {
+    white-space: normal;
+}
+
+/* One aligned control column on wide rows; narrow layouts stack like the
+   rest of the settings list instead. */
+@media (min-width: 769px) {
+    .settings-pi-launch .settings-row label {
+        flex-basis: 52%;
+    }
+}
+
+.settings-pi-launch textarea {
+    min-width: 0;
+    flex: 1 1 auto;
+    min-height: 46px;
+    resize: vertical;
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--bg-border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    padding: 6px 10px;
+    font-size: calc(13px * var(--ui-scale));
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+.settings-pi-launch textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.settings-pi-launch .settings-pi-field-error {
+    color: var(--red);
+    overflow-wrap: anywhere;
+}
+
 .settings-access-actions-row {
     display: flex;
     align-items: center;
@@ -5518,7 +5558,10 @@ html[data-appearance-profile="mobile"] .settings-modal :is(input, select, textar
         flex-wrap: wrap;
     }
     .settings-row label {
-        min-width: 100%;
+        /* A full-width label must still wrap inside the row: without a zero
+           minimum the max-content width overflows next to a checkbox. */
+        flex: 1 1 100%;
+        min-width: 0;
         margin-bottom: 4px;
     }
 }
