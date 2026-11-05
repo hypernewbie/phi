@@ -97,14 +97,24 @@ test('the shell header hamburger opens the body sessions drawer', async () => {
         })();
 
         // The active body view is the retained Phi page: the desktop shell
-        // marks it with ?desktop=1.
+        // marks it with ?desktop=1. (app.evaluate's context is untyped in
+        // this tsconfig — annotate it rather than relying on inference.)
+        interface BodyWebContents {
+            getURL: () => string;
+            executeJavaScript: (code: string) => Promise<unknown>;
+        }
         const bodyDrawer = async () =>
-            app.evaluate(async ({ webContents }) => {
-                const body = webContents
-                    .getAllWebContents()
-                    .find((wc) => wc.getURL().includes('desktop=1'));
-                if (!body) return null;
-                return (await body.executeJavaScript(`(() => {
+            app.evaluate(
+                async (api: {
+                    webContents: {
+                        getAllWebContents: () => BodyWebContents[];
+                    };
+                }) => {
+                    const body = api.webContents
+                        .getAllWebContents()
+                        .find((wc) => wc.getURL().includes('desktop=1'));
+                    if (!body) return null;
+                    return (await body.executeJavaScript(`(() => {
                     const panel = document.getElementById('sidebar-panel');
                     if (!panel) return null;
                     return {
@@ -115,16 +125,26 @@ test('the shell header hamburger opens the body sessions drawer', async () => {
                             document.documentElement.clientWidth,
                     };
                 })()`)) as {
-                    open: boolean;
-                    right: number;
-                    overflow: number;
-                } | null;
-            });
+                        open: boolean;
+                        right: number;
+                        overflow: number;
+                    } | null;
+                },
+            );
 
         const resize = async (width: number, height: number) =>
             app.evaluate(
-                ({ BrowserWindow }, size) => {
-                    BrowserWindow.getAllWindows()[0].setContentSize(
+                (
+                    api: {
+                        BrowserWindow: {
+                            getAllWindows: () => {
+                                setContentSize: (w: number, h: number) => void;
+                            }[];
+                        };
+                    },
+                    size: { width: number; height: number },
+                ) => {
+                    api.BrowserWindow.getAllWindows()[0].setContentSize(
                         size.width,
                         size.height,
                     );
