@@ -147,7 +147,9 @@ type Config struct {
 	PsiArgs []string          `json:"psi_args,omitempty" toml:"psi_args,omitempty"`
 	PsiEnv  map[string]string `json:"psi_env,omitempty" toml:"psi_env,omitempty"`
 
-	// PiDefaultMode selects the agent a new Pi launch starts by default.
+	// PiDefaultMode selects the agent a new Pi launch starts by default:
+	// "pi" or "psi", always explicit on disk. An empty value from an older
+	// config is migrated to "pi" on load.
 	// Empty means Pi, so an existing config file keeps its behaviour.
 	// Owned by the revisioned /api/config/pi-launch endpoint; saved tabs keep
 	// the mode they were created with.
@@ -302,6 +304,29 @@ func (s *Store) LoadWithError() (Config, error) {
 	return applyDefaults(cfg), nil
 }
 
+// MigratePiDefault persists the explicit launch default for primary configs
+// written before the feature existed. It runs once at startup, never on a
+// read path: reads must not rewrite the config file. A fresh install (no
+// primary file) and the legacy JSON fallback are left alone; applyDefaults
+// already reports the explicit value for them.
+func (s *Store) MigratePiDefault() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, present, err := s.readPrimary()
+	if err != nil || !present {
+		return err
+	}
+	cfg, err := s.readLocked()
+	if err != nil {
+		return err
+	}
+	if cfg.PiDefaultMode != "" {
+		return nil
+	}
+	cfg.PiDefaultMode = "pi"
+	return s.writeContentsLocked(cfg)
+}
+
 // ReadAuthoritative returns the config exactly as stored, without defaults.
 // An unreadable config is an error: authentication must become unavailable
 // rather than look like "no password set".
@@ -421,6 +446,9 @@ func (s *Store) logReadError(err error) {
 }
 
 func applyDefaults(cfg Config) Config {
+	if cfg.PiDefaultMode == "" {
+		cfg.PiDefaultMode = "pi"
+	}
 	if cfg.Workspaces == nil {
 		cfg.Workspaces = []string{}
 	}
@@ -720,11 +748,19 @@ func (s *Store) writeContentsLocked(cfg Config) error {
 	// cheap reread beats reasoning about which failures leave disk stale.
 	s.cache = nil
 	cfg.Workspaces = filterOutTestPaths(cfg.Workspaces)
+	// The launch default is always explicit on disk; never write an empty
+	// value that readers would have to interpret.
+	if cfg.PiDefaultMode == "" {
+		cfg.PiDefaultMode = "pi"
+	}
 	before, present, err := s.readPrimary()
 	if err != nil {
 		return err
 	}
-	if present && reflect.DeepEqual(applyDefaults(before), applyDefaults(cfg)) {
+	// A legacy file with an empty default must be rewritten even when the
+	// defaulted forms compare equal, or the migration would never persist.
+	migratePiDefault := present && before.PiDefaultMode == ""
+	if !migratePiDefault && present && reflect.DeepEqual(applyDefaults(before), applyDefaults(cfg)) {
 		return nil
 	}
 	path := s.PrimaryPath()

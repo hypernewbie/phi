@@ -34,13 +34,9 @@ type PiLaunchState struct {
 	PsiEnv        map[string]string `json:"psi_env"`
 }
 
-// PiLaunchFromConfig projects the stored launch fields. An empty default is
-// reported as Pi so clients never have to guess what the server will do.
+// PiLaunchFromConfig projects the stored launch fields. The store migrates
+// an empty default to an explicit "pi" on load, so this is a direct copy.
 func PiLaunchFromConfig(cfg config.Config) PiLaunchState {
-	mode := cfg.PiDefaultMode
-	if mode == "" {
-		mode = piModePi
-	}
 	args := cfg.PsiArgs
 	if args == nil {
 		args = []string{}
@@ -51,7 +47,7 @@ func PiLaunchFromConfig(cfg config.Config) PiLaunchState {
 	}
 	return PiLaunchState{
 		Revision:      cfg.PiLaunchRevision,
-		PiDefaultMode: mode,
+		PiDefaultMode: cfg.PiDefaultMode,
 		PsiCommand:    cfg.PsiCommand,
 		PsiArgs:       args,
 		PsiEnv:        env,
@@ -60,6 +56,16 @@ func PiLaunchFromConfig(cfg config.Config) PiLaunchState {
 
 // validPiMode reports whether mode names a supported agent.
 func validPiMode(mode string) bool { return mode == piModePi || mode == piModePsi }
+
+// effectivePanePiMode normalises a pane's stored agent for reattach: panes
+// saved before this feature carry an empty mode and are Pi. This is pane
+// metadata, not the config default, so no migration applies.
+func effectivePanePiMode(mode string) string {
+	if mode == "" {
+		return piModePi
+	}
+	return mode
+}
 
 // effectivePiMode normalises a coder's stored mode to "pi" or "psi". Panes
 // created before this feature carry an empty mode and are Pi.
@@ -104,10 +110,9 @@ func selectPiLaunch(c coders.Coder, explicitMode string, legacyPsi bool, cfg con
 		if legacyPsi {
 			mode = piModePsi
 		} else {
+			// The store migrates an empty default on load; anything still
+			// empty or invalid here is rejected, never silently Pi.
 			mode = cfg.PiDefaultMode
-			if mode == "" {
-				mode = piModePi
-			}
 		}
 	}
 	if !validPiMode(mode) {
@@ -160,7 +165,7 @@ func mergePsiEnv(base, overrides map[string]string, caseInsensitive bool) map[st
 // The revision counter is excluded so a concurrent unrelated launch save is
 // distinguishable from a hand edit of the fields themselves.
 func sameLaunchFields(a, b config.Config) bool {
-	return effectiveDefaultMode(a.PiDefaultMode) == effectiveDefaultMode(b.PiDefaultMode) &&
+	return a.PiDefaultMode == b.PiDefaultMode &&
 		a.PsiCommand == b.PsiCommand &&
 		slices.Equal(a.PsiArgs, b.PsiArgs) &&
 		maps.Equal(a.PsiEnv, b.PsiEnv)

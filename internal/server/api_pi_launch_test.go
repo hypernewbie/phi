@@ -77,7 +77,7 @@ func piLaunchRequest(t *testing.T, method, body, contentType string, want int) P
 }
 
 // TestPiLaunchModeResolution pins the launch-time precedence: explicit mode,
-// then the legacy boolean, then the saved default, then Pi.
+// then the legacy boolean, then the saved (always explicit) default.
 func TestPiLaunchModeResolution(t *testing.T) {
 	pi, _ := coders.NewManager().Get("pi")
 	for _, test := range []struct {
@@ -90,7 +90,8 @@ func TestPiLaunchModeResolution(t *testing.T) {
 		wantCmd  string
 		wantErr  bool
 	}{
-		{name: "empty config", want: "pi", wantCmd: "pi"},
+		{name: "saved pi", saved: "pi", want: "pi", wantCmd: "pi"},
+		{name: "unmigrated empty default is rejected, not silently Pi", wantErr: true},
 		{name: "saved psi", saved: "psi", want: "psi", wantCmd: "psi"},
 		{name: "saved psi with command", saved: "psi", command: "/opt/psi", want: "psi", wantCmd: "/opt/psi"},
 		{name: "legacy flag beats pi default", legacy: true, want: "psi", wantCmd: "psi"},
@@ -149,7 +150,7 @@ func TestPiLaunchSettingsEndpoint(t *testing.T) {
 	// and must not block recovery to Pi.
 	withoutPsi(t)
 	piLaunchRequest(t, http.MethodPost, `{"revision":0,"fields":{"pi_default_mode":"psi"}}`, "application/json", http.StatusBadRequest)
-	if cfg := testServer.loadConfig(); cfg.PiDefaultMode != "" || cfg.PiLaunchRevision != 0 {
+	if cfg := testServer.loadConfig(); cfg.PiDefaultMode != "pi" || cfg.PiLaunchRevision != 0 {
 		t.Fatalf("rejected save mutated config: %+v", cfg)
 	}
 	state = piLaunchRequest(t, http.MethodPost, `{"revision":0,"fields":{"pi_default_mode":"pi"}}`, "application/json; charset=utf-8", http.StatusOK)
@@ -181,6 +182,7 @@ func TestPiLaunchSettingsEndpoint(t *testing.T) {
 		`{"revision":2,"fields":{"pi_default_mode":null}}`,
 		`{"revision":2,"fields":{"pi_default_mode":true}}`,
 		`{"revision":2,"fields":{"pi_default_mode":"bogus"}}`,
+		`{"revision":2,"fields":{"pi_default_mode":""}}`,
 		`{"revision":2,"fields":{"nope":"x"}}`,
 		`{"revision":2,"fields":{"pi_default_mode":"pi"}} {}`,
 		`{"revision":9007199254740992,"fields":{"pi_default_mode":"pi"}}`,

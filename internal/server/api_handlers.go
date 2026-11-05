@@ -478,7 +478,7 @@ func (app *Server) handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 				// Compare in both directions: a Pi request must never attach
 				// to a Psi pane, or the reverse.
 				piMode := app.terminalPiMode(inst)
-				if req.Coder == "pi" && ok && effectiveDefaultMode(piMode) != effectivePiMode(c) {
+				if req.Coder == "pi" && ok && effectivePanePiMode(piMode) != effectivePiMode(c) {
 					continue
 				}
 				w.Header().Set("Content-Type", "application/json")
@@ -489,7 +489,7 @@ func (app *Server) handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 				if req.Coder == "pi" {
 					// Report the effective mode, so a legacy pane with no stored
 					// mode still titles itself as Pi.
-					payload["pi_mode"] = effectiveDefaultMode(piMode)
+					payload["pi_mode"] = effectivePanePiMode(piMode)
 				} else if piMode != "" {
 					payload["pi_mode"] = piMode
 				}

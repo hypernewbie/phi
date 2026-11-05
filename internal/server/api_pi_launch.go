@@ -104,7 +104,7 @@ func (app *Server) servePiLaunch(w http.ResponseWriter, r *http.Request, update 
 	// installation, so recovery to Pi stays possible. A patch that edits any
 	// Psi field must leave a launchable command behind.
 	changedPsi := patch.psiCommand != nil || patch.psiArgs != nil || patch.psiEnv != nil
-	needLookup := changedPsi || (patch.defaultMode != nil && effectiveDefaultMode(candidate.PiDefaultMode) == piModePsi)
+	needLookup := changedPsi || (patch.defaultMode != nil && candidate.PiDefaultMode == piModePsi)
 	// Step 3: lookup outside the store lock.
 	if needLookup {
 		if err := validatePsiLaunch(candidate); err != nil {
@@ -120,6 +120,12 @@ func (app *Server) servePiLaunch(w http.ResponseWriter, r *http.Request, update 
 	// Steps 4 and 5: recheck the snapshot inside the lock, then apply only the
 	// requested fields.
 	cfg, err := update(func(cfg *config.Config) error {
+		// Update reads the raw file; the base above has defaults applied.
+		// Normalize the legacy empty default at this write boundary so the
+		// drift check compares the same effective values.
+		if cfg.PiDefaultMode == "" {
+			cfg.PiDefaultMode = piModePi
+		}
 		if cfg.PiLaunchRevision > MaxPiLaunchRevision {
 			return errPiLaunchInvalid
 		}
@@ -172,14 +178,6 @@ type piLaunchPatch struct {
 	psiEnv      *map[string]string
 }
 
-// effectiveDefaultMode normalises an empty stored default to Pi.
-func effectiveDefaultMode(mode string) string {
-	if mode == "" {
-		return piModePi
-	}
-	return mode
-}
-
 // decodePiLaunchPatch validates the request shape. A non-zero status means the
 // response is already written.
 func decodePiLaunchPatch(w http.ResponseWriter, r *http.Request) (uint64, piLaunchPatch, int) {
@@ -230,7 +228,7 @@ func decodePiLaunchPatch(w http.ResponseWriter, r *http.Request) (uint64, piLaun
 			if json.Unmarshal(raw, &mode) != nil || mode == nil {
 				return fail("pi_default_mode must be a string", http.StatusBadRequest)
 			}
-			if *mode != "" && !validPiMode(*mode) {
+			if !validPiMode(*mode) {
 				return fail(`pi_default_mode must be "pi" or "psi"`, http.StatusBadRequest)
 			}
 			patch.defaultMode = mode
