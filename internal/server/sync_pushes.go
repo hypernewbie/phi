@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
-	"time"
 	"unicode/utf8"
 
 	syncmeshb "github.com/hypernewbie/phi/internal/syncmesh/pb"
@@ -78,8 +77,5 @@ func (app *Server) handleSyncPushes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"messages":  list,
-		"generated": time.Now().UnixMilli(),
-	})
+	_ = json.NewEncoder(w).Encode(list)
 }

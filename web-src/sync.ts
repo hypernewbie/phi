@@ -639,10 +639,8 @@ export class SyncManager {
                 signal: controller.signal,
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const payload: unknown = await res.json();
-            const messages = parsePushMessages(
-                asObject<{ messages?: unknown }>(payload)?.messages,
-            );
+            // A bare array, the same shape /api/sync/messages returns.
+            const messages = parsePushMessages(await res.json());
             if (!messages)
                 throw new Error('Unexpected addressed messages response');
             if (!current()) return;

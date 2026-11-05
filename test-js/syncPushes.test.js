@@ -11,7 +11,7 @@ afterEach(() => {
     vi.useRealTimers();
 });
 
-function newManager(handler = () => ({ messages: [] }), app = {}) {
+function newManager(handler = () => [], app = {}) {
     document.body.innerHTML = '<div id="sync-panel"></div>';
     const requests = mockFetch(handler);
     // Each test controls refresh timing. Startup itself is covered below.
@@ -87,9 +87,7 @@ describe('Syncboard addressed messages', () => {
 
     it('fetches this Phi even when the remote board hangs', async () => {
         const requests = newManager((url) =>
-            url === '/api/sync/pushes'
-                ? { messages: [push()] }
-                : new Promise(() => {}),
+            url === '/api/sync/pushes' ? [push()] : new Promise(() => {}),
         );
         manager.app.sessionsManager.config.sync_coordinator =
             'https://remote.example:7443';
@@ -112,7 +110,7 @@ describe('Syncboard addressed messages', () => {
 
     it('paints the persisted last good answer before the startup request finishes', async () => {
         const store = { responses: new Map() };
-        newManager(() => ({ messages: [push()] }), {
+        newManager(() => [push()], {
             getActiveStore: () => store,
         });
         await manager.refreshPushes();
@@ -137,8 +135,8 @@ describe('Syncboard addressed messages', () => {
             throw new TypeError('offline');
         },
         () => ({ ok: false, status: 502 }),
-        () => ({ messages: [null] }),
-        () => ({ messages: [push({ value: { invalid: true } })] }),
+        () => [null],
+        () => [push({ value: { invalid: true } })],
     ])(
         'preserves the last good list on transport or malformed-response failure',
         async (handler) => {
@@ -151,7 +149,7 @@ describe('Syncboard addressed messages', () => {
             expect(
                 manager.pushSection.querySelector('[role=status]').textContent,
             ).toContain('Refresh unavailable');
-            mockFetch(() => ({ messages: [] }));
+            mockFetch(() => []);
             await manager.refreshPushes();
             expect(manager.pushSection.classList.contains('hidden')).toBe(true);
         },
@@ -177,7 +175,7 @@ describe('Syncboard addressed messages', () => {
         expect(
             manager.pushSection.querySelector('[role=status]').textContent,
         ).toContain('Refresh unavailable');
-        mockFetch(() => ({ messages: [push({ value: 'back online' })] }));
+        mockFetch(() => [push({ value: 'back online' })]);
         await manager.refreshPushes();
         expect(manager.pushList.textContent).toContain('back online');
     });
@@ -199,7 +197,7 @@ describe('Syncboard addressed messages', () => {
         store = { responses: new Map() };
         manager.app.scope = scope;
         manager.restorePushes(store);
-        finish({ messages: [push()] });
+        finish([push()]);
         await oldRead;
         expect(manager.pushList.children).toHaveLength(0);
         expect(store.responses.size).toBe(0);

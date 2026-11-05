@@ -66,16 +66,14 @@ func TestSyncPushesEndpointListsAddressedMessages(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 
-	var body struct {
-		Messages []SyncPushMessage `json:"messages"`
-	}
+	var body []SyncPushMessage
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(body.Messages) != 1 {
-		t.Fatalf("got %d messages, want 1", len(body.Messages))
+	if len(body) != 1 {
+		t.Fatalf("got %d messages, want 1", len(body))
 	}
-	got := body.Messages[0]
+	got := body[0]
 	if got.MessageID != "m-1" || got.Recipient != "pane-b" || got.Value != "hello from a" {
 		t.Fatalf("message = %+v", got)
 	}
@@ -94,20 +92,18 @@ func TestSyncPushesTruncatesLargeValues(t *testing.T) {
 	rec := httptest.NewRecorder()
 	app.handleSyncPushes(rec, httptest.NewRequest(http.MethodGet, "/api/sync/pushes", nil))
 
-	var body struct {
-		Messages []SyncPushMessage `json:"messages"`
-	}
+	var body []SyncPushMessage
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(body.Messages) != 1 {
-		t.Fatalf("got %d messages, want 1", len(body.Messages))
+	if len(body) != 1 {
+		t.Fatalf("got %d messages, want 1", len(body))
 	}
-	if !body.Messages[0].Truncated {
+	if !body[0].Truncated {
 		t.Fatal("oversized value was not marked truncated")
 	}
-	if len(body.Messages[0].Value) != maxSyncPushValueBytes {
-		t.Fatalf("value length = %d, want %d", len(body.Messages[0].Value), maxSyncPushValueBytes)
+	if len(body[0].Value) != maxSyncPushValueBytes {
+		t.Fatalf("value length = %d, want %d", len(body[0].Value), maxSyncPushValueBytes)
 	}
 }
 
@@ -124,13 +120,11 @@ func TestSyncPushesTruncatesOnARuneBoundary(t *testing.T) {
 	rec := httptest.NewRecorder()
 	app.handleSyncPushes(rec, httptest.NewRequest(http.MethodGet, "/api/sync/pushes", nil))
 
-	var body struct {
-		Messages []SyncPushMessage `json:"messages"`
-	}
+	var body []SyncPushMessage
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	got := body.Messages[0]
+	got := body[0]
 	if !got.Truncated {
 		t.Fatal("oversized value was not marked truncated")
 	}
@@ -151,14 +145,12 @@ func TestSyncPushesWithoutMeshIsEmpty(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	var body struct {
-		Messages []SyncPushMessage `json:"messages"`
-	}
+	var body []SyncPushMessage
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(body.Messages) != 0 {
-		t.Fatalf("got %d messages, want none", len(body.Messages))
+	if len(body) != 0 {
+		t.Fatalf("got %d messages, want none", len(body))
 	}
 }
 
