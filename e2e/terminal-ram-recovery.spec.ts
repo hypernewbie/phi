@@ -5,6 +5,7 @@ import type {
     TerminalServerFrame as TerminalServerMessage,
 } from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
+import { readReplay } from './_terminal-replay.js';
 
 // Adverse-network recovery for the RAM window. A slow or refused replay
 // must never block input, resend a request pair the server already
@@ -245,53 +246,64 @@ test('a refused prefix resumes at the certified floor', async ({ page }) => {
     const pane = await spawnShell();
     await page.setViewportSize({ width: 1440, height: 900 });
     await installTermTracker(page);
-    const current = watchAttach(page, pane);
     const requests: string[] = [];
-    const floorBytes = 100;
+    const holder: { release: (() => void) | null } = { release: null };
+    const gate = new Promise<void>((resolve) => {
+        holder.release = resolve;
+    });
+    let delayed = false;
+    await page.route('**/api/terminals/*/replay?*', async (route) => {
+        requests.push(route.request().url());
+        if (!delayed) {
+            delayed = true;
+            await gate;
+        }
+        await route.continue();
+    });
+    const refused: number[] = [];
+    page.on('response', (response) => {
+        if (response.url().includes('/replay?') && response.status() === 409)
+            refused.push(response.status());
+    });
     await page.goto(phi.url);
     const screen = page.locator(`#term-${pane} .xterm-screen`);
     await expect(screen).toBeVisible({ timeout: 30_000 });
+    await expect.poll(() => delayed).toBe(true);
     await screen.click();
-    await page.keyboard.type('echo FIRST-PASS-MARK');
+    await page.keyboard.type(
+        'yes "floor padding padding padding" | head -4000; echo "FLOOR-READY-$(printf END)"',
+    );
     await page.keyboard.press('Enter');
+
+    // Evict the captured prefix while its read is held. Use the real
+    // server's byte/resize pair, not a guessed cursor inside shell output.
+    let floorBytes = 0;
+    await expect
+        .poll(
+            async () => {
+                try {
+                    const tail = await readReplay(phi.url, pane);
+                    floorBytes = tail.oldest;
+                    return tail.data.toString('utf8');
+                } catch (error) {
+                    // The producer can move the floor between attach and read.
+                    if (
+                        error instanceof Error &&
+                        error.message === 'replay failed: 409'
+                    )
+                        return '';
+                    throw error;
+                }
+            },
+            { timeout: 30_000 },
+        )
+        .toContain('FLOOR-READY-END');
+    expect(floorBytes).toBeGreaterThan(0);
+    holder.release?.();
+    await expect.poll(() => refused.length).toBe(1);
     await expect
         .poll(() => paneBody(page, pane), { timeout: 30_000 })
-        .toContain('FIRST-PASS-MARK');
-
-    // Only the prefix is refused: the certified floor still has head bytes
-    // behind it, so a client that resumes instead of restarting asks for
-    // exactly that floor.
-    await page.route('**/api/terminals/*/replay?*', async (route) => {
-        const url = route.request().url();
-        requests.push(url);
-        const from = Number(new URL(url).searchParams.get('from') ?? '0');
-        const attach = current.current;
-        if (from >= floorBytes || !attach?.eventCursor) {
-            await route.continue();
-            return;
-        }
-        await route.fulfill({
-            status: 409,
-            headers: {
-                'X-Phi-Replay-Window': JSON.stringify({
-                    epoch: attach.epoch,
-                    oldest: floorBytes,
-                    head: attach.head,
-                    floor_cols: 100,
-                    floor_rows: 30,
-                    head_cols: 100,
-                    head_rows: 30,
-                    floor_event_cursor: `v1.${attach.epoch}.${floorBytes}.0`,
-                    event_cursor: attach.eventCursor,
-                }),
-            },
-            body: 'replay position expired',
-        });
-    });
-    await page.reload();
-    await expect
-        .poll(() => requests.length, { timeout: 30_000 })
-        .toBeGreaterThan(0);
+        .toContain('FLOOR-READY-END');
     // One refusal, then a resume from the floor: never the same pair twice.
     await expect
         .poll(
