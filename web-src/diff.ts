@@ -4415,12 +4415,96 @@ export class DiffController {
         });
     }
 
+    /** Split a raw patch into per-file sections at each `diff --git`
+     *  line; anything before the first header stays its own chunk. Each
+     *  chunk records the binary markers diff2html recognises, so binary
+     *  sections can be dropped before rendering. Re-joining the kept
+     *  chunks with `\n` reproduces the original patch byte for byte. */
+    _splitDiffChunks(rawDiffText: string): Array<{
+        text: string;
+        name: string;
+        isBinary: boolean;
+    }> {
+        const chunks: Array<{
+            lines: string[];
+            name: string;
+            isBinary: boolean;
+        }> = [];
+        for (const line of rawDiffText.split('\n')) {
+            const header = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
+            if (header) {
+                chunks.push({
+                    lines: [line],
+                    name: header[2],
+                    isBinary: false,
+                });
+                continue;
+            }
+            if (chunks.length === 0) {
+                chunks.push({ lines: [line], name: '', isBinary: false });
+                continue;
+            }
+            const current = chunks[chunks.length - 1];
+            if (
+                /^Binary files .* differ/.test(line) ||
+                /^GIT binary patch/.test(line)
+            ) {
+                current.isBinary = true;
+            }
+            current.lines.push(line);
+        }
+        return chunks.map((chunk) => ({
+            text: chunk.lines.join('\n'),
+            name: chunk.name,
+            isBinary: chunk.isBinary,
+        }));
+    }
+
+    /** One muted line above the diff naming the skipped binary files.
+     *  Names are capped so a build-artifact dump cannot flood the panel. */
+    _insertBinaryNote(binaryNames: string[]): void {
+        const note = document.createElement('div');
+        note.className = 'git-binary-note';
+        const shown = binaryNames.slice(0, 5).join(', ');
+        const rest = binaryNames.length - 5;
+        note.textContent = `Skipped ${binaryNames.length} binary file${
+            binaryNames.length === 1 ? '' : 's'
+        }: ${shown}${rest > 0 ? `, +${rest} more` : ''}`;
+        this.diffModalBody?.prepend(note);
+    }
+
     renderRichDiff(rawDiffText: string): void {
         if (!rawDiffText?.trim()) {
             this.diffModalBody!.innerHTML =
                 '<div style="padding: 40px; text-align: center; color: var(--text-muted); font-family: var(--font-mono);">No changes detected.</div>';
             // The project buttons stay usable with no diff: opening the
             // project root is independent of which commit is selected.
+            this._refreshDiffProjectActions();
+            return;
+        }
+
+        // Binary sections are dropped before diff2html sees them: a
+        // binary blob has no line structure to render. Filtering the
+        // patch text (not the rendered DOM) keeps parsed file records
+        // and wrapper indices aligned, so VS Code actions and review
+        // overlays still pair with the right file.
+        const binaryNames: string[] = [];
+        const renderText = this._splitDiffChunks(rawDiffText)
+            .filter((chunk) => {
+                if (!chunk.isBinary) return true;
+                if (chunk.name) binaryNames.push(chunk.name);
+                return false;
+            })
+            .map((chunk) => chunk.text)
+            .join('\n');
+
+        if (!renderText.trim()) {
+            const message =
+                binaryNames.length > 0
+                    ? `Only binary changes (${binaryNames.length}) \u2014 not shown.`
+                    : 'No changes detected.';
+            this.diffModalBody!.innerHTML =
+                `<div style="padding: 40px; text-align: center; color: var(--text-muted); font-family: var(--font-mono);">${message}</div>`;
             this._refreshDiffProjectActions();
             return;
         }
@@ -4438,7 +4522,7 @@ export class DiffController {
         const parsedFiles = (() => {
             try {
                 if (typeof window.Diff2Html?.parse !== 'function') return [];
-                return window.Diff2Html.parse(rawDiffText) as Array<{
+                return window.Diff2Html.parse(renderText) as Array<{
                     newName?: string;
                     oldName?: string;
                     isDeleted?: boolean;
@@ -4452,7 +4536,7 @@ export class DiffController {
             }
         })();
 
-        const diffHtml = window.Diff2Html.html(rawDiffText, {
+        const diffHtml = window.Diff2Html.html(renderText, {
             drawFileList: !isDrawer,
             matching: 'lines',
             outputFormat,
@@ -4497,6 +4581,10 @@ export class DiffController {
         this.diffModalBody?.replaceChildren(
             ...Array.from(parsed.body.childNodes),
         );
+
+        if (binaryNames.length > 0) {
+            this._insertBinaryNote(binaryNames);
+        }
 
         if (this.syntaxHighlightEnabled) {
             this._applySyntaxHighlighting();

@@ -7513,12 +7513,19 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     position: relative;
 }
 
-#diff-modal .git-view-cache-note {
+#diff-modal .git-view-cache-note,
+#diff-modal .git-binary-note {
     padding: 6px 12px;
     border-bottom: 1px solid var(--bg-border);
     color: var(--text-muted);
     font-family: var(--font-mono);
     font-size: calc(12px * var(--ui-scale));
+}
+
+/* Skipped-binary names can be long unbroken paths; keep the note
+   inside the modal instead of stretching it sideways. */
+#diff-modal .git-binary-note {
+    overflow-wrap: anywhere;
 }
 
 /* When the file list is hidden, the diff action bar still shows —

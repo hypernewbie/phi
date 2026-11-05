@@ -233,6 +233,17 @@ func (a *API) HandleGetDiff(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// binarySampleBytes is the sample Git inspects in buffer_is_binary(). A NUL
+// byte inside it marks the blob binary.
+const binarySampleBytes = 8000
+
+func isBinaryContent(content []byte) bool {
+	if len(content) > binarySampleBytes {
+		content = content[:binarySampleBytes]
+	}
+	return bytes.IndexByte(content, 0) >= 0
+}
+
 func appendUntrackedDiff(out []byte, fname string, content []byte, ansi bool) []byte {
 	trimmed := strings.TrimRight(string(content), "\n")
 	lines := []string{}
@@ -268,6 +279,13 @@ func appendUntrackedDiff(out []byte, fname string, content []byte, ansi bool) []
 
 	out = append(out, []byte(header(fmt.Sprintf("diff --git a/%s b/%s\n", fname, fname)))...)
 	out = append(out, []byte("new file mode 100644\n")...)
+	if isBinaryContent(content) {
+		// Binary bytes are not lines. Emit the marker Git uses for
+		// binary blobs so the diff UI shows one "Binary file" row
+		// instead of raw bytes spread over added lines.
+		out = append(out, []byte(header(fmt.Sprintf("Binary files /dev/null and b/%s differ\n", fname)))...)
+		return out
+	}
 	out = append(out, []byte(oldFile("--- /dev/null\n"))...)
 	out = append(out, []byte(newFile(fmt.Sprintf("+++ b/%s\n", fname)))...)
 	out = append(out, []byte(fmt.Sprintf("@@ -0,0 +1,%d @@\n", lineCount))...)
