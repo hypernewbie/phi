@@ -2200,6 +2200,7 @@ function getAccessState() {
         memoryOnly,
         hostSession,
         accessExpiresAt,
+        refreshAbsoluteExpiresAt,
         loggedOut,
     } = activeAuthState();
     return {
@@ -2210,6 +2211,7 @@ function getAccessState() {
         memoryOnly,
         hostSession,
         accessExpiresAt,
+        refreshAbsoluteExpiresAt,
         loggedOut,
     };
 }

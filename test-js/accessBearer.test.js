@@ -1791,8 +1791,13 @@ describe('refresh ownership', () => {
         });
         mockAuth((url) => (url === '/api/auth/v2/logout' ? held : undefined));
         const logout = logoutAccess();
-        // A rotation of the same session: new token, same refresh family.
-        __test__.receiveBundle(siblingBundle('jwt-rotated', 7200));
+        // A rotation of the same session: new token, same refresh family. Pin
+        // the family to the live one so the setup cannot straddle a wall-clock
+        // second boundary.
+        const rotation = siblingBundle('jwt-rotated', 7200);
+        rotation.bundle.refreshAbsoluteExpiresAt =
+            __test__.getAccessState().refreshAbsoluteExpiresAt;
+        __test__.receiveBundle(rotation);
         expect(__test__.getAccessState().accessToken).toBe('jwt-rotated');
         release();
         await expect(logout).resolves.toEqual({ ok: true });
@@ -1814,6 +1819,8 @@ describe('refresh ownership', () => {
         release();
         await expect(logout).resolves.toEqual({ ok: true });
         expect(__test__.getAccessState().accessToken).toBe('jwt-new-signin');
+        // The stale answer must not flip the page to signed-out either.
+        expect(__test__.getAccessState().loggedOut).toBe(false);
     });
 
     it('ignores an older bundle and a foreign-origin bundle', async () => {

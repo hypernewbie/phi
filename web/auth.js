@@ -1889,7 +1889,7 @@ function setReload(fn) {
     reloadPage = fn;
 }
 function getAccessState() {
-    const { selectedProtocol, accessEnabled, accessToken, persistedToken, memoryOnly, hostSession, accessExpiresAt, loggedOut, } = activeAuthState();
+    const { selectedProtocol, accessEnabled, accessToken, persistedToken, memoryOnly, hostSession, accessExpiresAt, refreshAbsoluteExpiresAt, loggedOut, } = activeAuthState();
     return {
         selectedProtocol,
         accessEnabled,
@@ -1898,6 +1898,7 @@ function getAccessState() {
         memoryOnly,
         hostSession,
         accessExpiresAt,
+        refreshAbsoluteExpiresAt,
         loggedOut,
     };
 }
