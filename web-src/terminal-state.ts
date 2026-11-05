@@ -157,7 +157,11 @@ export interface TerminalInternals {
         };
         viewport?: { syncScrollArea(force?: boolean): void };
         coreService?: { onUserInput?(cb: () => void): void };
-        _charSizeService?: { measure?(): void };
+        _charSizeService?: {
+            measure?(): void;
+            width?: number;
+            height?: number;
+        };
     };
 }
 

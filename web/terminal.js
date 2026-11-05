@@ -627,6 +627,39 @@ function isAbortError(error) {
 function internals(term) {
     return (term ?? {});
 }
+/** Two renderers, two cell metrics. The DOM renderer keeps the fractional
+ *  advance it measures (8.4 px at the default 14 px font); the WebGL renderer
+ *  quantizes it to whole device pixels. A tab switch disposes the GL addon to
+ *  release its framebuffer and re-creates it on return, so each switch
+ *  proposed the grid through the other renderer: five columns either way, a
+ *  real PTY resize, SIGWINCH, and a full application repaint with no layout
+ *  change behind it. Applying WebGL's floor-width/ceil-height quantization to
+ *  the shared measurement makes both renderers propose the grid the visible
+ *  one is already showing. */
+export function pinCharMetrics(term) {
+    const service = internals(term)._core?._charSizeService;
+    if (!service || typeof service.width !== 'number')
+        return;
+    if (Object.getOwnPropertyDescriptor(service, 'width')?.get)
+        return;
+    const quantize = (field, value) => {
+        if (!(value > 0))
+            return value;
+        const dpr = window.devicePixelRatio || 1;
+        const round = field === 'width' ? Math.floor : Math.ceil;
+        return round(value * dpr) / dpr;
+    };
+    for (const field of ['width', 'height']) {
+        let measured = service[field] ?? 0;
+        Object.defineProperty(service, field, {
+            configurable: true,
+            get: () => quantize(field, measured),
+            set: (value) => {
+                measured = value;
+            },
+        });
+    }
+}
 export class TabManager {
     // Declared explicitly: TypeScript does not infer instance fields from
     // constructor assignments, and every member below is part of the shape
@@ -3834,6 +3867,9 @@ export class TabManager {
         catch (e) {
             console.error('[term] open failed:', e);
         }
+        // xterm builds its render services inside open(), so the shared cell
+        // measurement only exists from here on.
+        pinCharMetrics(tabInfo.term);
         // Prevent browser viewport jump when xterm focuses its hidden
         // textarea (moved out of createTab so hot tabs can open late).
         const textarea = tabInfo.termContainer.querySelector('textarea.xterm-helper-textarea');

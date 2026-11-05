@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { setupDomHarness } from './_dom.js';
-import { TabManager } from '../web/terminal.js';
+import { TabManager, pinCharMetrics } from '../web/terminal.js';
 
 // Brute-force-correct fit path: a fit that changes no geometry must not
 // run scroll capture, _spamScroll timers, or a backend SIGWINCH
@@ -171,5 +171,74 @@ describe('fitActiveTerminal skips same-geometry fits', () => {
         const c2 = ctx(dead);
         c2.fitActiveTerminal();
         expect(dead.fitAddon.fit).not.toHaveBeenCalled();
+    });
+});
+
+// The DOM renderer keeps a fractional cell (8.4 px at 14 px) while the
+// WebGL renderer quantizes it to whole device pixels. Disposing the GL addon
+// on a tab switch therefore changed the proposed grid by five columns, which
+// resized the PTY and repainted the application on every switch. Applying
+// WebGL's quantization to the shared measurement makes both renderers agree.
+describe('pinCharMetrics quantizes the shared cell measurement', () => {
+    function termWith(width, height = 18.2) {
+        const service = { width, height, measure: vi.fn() };
+        return { _core: { _charSizeService: service } };
+    }
+
+    const originalDpr = Object.getOwnPropertyDescriptor(
+        window,
+        'devicePixelRatio',
+    );
+    function setDpr(value) {
+        Object.defineProperty(window, 'devicePixelRatio', {
+            configurable: true,
+            value,
+        });
+    }
+
+    afterEach(() => {
+        if (originalDpr)
+            Object.defineProperty(window, 'devicePixelRatio', originalDpr);
+    });
+
+    it('matches WebGL device-pixel quantization on both axes', () => {
+        setDpr(1);
+        const term = termWith(8.4);
+        pinCharMetrics(term);
+        const service = term._core._charSizeService;
+        expect(service.width).toBe(8);
+        expect(service.height).toBe(19);
+    });
+
+    it('floors width and ceils height on a 2x display', () => {
+        setDpr(2);
+        const term = termWith(8.4);
+        pinCharMetrics(term);
+        const service = term._core._charSizeService;
+        // WebGL: floor(8.4 * 2) / 2 and ceil(18.2 * 2) / 2.
+        expect(service.width).toBe(8);
+        expect(service.height).toBe(18.5);
+    });
+
+    it('keeps quantizing what a later measure() stores', () => {
+        setDpr(1);
+        const term = termWith(8.4);
+        pinCharMetrics(term);
+        const service = term._core._charSizeService;
+        service.width = 9.2;
+        expect(service.width).toBe(9);
+    });
+
+    it('is idempotent and leaves unmeasured values alone', () => {
+        setDpr(1);
+        const term = termWith(0, 0);
+        pinCharMetrics(term);
+        pinCharMetrics(term);
+        expect(term._core._charSizeService.width).toBe(0);
+        expect(term._core._charSizeService.height).toBe(0);
+    });
+
+    it('ignores terminals without a char size service', () => {
+        expect(() => pinCharMetrics({})).not.toThrow();
     });
 });
