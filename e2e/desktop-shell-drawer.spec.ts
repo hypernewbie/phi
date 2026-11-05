@@ -157,6 +157,19 @@ test('the shell header hamburger opens the body sessions drawer', async () => {
             .poll(bodyDrawer, { timeout: 15_000 })
             .toMatchObject({ open: false });
 
+        // The hamburger is a real button in the shell page, so the keyboard
+        // path must reach the same relay (Enter activates the click
+        // handler) without the drawer being pointer-only.
+        await hamburger.focus();
+        await shell.keyboard.press('Enter');
+        await expect
+            .poll(bodyDrawer, { timeout: 15_000 })
+            .toMatchObject({ open: true });
+        await shell.keyboard.press('Enter');
+        await expect
+            .poll(bodyDrawer, { timeout: 15_000 })
+            .toMatchObject({ open: false });
+
         // Wide window: no hamburger, and the drawer state is untouched.
         await resize(1440, 900);
         await expect(hamburger).toBeHidden({ timeout: 15_000 });
