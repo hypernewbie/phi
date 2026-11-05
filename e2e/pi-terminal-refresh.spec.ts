@@ -63,6 +63,7 @@ async function paneBridge(
 }
 
 interface TrackedTerminal {
+    write(data: string | Uint8Array, callback?: () => void): void;
     element?: HTMLElement;
     cols: number;
     rows: number;
@@ -658,6 +659,9 @@ test('a withheld receipt falls back once and never retries', async ({
         // Phi-to-Pi frames still flow; the acknowledgement does not.
         const resume = proxy.pausePiToPhi();
         const receiptsBefore = viewer.receipts.length;
+        const fallbackPage = page.waitForResponse((res) =>
+            res.url().includes(`/api/terminals/${pane}/replay?`),
+        );
         await page.locator('#refresh-console-btn').click();
         // The repaint itself repaints: the screen returns before the ack.
         await expect
@@ -671,26 +675,31 @@ test('a withheld receipt falls back once and never retries', async ({
             .toBe(visibleRows(reference));
         // Output that arrives before the missing receipt does not end the
         // episode: the repaint is unacknowledged, so no receipt exists yet.
-        // Output that arrives before the missing receipt does not end the
-        // episode: the repaint is unacknowledged, so no receipt exists yet.
         expect(viewer.receipts.slice(receiptsBefore)).toEqual([]);
         // The bounded budget expires and asks for exactly one fallback
         // attach. Repaint bytes arriving first never renew the budget.
         await expect
             .poll(() => viewer.attaches.length, { timeout: 60_000 })
             .toBe(3);
-        await page.waitForTimeout(2000);
-        expect(viewer.attaches).toHaveLength(3);
-        expect(viewer.replayRequests.length).toBe(replays);
+        // The fallback must replay a certified prefix, not combine byte
+        // zero with the later ordinal left by the unconfirmed repaint.
+        expect((await fallbackPage).status()).toBe(200);
         await expect
             .poll(async () => (await screenState(page, pane))?.text ?? '', {
                 timeout: 30_000,
             })
             .toContain('COMPACT FIXTURE REPLY 5');
+        expect(visibleRows(await settledScreen(page, pane))).toBe(
+            visibleRows(reference),
+        );
+        await page.waitForTimeout(2000);
+        expect(viewer.attaches).toHaveLength(3);
+        expect(viewer.replayRequests).toHaveLength(replays + 1);
         resume();
         // The late receipt is stale: it cannot repaint, retry, or attach.
         await page.waitForTimeout(1500);
         expect(viewer.attaches).toHaveLength(3);
+        expect(viewer.replayRequests).toHaveLength(replays + 1);
         expect(viewer.problems).toEqual([]);
     } finally {
         await fixture.cleanup();

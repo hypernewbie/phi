@@ -131,18 +131,6 @@ func (w *replayWindow) dropExpiredMarkers() {
 	w.baseCols, w.baseRows = last.Cols, last.Rows
 	w.floorOrd += uint64(drop)
 	w.resizes = w.resizes[drop:]
-	w.compactMarkers()
-}
-
-// compactMarkers moves the retained tail back to the start of the slice
-// so repeated rollover does not grow the backing array.
-func (w *replayWindow) compactMarkers() {
-	if len(w.resizes) == 0 || cap(w.resizes) <= replayWindowResizeCap {
-		return
-	}
-	retained := make([]ResizeMarker, len(w.resizes))
-	copy(retained, w.resizes)
-	w.resizes = retained
 }
 
 // appendResize records a backend resize at the current head. A repeat of
@@ -160,24 +148,35 @@ func (w *replayWindow) appendResize(cols, rows uint16) (ResizeMarker, uint64, bo
 		return ResizeMarker{AtSeq: pos, Cols: cols, Rows: rows}, w.floorOrd, false
 	}
 	marker := ResizeMarker{AtSeq: pos, Cols: cols, Rows: rows}
-	w.resizes = append(w.resizes, marker)
-	if len(w.resizes) > replayWindowResizeCap {
-		drop := len(w.resizes) - replayWindowResizeKeep
-		// The oldest retained marker defines the certified floor and its
-		// own geometry, so bytes below it are not replayed under a grid
-		// the server can no longer certify.
-		w.metaFloor = w.resizes[drop].AtSeq
-		w.baseCols, w.baseRows = w.resizes[drop].Cols, w.resizes[drop].Rows
-		w.floorOrd += uint64(drop)
-		w.resizes = w.resizes[drop:]
-		w.compactMarkers()
+	if w.ring == nil {
+		// With no retained bytes the baseline consumes every event.
+		w.baseCols, w.baseRows = cols, rows
+		w.floorOrd++
+		return marker, w.floorOrd, true
 	}
+	if len(w.resizes) == cap(w.resizes) && len(w.resizes) < replayWindowResizeCap {
+		// Expiry can slice away backing capacity. Refill a fixed-size
+		// allocation instead of letting append grow it past the cap.
+		retained := make([]ResizeMarker, len(w.resizes), replayWindowResizeCap)
+		copy(retained, w.resizes)
+		w.resizes = retained
+	}
+	if len(w.resizes) == replayWindowResizeCap {
+		drop := len(w.resizes) - replayWindowResizeKeep
+		last := w.resizes[drop-1]
+		w.metaFloor = max(w.metaFloor, last.AtSeq)
+		w.baseCols, w.baseRows = last.Cols, last.Rows
+		w.floorOrd += uint64(drop)
+		copy(w.resizes, w.resizes[drop:])
+		w.resizes = w.resizes[:replayWindowResizeKeep]
+	}
+	w.resizes = append(w.resizes, marker)
 	return marker, w.floorOrd + uint64(len(w.resizes)), true
 }
 
 // initialGeometry is the grid in effect at the replay floor.
 func (w *replayWindow) initialGeometry() (uint16, uint16) {
-	return w.baseCols, w.baseRows
+	return w.geometryAt(w.floor())
 }
 
 // geometryAt reports the grid in effect at pos.

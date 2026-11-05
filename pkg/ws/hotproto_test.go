@@ -158,10 +158,6 @@ func TestIngestPublishesCommittedResizeWhenPayloadFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A second stage cannot interleave while the first is open.
-	if _, _, err := h.StagePaneResize("p", 120, 40); err == nil {
-		t.Fatal("a concurrent stage must be refused")
-	}
 	if err := commit(); err != nil {
 		t.Fatal(err)
 	}

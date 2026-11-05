@@ -169,19 +169,33 @@ async function installTermTracker(page: Page): Promise<void> {
     });
 }
 
-const screenText = (page: Page, pane: string): Promise<string> =>
-    page.evaluate((id) => {
-        const w = window as unknown as ReplayWindow;
-        const term = w.replayTerms.find(
-            (t) => t.element?.closest('.term-container')?.id === `term-${id}`,
-        );
-        if (!term || w.replayPending !== 0) return '';
-        const buf = term.buffer.active;
-        const lines: string[] = [];
-        for (let i = 0; i < buf.length; i++)
-            lines.push(buf.getLine(i)?.translateToString(true) ?? '');
-        return lines.join('\n');
-    }, pane);
+const screenText = (
+    page: Page,
+    pane: string,
+    tailLines = 100,
+): Promise<string> =>
+    page.evaluate(
+        ({ id, tailLines }) => {
+            const w = window as unknown as ReplayWindow;
+            const term = w.replayTerms.find(
+                (t) =>
+                    t.element?.closest('.term-container')?.id === `term-${id}`,
+            );
+            if (!term || w.replayPending !== 0) return '';
+            const buf = term.buffer.active;
+            const lines: string[] = [];
+            // Marker polling only needs the tail. Copying 10,000 scrollback
+            // rows into every trace entry can dominate a full-window replay.
+            for (
+                let i = Math.max(0, buf.length - tailLines);
+                i < buf.length;
+                i++
+            )
+                lines.push(buf.getLine(i)?.translateToString(true) ?? '');
+            return lines.join('\n');
+        },
+        { id: pane, tailLines },
+    );
 
 // FNV-1a over every line's text plus every cell's colors and flags.
 // The Node reference below repeats this logic over headless xterm; keep
@@ -445,14 +459,17 @@ async function spawnReplayPane(
     return (await spawned.json()).pane_id as string;
 }
 
-test('raw replay matches an uninterrupted terminal past 32 MiB', async ({
+test('retained raw replay preserves split VT and UTF-8 after rollover', async ({
     page: pageA,
     request,
     browser,
 }) => {
     test.setTimeout(480_000);
     const phi = await startPhi({
-        config: { pi_bridge_no_inject: true },
+        // Keep this ordering/decoder regression small enough to complete
+        // within the real 10-second episode on slow CI. Full-size default
+        // capacity is checked separately; the producer still exceeds 32 MiB.
+        config: { pi_bridge_no_inject: true, replay_buffer_bytes: 64 << 10 },
         setup(dir) {
             const command = join(dir, 'raw-replay-backend');
             copyFileSync(FIXTURE, command);
@@ -595,9 +612,10 @@ test('raw replay matches an uninterrupted terminal past 32 MiB', async ({
                 '3',
             );
 
-            // A same-epoch reconnect preserves the parser and decoder,
-            // and settled viewers stop resizing.
-            await pageA.reload();
+            // Both viewers must replay the same current window: the split
+            // suffix moved the floor beyond B's earlier retained prefix.
+            // Comparing a fresh tail with older local scrollback is invalid.
+            await Promise.all([pageA.reload(), pageB.reload()]);
             await expect.poll(statesMatch, { timeout: 120_000 }).toBe(true);
             const sizeBefore = await screenState(pageB, pane);
             await new Promise((r) => setTimeout(r, 2000));
@@ -643,7 +661,7 @@ test('an exit during bootstrap retains its complete final output', async ({
         await expect
             .poll(() => screenText(page, pane), { timeout: 60_000 })
             .toContain('EXIT_TAIL_MARK');
-        expect(await screenText(page, pane)).toContain('EXIT_LINE_0001');
+        expect(await screenText(page, pane, 10000)).toContain('EXIT_LINE_0001');
         expect(seen.attaches.length).toBeGreaterThanOrEqual(1);
         expect(seen.stateRequests).toHaveLength(0);
         expect(seen.problems).toEqual([]);

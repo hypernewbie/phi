@@ -171,9 +171,7 @@ func (app *Server) Run(ctx context.Context) error {
 		app.bridge.LoadConfig = app.configStore().LoadWithError
 	}
 	app.restoreSavedTabs()
-	// No retention sweep runs: the v3 journal never evicts, and the
-	// retired v2 sweep must not touch pre-upgrade files. Expiry for
-	// closed v3 panes arrives with the VT removal.
+	app.hub.StartRAMRetentionSweeps()
 	app.titles = NewPiTerminalTitleService(app.pty, app.hub)
 	app.titles.Start()
 

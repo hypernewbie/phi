@@ -137,10 +137,6 @@ function jsonBody(value) {
         ? value
         : {};
 }
-/** A permanent history failure is never retried: the range is gone. */
-function isPermanentHistoryError(error) {
-    return Boolean(error?.historyPermanent);
-}
 function chrome(id) {
     return document.getElementById(id);
 }
@@ -2671,14 +2667,7 @@ export class TabManager {
     // Recovery reads exact source spans with their current resize metadata.
     // No negotiated cached prefix, hashes, or omitted response bodies.
     async _fetchReplayPages(paneId, from, through, epoch, fences = {}) {
-        for (let attempt = 0; attempt < 3; attempt++) {
-            const range = await this._fetchReplayPagesOnce(paneId, from, through, epoch, fences.signal, fences);
-            if (range || fences.signal?.aborted)
-                return range;
-            if (attempt < 2)
-                await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
-        }
-        return null;
+        return this._fetchReplayPagesOnce(paneId, from, through, epoch, fences.signal, fences);
     }
     /** Parses the certified-window header, or null when it is absent or
         malformed. A bad header never authorizes guessing a floor. */
@@ -2698,13 +2687,27 @@ export class TabManager {
                 !size(v.floor_cols) ||
                 !size(v.floor_rows) ||
                 !size(v.head_cols) ||
-                !size(v.head_rows))
+                !size(v.head_rows) ||
+                !this._replayPosition(v.floor_event_cursor, v.epoch, v.oldest) ||
+                !this._replayPosition(v.event_cursor, v.epoch, v.head) ||
+                Number(v.floor_event_cursor.split('.').at(-1)) >
+                    Number(v.event_cursor.split('.').at(-1)))
                 return null;
             return v;
         }
         catch (_e) {
             return null;
         }
+    }
+    _replayPosition(cursor, epoch, seq) {
+        if (typeof cursor !== 'string' ||
+            cursor.length > 128 ||
+            !/^v1\.\d+\.\d+\.\d+$/.test(cursor))
+            return false;
+        const parts = cursor.split('.').slice(1).map(Number);
+        return (parts.every(Number.isSafeInteger) &&
+            parts[0] === epoch &&
+            parts[1] === seq);
     }
     _historyPermanentError(message) {
         const error = new Error(message);
@@ -2713,21 +2716,22 @@ export class TabManager {
     }
     async _fetchReplayPagesOnce(paneId, from, through, epoch, requestSignal, fences = {}) {
         const { throughCursor, afterCursor, latest } = fences;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), Math.max(0, (fences.deadline ?? Date.now() + REPLAY_RECOVERY_BUDGET_MS) -
+            Date.now()));
+        const abortOuter = () => controller.abort();
+        if (requestSignal?.aborted)
+            controller.abort();
+        else
+            requestSignal?.addEventListener('abort', abortOuter, {
+                once: true,
+            });
         try {
             // Bound each attempt with a timer-driven controller, so old
             // browsers without AbortSignal.timeout/any still get a deadline
             // instead of an unbounded fetch. Failure never authorizes
             // skipping bytes: callers keep the stream held and reconnect
             // for a fresh head.
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 10000);
-            const abortOuter = () => controller.abort();
-            if (requestSignal) {
-                if (requestSignal.aborted)
-                    controller.abort();
-                else
-                    requestSignal.addEventListener('abort', abortOuter);
-            }
             const signal = controller.signal;
             const validCursor = (v) => typeof v === 'string' &&
                 v.length <= 128 &&
@@ -2772,7 +2776,7 @@ export class TabManager {
                     // the caller can resume at a floor instead of guessing.
                     const window = this._parseReplayWindow(res.headers?.get?.('X-Phi-Replay-Window') ?? null);
                     const error = this._historyPermanentError(`Terminal history unavailable (${res.status}); the requested range was not skipped.`);
-                    if (window)
+                    if (res.status === 409 && window && window.epoch === epoch)
                         error.replayWindow = window;
                     throw error;
                 }
@@ -2972,6 +2976,10 @@ export class TabManager {
                 throw error;
             return null;
         }
+        finally {
+            clearTimeout(timer);
+            requestSignal?.removeEventListener('abort', abortOuter);
+        }
     }
     // Attaches the hot protocol's data/gap callbacks onto a pane's socket
     // options. Returns the PTYWebSocketOptions object for the ctor.
@@ -2980,9 +2988,17 @@ export class TabManager {
     _hotOptions(tabInfo) {
         return {
             hot: true,
-            onAttachHead: (info) => this._onAttachHead(tabInfo, info),
-            onGap: (from, to) => this._onLiveGap(tabInfo, from, to),
-            onRefreshResult: (result) => this._onRefreshResult(tabInfo, tabInfo.ws, result),
+            onAttachHead: (info, socket) => {
+                if (socket && socket !== tabInfo.ws)
+                    return;
+                return this._onAttachHead(tabInfo, info);
+            },
+            onGap: (from, to, socket) => {
+                if (socket && socket !== tabInfo.ws)
+                    return;
+                return this._onLiveGap(tabInfo, from, to);
+            },
+            onRefreshResult: (result, socket) => this._onRefreshResult(tabInfo, socket ?? tabInfo.ws, result),
         };
     }
     async _onAttachHead(tabInfo, info) {
@@ -2994,9 +3010,21 @@ export class TabManager {
             if (tabInfo._refreshRequest.timer)
                 clearTimeout(tabInfo._refreshRequest.timer);
             tabInfo._refreshRequest = null;
+            if (tabInfo._recovery)
+                tabInfo._recovery.suppressFastPath = true;
         }
         const prevEpoch = tabInfo.paneEpoch;
         const samePane = prevEpoch !== undefined && prevEpoch === info.epoch;
+        tabInfo._attachHead = info;
+        if (prevEpoch !== undefined && !samePane) {
+            this._finishRecoveryEpisode(tabInfo);
+            tabInfo._limitedRecovery = false;
+        }
+        if (tabInfo._limitedRecovery ||
+            (tabInfo._recovery && Date.now() >= tabInfo._recovery.deadline)) {
+            this._enterLimitedRecovery(tabInfo, true);
+            return;
+        }
         if (!samePane || !tabInfo._termOpened) {
             tabInfo._replayHistorical =
                 !!tabInfo._termOpened || !tabInfo._freshReplay;
@@ -3051,7 +3079,7 @@ export class TabManager {
             // the terminal now; the retained prefix replays in the
             // background. First paint is not gated on the network.
             try {
-                tabInfo.term.resize(info.initialCols, info.initialRows);
+                tabInfo.term.resize(info.floorCols ?? info.initialCols, info.floorRows ?? info.initialRows);
             }
             catch (_e) {
                 /* default size; post-open fit corrects it */
@@ -3112,8 +3140,23 @@ export class TabManager {
             }
             tabInfo._streamDecoder = pty.decoder ?? null;
             tabInfo.paneEpoch = info.epoch;
+            // A certified floor only moves forward for one lifetime; a
+            // reconnect must not re-open a prefix an earlier page refused.
             tabInfo.paneOldest = info.oldest;
             tabInfo._floorCursor = info.floorEventCursor;
+            if (from < info.oldest || tabInfo._recovery?.suppressFastPath) {
+                tabInfo._replayHistorical = true;
+                tabInfo._historicalReplayFence = {
+                    head: info.head,
+                    cursor: info.eventCursor,
+                };
+                tabInfo._replayBaseline = {
+                    cols: info.floorCols ?? info.initialCols,
+                    rows: info.floorRows ?? info.initialRows,
+                };
+                this._bootstrappedRelease(tabInfo, pty, 0, info.head, info.eventCursor);
+                return;
+            }
             if (from >= 0 && from <= info.head) {
                 this._bootstrappedRelease(tabInfo, pty, from, info.head, info.eventCursor);
             }
@@ -3132,8 +3175,8 @@ export class TabManager {
         pty.decoder = new TextDecoder('utf-8');
         tabInfo._streamDecoder = pty.decoder;
         tabInfo._replayBaseline = {
-            cols: info.initialCols,
-            rows: info.initialRows,
+            cols: info.floorCols ?? info.initialCols,
+            rows: info.floorRows ?? info.initialRows,
         };
         tabInfo.paneEpoch = info.epoch;
         tabInfo.paneOldest = info.oldest;
@@ -3170,9 +3213,7 @@ export class TabManager {
     // replacement sockets: a WS open or a HEAD adoption never renews it.
     _beginRecoveryEpisode(tabInfo) {
         const rec = tabInfo._recovery;
-        if (rec &&
-            Date.now() <= rec.deadline &&
-            rec.attempts < REPLAY_RECOVERY_ATTEMPTS)
+        if (rec)
             return rec;
         tabInfo._recovery = {
             deadline: Date.now() + REPLAY_RECOVERY_BUDGET_MS,
@@ -3224,7 +3265,7 @@ export class TabManager {
             return;
         if (pending.timer)
             clearTimeout(pending.timer);
-        const remaining = Math.max(0, (tabInfo._recovery?.deadline ?? Date.now()) - Date.now());
+        const remaining = Math.max(0, Math.min(tabInfo._recovery?.deadline ?? Date.now(), Date.now() + 3000) - Date.now());
         pending.timer = setTimeout(() => {
             if (tabInfo._refreshRequest !== pending)
                 return;
@@ -3248,7 +3289,19 @@ export class TabManager {
         if (receipt.outcome === 'dispatched') {
             // One accepted repaint for this window. Live delivery continues;
             // the episode ends only once a drained frame passes the head.
+            if (pending.dispatched)
+                return;
             pending.dispatched = true;
+            if ((tabInfo.drainedSeq ?? 0) > pending.head) {
+                this._finishRecoveryEpisode(tabInfo);
+            }
+            else {
+                pending.timer = setTimeout(() => {
+                    if (tabInfo._refreshRequest === pending)
+                        this._fallbackAfterRefresh(tabInfo);
+                }, Math.max(0, (tabInfo._recovery?.deadline ?? Date.now()) -
+                    Date.now()));
+            }
             const key = `${tabInfo.paneEpoch}:${pending.head}:${tabInfo.term?.cols}x${tabInfo.term?.rows}`;
             tabInfo._redrawnKey = key;
             tabInfo._redraws = (tabInfo._redraws ?? 0) + 1;
@@ -3273,33 +3326,48 @@ export class TabManager {
         }
         rec.suppressFastPath = true;
         rec.attempts += 1;
+        rec.socket = null;
         this.reconnectTab(tabInfo, { auto: true });
+    }
+    // The start spinner covers the pane until the first write. Recovery can
+    // finish with an empty screen (refused history, zero-byte window), and a
+    // spinner parked over a usable terminal blocks the click that focuses it.
+    _dismissTabLoader(tabInfo) {
+        if (!tabInfo.loaderEl)
+            return;
+        const loader = tabInfo.loaderEl;
+        tabInfo.loaderEl = null;
+        tabInfo.hasStarted = true;
+        loader.remove();
     }
     // Limited recovery: keep the last view and input, stop automatic
     // history recovery, and continue from the certified head. This is an
     // explicit fallback, never a claim that missing bytes were parsed.
-    _enterLimitedRecovery(tabInfo) {
-        const head = tabInfo._refreshRequest?.head ?? tabInfo.queuedSeq ?? 0;
-        const pty = tabInfo.ws;
+    _enterLimitedRecovery(tabInfo, certifiedAttach = false) {
+        const notify = !tabInfo._limitedRecovery;
+        tabInfo._limitedRecovery = true;
         this._finishRecoveryEpisode(tabInfo);
-        try {
-            this._resetPaneBuffer(tabInfo);
-        }
-        catch (e) {
-            console.error('[term] limited-recovery reset failed:', e);
-        }
-        tabInfo.queuedSeq = head;
-        tabInfo.drainedSeq = head;
-        if (pty) {
+        tabInfo._replayAbort?.abort();
+        tabInfo._bootstrapGen = (tabInfo._bootstrapGen ?? 0) + 1;
+        tabInfo._bootstrapGate = null;
+        const pty = tabInfo.ws;
+        const info = tabInfo._attachHead;
+        if (certifiedAttach && !tabInfo.isDead && pty?.mode === 'hot' && info) {
+            tabInfo.paneEpoch = info.epoch;
+            tabInfo.queuedSeq = tabInfo.drainedSeq = info.head;
+            tabInfo._replayCursor = info.eventCursor;
             pty.decoder = new TextDecoder('utf-8');
             tabInfo._streamDecoder = pty.decoder;
-            try {
-                pty.release?.();
-            }
-            catch (_e) { }
+            pty.adoptState?.(info.head);
+            this._dismissTabLoader(tabInfo);
+            pty.release?.();
         }
-        this._fitVisibleTerminal(tabInfo);
-        this.app?.showToast?.('History could not be recovered; showing live output only.', { type: 'info', title: 'Terminal' });
+        else if (!tabInfo.isDead) {
+            pty?.ws?.close?.();
+        }
+        this._hideReplayProgress(tabInfo);
+        if (notify)
+            this.app?.showToast?.('History could not be recovered; showing live output only.', { type: 'info', title: 'Terminal' });
     }
     // Replays the raw journal from `from` to the attach head in the
     // background, then releases live delivery. Aborted silently when the
@@ -3308,6 +3376,16 @@ export class TabManager {
     // attach-time socket only: a reconnect swaps tabInfo.ws, and releasing
     // a stale socket would flush its orphaned frames into the new stream.
     _bootstrappedRelease(tabInfo, pty, from, head, throughCursor) {
+        const rec = this._beginRecoveryEpisode(tabInfo);
+        if (rec.socket && rec.socket !== pty)
+            rec.attempts++;
+        rec.socket = pty;
+        if (rec.attempts > REPLAY_RECOVERY_ATTEMPTS ||
+            Date.now() >= rec.deadline) {
+            this._enterLimitedRecovery(tabInfo);
+            return;
+        }
+        tabInfo._replayAbort?.abort();
         // Generation counters serialize overlapping bootstraps on one
         // socket (a second head while a delta fetch is in flight): only
         // the newest generation writes or releases; older ones dissolve.
@@ -3346,17 +3424,60 @@ export class TabManager {
         };
         let boot = null;
         boot = (async () => {
-            let outcome = null;
-            try {
-                outcome = await this._bootstrapDelta(tabInfo, from, head, gen, releaseOnce, throughCursor);
-            }
-            catch (error) {
-                console.warn('[term] bootstrap failed:', error);
-                outcome = { kind: 'failed', error };
+            const runDelta = async () => {
+                try {
+                    return await this._bootstrapDelta(tabInfo, from, head, gen, releaseOnce, throughCursor);
+                }
+                catch (error) {
+                    console.warn('[term] bootstrap failed:', error);
+                    return { kind: 'failed', error };
+                }
+            };
+            let outcome = await runDelta();
+            const refused = outcome?.error?.replayWindow;
+            if (outcome?.kind === 'failed' &&
+                refused &&
+                refused.epoch === tabInfo.paneEpoch &&
+                (refused.oldest > from ||
+                    (refused.oldest === from &&
+                        Number(refused.floor_event_cursor.split('.').at(-1)) >
+                            Number((tabInfo._replayCursor ??
+                                tabInfo._floorCursor ??
+                                '0')
+                                .split('.')
+                                .at(-1)))) &&
+                rec.attempts < REPLAY_RECOVERY_ATTEMPTS &&
+                Date.now() < rec.deadline &&
+                tabInfo.ws === pty &&
+                tabInfo._bootstrapGen === gen) {
+                // The server refused the requested prefix and certified where
+                // its window now starts. Adopt that floor and replay once from
+                // there; the refused pair is never sent twice.
+                tabInfo.paneOldest = refused.oldest;
+                tabInfo._floorCursor = refused.floor_event_cursor;
+                rec.attempts++;
+                from = refused.oldest;
+                head = refused.head;
+                throughCursor = refused.event_cursor;
+                tabInfo._replayCursor = refused.floor_event_cursor;
+                tabInfo._attachHead = {
+                    ...tabInfo._attachHead,
+                    epoch: refused.epoch,
+                    oldest: refused.oldest,
+                    head: refused.head,
+                    eventCursor: refused.event_cursor,
+                };
+                tabInfo._replayBaseline = {
+                    cols: refused.floor_cols,
+                    rows: refused.floor_rows,
+                };
+                outcome = await runDelta();
             }
             switch (outcome?.kind) {
                 case 'applied':
                     releaseOnce();
+                    if (!tabInfo._refreshRequest)
+                        this._finishRecoveryEpisode(tabInfo);
                     return;
                 case 'live-now': {
                     // The reader cancelled the replay: drop the partial
@@ -3389,6 +3510,13 @@ export class TabManager {
                     if (tabInfo.ws !== pty || tabInfo._bootstrapGen !== gen)
                         return;
                     tabInfo._bootstrapGate = null;
+                    if (tabInfo.exitCode != null)
+                        return;
+                    if (rec.attempts >= REPLAY_RECOVERY_ATTEMPTS ||
+                        Date.now() >= rec.deadline) {
+                        this._enterLimitedRecovery(tabInfo);
+                        return;
+                    }
                     try {
                         pty.ws?.close?.();
                     }
@@ -3607,7 +3735,10 @@ export class TabManager {
     async _bootstrapDelta(tabInfo, from, head, expectGen, onReady, throughCursor) {
         const ws = tabInfo.ws;
         const epoch = tabInfo.paneEpoch;
-        const historicalFence = tabInfo._historicalReplayFence;
+        const historicalFence = tabInfo._historicalReplayFence &&
+            tabInfo._historicalReplayFence.head >= from
+            ? tabInfo._historicalReplayFence
+            : null;
         let admitted = false;
         const current = () => !tabInfo.finalizing &&
             tabInfo.paneEpoch === epoch &&
@@ -3635,10 +3766,15 @@ export class TabManager {
             // from the attach cursor instead of assuming zero.
             startOrdinal = tabInfo._floorCursor?.split('.').at(-1) ?? '0';
             tabInfo._replayBaseline = tabInfo._replayBaseline ?? {
-                cols: tabInfo.term?.cols ?? 80,
-                rows: tabInfo.term?.rows ?? 24,
+                cols: tabInfo._attachHead?.floorCols ?? tabInfo.term?.cols ?? 80,
+                rows: tabInfo._attachHead?.floorRows ?? tabInfo.term?.rows ?? 24,
             };
             this._noteReplayTruncated(tabInfo, certifiedFloor);
+        }
+        if (tabInfo._replayBaseline && from === certifiedFloor) {
+            // A full repaint starts at the certified byte/ordinal pair,
+            // never the ordinal left over from a later live frontier.
+            startOrdinal = tabInfo._floorCursor?.split('.').at(-1) ?? '0';
         }
         let cursor = from;
         const target = head;
@@ -3656,7 +3792,14 @@ export class TabManager {
             if (repeated) {
                 tabInfo._replayBaseline = null;
                 this._debugRedraw(tabInfo, 'suppressed', redrawKey);
-                return { kind: 'live-now' };
+                // This is already painted, not a cancelled replay. The
+                // outer bootstrap must not erase it on its live-now path.
+                tabInfo.queuedSeq = tabInfo.drainedSeq = target;
+                tabInfo._replayCursor = throughCursor;
+                ws?.adoptState?.(target);
+                this._fitVisibleTerminal(tabInfo);
+                onReady?.();
+                return { kind: 'applied', through: target };
             }
         }
         // Cursor position includes the last parsed resize, not merely
@@ -3672,7 +3815,13 @@ export class TabManager {
             if (!baseline)
                 return current();
             this._resetPaneBuffer(tabInfo);
+            if (ws) {
+                ws.decoder = new TextDecoder('utf-8');
+                tabInfo._streamDecoder = ws.decoder;
+            }
             tabInfo.term.resize(baseline.cols, baseline.rows);
+            tabInfo.queuedSeq = tabInfo.drainedSeq = cursor;
+            tabInfo._replayCursor = chained;
             tabInfo._replayBaseline = null;
             if (tabInfo._pendingRestartNotice) {
                 tabInfo._pendingRestartNotice = false;
@@ -3709,6 +3858,7 @@ export class TabManager {
                     throughCursor: pageFence,
                     afterCursor: chained,
                     signal: abort.signal,
+                    deadline: tabInfo._recovery?.deadline,
                 });
             }
             catch (error) {
@@ -3717,10 +3867,9 @@ export class TabManager {
                     throw error;
                 if (!current())
                     return { kind: 'cancelled', reason: 'stale' };
-                // The journal never evicts, so a permanent failure is a
-                // rebirth or a malformed request, not a servable span.
-                // Fail for a fresh atomic attach instead of healing
-                // through a checkpoint that no longer exists.
+                // Only the certified 409 window can authorize a new
+                // floor. Other refusals require a fresh atomic attach,
+                // never an invented prefix or checkpoint restore.
                 return { kind: 'failed', error };
             }
             if (!current()) {
@@ -3789,6 +3938,9 @@ export class TabManager {
         // An empty, geometry-free attach is already a complete baseline.
         if (!prepareParser())
             return { kind: 'cancelled', reason: 'stale' };
+        tabInfo.queuedSeq = tabInfo.drainedSeq = cursor;
+        tabInfo._replayCursor = chained;
+        ws?.adoptState?.(cursor);
         // Finish replay writes before fitting and releasing live output.
         await this._drainSettled(tabInfo);
         if (!current())
@@ -3902,6 +4054,14 @@ export class TabManager {
         // instead of stalling.
         if (tabInfo._gapInFlight)
             return;
+        const rec = this._beginRecoveryEpisode(tabInfo);
+        rec.socket = pty;
+        if (Date.now() >= rec.deadline) {
+            this._enterLimitedRecovery(tabInfo);
+            return;
+        }
+        const abort = new AbortController();
+        tabInfo._replayAbort = abort;
         tabInfo._gapInFlight = true;
         pty.hold?.();
         const current = () => !tabInfo.finalizing &&
@@ -3915,6 +4075,10 @@ export class TabManager {
             let targetThrough;
             let targetCursor;
             for (let cursor = from; cursor < to;) {
+                if (Date.now() >= rec.deadline) {
+                    this._enterLimitedRecovery(tabInfo);
+                    return;
+                }
                 let d;
                 try {
                     // Resolve latest once, then keep that finite fence
@@ -3924,6 +4088,8 @@ export class TabManager {
                         requestThrough: targetThrough,
                         throughCursor: targetCursor,
                         afterCursor: chained,
+                        signal: abort.signal,
+                        deadline: rec.deadline,
                     });
                     if (d && targetCursor === undefined) {
                         targetThrough = d.through;
@@ -3931,8 +4097,8 @@ export class TabManager {
                     }
                 }
                 catch (error) {
-                    // The journal never evicts: retry through a new
-                    // atomic attach instead of patching around it.
+                    // Only an atomic attach can certify a replacement
+                    // floor after expiry. Do not patch around lost bytes.
                     if (error
                         ?.historyPermanent) {
                         try {
@@ -3979,6 +4145,10 @@ export class TabManager {
         finally {
             if (tabInfo._bootstrapGen === bootGen)
                 tabInfo._gapInFlight = false;
+            if (tabInfo._replayAbort === abort)
+                tabInfo._replayAbort = null;
+            if (recovered && !tabInfo._refreshRequest)
+                this._finishRecoveryEpisode(tabInfo);
             // applyGapPatch may encounter the next hole while this handler
             // owns the gate. Re-fire after relinquishing it, not before.
             if (recovered && tabInfo.ws === pty && !tabInfo.finalizing)
@@ -4006,11 +4176,15 @@ export class TabManager {
         let after = `v1.${epoch}.${from}.${ordinal}`;
         let through = Number.MAX_SAFE_INTEGER;
         let throughCursor;
+        const deadline = Date.now() + REPLAY_RECOVERY_BUDGET_MS;
         do {
+            if (Date.now() >= deadline)
+                throw new Error('final output replay timed out');
             const page = await this._fetchReplayPages(tabInfo.paneId, from, through, epoch, {
                 latest: throughCursor === undefined,
                 throughCursor,
                 afterCursor: after,
+                deadline,
             });
             if (!current())
                 return;
@@ -4146,6 +4320,9 @@ export class TabManager {
         }
         clearTimeout(tabInfo._openFallbackTimer ?? undefined);
         tabInfo._termOpened = true;
+        // The start spinner hides the pane; once the terminal surface is up,
+        // an opaque overlay would block input for as long as history takes.
+        this._dismissTabLoader(tabInfo);
         try {
             tabInfo.term.open(tabInfo.termContainer);
         }
@@ -4161,6 +4338,32 @@ export class TabManager {
                 originalFocus({ preventScroll: true, ...options });
             };
         }
+        // xterm's synthetic click after a touch can be consumed by its
+        // viewport. Focus on a short tap, never a swipe or long selection.
+        let tap = null;
+        const surface = tabInfo.term.element;
+        surface?.addEventListener('touchstart', (event) => {
+            const t = event.touches.length === 1 ? event.touches[0] : null;
+            tap = t
+                ? { x: t.clientX, y: t.clientY, at: event.timeStamp }
+                : null;
+        }, { passive: true });
+        surface?.addEventListener('touchend', (event) => {
+            const start = tap;
+            tap = null;
+            const t = event.changedTouches[0];
+            if (start &&
+                t &&
+                event.touches.length === 0 &&
+                event.timeStamp - start.at < 400 &&
+                Math.abs(t.clientX - start.x) < 10 &&
+                Math.abs(t.clientY - start.y) < 10 &&
+                !tabInfo.term.hasSelection())
+                tabInfo.term.focus();
+        }, { passive: true });
+        surface?.addEventListener('touchcancel', () => {
+            tap = null;
+        }, { passive: true });
         // Hooks that need the open terminal's DOM (xterm viewport etc.).
         for (const hook of tabInfo._postOpenHooks || []) {
             try {
@@ -4374,6 +4577,9 @@ export class TabManager {
         const pending = tabInfo._refreshRequest;
         if (pending?.dispatched && frontier > pending.head)
             this._finishRecoveryEpisode(tabInfo);
+        if (tabInfo._limitedRecovery &&
+            frontier > (tabInfo._attachHead?.head ?? frontier))
+            tabInfo._limitedRecovery = false;
     }
     // Splits the run list at the batch boundary without mutating it: the
     // caller commits `rest` only when the batch is admitted.
@@ -5745,6 +5951,14 @@ export class TabManager {
             tabInfo[timer] = null;
         }
         tabInfo.reconnectInFlight = false;
+        tabInfo._replayAbort?.abort();
+        if (tabInfo._refreshRequest) {
+            if (tabInfo._refreshRequest.timer)
+                clearTimeout(tabInfo._refreshRequest.timer);
+            tabInfo._refreshRequest = null;
+            if (tabInfo._recovery)
+                tabInfo._recovery.suppressFastPath = true;
+        }
         // Deliberately not written into the terminal buffer: the overlay
         // and disconnect banner already report the lost connection,
         // and unlike them a buffer write is permanent scrollback that
@@ -13544,6 +13758,10 @@ export class TabManager {
             }
             tabInfo.autoReconnectPending = false;
             tabInfo.reconnectInFlight = false;
+            this._finishRecoveryEpisode(tabInfo);
+            tabInfo.exitCode =
+                typeof control.code === 'number' ? control.code : null;
+            tabInfo.isDead = true;
             if (socket?.mode === 'hot' && !tabInfo._exitDrain) {
                 const drain = this._drainReplayTail(tabInfo, socket).catch((error) => {
                     if (tabInfo.ws !== socket || tabInfo.finalizing)

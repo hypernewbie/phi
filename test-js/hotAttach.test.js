@@ -98,11 +98,11 @@ class FakeWebSocket {
                             ...(hdr.ephemeral !== undefined
                                 ? { ephemeral: hdr.ephemeral }
                                 : {}),
-                            ...(hdr.floorEventCursor !== undefined
-                                ? {
-                                      floorEventCursor: hdr.floorEventCursor,
-                                  }
-                                : {}),
+                            floorEventCursor:
+                                hdr.floorEventCursor ??
+                                `v1.${epoch}.${hdr.oldest ?? 0}.0`,
+                            floorCols: hdr.floorCols ?? hdr.initialCols ?? 80,
+                            floorRows: hdr.floorRows ?? hdr.initialRows ?? 24,
                             ...(hdr.headCols !== undefined
                                 ? { headCols: hdr.headCols }
                                 : {}),
@@ -248,17 +248,23 @@ describe('PTYWebSocket hot framing', () => {
 
         ws.emitAttachHead({ epoch: 7, oldest: 0, head: 10 });
         expect(pty.mode).toBe('hot');
-        expect(onAttachHead).toHaveBeenCalledWith({
-            epoch: 7,
-            oldest: 0,
-            head: 10,
-            ckpt: null,
-            initialCols: 80,
-            initialRows: 24,
-            eventCursor: 'v1.7.10.0',
-            historyIncomplete: false,
-            ephemeral: false,
-        });
+        expect(onAttachHead).toHaveBeenCalledWith(
+            {
+                epoch: 7,
+                oldest: 0,
+                head: 10,
+                floorEventCursor: 'v1.7.0.0',
+                floorCols: 80,
+                floorRows: 24,
+                ckpt: null,
+                initialCols: 80,
+                initialRows: 24,
+                eventCursor: 'v1.7.10.0',
+                historyIncomplete: false,
+                ephemeral: false,
+            },
+            pty,
+        );
 
         // Held: not delivered until release.
         ws.emitHot(10, 'hello');
@@ -312,7 +318,7 @@ describe('PTYWebSocket hot framing', () => {
 
         pty.ws.emitHot(0, 'a'); // 0..1
         pty.ws.emitHot(5, 'fghi'); // gap 1..5 held
-        expect(onGap).toHaveBeenCalledWith(1, 5);
+        expect(onGap).toHaveBeenCalledWith(1, 5, pty);
         expect(data).toHaveBeenCalledTimes(1);
 
         pty.applyGapPatch(new TextEncoder().encode('bcde'));
@@ -334,7 +340,7 @@ describe('PTYWebSocket hot framing', () => {
         expect(onGap).not.toHaveBeenCalled();
         pty.release();
         expect(data.mock.calls.map((c) => c[0])).toEqual(['aa']);
-        expect(onGap).toHaveBeenCalledExactlyOnceWith(102, 110);
+        expect(onGap).toHaveBeenCalledExactlyOnceWith(102, 110, pty);
         expect(pty.liveSeq).toBe(102);
         // Host patches the remainder; the held tail flushes in order.
         pty.applyGapPatch(new TextEncoder().encode('01234567'));
@@ -368,7 +374,7 @@ describe('PTYWebSocket hot framing', () => {
         pty.release();
         pty.ws.emitHot(0, 'a');
         pty.ws.emitHot(5, 'fghi'); // gap 1..5, host rejects
-        expect(onGap).toHaveBeenCalledWith(1, 5);
+        expect(onGap).toHaveBeenCalledWith(1, 5, pty);
         await new Promise((r) => setTimeout(r, 10));
         // Rejection observed internally: no unhandled error fails the run,
         // and the stream is intact for a later healthy patch.

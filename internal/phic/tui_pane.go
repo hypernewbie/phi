@@ -120,6 +120,41 @@ type paneActor struct {
 	ctx                                context.Context
 	cancel                             context.CancelFunc
 	done, writerDone                   chan struct{}
+
+	// Paged replay: one worker owns HTTP reads and one page is pending at
+	// a time. Frames that arrive during a page are held in order, bounded
+	// by paneHeldBytes/paneHeldSpans, and replayed by the actor after it.
+	pageSeq      uint64
+	pages        chan pageRequest
+	pageResults  chan pageResult
+	pageDone     chan struct{}
+	reads        <-chan paneRead
+	held         [][]byte
+	heldBytes    int
+	heldOverflow bool
+
+	// One recovery episode spans replacement sockets: a 10 s budget and at
+	// most two history/refresh attempts.
+	recoveryUntil    time.Time
+	recoveryAttempts int
+
+	// Pending Pi repaint request, its receipt wait, and the certified
+	// attach position a fallback replays from.
+	exitNotified      bool
+	refreshDispatched bool
+	fallbackNeeded    bool
+	refreshID         string
+	refreshSeq        uint64
+	refreshDeadline   time.Time
+	refreshBlocked    bool
+	limited           bool
+	attachHead        uint64
+	attachCursor      string
+	floorCols         uint16
+	floorRows         uint16
+	floorOrdinal      uint64
+	headCols          uint16
+	headRows          uint16
 }
 
 func newPaneActor(parent context.Context, api *apiClient, spec paneSpec, events chan<- paneEvent, build func(termemu.Options) (termemu.Terminal, error)) (*paneActor, error) {
@@ -127,8 +162,9 @@ func newPaneActor(parent context.Context, api *apiClient, spec paneSpec, events 
 		return nil, fmt.Errorf("phic: pane geometry must be positive")
 	}
 	ctx, cancel := context.WithCancel(parent)
-	p := &paneActor{spec: spec, api: api, build: build, events: events, cols: spec.Cols, rows: spec.Rows, lastInteraction: time.Now(), ctx: ctx, cancel: cancel, done: make(chan struct{}), writerDone: make(chan struct{}), outbox: make(chan paneWrite, 256), inbox: make(chan paneInput, 128), resizes: make(chan paneInput, 1)}
+	p := &paneActor{spec: spec, api: api, build: build, events: events, cols: spec.Cols, rows: spec.Rows, lastInteraction: time.Now(), ctx: ctx, cancel: cancel, done: make(chan struct{}), writerDone: make(chan struct{}), outbox: make(chan paneWrite, 256), inbox: make(chan paneInput, 128), resizes: make(chan paneInput, 1), pages: make(chan pageRequest, 1), pageResults: make(chan pageResult, 1), pageDone: make(chan struct{})}
 	go p.writeLoop()
+	go p.pageWorker()
 	go p.run()
 	return p, nil
 }
@@ -190,6 +226,12 @@ func (p *paneActor) getConn() *websocket.Conn {
 	return p.conn
 }
 func (p *paneActor) enqueue(b []byte) bool {
+	p.mu.Lock()
+	exited := p.exited
+	p.mu.Unlock()
+	if exited {
+		return false
+	}
 	if len(b) == 0 {
 		return true
 	}
@@ -355,6 +397,7 @@ func (p *paneActor) close() {
 	}
 	<-p.done
 	<-p.writerDone
+	<-p.pageDone
 }
 func (p *paneActor) geometry() (int, int) { p.mu.Lock(); defer p.mu.Unlock(); return p.cols, p.rows }
 func (p *paneActor) epochValue() uint64   { p.mu.Lock(); defer p.mu.Unlock(); return p.epoch }
@@ -474,7 +517,15 @@ func (p *paneActor) attachAndRun() error {
 			ctx, cancel := context.WithCancel(p.ctx)
 			p.setConn(conn)
 			go p.readLoop(ctx, conn, reads, readerDone)
+			p.reads = reads
+			p.held, p.heldBytes, p.heldOverflow = nil, 0, false
 			err = p.bootstrap(h)
+			if p.exited {
+				if !p.exitNotified {
+					p.finalizeKnownExit()
+				}
+				err = errPaneExited
+			}
 			if err == nil {
 				p.mu.Lock()
 				p.uncertainInput = false
@@ -482,6 +533,18 @@ func (p *paneActor) attachAndRun() error {
 				p.sendEvent(paneEvent{Key: p.spec.Key, Kind: paneStatus, Status: "connected"})
 				err = p.consume(reads)
 			}
+			if p.exited && !p.exitNotified {
+				p.finalizeKnownExit()
+				err = errPaneExited
+			}
+			if p.refreshID != "" {
+				p.clearRefresh()
+				p.refreshBlocked, p.fallbackNeeded = true, true
+			}
+			if errors.Is(err, errHeldOverflow) || errors.Is(err, errPageDeadline) {
+				p.limited = true
+			}
+			p.reads = nil
 			p.setConn(nil)
 			cancel()
 			_ = conn.Close()
@@ -510,58 +573,104 @@ var errPaneExited = errors.New("phic: pane exited")
 var errPaneResize = errors.New("phic: resize could not be queued; reconnect required")
 
 func (p *paneActor) bootstrap(h wireAttach) error {
+	header := h.Header
 	p.mu.Lock()
 	epoch, frontier, exited, attached := p.epoch, p.frontier, p.exited, p.epochSet
 	p.mu.Unlock()
 	if exited {
 		return errPaneExited
 	}
-	cold := !attached || epoch != h.Header.GetEpoch()
+	cold := !attached || epoch != header.GetEpoch()
 	if attached && cold {
-		p.returnLive()
-		emu, err := p.newTerminal(int(h.Header.GetInitialCols()), int(h.Header.GetInitialRows()))
-		if err != nil {
-			return err
-		}
-		_ = p.emu.Close()
-		p.emu = emu
-		frontier = 0
-		p.spec.Fresh = false
-		p.mu.Lock()
-		p.frontier = 0
-		p.frameOK = false
-		p.mu.Unlock()
+		p.endRecovery()
+		p.limited = false
+		p.clearRefresh()
 	}
-	if cold {
-		if err := p.resizeEmulator(int(h.Header.GetInitialCols()), int(h.Header.GetInitialRows())); err != nil {
+	floor := header.GetOldest()
+	// A reconnect can outlive the window it was reading: the certified
+	// floor moved past the local frontier and the prefix is gone.
+	lostFloor := attached && !cold && frontier < floor
+	// Older frames carry only the spawn grid; the floor and head grids
+	// then equal it and the ordinal starts at zero.
+	floorCols, floorRows := header.GetFloorCols(), header.GetFloorRows()
+	if floorCols == 0 || floorRows == 0 {
+		floorCols, floorRows = header.GetInitialCols(), header.GetInitialRows()
+	}
+	headCols, headRows := header.GetHeadCols(), header.GetHeadRows()
+	if headCols == 0 || headRows == 0 {
+		headCols, headRows = floorCols, floorRows
+	}
+	p.floorCols, p.floorRows = uint16(floorCols), uint16(floorRows)
+	p.headCols, p.headRows = uint16(headCols), uint16(headRows)
+	p.floorOrdinal = 0
+	if cursor := header.GetFloorEventCursor(); cursor != "" {
+		by, err := parseReplayPosition(cursor)
+		if err != nil || by.epoch != header.GetEpoch() || by.seq != floor {
+			return errProtocol
+		}
+		p.floorOrdinal = by.ordinal
+	} else if floor != 0 {
+		return errProtocol
+	}
+	// A managed Pi can repaint the screen this viewer is missing, so a
+	// fresh parser starts at the certified head instead of downloading it.
+	if (cold || lostFloor) && p.canFastPath(header) {
+		return p.startRefreshFastPath(header)
+	}
+	if p.limited || p.recoveryExhausted() {
+		p.limited = true
+		if err := p.adoptHead(header); err != nil {
 			return err
 		}
-		p.replayOrdinal = 0
-		p.historicalUntil = nil
+		p.dirty = false // retain the last painted frame until new live output
+		p.sendEvent(paneEvent{Key: p.spec.Key, Kind: paneStatus, Status: "history unavailable; showing live output only"})
+		return nil
+	}
+	p.beginRecovery()
+	if cold || lostFloor || p.fallbackNeeded {
+		p.fallbackNeeded = false
+		if err := p.adoptFloor(header); err != nil {
+			return err
+		}
+		frontier = floor
 		if !p.spec.Fresh {
-			fence, err := parseReplayPosition(h.Header.GetEventCursor())
+			fence, err := parseReplayPosition(header.GetEventCursor())
 			if err != nil {
 				return err
 			}
 			p.historicalUntil = &fence
 		}
+		p.spec.Fresh = false
 	}
-	head := h.Header.GetHead()
-	if frontier > head || h.Header.GetOldest() != 0 {
+	head := header.GetHead()
+	if frontier > head {
 		return fmt.Errorf("%w: invalid attach frontier", errProtocol)
 	}
 	p.mu.Lock()
-	p.oldest, p.epoch, p.epochSet, p.head = 0, h.Header.GetEpoch(), true, head
+	p.oldest, p.epoch, p.epochSet, p.head = floor, header.GetEpoch(), true, max(p.head, head)
 	p.mu.Unlock()
+	p.attachHead, p.attachCursor = head, header.GetEventCursor()
+	deadline := p.recoveryDeadline()
 	if fence := p.historicalUntil; fence != nil {
-		if err := p.recover(p.ctx, frontier, fence.seq, true, fence.String()); err != nil {
+		if err := p.recoverFrom(deadline, frontier, fence.seq, fence.String()); err != nil {
 			return err
 		}
-		frontier = fence.seq
+		p.mu.Lock()
+		frontier = p.frontier
+		p.mu.Unlock()
 		p.historicalUntil = nil
 	}
-	if err := p.recover(p.ctx, frontier, head, false, h.Header.GetEventCursor()); err != nil {
+	if err := p.recoverFrom(deadline, frontier, p.attachHead, p.attachCursor); err != nil {
 		return err
+	}
+	if err := p.flushHeld(); err != nil {
+		if !errors.Is(err, errHeldOverflow) {
+			return err
+		}
+		return p.enterLimited("live output hold overflow")
+	}
+	if p.exited {
+		return nil
 	}
 	// Request the desired panel size; only its committed geometry frame
 	// may resize the parser. Queued output still belongs to the old grid.
@@ -569,9 +678,71 @@ func (p *paneActor) bootstrap(h wireAttach) error {
 	if !p.enqueueResize(cols, rows) {
 		return errPaneResize
 	}
+	p.endRecovery()
 	p.dirty = true
 	return p.refreshFrame()
 }
+
+// adoptFloor resets the parser at the certified floor. Every byte below
+// it is gone, so replay starts there under the floor grid.
+func (p *paneActor) adoptFloor(h *wspb.TerminalAttach) error {
+	p.attachHead, p.attachCursor = h.GetHead(), h.GetEventCursor()
+	return p.resetAt(h.GetEpoch(), h.GetOldest(), h.GetHead(), p.floorCols, p.floorRows, h.GetOldest(), p.floorOrdinal)
+}
+
+// adoptHead resets the parser at the certified head. The host repaint or
+// the held live tail supplies every byte after it.
+func (p *paneActor) adoptHead(h *wspb.TerminalAttach) error {
+	pos, err := parseReplayPosition(h.GetEventCursor())
+	if err != nil {
+		return errProtocol
+	}
+	p.attachHead, p.attachCursor = h.GetHead(), h.GetEventCursor()
+	return p.resetAt(h.GetEpoch(), h.GetOldest(), h.GetHead(), p.headCols, p.headRows, h.GetHead(), pos.ordinal)
+}
+
+// resetAt installs a fresh parser at a certified position. The caller
+// owns the actor goroutine; no other goroutine touches the emulator.
+func (p *paneActor) resetAt(epoch, oldest, head uint64, cols, rows uint16, pos, ordinal uint64) error {
+	if cols == 0 || rows == 0 {
+		return errProtocol
+	}
+	p.returnLive()
+	emu, err := p.newTerminal(int(cols), int(rows))
+	if err != nil {
+		return err
+	}
+	if p.emu != nil {
+		_ = p.emu.Close()
+	}
+	p.emu = emu
+	p.historyOffset = 0
+	p.replayOrdinal = ordinal
+	p.historicalUntil = nil
+	p.mu.Lock()
+	p.epoch, p.epochSet, p.oldest = epoch, true, oldest
+	p.frontier = pos
+	p.head = max(pos, head)
+	p.mu.Unlock()
+	p.dirty = true
+	return nil
+}
+
+// startRefreshFastPath asks the host to repaint instead of replaying
+// history. Refusal or silence falls back to one bounded floor replay.
+func (p *paneActor) startRefreshFastPath(h *wspb.TerminalAttach) error {
+	if err := p.adoptHead(h); err != nil {
+		return err
+	}
+	cols, rows := p.geometry()
+	p.beginRecovery()
+	if !p.requestRefresh(cols, rows) {
+		return p.fallbackAfterRefresh()
+	}
+	p.dirty = true
+	return p.refreshFrame()
+}
+
 func (p *paneActor) consume(reads <-chan paneRead) error {
 	ping := time.NewTicker(25 * time.Second)
 	defer ping.Stop()
@@ -583,7 +754,29 @@ func (p *paneActor) consume(reads <-chan paneRead) error {
 	defer paint.Stop()
 	var paintC <-chan time.Time
 	var due time.Time
+	// A pending repaint request has its own deadline. It bounds the wait
+	// for a receipt; it never paces parsing or input.
+	refresh := time.NewTimer(time.Hour)
+	refresh.Stop()
+	defer refresh.Stop()
+	var refreshC <-chan time.Time
+	var refreshAt time.Time
 	for {
+		if at, ok := p.refreshDue(); ok {
+			if refreshC == nil || !at.Equal(refreshAt) {
+				if !refresh.Stop() {
+					select {
+					case <-refresh.C:
+					default:
+					}
+				}
+				refresh.Reset(max(time.Duration(0), time.Until(at)))
+				refreshC, refreshAt = refresh.C, at
+			}
+		} else if refreshC != nil {
+			refresh.Stop()
+			refreshC = nil
+		}
 		if p.dirty {
 			now := time.Now()
 			p.mu.Lock()
@@ -629,6 +822,11 @@ func (p *paneActor) consume(reads <-chan paneRead) error {
 					return err
 				}
 			}
+		case <-refreshC:
+			refreshC = nil
+			if err := p.refreshTimeout(); err != nil {
+				return err
+			}
 		case <-ping.C:
 			if ping, err := wireproto.EncodePingFrame(); err == nil {
 				p.enqueue(ping)
@@ -654,7 +852,10 @@ func (p *paneActor) handleFrame(msg []byte) error {
 		frontier := p.frontier
 		p.mu.Unlock()
 		if start > frontier {
-			if err = p.recoverLatest(p.ctx); err != nil {
+			if err = p.recoverLiveGap(); err != nil {
+				return err
+			}
+			if err := p.flushHeld(); err != nil {
 				return err
 			}
 			// Recovery may have healed from a live checkpoint past
@@ -678,6 +879,11 @@ func (p *paneActor) handleFrame(msg []byte) error {
 		p.frontier = max(p.frontier, end)
 		p.head = max(p.head, end)
 		p.mu.Unlock()
+		p.completeRefresh()
+		if p.limited && end > p.attachHead {
+			p.limited = false
+			p.endRecovery()
+		}
 	case *wspb.TerminalServerFrame_Geometry:
 		geom := payload.Geometry
 		pos, err := parseReplayPosition(geom.GetEventCursor())
@@ -692,12 +898,18 @@ func (p *paneActor) handleFrame(msg []byte) error {
 		frontier := p.frontier
 		p.mu.Unlock()
 		if pos.seq > frontier {
-			if err := p.recoverLatest(p.ctx); err != nil {
+			if err := p.recoverLiveGap(); err != nil {
+				return err
+			}
+			if err := p.flushHeld(); err != nil {
 				return err
 			}
 			if pos.ordinal <= p.replayOrdinal {
 				return nil
 			}
+			p.mu.Lock()
+			frontier = p.frontier
+			p.mu.Unlock()
 		}
 		if pos.seq != frontier || pos.ordinal != p.replayOrdinal+1 {
 			return errProtocol
@@ -711,21 +923,18 @@ func (p *paneActor) handleFrame(msg []byte) error {
 		if err != nil {
 			return err
 		}
-		if err := p.drainExit(); err != nil {
-			return err
-		}
-		p.mu.Lock()
-		p.exited = true
-		p.exitCode = code
-		p.mu.Unlock()
-		// Exit remains authoritative even if the final screen copy fails.
-		_ = p.refreshFrame()
-		p.sendEvent(paneEvent{Key: p.spec.Key, Kind: paneExited, Code: code})
+		// Record the exit first: admission closes immediately, then the
+		// finite archive drain runs. A late repaint receipt cannot reopen
+		// the pane or start a fallback attach.
+		p.noteExit(code)
+		p.finalizeKnownExit()
 		return errPaneExited
+	case *wspb.TerminalServerFrame_RefreshResult:
+		return p.handleRefreshResult(payload.RefreshResult)
 	case *wspb.TerminalServerFrame_Pong:
 		return nil
 	case *wspb.TerminalServerFrame_DropNotice:
-		return p.drainExit()
+		return p.recoverLiveGap()
 	case *wspb.TerminalServerFrame_Notification:
 		if payload.Notification.GetShutdown() != nil {
 			p.serverDraining = true
@@ -745,45 +954,130 @@ func (p *paneActor) handleFrame(msg []byte) error {
 	return nil
 }
 
+func (p *paneActor) recoverLiveGap() error {
+	if p.recoveryExhausted() {
+		return p.enterLimited("live recovery budget exhausted")
+	}
+	p.beginRecovery()
+	err := p.recoverLatest(p.recoveryDeadline())
+	if err == nil && p.refreshID == "" {
+		p.endRecovery()
+	}
+	return err
+}
+
 // Exit carries no head. Capture latest once and finish that finite target,
 // including zero-byte pages that advance only the resize ordinal.
-func (p *paneActor) drainExit() error { return p.recoverLatest(p.ctx) }
-func (p *paneActor) recoverLatest(ctx context.Context) error {
-	p.mu.Lock()
-	from := p.frontier
-	p.mu.Unlock()
-	after := (replayPosition{p.epochValue(), from, p.replayOrdinal}).String()
-	h, data, err := p.api.replay(ctx, p.spec.Key.ID, p.epochValue(), from, 0, after, "", true)
+func (p *paneActor) drainExit() error {
+	// The archive drain is finite and independent of recovery episodes:
+	// a known exit finalizes once, even when the tail is missing.
+	return p.recoverLatest(time.Now().Add(paneRecoveryBudget))
+}
+
+// recoverLatest captures the current head once and pages to that finite
+// fence, including zero-byte pages that only advance the ordinal.
+func (p *paneActor) recoverLatest(deadline time.Time) error {
+	res, err := p.latestPage(deadline)
 	if err != nil {
 		return err
 	}
-	if err = p.admitReplay(h, data, termemu.SourceLive); err != nil {
+	if err := p.admitReplay(res.h, res.data, termemu.SourceLive); err != nil {
 		return err
 	}
-	return p.recover(ctx, h.End, h.Through, false, h.ThroughCursor)
+	return p.recoverFrom(deadline, res.h.End, res.h.Through, res.h.ThroughCursor)
 }
-func (p *paneActor) recover(ctx context.Context, from, through uint64, historical bool, fence string) error {
-	source := termemu.SourceLive
-	if historical {
-		source = termemu.SourceReplay
+
+func (p *paneActor) latestPage(deadline time.Time) (pageResult, error) {
+	p.mu.Lock()
+	from := p.frontier
+	p.mu.Unlock()
+	epoch := p.epochValue()
+	after := (replayPosition{epoch, from, p.replayOrdinal}).String()
+	req := pageRequest{epoch: epoch, from: from, after: after, latest: true, deadline: deadline}
+	res, err := p.fetchPage(req)
+	var expired *expiredWindowError
+	if err == nil || !errors.As(err, &expired) || expired.info.Epoch != epoch {
+		return res, err
 	}
+	// The window moved past the local frontier while paging. Resume at
+	// its certified floor instead of guessing the lost prefix.
+	if !p.windowAdvances(expired.info, from) {
+		return pageResult{}, err
+	}
+	if !p.exited {
+		if p.recoveryExhausted() {
+			return pageResult{}, p.enterLimited("history expired during recovery")
+		}
+		p.beginRecovery()
+	}
+	if err := p.adoptWindow(expired.info); err != nil {
+		return pageResult{}, err
+	}
+	p.mu.Lock()
+	from = p.frontier
+	p.mu.Unlock()
+	after = (replayPosition{epoch, from, p.replayOrdinal}).String()
+	return p.fetchPage(pageRequest{epoch: epoch, from: from, after: after, latest: true, deadline: deadline})
+}
+
+// recoverFrom pages one finite byte/ordinal fence. Every fetch runs on
+// the page worker, so input, resize, ping and paint stay live while the
+// history streams in.
+func (p *paneActor) recoverFrom(deadline time.Time, from, through uint64, fence string) error {
 	target, err := parseReplayPosition(fence)
 	if err != nil || target.epoch != p.epochValue() || target.seq != through || target.ordinal < p.replayOrdinal {
 		return errInvalidRecording
 	}
+	resets := 0
+	source := p.replaySource(fence)
 	for from < through || p.replayOrdinal < target.ordinal {
-		after := (replayPosition{p.epochValue(), from, p.replayOrdinal}).String()
-		h, data, err := p.api.replay(ctx, p.spec.Key.ID, p.epochValue(), from, through, after, fence, false)
+		if !time.Now().Before(deadline) {
+			return errPageDeadline
+		}
+		epoch := p.epochValue()
+		after := (replayPosition{epoch, from, p.replayOrdinal}).String()
+		res, err := p.fetchPage(pageRequest{epoch: epoch, from: from, through: through, after: after, fence: fence, deadline: deadline})
 		if err != nil {
+			var expired *expiredWindowError
+			if !errors.As(err, &expired) || resets > 0 || expired.info.Epoch != p.epochValue() {
+				return err
+			}
+			if !p.windowAdvances(expired.info, from) {
+				return err
+			}
+			resets++
+			if !p.exited {
+				if p.recoveryExhausted() {
+					return p.enterLimited("history expired during recovery")
+				}
+				p.beginRecovery()
+			}
+			if err := p.adoptWindow(expired.info); err != nil {
+				return err
+			}
+			from = p.floorValue()
+			through, fence = expired.info.Head, expired.info.EventCursor
+			if target, err = parseReplayPosition(fence); err != nil || target.seq != through {
+				return errProtocol
+			}
+			continue
+		}
+		if err := p.admitReplay(res.h, res.data, source); err != nil {
 			return err
 		}
-		if err = p.admitReplay(h, data, source); err != nil {
-			return err
-		}
-		from = h.End
+		from = res.h.End
 	}
 	return nil
 }
+
+// replaySource marks bytes already presented before this reader attached.
+func (p *paneActor) replaySource(fence string) termemu.Source {
+	if p.historicalUntil != nil && fence == p.historicalUntil.String() {
+		return termemu.SourceReplay
+	}
+	return termemu.SourceLive
+}
+
 func (p *paneActor) admitReplay(h wireproto.ReplayHeader, b []byte, source termemu.Source) error {
 	if err := p.feedRecording(wireproto.RecordingHeader{Start: h.Start, End: h.End, Resizes: h.Resizes}, b, source); err != nil {
 		return err
@@ -838,7 +1132,7 @@ func (p *paneActor) handleInput(in paneInput) error {
 	p.mu.Lock()
 	uncertain, exited := p.uncertainInput, p.exited
 	p.mu.Unlock()
-	if exited {
+	if exited && in.Kind != paneInputScroll && in.Kind != paneInputHistory && in.Kind != paneInputLive {
 		return nil
 	}
 	if in.Kind == paneInputResize {

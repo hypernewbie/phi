@@ -5,7 +5,10 @@ import browserConfig from './playwright.config.js';
 // runtime and a desktop display; failures are never converted into skips.
 export default defineConfig({
     ...browserConfig,
-    testMatch: '**/mobile-settings-desktop.spec.ts',
+    testMatch: [
+        '**/mobile-settings-desktop.spec.ts',
+        '**/terminal-ram-electron.spec.ts',
+    ],
     testIgnore: [],
     workers: 1,
     outputDir: 'test-results/desktop',

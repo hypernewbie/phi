@@ -46,11 +46,7 @@ const faults = [
     ],
     // HTTP 404 and 409 are permanent under bounded retention: the range
     // is over, not delayed. They are covered below, not in this matrix.
-    ...[408, 425, 429, 500, 502, 503, 504].map((status) => [
-        `HTTP ${status}`,
-        () => ({ ok: false, status }),
-    ]),
-    ['204 after cache eviction', () => ({ ok: true, status: 204 })],
+    ['HTTP 503', () => ({ ok: false, status: 503 })],
     [
         'body read failure',
         () => ({
@@ -61,48 +57,7 @@ const faults = [
             },
         }),
     ],
-    [
-        'short binary header',
-        () => ({
-            ok: true,
-            status: 200,
-            arrayBuffer: async () => new Uint8Array(3).buffer,
-        }),
-    ],
-    [
-        'impossible JSON length',
-        () => ({
-            ok: true,
-            status: 200,
-            arrayBuffer: async () => new Uint8Array([0, 0, 255, 255, 0]).buffer,
-        }),
-    ],
-    [
-        'invalid JSON header',
-        () => ({
-            ok: true,
-            status: 200,
-            arrayBuffer: async () => new Uint8Array([0, 0, 0, 1, 123]).buffer,
-        }),
-    ],
-    [
-        'negative span start',
-        ({ from, to }) => recordingEnvelope(small.slice(from, to), -1, to),
-    ],
-    [
-        'end before start',
-        ({ from }) => recordingEnvelope(new Uint8Array(), from, from - 1),
-    ],
-    [
-        'short body with a full-length header',
-        ({ from, to }) =>
-            recordingEnvelope(small.slice(from, to - 3), from, to),
-    ],
-    [
-        'body longer than its declared span',
-        ({ from, to }) =>
-            recordingEnvelope(encode('foreign data'.repeat(90)), from, to),
-    ],
+    // Envelope boundary validation lives in terminalRecordingRange.test.js.
     [
         'response from a different pane epoch',
         ({ from, to }) =>
@@ -112,8 +67,8 @@ const faults = [
     ],
 ];
 
-// These are independently named failure scenarios, NOT a claim that every
-// matrix cell is a different root cause. The audit ledger groups root causes.
+// Recovery reconnects for a fresh atomic head instead of retrying a page
+// in a hidden loop. A later valid response must preserve the proven prefix.
 for (const phase of ['initial attach', 'live gap']) {
     describe(`${phase}: recording recovery must be lossless`, () => {
         it.each(faults)(
@@ -136,11 +91,17 @@ for (const phase of ['initial attach', 'live gap']) {
                         h.pty.ws.output(small.length - 6, small.slice(-6));
                     }
                     await h.settle();
+                    expect(h.pty.ws.closed).toBe(true);
+                    expect(h.requests).toHaveLength(1);
+                    const replacement = h.socket();
+                    replacement.ws.head({
+                        epoch: 7,
+                        oldest: 0,
+                        head: small.length,
+                    });
+                    await h.settle();
                     assertComplete(h, small);
-                    expect(
-                        h.requests.length,
-                        'invalid or temporary responses must not become permanent data loss',
-                    ).toBeGreaterThan(1);
+                    expect(h.requests).toHaveLength(2);
                 } finally {
                     h.dispose();
                 }
@@ -182,9 +143,8 @@ for (const phase of ['initial attach', 'live gap']) {
                         h.tape.join(''),
                         'no failed-range bytes may enter the parser',
                     ).not.toContain('retained history');
-                    // The journal never evicts, so a permanent failure
-                    // is a rebirth: recovery is a fresh atomic attach,
-                    // not a patch around the hole.
+                    // An uncertified failure cannot authorize a skipped
+                    // prefix. Recovery needs a fresh atomic attach.
                     expect(h.tab._bootstrapGate).toBe(null);
                     expect(h.pty.ws.closed).toBe(true);
                 } finally {

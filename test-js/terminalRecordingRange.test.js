@@ -62,25 +62,13 @@ it('one request per call: the caller pages, parses, and chains between responses
     );
 });
 
-it('transient failures retry twice, then stay a null the caller reconnects on', async () => {
+it('a failed read leaves retry decisions to the bounded recovery episode', async () => {
     const fetcher = vi.fn(async () => {
         throw new Error('disconnected');
     });
     vi.stubGlobal('fetch', fetcher);
     expect(await manager()._fetchReplayPages('p', 0, 4, 7)).toBeNull();
-    expect(fetcher).toHaveBeenCalledTimes(3);
-    fetcher.mockClear();
-    let calls = 0;
-    vi.stubGlobal(
-        'fetch',
-        vi.fn(async () => {
-            calls++;
-            if (calls < 3) throw new Error('disconnected');
-            return recordingEnvelope(encode('data'), 0, 4);
-        }),
-    );
-    const page = await manager()._fetchReplayPages('p', 0, 4, 7);
-    expect(page?.end).toBe(4);
+    expect(fetcher).toHaveBeenCalledOnce();
 });
 
 it('a skipped prefix stays a transient null, never an admitted gap', async () => {
@@ -205,6 +193,80 @@ it.each([400, 404, 409, 413])(
         });
     },
 );
+
+it('only a same-epoch certified 409 can replace a replay frontier', async () => {
+    const valid = {
+        epoch: 7,
+        oldest: 2,
+        head: 4,
+        floor_cols: 80,
+        floor_rows: 24,
+        head_cols: 100,
+        head_rows: 30,
+        floor_event_cursor: 'v1.7.2.1',
+        event_cursor: 'v1.7.4.2',
+    };
+    for (const [status, info, accepted] of [
+        [409, valid, true],
+        [404, valid, false],
+        [409, { ...valid, epoch: 8 }, false],
+        [409, { ...valid, floor_event_cursor: 'v1.7.1.1' }, false],
+        [409, { ...valid, event_cursor: 'v1.7.4.0' }, false],
+        [409, { ...valid, floor_event_cursor: undefined }, false],
+    ]) {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(
+                async () =>
+                    new Response('replay expired', {
+                        status,
+                        headers: {
+                            'X-Phi-Replay-Window': JSON.stringify(info),
+                        },
+                    }),
+            ),
+        );
+        try {
+            await manager()._fetchReplayPages('p', 0, 4, 7);
+            throw new Error('refusal accepted as data');
+        } catch (error) {
+            expect(error.historyPermanent).toBe(true);
+            expect(Boolean(error.replayWindow)).toBe(accepted);
+        }
+    }
+});
+
+it('the response body shares the remaining episode deadline', async () => {
+    vi.useFakeTimers();
+    try {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async (_url, { signal }) => ({
+                ok: true,
+                status: 200,
+                arrayBuffer: () =>
+                    new Promise((_resolve, reject) =>
+                        signal.addEventListener(
+                            'abort',
+                            () =>
+                                reject(
+                                    new DOMException('aborted', 'AbortError'),
+                                ),
+                            { once: true },
+                        ),
+                    ),
+            })),
+        );
+        const read = manager()._fetchReplayPages('p', 0, 4, 7, {
+            deadline: Date.now() + 100,
+        });
+        await vi.advanceTimersByTimeAsync(100);
+        expect(await read).toBeNull();
+        expect(vi.getTimerCount()).toBe(0);
+    } finally {
+        vi.useRealTimers();
+    }
+});
 
 it('malformed envelopes and network failures leave the interval unfilled', async () => {
     vi.stubGlobal(

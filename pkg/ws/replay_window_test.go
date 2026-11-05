@@ -5,9 +5,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/hypernewbie/phi/pkg/pty"
+	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
 // ptyInstance builds a real instance record with spawn geometry.
@@ -91,7 +93,7 @@ func TestRAMReplayWindow(t *testing.T) {
 			if string(page.Data) != tc.want {
 				t.Fatalf("retained = %q, want %q", page.Data, tc.want)
 			}
-			if page.Incomplete != (pos.Oldest > 0) {
+			if page.Incomplete {
 				t.Fatalf("incomplete = %v at oldest %d", page.Incomplete, pos.Oldest)
 			}
 			// No pane output reached disk: only the namespace lease exists.
@@ -106,6 +108,76 @@ func TestRAMReplayWindow(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRAMReplayResizeMetadataBounds(t *testing.T) {
+	for _, capacity := range []int{0, 32} {
+		w := newReplayWindow(capacity, 80, 24)
+		for i := 0; i < 3*replayWindowResizeCap; i++ {
+			w.appendResize(uint16(80+i%2), 24)
+			w.write([]byte("x"))
+			if len(w.resizes) > replayWindowResizeCap || cap(w.resizes) > replayWindowResizeCap {
+				t.Fatal("resize storage exceeded its hard cap")
+			}
+		}
+		if capacity == 0 && w.resizes != nil {
+			t.Fatal("disabled retention allocated resize history")
+		}
+	}
+	h := NewHub(64)
+	t.Cleanup(func() { _ = h.Close() })
+	if err := h.InitPaneJournal("p", 80, 24); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Ingest("p", []byte("ab")); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 1000; i++ {
+		commit, _, err := h.StagePaneResize("p", uint16(81+i%2), 24)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	info, _ := h.ReplayWindow("p")
+	from, after := uint64(0), EncodeEventCursor(info.Epoch, 0, 0)
+	markers, pages := 0, 0
+	for after != info.EventCursor {
+		page, err := h.Replay("p", ReplayRequest{Epoch: info.Epoch, From: from, Through: info.Head, ThroughCursor: info.EventCursor, AfterCursor: after})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Resizes) > 256 || page.EndCursor == after {
+			t.Fatal("marker-only paging exceeded its cap or stalled")
+		}
+		markers += len(page.Resizes)
+		pages++
+		from, after = page.End, page.EndCursor
+	}
+	if markers != 1000 || pages != 4 {
+		t.Fatalf("markers=%d pages=%d", markers, pages)
+	}
+	// Overflow at the same byte expires old ordinals without losing the
+	// latest geometry or pretending the byte floor alone certifies it.
+	for i := 0; i < replayWindowResizeCap; i++ {
+		commit, _, err := h.StagePaneResize("p", uint16(83+i%2), 24)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page, err := h.Replay("p", ReplayRequest{Epoch: info.Epoch, From: 2, Through: 2, ThroughCursor: info.EventCursor, AfterCursor: after})
+	if !errors.Is(err, ErrReplayExpired) || page.Position == nil || page.Position.Oldest != 2 {
+		t.Fatalf("expired ordinal: %v %+v", err, page.Position)
+	}
+	latest := page.Position
+	if latest.FloorEventCursor != latest.EventCursor || latest.FloorCols != latest.HeadCols {
+		t.Fatal("floor geometry and ordinal are not one certificate")
 	}
 }
 
@@ -219,6 +291,18 @@ func TestRAMReplayOwnerReplacement(t *testing.T) {
 	if _, err := h.Replay("p", ReplayRequest{Epoch: oldEpoch, From: 0, Latest: true}); !errors.Is(err, ErrReplayEpoch) {
 		t.Fatalf("old epoch = %v, want epoch mismatch", err)
 	}
+	if err := h.InitPaneForOwner(old); err == nil {
+		t.Fatal("retired owner reinitialized")
+	}
+	if err := h.ingestForOwner(old, []byte("late")); err == nil {
+		t.Fatal("retired owner admitted output")
+	}
+	if _, _, err := h.stageResizeForOwner(old, 90, 25); err == nil {
+		t.Fatal("retired owner resized replacement")
+	}
+	if h.attachHot("p", &Client{Send: make(chan []byte, 1)}, old) {
+		t.Fatal("retired owner attached")
+	}
 	// Repeating the same owner is idempotent.
 	before := ph.EpochOf()
 	if err := h.InitPaneForOwner(fresh); err != nil {
@@ -243,13 +327,21 @@ func TestRAMReplayResizeTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := h.StagePaneResize("p", 100, 30); err == nil {
-		t.Fatal("same-size stage must still serialize later resizes")
+	started, admitted := make(chan struct{}), make(chan error, 1)
+	go func() { close(started); admitted <- h.Ingest("p", []byte("b")) }()
+	<-started
+	select {
+	case <-admitted:
+		t.Fatal("output passed an uncommitted resize")
+	default:
 	}
 	if err := commit(); err != nil {
 		t.Fatal(err)
 	}
 	abort()
+	if err := <-admitted; err != nil {
+		t.Fatal(err)
+	}
 	// The same-size commit recorded no marker.
 	ph, _ := h.LookupPane("p")
 	page, err := h.Replay("p", ReplayRequest{Epoch: ph.EpochOf(), From: 0, Latest: true})
@@ -258,5 +350,129 @@ func TestRAMReplayResizeTransaction(t *testing.T) {
 	}
 	if len(page.Resizes) != 0 {
 		t.Fatalf("same-size stage recorded %+v", page.Resizes)
+	}
+}
+
+// TestRAMReplaySlowClient proves the congestion invariant end to end: one
+// paused reader overflows its own bounded queue while a healthy reader
+// keeps every frame, the producer keeps admitting bytes, and the paused
+// reader can still recover from the retained window instead of mistaking
+// a dropped frame for complete output.
+func TestRAMReplaySlowClient(t *testing.T) {
+	h := NewHub(1 << 20)
+	defer func() { _ = h.Close() }()
+	const pane = "pane-slow-client"
+	if err := h.InitPaneJournal(pane, 80, 24); err != nil {
+		t.Fatal(err)
+	}
+	paused := &Client{Send: make(chan []byte, 8), Logger: componentLogger().With("pane", pane)}
+	healthy := &Client{Send: make(chan []byte, 4096), Logger: componentLogger().With("pane", pane)}
+	h.Register(pane, paused)
+	h.Register(pane, healthy)
+
+	received := make(chan []byte, 4096)
+	go func() {
+		defer close(received)
+		for msg := range healthy.Send {
+			received <- msg
+		}
+	}()
+
+	const frames = 600
+	for i := 0; i < frames; i++ {
+		if err := h.Ingest(pane, []byte("line-"+strconv.Itoa(i)+"\n")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A committed resize after the flood proves the healthy reader still
+	// gets control frames and the window still certifies their geometry.
+	commit, abort, err := h.StagePaneResize(pane, 120, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer abort()
+	if err := commit(); err != nil {
+		t.Fatal(err)
+	}
+	info, ok := h.ReplayWindow(pane)
+	if !ok || info.Head == 0 {
+		t.Fatalf("window after resize: %+v ok=%v", info, ok)
+	}
+	head := info.Head
+
+	h.Unregister(pane, healthy)
+	var outputs int
+	var lastEnd uint64
+	var sawGeometry bool
+	for msg := range received {
+		frame, err := wireproto.DecodeServerFrame(msg)
+		if err != nil {
+			t.Fatalf("healthy frame: %v", err)
+		}
+		if out := frame.GetOutput(); out != nil {
+			outputs++
+			lastEnd = out.GetStart() + uint64(len(out.GetData()))
+			continue
+		}
+		if geom := frame.GetGeometry(); geom != nil {
+			if geom.GetCols() != 120 || geom.GetRows() != 30 || geom.GetAtSeq() != head {
+				t.Fatalf("healthy geometry: %+v", geom)
+			}
+			sawGeometry = true
+			continue
+		}
+		if frame.GetDropNotice() != nil {
+			t.Fatalf("healthy reader received a drop notice")
+		}
+	}
+	if outputs != frames || lastEnd != head || !sawGeometry {
+		t.Fatalf("healthy reader: outputs=%d last=%d geometry=%v head=%d", outputs, lastEnd, sawGeometry, head)
+	}
+
+	// The paused reader is still attached with a bounded queue; its lost
+	// frames are exactly what recovery has to repair.
+	if got, want := len(paused.Send), cap(paused.Send); got != want {
+		t.Fatalf("paused queue=%d, want bounded at %d", got, want)
+	}
+	// The paused reader kept only the newest frames: the prompt tells it
+	// output was lost, and recovery comes from the window below.
+	pausedFrames := 0
+drain:
+	for {
+		select {
+		case msg := <-paused.Send:
+			frame, err := wireproto.DecodeServerFrame(msg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if frame.GetOutput() != nil {
+				pausedFrames++
+			}
+		default:
+			break drain
+		}
+	}
+	if pausedFrames >= frames {
+		t.Fatalf("paused reader kept %d frames; congestion did not drop any", pausedFrames)
+	}
+
+	h.mu.RLock()
+	attached := h.panes[pane] != nil && h.panes[pane].clients[paused]
+	h.mu.RUnlock()
+	if !attached {
+		t.Fatal("overflow detached the paused reader instead of keeping it open")
+	}
+
+	// The retained window still certifies every byte and the resize, so a
+	// recovery read needs no cooperation from the reader that fell behind.
+	if info.Head != head || info.Oldest != 0 {
+		t.Fatalf("window: %+v ok=%v", info, ok)
+	}
+	page, err := h.Replay(pane, ReplayRequest{Epoch: info.Epoch, From: 0, Latest: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.End != info.Head || len(page.Data) != int(info.Head) || len(page.Resizes) != 1 {
+		t.Fatalf("recovery page: end=%d data=%d resizes=%d head=%d", page.End, len(page.Data), len(page.Resizes), info.Head)
 	}
 }

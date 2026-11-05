@@ -72,8 +72,8 @@ describe('bounded redraw', () => {
         // Same epoch, head and geometry: no fetch, no reset, no scroll.
         const second = first;
         second._replayBaseline = { cols: 80, rows: 24 };
-        const b = await c._bootstrapDelta(second, 0, 5);
-        expect(b.kind).toBe('live-now');
+        c._bootstrappedRelease(second, p, 0, 5, 'v1.e.5.0');
+        await Promise.all(second._pendingBootstraps ?? []);
         expect(c._fetchReplayPages).toHaveBeenCalledTimes(1);
         expect(c._resetPaneBuffer).toHaveBeenCalledTimes(1);
         // Exactly one paint, then one suppression: no second scroll.
@@ -81,6 +81,28 @@ describe('bounded redraw', () => {
             'painted',
             'suppressed',
         ]);
+    });
+
+    it('starts a fallback repaint at the floor ordinal, not the live ordinal', async () => {
+        const p = { mode: 'hot', sendResize: () => true };
+        const c = ctx(async () => ({
+            ...page(0, 6, 'hello!'),
+            endCursor: 'v1.e.6.1',
+        }));
+        const tab = coldTab(p);
+        tab._floorCursor = 'v1.e.0.0';
+        tab._replayCursor = 'v1.e.5.1';
+        tab.queuedSeq = tab.drainedSeq = 5;
+        c._parseRecordingRange.mockImplementation(async () => {
+            expect(tab._replayCursor).toBe('v1.e.0.0');
+            expect(tab.drainedSeq).toBe(0);
+            return true;
+        });
+        expect((await c._bootstrapDelta(tab, 0, 6)).kind).toBe('applied');
+        expect(c._fetchReplayPages.mock.calls[0][4].afterCursor).toBe(
+            'v1.e.0.0',
+        );
+        expect(tab._replayCursor).toBe('v1.e.6.1');
     });
 
     it('paints again when the head moved', async () => {
@@ -137,7 +159,7 @@ describe('bounded redraw', () => {
         const second = first;
         second._replayBaseline = { cols: 80, rows: 24 };
         const b = await c._bootstrapDelta(second, 0, 0);
-        expect(b.kind).toBe('live-now');
+        expect(b.kind).toBe('applied');
         expect(c._resetPaneBuffer).toHaveBeenCalledTimes(resets);
     });
 });

@@ -46,8 +46,8 @@ func TestRecordingSurvivesReplayMemoryLimits(t *testing.T) {
 	if page.End != uint64(len(big)) {
 		t.Fatalf("retained tail ends at %d, want %d", page.End, len(big))
 	}
-	if !page.Incomplete {
-		t.Fatal("a rolled-over window must report incomplete history")
+	if page.Incomplete {
+		t.Fatal("normal retention must not report a recording failure")
 	}
 }
 

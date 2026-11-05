@@ -184,7 +184,7 @@ describe('Pi repaint fast path', () => {
         ]) {
             const { tm, tab } = harness();
             tab._recovery = recovery;
-            await tm._onAttachHead(tab, refreshAttach({ epoch: 8 }));
+            await tm._onAttachHead(tab, refreshAttach({ oldest: 300 }));
             expect(tab._piRefreshNext).toBeUndefined();
         }
     });
@@ -192,6 +192,7 @@ describe('Pi repaint fast path', () => {
 
 describe('Pi repaint receipts', () => {
     function pending(tab, pty, over = {}) {
+        tab._attachHead = attach();
         tab._bootstrapGen = 3;
         tab._recovery = {
             deadline: Date.now() + 10_000,
@@ -303,7 +304,9 @@ describe('Pi repaint receipts', () => {
             expect.objectContaining({ type: 'info' }),
         );
         expect(tab._recovery).toBeNull();
-        expect(pty.release).toHaveBeenCalled();
+        expect(tab._limitedRecovery).toBe(true);
+        expect(pty.ws.close).toHaveBeenCalled();
+        expect(pty.release).not.toHaveBeenCalled();
     });
 
     it('bounds the receipt wait by the remaining episode budget', () => {

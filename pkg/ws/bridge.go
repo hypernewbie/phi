@@ -187,7 +187,7 @@ func (c *Client) readPump(ctx context.Context, inst *pty.PTYInstance, manager *p
 				// before the PTY takes the new size, committed only
 				// after: bytes after the marker were produced under it.
 				resizeErr := inst.Pty.ResizeRecorded(uint16(cols), uint16(rows), func() (func() error, func(), error) {
-					return hub.StagePaneResize(inst.ID, uint16(cols), uint16(rows))
+					return hub.stageResizeForOwner(inst, uint16(cols), uint16(rows))
 				})
 				endResize(resizeErr)
 				if resizeErr != nil {
@@ -213,7 +213,13 @@ func (c *Client) readPump(ctx context.Context, inst *pty.PTYInstance, manager *p
 				logger.Error("ws pong encode failed", "err", err)
 				continue
 			}
-			c.Send <- pong
+			if ph := c.pane; ph != nil {
+				ph.mu.Lock()
+				if ph.clients[c] {
+					hub.deliverOrClose(c, pong)
+				}
+				ph.mu.Unlock()
+			}
 		default:
 			c.closeWithCode(websocket.CloseProtocolError, "unsupported payload")
 			return
@@ -266,13 +272,9 @@ func StartPTYReadLoop(inst *pty.PTYInstance, hub *Hub) {
 				if slog.Default().Enabled(context.Background(), slog.LevelDebug) {
 					logger.Debug("frame", "dir", "pty->hub", "bytes", n)
 				}
-				for {
-					if err := hub.Ingest(inst.ID, buf[:n]); err == nil {
-						break
-					} else {
-						logger.Error("terminal ingest failed; holding PTY output for retry", "err", err)
-						time.Sleep(100 * time.Millisecond)
-					}
+				if err := hub.ingestForOwner(inst, buf[:n]); err != nil {
+					logger.Warn("terminal read owner stopped", "err", err)
+					break
 				}
 			}
 			if err != nil {
@@ -421,7 +423,7 @@ func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, man
 	client.AnsiState = r.URL.Query().Get("state") == "ansi-v1"
 	// Live-only attach: no replay enters the live terminal. The client
 	// bootstraps its retained window over HTTP from the RAM ring.
-	if !hub.AttachHot(inst.ID, client) {
+	if !hub.attachHot(inst.ID, client, inst) {
 		manager.UnregisterWSForInstance(inst, fmt.Sprintf("%p", client))
 		endSpan(errors.New("attach frame not queued"))
 		_ = conn.Close()
@@ -443,8 +445,13 @@ func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, man
 		exitMsg, err := wireproto.EncodeExitFrame(int32(code))
 		if err != nil {
 			logger.Error("ws exit encode failed", "err", err)
-		} else {
-			hub.BroadcastFrame(inst.ID, exitMsg)
+		} else if ph := client.pane; ph != nil {
+			// Ghost viewers belong to the archive, not the active-pane map.
+			ph.mu.Lock()
+			if ph.clients[client] {
+				hub.deliverOrClose(client, exitMsg)
+			}
+			ph.mu.Unlock()
 		}
 		go func() {
 			time.Sleep(100 * time.Millisecond)

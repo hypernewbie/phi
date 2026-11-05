@@ -10,8 +10,17 @@ import (
 
 // Terminal history is RAM-only: a restart starts empty, never adopts the
 // previous process's files, and never deletes them.
-func TestPersistentRecordingAcrossHubRestart(t *testing.T) {
+func TestRAMReplayRestartDoesNotAdoptFiles(t *testing.T) {
 	dir := t.TempDir()
+	files := []string{filepath.Join(dir, "legacy.rec"), filepath.Join(dir, "v2", "old", "manifest"), filepath.Join(dir, "v3", "old", "data")}
+	for _, file := range files {
+		if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte("synthetic pre-upgrade history"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
 	first := NewHub(64)
 	if err := first.SetRecordingDirectory(dir); err != nil {
 		t.Fatal(err)
@@ -21,6 +30,11 @@ func TestPersistentRecordingAcrossHubRestart(t *testing.T) {
 	}
 	if err := first.Ingest("p", []byte("old output\r\n")); err != nil {
 		t.Fatal(err)
+	}
+	first.ClosePane("p")
+	closed := first.recordingForRead("p")
+	if page, err := first.Replay("p", ReplayRequest{Epoch: closed.epoch, Latest: true}); err != nil || string(page.Data) != "old output\r\n" {
+		t.Fatalf("closed pane lost its finite view: %v", err)
 	}
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
@@ -44,6 +58,22 @@ func TestPersistentRecordingAcrossHubRestart(t *testing.T) {
 	}
 	if page.Incomplete {
 		t.Fatal("a fresh RAM window reported incomplete history")
+	}
+	second.savedReservations = func() (map[string]bool, error) { return nil, nil }
+	second.sweepRAMArchives(second.wallClock().Add(2 * retentionPeriod))
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		if err != nil || string(data) != "synthetic pre-upgrade history" {
+			t.Fatalf("old file changed: %s: %v", file, err)
+		}
+		info, err := os.Stat(file)
+		if err != nil || info.Mode().Perm() != 0o640 {
+			t.Fatalf("old file mode changed: %s", file)
+		}
+		entries, err := os.ReadDir(filepath.Dir(file))
+		if err != nil || (filepath.Dir(file) != dir && len(entries) != 1) {
+			t.Fatalf("old directory changed: %s", file)
+		}
 	}
 }
 

@@ -58,6 +58,8 @@ type Client struct {
 	// A second refresh request while it is set is refused with NOT_SENT,
 	// never queued: one repaint in flight per socket.
 	refreshPending atomic.Bool
+	pane           *PaneHub // exact registration, including archived/replaced panes
+	terminal       bool
 }
 
 // logger returns c.Logger if set, else componentLogger() — nil-safe so
@@ -192,6 +194,8 @@ type Hub struct {
 	sweepDone         chan struct{}
 	sweepWg           sync.WaitGroup
 	sweepStarted      bool
+	closed            bool
+	closeDone         chan struct{}
 	importFailed      map[string]importFailure
 	importScans       uint64
 	lastStats         importStats
@@ -451,6 +455,9 @@ func (h *Hub) SetReplayBufferBytes(bytes int) {
 func (h *Hub) GetOrCreatePaneHub(paneID string) (*PaneHub, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.closed {
+		return nil, ErrReplayNoHistory
+	}
 	return h.getOrCreatePaneHubLocked(paneID), nil
 }
 
@@ -559,6 +566,7 @@ func (h *Hub) InitPaneJournal(paneID string, cols, rows uint16) error {
 	}
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
+	ph.initCols, ph.initRows = cols, rows
 	ph.bindGeometryLocked(h.replayBufferBytes, cols, rows)
 	return nil
 }
@@ -592,6 +600,9 @@ func (h *Hub) InitPaneForOwner(inst *pty.PTYInstance) error {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.closed || inst.ReadOwnerRetired() {
+		return fmt.Errorf("pane owner retired")
+	}
 	ph := h.getOrCreatePaneHubLocked(inst.ID)
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
@@ -600,8 +611,10 @@ func (h *Hub) InitPaneForOwner(inst *pty.PTYInstance) error {
 		return nil
 	}
 	if ph.owner != nil || ph.winHeadLocked() > 0 {
-		// A replacement (or previously unowned history) starts a new
-		// lifetime: old clients, bytes, geometry and epoch are gone.
+		// A replacement owns a new lifetime, never the old reader's bytes.
+		if ph.owner != nil {
+			ph.owner.RetireReadOwner()
+		}
 		for client := range ph.clients {
 			delete(ph.clients, client)
 			close(client.Send)
@@ -613,6 +626,7 @@ func (h *Hub) InitPaneForOwner(inst *pty.PTYInstance) error {
 		ph.retired = false
 	}
 	ph.owner = inst
+	ph.initCols, ph.initRows = cols, rows
 	ph.bindGeometryLocked(h.replayBufferBytes, cols, rows)
 	h.paneOwners[inst.ID] = inst
 	return nil
@@ -660,6 +674,7 @@ func (h *Hub) Register(paneID string, client *Client) {
 		return
 	}
 	ph.mu.Lock()
+	client.pane = ph
 	ph.clients[client] = true
 	ph.mu.Unlock()
 	log.Printf("[ws] Registered client for pane %s", paneID)
@@ -696,7 +711,23 @@ type RecordingHeaderJSON = wireproto.RecordingHeader
 // Head is pushed — history is served over HTTP from the RAM window.
 // It reports false when the attach frame could not be queued.
 func (h *Hub) AttachHot(paneID string, client *Client) bool {
-	ph, err := h.GetOrCreatePaneHub(paneID)
+	return h.attachHot(paneID, client, nil)
+}
+
+func (h *Hub) attachHot(paneID string, client *Client, owner *pty.PTYInstance) bool {
+	// A viewer never promotes an archive or renews its closure time.
+	ph := h.recordingForRead(paneID)
+	var err error
+	if ph == nil && owner != nil && owner.IsPtyDead() {
+		// A missing ghost archive still gets a finite empty attach + Exit,
+		// but viewing it must not recreate retained state or renew expiry.
+		ph = &PaneHub{clients: make(map[*Client]bool), epoch: randomEpoch(), win: newReplayWindow(0, 80, 24)}
+	} else if ph == nil && (owner == nil || !owner.ReadOwnerRetired()) {
+		ph, err = h.GetOrCreatePaneHub(paneID)
+	}
+	if ph == nil {
+		return false
+	}
 	if err != nil {
 		log.Printf("[ws] attach pane %s: %v", paneID, err)
 		if client.Ws != nil {
@@ -708,6 +739,10 @@ func (h *Hub) AttachHot(paneID string, client *Client) bool {
 	// bridge lookup must never wait behind terminal state.
 	refreshAvailable := h.terminalRefreshHint != nil && h.terminalRefreshHint(paneID)
 	ph.mu.Lock()
+	if ph.retired || (owner != nil && owner.Pty != nil && ph.owner != nil && ph.owner != owner) {
+		ph.mu.Unlock()
+		return false
+	}
 	pos := ph.positionLocked()
 	floorCols, floorRows, headCols, headRows := ph.attachGeometryLocked()
 
@@ -715,16 +750,13 @@ func (h *Hub) AttachHot(paneID string, client *Client) bool {
 		Epoch:       proto.Uint64(pos.Epoch),
 		Oldest:      proto.Uint64(pos.Oldest),
 		Head:        proto.Uint64(pos.Head),
-		InitialCols: proto.Uint32(uint32(floorCols)),
-		InitialRows: proto.Uint32(uint32(floorRows)),
+		InitialCols: proto.Uint32(uint32(ph.initColsOrDefault())),
+		InitialRows: proto.Uint32(uint32(ph.initRowsOrDefault())),
 		FloorCols:   proto.Uint32(uint32(floorCols)),
 		FloorRows:   proto.Uint32(uint32(floorRows)),
 		HeadCols:    proto.Uint32(uint32(headCols)),
 		HeadRows:    proto.Uint32(uint32(headRows)),
 		EventCursor: proto.String(EncodeEventCursor(pos.Epoch, pos.Head, ph.winOrdinalLocked())),
-	}
-	if pos.Oldest > 0 {
-		attach.HistoryIncomplete = proto.Bool(true)
 	}
 	if ph.win != nil {
 		attach.FloorEventCursor = proto.String(EncodeEventCursor(pos.Epoch, pos.Oldest, ph.win.ordinalAt(pos.Oldest)))
@@ -738,6 +770,7 @@ func (h *Hub) AttachHot(paneID string, client *Client) bool {
 		log.Printf("[ws] attach pane %s: encode error: %v", paneID, err)
 		return false
 	}
+	client.pane, client.terminal = ph, true
 	ph.clients[client] = true
 	select {
 	case client.Send <- frame:
@@ -780,13 +813,15 @@ func (ph *PaneHub) winOrdinalLocked() uint64 {
 // replay response. A client uses it to resume at the certified floor
 // without guessing how much history it lost.
 type ReplayWindowInfo struct {
-	Epoch     uint64 `json:"epoch"`
-	Oldest    uint64 `json:"oldest"`
-	Head      uint64 `json:"head"`
-	FloorCols uint16 `json:"floor_cols"`
-	FloorRows uint16 `json:"floor_rows"`
-	HeadCols  uint16 `json:"head_cols"`
-	HeadRows  uint16 `json:"head_rows"`
+	Epoch            uint64 `json:"epoch"`
+	Oldest           uint64 `json:"oldest"`
+	Head             uint64 `json:"head"`
+	FloorCols        uint16 `json:"floor_cols"`
+	FloorRows        uint16 `json:"floor_rows"`
+	HeadCols         uint16 `json:"head_cols"`
+	HeadRows         uint16 `json:"head_rows"`
+	FloorEventCursor string `json:"floor_event_cursor,omitempty"`
+	EventCursor      string `json:"event_cursor,omitempty"`
 }
 
 // ReplayWindow reports the pane's current floor and head with geometry.
@@ -801,17 +836,23 @@ func (h *Hub) ReplayWindow(paneID string) (ReplayWindowInfo, bool) {
 	if ph.retired || ph.win == nil {
 		return ReplayWindowInfo{}, false
 	}
+	return ph.replayWindowLocked(), true
+}
+
+func (ph *PaneHub) replayWindowLocked() ReplayWindowInfo {
 	pos := ph.positionLocked()
 	floorCols, floorRows, headCols, headRows := ph.attachGeometryLocked()
 	return ReplayWindowInfo{
-		Epoch:     pos.Epoch,
-		Oldest:    pos.Oldest,
-		Head:      pos.Head,
-		FloorCols: floorCols,
-		FloorRows: floorRows,
-		HeadCols:  headCols,
-		HeadRows:  headRows,
-	}, true
+		Epoch:            pos.Epoch,
+		Oldest:           pos.Oldest,
+		Head:             pos.Head,
+		FloorCols:        floorCols,
+		FloorRows:        floorRows,
+		HeadCols:         headCols,
+		HeadRows:         headRows,
+		FloorEventCursor: EncodeEventCursor(pos.Epoch, pos.Oldest, ph.win.ordinalAt(pos.Oldest)),
+		EventCursor:      EncodeEventCursor(pos.Epoch, pos.Head, ph.winOrdinalLocked()),
+	}
 }
 
 // Replay errors map to HTTP statuses at the /replay endpoint: malformed
@@ -844,6 +885,7 @@ type ReplayRequest struct {
 // ReplayPage is one raw replay page: output bytes plus the geometry that
 // orders them. End and EndCursor fence the next request.
 type ReplayPage struct {
+	Position      *ReplayWindowInfo // captured under the same lock as an expiry refusal
 	Through       uint64
 	ThroughCursor string
 	Epoch         uint64
@@ -883,8 +925,12 @@ func (h *Hub) Replay(paneID string, req ReplayRequest) (ReplayPage, error) {
 		return ReplayPage{}, ErrReplayEpoch
 	}
 	floor := w.floor()
+	expired := func() (ReplayPage, error) {
+		info := ph.replayWindowLocked()
+		return ReplayPage{Position: &info}, ErrReplayExpired
+	}
 	if req.From < floor {
-		return ReplayPage{}, ErrReplayExpired
+		return expired()
 	}
 	if req.From > head {
 		return ReplayPage{}, fmt.Errorf("%w: from past head", ErrReplayBadRequest)
@@ -909,6 +955,9 @@ func (h *Hub) Replay(paneID string, req ReplayRequest) (ReplayPage, error) {
 		}
 		if through > head || cOrd > w.lastOrdinal() {
 			return ReplayPage{}, ErrReplayFuture
+		}
+		if through < floor || cOrd < w.floorOrd {
+			return expired()
 		}
 		if !w.validFence(through, cOrd) {
 			return ReplayPage{}, fmt.Errorf("%w: inconsistent through cursor", ErrReplayBadRequest)
@@ -942,18 +991,38 @@ func (h *Hub) Replay(paneID string, req ReplayRequest) (ReplayPage, error) {
 		}
 		afterOrdinal = cOrd
 	}
+	if afterOrdinal < w.floorOrd {
+		return expired()
+	}
 	if afterOrdinal > throughOrdinal || !w.validFence(req.From, afterOrdinal) {
 		return ReplayPage{}, fmt.Errorf("%w: inconsistent paging cursor", ErrReplayBadRequest)
+	}
+	// Stop before a 257th event, even when many share the same byte.
+	pageOrdinal := throughOrdinal
+	count := 0
+	for i, m := range w.resizes {
+		ord := w.floorOrd + uint64(i) + 1
+		if ord <= afterOrdinal {
+			continue
+		}
+		if ord > throughOrdinal || m.AtSeq > end {
+			break
+		}
+		if count == 256 {
+			end, pageOrdinal = m.AtSeq, ord-1
+			break
+		}
+		count++
 	}
 	data := w.rangeView(req.From, end)
 	if uint64(len(data)) != end-req.From {
 		if req.From < w.floor() {
-			return ReplayPage{}, ErrReplayExpired
+			return expired()
 		}
 		return ReplayPage{}, ErrReplayUnavailable
 	}
 	finalEnd := req.From + uint64(len(data))
-	resizes, endOrdinal := w.markersBetween(req.From, finalEnd, afterOrdinal, throughOrdinal)
+	resizes, endOrdinal := w.markersBetween(req.From, finalEnd, afterOrdinal, pageOrdinal)
 	initCols, initRows := w.initialGeometry()
 	if initCols == 0 || initRows == 0 {
 		initCols, initRows = ph.initColsOrDefault(), ph.initRowsOrDefault()
@@ -973,7 +1042,7 @@ func (h *Hub) Replay(paneID string, req ReplayRequest) (ReplayPage, error) {
 		EndCursor:        EncodeEventCursor(ph.epoch, finalEnd, endOrdinal),
 		InitCols:         initCols,
 		InitRows:         initRows,
-		Incomplete:       floor > 0,
+		Incomplete:       false,
 		FloorEventCursor: EncodeEventCursor(ph.epoch, floor, w.ordinalAt(floor)),
 		FloorCols:        initCols,
 		FloorRows:        initRows,
@@ -1085,34 +1154,40 @@ func (h *Hub) StagePaneResize(paneID string, cols, rows uint16) (commit func() e
 		return nil, nil, err
 	}
 	ph.mu.Lock()
-	if ph.pendingResize != nil {
-		ph.mu.Unlock()
-		return nil, nil, fmt.Errorf("terminal resize: another resize is still staged")
-	}
-	ph.pendingResize = &ResizeMarker{AtSeq: ph.winHeadLocked(), Cols: cols, Rows: rows}
-	ph.mu.Unlock()
+	return h.stageResizeLocked(ph, paneID, cols, rows)
+}
 
+func (h *Hub) stageResizeForOwner(inst *pty.PTYInstance, cols, rows uint16) (func() error, func(), error) {
+	h.mu.RLock()
+	ph := h.panes[inst.ID]
+	if ph == nil {
+		h.mu.RUnlock()
+		return nil, nil, ErrReplayNoHistory
+	}
+	ph.mu.Lock()
+	h.mu.RUnlock()
+	if ph.retired || (ph.owner != nil && ph.owner != inst) {
+		ph.mu.Unlock()
+		return nil, nil, fmt.Errorf("pane owner replaced")
+	}
+	return h.stageResizeLocked(ph, inst.ID, cols, rows)
+}
+
+// Keep the pane transaction locked through the physical resize. Ingest
+// and owner replacement cannot publish bytes under uncommitted geometry.
+func (h *Hub) stageResizeLocked(ph *PaneHub, paneID string, cols, rows uint16) (func() error, func(), error) {
 	var once sync.Once
-	commit = func() error {
+	commit := func() error {
 		once.Do(func() {
-			ph.mu.Lock()
 			defer ph.mu.Unlock()
-			ph.pendingResize = nil
 			m, ordinal, changed := ph.appendResizeLocked(cols, rows)
-			if !changed {
-				return
+			if changed {
+				h.publishGeometryLocked(ph, paneID, m, ordinal)
 			}
-			h.publishGeometryLocked(ph, paneID, m, ordinal)
 		})
 		return nil
 	}
-	abort = func() {
-		once.Do(func() {
-			ph.mu.Lock()
-			ph.pendingResize = nil
-			ph.mu.Unlock()
-		})
-	}
+	abort := func() { once.Do(func() { ph.mu.Unlock() }) }
 	return commit, abort, nil
 }
 
@@ -1331,11 +1406,11 @@ func (h *Hub) StoreCheckpoint(paneID string, up CheckpointUpload) bool {
 // Unregister removes a client from a pane and drops it from the auth fence.
 func (h *Hub) Unregister(paneID string, client *Client) {
 	h.auth.forget(client.Ws)
-	h.mu.RLock()
-	ph, exists := h.panes[paneID]
-	h.mu.RUnlock()
-
-	if !exists {
+	ph := client.pane
+	if ph == nil {
+		ph = h.recordingForRead(paneID)
+	}
+	if ph == nil {
 		return
 	}
 
@@ -1357,6 +1432,15 @@ func (h *Hub) Unregister(paneID string, client *Client) {
 // idempotent.
 func (h *Hub) Close() error {
 	h.mu.Lock()
+	if h.closed {
+		done := h.closeDone
+		h.mu.Unlock()
+		<-done
+		return nil
+	}
+	h.closed = true
+	h.closeDone = make(chan struct{})
+	defer close(h.closeDone)
 	started, done := h.sweepStarted, h.sweepDone
 	h.sweepStarted = false
 	h.sweepDone = nil
@@ -1371,6 +1455,12 @@ func (h *Hub) Close() error {
 	closeJournals := func(panes map[string]*PaneHub) {
 		for paneID, ph := range panes {
 			ph.mu.Lock()
+			ph.retired = true
+			for c := range ph.clients {
+				delete(ph.clients, c)
+				close(c.Send)
+			}
+			ph.win, ph.Ring, ph.ckpt = nil, nil, nil
 			if ph.recording != nil {
 				errs = append(errs, ph.recording.close())
 			}
@@ -1383,6 +1473,9 @@ func (h *Hub) Close() error {
 	}
 	closeJournals(h.panes)
 	closeJournals(h.archives)
+	clear(h.panes)
+	clear(h.archives)
+	clear(h.paneOwners)
 	if h.leaseFile != nil {
 		errs = append(errs, h.leaseFile.Close())
 		h.leaseFile = nil
@@ -1581,9 +1674,28 @@ func (h *Hub) Ingest(paneID string, payload []byte) error {
 	}
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
+	return h.ingestLocked(ph, paneID, payload)
+}
 
-	if ph.win == nil {
-		ph.win = newReplayWindow(h.replayBufferBytes, ph.initColsOrDefault(), ph.initRowsOrDefault())
+func (h *Hub) ingestForOwner(inst *pty.PTYInstance, payload []byte) error {
+	h.mu.RLock()
+	ph := h.panes[inst.ID]
+	if ph == nil {
+		h.mu.RUnlock()
+		return ErrReplayNoHistory
+	}
+	ph.mu.Lock()
+	h.mu.RUnlock()
+	defer ph.mu.Unlock()
+	if ph.owner != inst || ph.retired || inst.ReadOwnerRetired() {
+		return fmt.Errorf("pane owner replaced")
+	}
+	return h.ingestLocked(ph, inst.ID, payload)
+}
+
+func (h *Hub) ingestLocked(ph *PaneHub, paneID string, payload []byte) error {
+	if ph.retired {
+		return ErrReplayNoHistory
 	}
 	// Publish bounded chunks: one oversized admission is split so a
 	// subscriber's queue holds frames, not a whole burst.
@@ -1619,7 +1731,7 @@ const terminalPublishChunkBytes = 64 << 10
 // panes close a full client instead of evicting queued frames, so PTY
 // output cannot drop an already queued bridge control.
 func (h *Hub) deliverPaneFrame(ph *PaneHub, client *Client, msg []byte) {
-	if ph.bridgeManaged {
+	if client.terminal || ph.bridgeManaged {
 		h.deliverOrClose(client, msg)
 		return
 	}
@@ -1738,8 +1850,8 @@ func (h *Hub) PaneStats(paneID string) (int, int, int) {
 	defer ph.mu.Unlock()
 	clients := len(ph.clients)
 	var used, cap int
-	if ph.Ring != nil {
-		used, cap = ph.Ring.Stats()
+	if ph.win != nil {
+		used, cap = ph.win.used(), ph.win.capacity()
 	}
 	return clients, used, cap
 }

@@ -98,8 +98,8 @@ func (app *Server) handleTerminalReplay(w http.ResponseWriter, r *http.Request) 
 		case errors.Is(rerr, ws.ErrReplayExpired):
 			// The client lost bytes below the floor. Send the exact window
 			// it can still certify so it resumes there instead of guessing.
-			if info, ok := app.hub.ReplayWindow(id); ok {
-				if meta, err := json.Marshal(info); err == nil && len(meta) <= 2048 {
+			if page.Position != nil {
+				if meta, err := json.Marshal(page.Position); err == nil && len(meta) <= 2048 {
 					w.Header().Set("X-Phi-Replay-Window", string(meta))
 				}
 			}

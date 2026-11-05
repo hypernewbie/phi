@@ -372,7 +372,7 @@ func TestHandleWS_DiedInPlaceReportsRealExitCode(t *testing.T) {
 		t.Fatal("timed out waiting for shell to exit")
 	}
 
-	assertionHub := NewHub(0)
+	assertionHub := drainHub
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		HandleWS(w, r, inst, manager, assertionHub)
 	}))
