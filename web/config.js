@@ -63,6 +63,8 @@ async function bootConfigPage() {
         };
         app.settingsReady = !!cached;
         app.initAppearance(cached || {});
+        app.initPiLaunch();
+        void app.piLaunchStore?.refresh();
         ingest(cached || {});
         void app.loadCustomFont();
         void app.loadCustomBg();

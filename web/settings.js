@@ -412,10 +412,14 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     modal.appendChild(footer);
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
+    // Assigned once the launch rows exist; closing Settings must drop their
+    // store subscription so a reopened view never renders twice.
+    let stopPiLaunch = () => { };
     const close = () => {
         document.removeEventListener('keydown', onKeydown, true);
         document.removeEventListener('focusin', onFocusin, true);
         overlay.removeEventListener('phi-settings-refresh', refreshShared);
+        stopPiLaunch();
         mobile.unsubscribe();
         if (persistTimer !== null)
             clearTimeout(persistTimer);
@@ -765,6 +769,126 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             console.warn('[settings] failed to persist low-power toggle', err);
         }
     });
+    // Launch settings live in their own store and endpoint, so the generic
+    // config readiness loop must not disable them and a config refresh must
+    // not clear a draft.
+    const piLaunchGroup = document.createElement('div');
+    piLaunchGroup.className = 'settings-pi-launch';
+    const piModeRow = _buildSelectRow('Default agent for new Pi tabs', 'settings-pi-default-mode', [
+        { value: 'pi', label: 'Pi' },
+        { value: 'psi', label: 'Psi' },
+    ], app.piLaunchStore?.mode ?? '');
+    piLaunchGroup.appendChild(piModeRow);
+    // The three Psi launch fields. A pending edit stays visible in the control,
+    // but launches keep using the confirmed value until the save lands.
+    const piCommandRow = _buildTextRow('Psi executable (blank = psi on PATH)', 'settings-pi-command', app.piLaunchStore?.value('psi_command') ?? '', '/usr/local/bin/psi');
+    piLaunchGroup.appendChild(piCommandRow);
+    // The plan's argument example: the second line is one argument with two
+    // inner spaces, and no line is split further.
+    const piArgsExample = '--some-option\n/a/b/c  d/';
+    const piArgsRow = _buildTextAreaRow('Extra Psi arguments (one per line)', 'settings-pi-args', 2, piArgsExample);
+    piLaunchGroup.appendChild(piArgsRow);
+    const piEnvRow = _buildTextAreaRow('Extra Psi environment (KEY=VALUE per line)', 'settings-pi-env', 2, 'PSI_LOG_LEVEL=debug');
+    piLaunchGroup.appendChild(piEnvRow);
+    const piLaunchHint = document.createElement('p');
+    piLaunchHint.className = 'settings-row-hint settings-pi-launch-status';
+    piLaunchGroup.appendChild(piLaunchHint);
+    // Recovery controls for a write that could not be confirmed. Automatic
+    // retries stop at that point, so the user decides.
+    const piLaunchActions = document.createElement('div');
+    piLaunchActions.className = 'settings-row';
+    const piSaveBtn = document.createElement('button');
+    piSaveBtn.className = 'btn btn-accent';
+    piSaveBtn.type = 'button';
+    piSaveBtn.textContent = 'Save my changes';
+    const piDiscardBtn = document.createElement('button');
+    piDiscardBtn.className = 'btn btn-primary';
+    piDiscardBtn.type = 'button';
+    piDiscardBtn.textContent = 'Use server values';
+    piLaunchActions.append(piSaveBtn, piDiscardBtn);
+    piLaunchGroup.appendChild(piLaunchActions);
+    behGroup.appendChild(piLaunchGroup);
+    const piModeSelect = piModeRow.querySelector('select');
+    const piCommandInput = piCommandRow.querySelector('input');
+    const piArgsInput = piArgsRow.querySelector('textarea');
+    const piEnvInput = piEnvRow.querySelector('textarea');
+    piLaunchHint.id = 'settings-pi-launch-status';
+    piLaunchHint.setAttribute('role', 'status');
+    const piFields = [
+        ['pi_default_mode', piModeSelect, piModeRow],
+        ['psi_command', piCommandInput, piCommandRow],
+        ['psi_args', piArgsInput, piArgsRow],
+        ['psi_env', piEnvInput, piEnvRow],
+    ];
+    const piErrors = piFields.map(([key, control, row]) => {
+        const error = document.createElement('p');
+        error.className = 'settings-row-hint settings-pi-field-error';
+        error.id = `settings-${key}-error`;
+        error.hidden = true;
+        error.setAttribute('aria-live', 'polite');
+        row.after(error);
+        control?.setAttribute('aria-describedby', `${error.id} ${piLaunchHint.id}`);
+        return error;
+    });
+    const renderPiLaunch = () => {
+        const store = app.piLaunchStore;
+        if (!store || !piModeSelect)
+            return;
+        if (!store.known) {
+            let placeholder = piModeSelect.querySelector('option[value=""]');
+            if (!placeholder) {
+                placeholder = document.createElement('option');
+                placeholder.value = '';
+                placeholder.textContent = 'Server default (not loaded)';
+                placeholder.disabled = true;
+                piModeSelect.insertBefore(placeholder, piModeSelect.firstChild);
+            }
+            placeholder.selected = true;
+        }
+        else {
+            piModeSelect.querySelector('option[value=""]')?.remove();
+            piModeSelect.value = store.mode ?? '';
+        }
+        piLaunchHint.textContent = store.status;
+        for (const [index, [key, control]] of piFields.entries()) {
+            const message = store.fieldError(key);
+            piErrors[index].textContent = message;
+            piErrors[index].hidden = !message;
+            control?.setAttribute('aria-invalid', String(!!message));
+            if (control && key !== 'pi_default_mode') {
+                const text = store.text(key);
+                if (control.value !== text)
+                    control.value = text;
+            }
+        }
+        piSaveBtn.hidden = !store.needsManualSave;
+        piDiscardBtn.hidden = !store.canDiscard;
+        piLaunchActions.hidden = piSaveBtn.hidden && piDiscardBtn.hidden;
+    };
+    for (const [key, control] of piFields) {
+        if (key === 'pi_default_mode')
+            continue;
+        control?.addEventListener('input', () => {
+            app.piLaunchStore?.editText(key, control.value);
+        });
+    }
+    piSaveBtn.addEventListener('click', () => {
+        piSaveBtn.disabled = true;
+        void app.piLaunchStore?.saveNow().finally(() => {
+            piSaveBtn.disabled = false;
+        });
+    });
+    piDiscardBtn.addEventListener('click', () => {
+        app.piLaunchStore?.useServerValues();
+    });
+    piModeSelect?.addEventListener('change', () => {
+        const value = piModeSelect.value;
+        if (value === 'pi' || value === 'psi')
+            app.piLaunchStore?.choose(value);
+    });
+    stopPiLaunch = app.piLaunchStore?.subscribe(renderPiLaunch) || (() => { });
+    renderPiLaunch();
+    void app.piLaunchStore?.refresh();
     const piOfflineRow = _buildCheckboxRow('Start pi with --offline (new tabs only)', 'settings-pi-offline', !!app.config?.pi_offline);
     behGroup.appendChild(piOfflineRow);
     piOfflineRow
@@ -1000,8 +1124,13 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             ? ''
             : 'Shared server settings are unavailable until the background refresh succeeds.';
         for (const group of [behGroup, securityGroup])
-            for (const control of group.querySelectorAll('input, select, button'))
+            for (const control of group.querySelectorAll('input, select, button')) {
+                // Launch settings have their own readiness state; a slow
+                // generic config refresh must never disable local editing.
+                if (control.closest('.settings-pi-launch'))
+                    continue;
                 control.disabled = !ready;
+            }
         const scrollInput = mobileScrollRow.querySelector('input');
         if (scrollInput)
             scrollInput.disabled = !ready;
@@ -1379,6 +1508,39 @@ function _buildSelectRow(labelText, id, options, current) {
         sel.appendChild(opt);
     });
     row.appendChild(sel);
+    return row;
+}
+function _buildTextRow(labelText, id, value, placeholder) {
+    const row = document.createElement('div');
+    row.className = 'settings-row';
+    const label = document.createElement('label');
+    label.htmlFor = id;
+    label.textContent = labelText;
+    row.appendChild(label);
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.id = id;
+    inp.value = value;
+    inp.placeholder = placeholder;
+    inp.autocomplete = 'off';
+    inp.spellcheck = false;
+    row.appendChild(inp);
+    return row;
+}
+function _buildTextAreaRow(labelText, id, rows, placeholder) {
+    const row = document.createElement('div');
+    row.className = 'settings-row';
+    const label = document.createElement('label');
+    label.htmlFor = id;
+    label.textContent = labelText;
+    row.appendChild(label);
+    const area = document.createElement('textarea');
+    area.id = id;
+    area.rows = rows;
+    area.placeholder = placeholder;
+    area.autocomplete = 'off';
+    area.spellcheck = false;
+    row.appendChild(area);
     return row;
 }
 function _buildNumberRow(labelText, id, current, min, max) {

@@ -430,9 +430,10 @@ export class SessionsManager {
                 const piTarget = e.target?.closest('.coder-tab[data-coder="pi"]');
                 if (piTarget && this.quickLaunchReady) {
                     e.preventDefault();
-                    this._showPiPsiMenu(e, () => {
+                    const mode = this._oppositePiMode();
+                    this._showPiLaunchMenu(e, mode, () => {
                         this.switchCoder('pi');
-                        this.spawnNewSession(false, true);
+                        this.spawnNewSession(false, mode);
                     });
                     return;
                 }
@@ -468,9 +469,10 @@ export class SessionsManager {
                 const piTarget = e.target?.closest('.empty-launch-btn[data-coder="pi"]');
                 if (piTarget && this.quickLaunchReady) {
                     e.preventDefault();
-                    this._showPiPsiMenu(e, () => {
+                    const mode = this._oppositePiMode();
+                    this._showPiLaunchMenu(e, mode, () => {
                         this.switchCoder('pi');
-                        this.spawnNewSession(false, true);
+                        this.spawnNewSession(false, mode);
                     });
                     return;
                 }
@@ -483,9 +485,10 @@ export class SessionsManager {
         this.newSessionBtn.addEventListener('contextmenu', (e) => {
             if (this.activeCoder === 'pi' && this.quickLaunchReady) {
                 e.preventDefault();
-                this._showPiPsiMenu(e, () => {
+                const mode = this._oppositePiMode();
+                this._showPiLaunchMenu(e, mode, () => {
                     this.switchCoder('pi');
-                    this.spawnNewSession(false, true);
+                    this.spawnNewSession(false, mode);
                 });
                 return;
             }
@@ -1925,7 +1928,19 @@ export class SessionsManager {
             }
         });
     }
-    async spawnNewSession(mini = false, psi = false) {
+    // _piLaunchMode resolves the agent for a launch in this browser. A local
+    // pending choice applies here immediately; other clients keep the last
+    // confirmed server default until the save is confirmed.
+    _piLaunchMode(explicit) {
+        return explicit ?? this.app?.piLaunchStore?.mode ?? null;
+    }
+    // _oppositePiMode is the action the Pi context menus offer: the agent the
+    // current default does not already use. Unknown defaults keep the
+    // historical "Open with Psi".
+    _oppositePiMode() {
+        return this.app?.piLaunchStore?.mode === 'psi' ? 'pi' : 'psi';
+    }
+    async spawnNewSession(mini = false, mode = null) {
         try {
             if (isCompactViewport()) {
                 document
@@ -1940,7 +1955,16 @@ export class SessionsManager {
                 coder?.short_label ??
                 coder?.name ??
                 'Shell';
-            const title = psi ? '+ Psi' : `+ ${coderName}`;
+            const launchMode = coderId === 'pi' ? this._piLaunchMode(mode) : null;
+            // With no known default the title is left to the server, which
+            // reports the agent it actually launched.
+            const title = coderId === 'pi'
+                ? launchMode
+                    ? launchMode === 'psi'
+                        ? '+ Psi'
+                        : '+ Pi'
+                    : ''
+                : `+ ${coderName}`;
             const res = await fetch('/api/terminals', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1951,7 +1975,8 @@ export class SessionsManager {
                     title: title,
                     workspace,
                     ...(mini ? { opencode_mini: true } : {}),
-                    ...(psi ? { pi_psi: true } : {}),
+                    ...(launchMode ? { pi_mode: launchMode } : {}),
+                    ...(launchMode === 'psi' ? { pi_psi: true } : {}),
                 }),
             });
             if (!res.ok) {
@@ -1959,10 +1984,16 @@ export class SessionsManager {
                 throw new Error(errText.trim() || 'Failed to spawn session');
             }
             const data = await res.json();
-            this.app.tabManager.createTab(data.pane_id, data.session_id, title, coderId, workspace, cwd, 
-            // The trailing bridge value seeds the tab's ordered
-            // model view; explicit defaults match createTab's.
-            ...(coderId === 'opencode'
+            // The returned agent is authoritative: a cold start with no known
+            // default can come back as Psi.
+            const tabTitle = coderId === 'pi'
+                ? (data.pi_mode ?? launchMode) === 'psi'
+                    ? '+ Psi'
+                    : '+ Pi'
+                : title;
+            // The trailing bridge value seeds the tab's ordered model view;
+            // explicit defaults match createTab's.
+            const tabExtras = coderId === 'opencode'
                 ? [
                     true,
                     false,
@@ -1980,12 +2011,15 @@ export class SessionsManager {
                     null,
                     data.pi_bridge,
                     {
-                        piMode: data.pi_mode,
+                        piMode: coderId === 'pi'
+                            ? (data.pi_mode ?? launchMode ?? 'pi')
+                            : undefined,
                         ...(data.new_pane === true
                             ? { fresh: true }
                             : {}),
                     },
-                ]));
+                ];
+            this.app.tabManager.createTab(data.pane_id, data.session_id, tabTitle, coderId, workspace, cwd, ...tabExtras);
             this.loadSessions();
             if (coderId === 'opencode') {
                 setTimeout(() => this.fetchOpenCodeServiceStatus(), 1200);
@@ -1995,9 +2029,10 @@ export class SessionsManager {
             this.app.showToast(e.message, { type: 'error' });
         }
     }
-    async launchSession(sessionId, title, extraArgs = [], mini = false, psi = false) {
+    async launchSession(sessionId, title, extraArgs = [], mini = false, mode = null) {
         try {
             const coderId = this.activeCoder, cwd = this.activeCWD, workspace = this.activeWorkspace;
+            const launchMode = coderId === 'pi' ? this._piLaunchMode(mode) : null;
             const res = await fetch('/api/terminals', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -2009,7 +2044,8 @@ export class SessionsManager {
                     title: title,
                     workspace,
                     ...(mini ? { opencode_mini: true } : {}),
-                    ...(psi ? { pi_psi: true } : {}),
+                    ...(launchMode ? { pi_mode: launchMode } : {}),
+                    ...(launchMode === 'psi' ? { pi_psi: true } : {}),
                 }),
             });
             if (!res.ok) {
@@ -2038,7 +2074,9 @@ export class SessionsManager {
                     null,
                     data.pi_bridge,
                     {
-                        piMode: data.pi_mode,
+                        piMode: coderId === 'pi'
+                            ? (data.pi_mode ?? launchMode ?? 'pi')
+                            : undefined,
                         ...(data.new_pane === true
                             ? { fresh: true }
                             : {}),
@@ -2080,8 +2118,9 @@ export class SessionsManager {
             });
         }
         if (this.activeCoder === 'pi' || sess.coder === 'pi') {
-            mkItem('Open with Psi', () => {
-                this.launchSession(sess.id, sess.title, [], false, true);
+            const mode = this._oppositePiMode();
+            mkItem(mode === 'pi' ? 'Open with Pi' : 'Open with Psi', () => {
+                this.launchSession(sess.id, sess.title, [], false, mode);
                 const sidebar = document.getElementById('sidebar-panel');
                 if (sidebar)
                     sidebar.classList.remove('drawer-open');
@@ -2253,14 +2292,14 @@ export class SessionsManager {
         menu.appendChild(item);
         this._mountSessionContextMenu(e, menu);
     }
-    _showPiPsiMenu(e, launch) {
+    _showPiLaunchMenu(e, mode, launch) {
         this._dismissContextMenu();
         const menu = document.createElement('div');
         menu.className = 'session-ctx-menu';
         menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;z-index:9999`;
         const item = document.createElement('div');
         item.className = 'session-ctx-item';
-        item.textContent = 'Open with Psi';
+        item.textContent = mode === 'pi' ? 'Open with Pi' : 'Open with Psi';
         item.setAttribute('role', 'menuitem');
         item.tabIndex = 0;
         const activate = () => {

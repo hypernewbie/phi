@@ -16885,8 +16885,13 @@ export class TabManager {
                 ...(tabInfo.coder === 'opencode'
                     ? { opencode_mini: isOpenCodeMini(tabInfo) }
                     : {}),
-                ...(tabInfo.coder === 'pi' && tabInfo.piMode === 'psi'
-                    ? { pi_psi: true }
+                // A restart keeps the pane's own agent; settings never move a
+                // running or restored tab to the other one.
+                ...(tabInfo.coder === 'pi'
+                    ? {
+                          pi_mode: tabInfo.piMode === 'psi' ? 'psi' : 'pi',
+                          ...(tabInfo.piMode === 'psi' ? { pi_psi: true } : {}),
+                      }
                     : {}),
             }),
         })

@@ -9,6 +9,7 @@ import { escapeHtml, buildPhiFaviconSvg, isCoarseViewport, isCompactViewport, is
 import { BackendScope } from './backend-scope.js';
 import { MobileAppearanceStore, EMPTY_MOBILE, captureAppearanceScope, appearanceRequestContext, appearanceOwner, currentAppearanceProfile, effectiveAppearance, applyAppearanceFonts, legacyAppearanceKey, readDesktopAppearance, } from './mobile-appearance.js';
 import { BackendStore, backendStores } from './backend-store.js';
+import { PiLaunchStore } from './pi-launch.js';
 import { NotificationManager } from './notifications.js';
 import { SyncManager } from './sync.js';
 import { initQuotaButton } from './quota.js';
@@ -83,6 +84,7 @@ export class App {
     useHiddenTerminal = false;
     desktopAppearance = null;
     mobileAppearanceStore = null;
+    piLaunchStore = null;
     faviconAccent;
     faviconAccentDim;
     terminalActivity;
@@ -166,6 +168,7 @@ export class App {
         this.kanbanManager = new KanbanManager(this);
         this.syncManager = new SyncManager(this);
         this.initAppearance();
+        this.initPiLaunch();
     }
     async init() {
         // Effects profile: apply synchronously before any await so a
@@ -182,6 +185,9 @@ export class App {
     async revalidate(scope = this.scope) {
         if (scope?.aborted)
             return;
+        // Read the launch default behind the cached paint. Running it here,
+        // after the switch is active, keeps the request on the new backend.
+        void this.piLaunchStore?.refresh();
         if (typeof document !== 'undefined' && document.documentElement) {
             document.documentElement.dataset.sync = 'stale';
         }
@@ -857,6 +863,7 @@ export class App {
         const scope = new BackendScope(profileId, origin || '');
         this.scope = scope;
         this.initAppearance();
+        this.initPiLaunch();
         this.tabManager?._bindThinkingPresetStore?.(scope);
         this.tabManager?._bindAttachmentStore?.(scope);
         const nextStore = backendStores.get(profileId);
@@ -1795,6 +1802,20 @@ export class App {
     }
     openSettingsModal(opts) {
         openSettingsModal(this, ACCENT_COLORS, opts);
+    }
+    // initPiLaunch owns the launch-settings store for the current backend. It
+    // is separate from generic config so a config refresh can never clear a
+    // draft or acknowledge a write this document did not confirm.
+    initPiLaunch() {
+        const writer = this.piLaunchStore?.writer;
+        this.piLaunchStore?.dispose();
+        this.scope ||= captureAppearanceScope();
+        const store = new PiLaunchStore(this.scope, writer);
+        this.piLaunchStore = store;
+        store.subscribe(() => {
+            if (this.piLaunchStore === store)
+                document.dispatchEvent(new Event('phi-pi-launch-change'));
+        });
     }
     initAppearance(data = {}) {
         this.settingsReady = Object.keys(data).length > 0;

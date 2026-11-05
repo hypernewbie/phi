@@ -5408,6 +5408,39 @@ html[data-appearance-profile="mobile"] .settings-modal :is(input, select, textar
     color: var(--red);
 }
 
+/* Pi launch fields. A textarea reuses the row-input tokens so the extra Psi
+   arguments and environment read as part of the same settings list. */
+.settings-pi-launch .settings-row label {
+    flex-basis: 52%;
+    white-space: normal;
+}
+
+.settings-pi-launch textarea {
+    min-width: 0;
+    flex: 1 1 auto;
+    min-height: 46px;
+    resize: vertical;
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--bg-border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    padding: 6px 10px;
+    font-size: calc(13px * var(--ui-scale));
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+.settings-pi-launch textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.settings-pi-launch .settings-pi-field-error {
+    color: var(--red);
+    overflow-wrap: anywhere;
+}
+
 .settings-access-actions-row {
     display: flex;
     align-items: center;
