@@ -56,6 +56,25 @@ func (app *Server) spawnTerminal(ctx context.Context, c coders.Coder, req SpawnR
 			return bad(err)
 		}
 	}
+	// Pi writes its session file only once the first message is sent. A pane
+	// that was opened but never used keeps an ID that cannot be resumed, and
+	// `pi --session <id>` exits with "No session found matching". Treat a
+	// missing Pi session as fresh instead of launching a dead pane; the UI
+	// restart sends the pane's ID back through this same path. Psi keeps its
+	// own behaviour because its session storage is not Pi's file store.
+	if c.ID == "pi" && c.SessionSource == "pi_files" && effectivePiMode(c) == piModePi && req.SessionID != "" {
+		cwd := req.Cwd
+		if cwd == "" {
+			cwd = c.DefaultCwd
+		}
+		if cwd == "" {
+			cwd = app.activeCWD
+		}
+		if !piSessionExists(cwd, req.SessionID) {
+			log.Printf("[spawn] pi session %q is not saved for %s; starting fresh", req.SessionID, cwd)
+			req.SessionID = ""
+		}
+	}
 	id := req.SessionID
 	if id == "" {
 		c, id = coders.FreshSession(c)
@@ -314,3 +333,19 @@ func (app *Server) restoreSavedTab(tab pty.SavedTab) {
 // bridge extension argument. Native psi speaks the protocol itself, so it
 // gets the environment but never --extension.
 func piBridgeInjectsExtension(c coders.Coder) bool { return c.PiMode != "psi" }
+
+// piSessionExists reports whether Pi has a saved session with this exact ID
+// for the working directory. A listing failure counts as missing: a launch
+// must prefer a fresh session over a resume that cannot succeed.
+func piSessionExists(cwd, id string) bool {
+	sessions, err := session.ListPiSessions(cwd)
+	if err != nil {
+		return false
+	}
+	for _, candidate := range sessions {
+		if candidate.ID == id {
+			return true
+		}
+	}
+	return false
+}
