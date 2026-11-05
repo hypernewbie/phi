@@ -51,6 +51,9 @@ type Client struct {
 	// same connection. Nil for Clients built directly in tests; logger()
 	// falls back to componentLogger().
 	Logger *slog.Logger
+
+	pane     *PaneHub // exact registration, including archived/replaced panes
+	terminal bool
 }
 
 // logger returns c.Logger if set, else componentLogger() — nil-safe so
@@ -87,6 +90,20 @@ type PaneHub struct {
 	Ring         *RingBuffer
 	recording    *retentionGroup
 	recordingErr error
+
+	// win is the RAM-only retained-output authority: every admitted byte
+	// is written here and nothing is written to disk. The legacy journal
+	// and retention group below stay referenceable for file-format tests
+	// only; no production entrypoint opens or reads them.
+	win *replayWindow
+
+	// owner is the current read-loop owner. A restore retry reuses the
+	// pane ID with a new instance, which resets the window and epoch.
+	owner *pty.PTYInstance
+
+	// retired marks history released by expiry. A late reader or attach
+	// gets no history instead of reading released storage.
+	retired bool
 
 	// journal is the v3 raw journal: every committed output byte plus
 	// ordered geometry. The retention group above is retired: it stays
@@ -165,6 +182,8 @@ type Hub struct {
 	sweepDone         chan struct{}
 	sweepWg           sync.WaitGroup
 	sweepStarted      bool
+	closed            bool
+	closeDone         chan struct{}
 	importFailed      map[string]importFailure
 	importScans       uint64
 	lastStats         importStats
@@ -312,7 +331,13 @@ func (h *Hub) recordingPath(paneID string) string {
 	return filepath.Join(h.recordingDirectory, "v3", fmt.Sprintf("%x", sha256.Sum256([]byte(paneID))))
 }
 
+// SetReplayBufferBytes changes the retained-byte capacity used for new
+// panes. The value is clamped to the hard 32 MiB ceiling; nonpositive
+// values disable retention.
 func (h *Hub) SetReplayBufferBytes(bytes int) {
+	if bytes > replayWindowMaxBytes {
+		bytes = replayWindowMaxBytes
+	}
 	h.mu.Lock()
 	h.replayBufferBytes = bytes
 	h.mu.Unlock()
@@ -324,61 +349,34 @@ func (h *Hub) SetReplayBufferBytes(bytes int) {
 func (h *Hub) GetOrCreatePaneHub(paneID string) (*PaneHub, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-
-	ph, exists := h.panes[paneID]
-	if !exists {
-		var ring *RingBuffer
-		if h.replayBufferBytes > 0 {
-			ring = NewRingBuffer(h.replayBufferBytes)
-		}
-		ph = h.archives[paneID]
-		if ph != nil {
-			// Promote the owner, not just its file. In-flight cold reads and
-			// the live writer must continue to use the same journal mutex.
-			delete(h.archives, paneID)
-		} else {
-			ph = &PaneHub{clients: make(map[*Client]bool)}
-		}
-		ph.mu.Lock()
-		defer ph.mu.Unlock()
-		if ph.journal != nil && ph.journal.readOnly {
-			_ = ph.journal.close()
-			ph.journal = nil
-		}
-		// Open the journal when an on-disk group or a stored spawn
-		// geometry exists; otherwise InitPaneJournal (spawn/restore) or
-		// the first Ingest opens it. A failed open is sticky: callers
-		// see the error instead of a fresh empty authority.
-		if ph.journal == nil && ph.journalErr == nil {
-			ph.journal, ph.journalErr = h.openPaneJournal(paneID, ph)
-		}
-		h.takeRawClock(ph.journal)
-		ph.closedAtUnixNano = 0
-		if ph.journal != nil {
-			if err := ph.journal.markOpen(); err != nil {
-				log.Printf("[ws] pane %s: could not record its reopening: %v", paneID, err)
-			}
-		}
-		ph.Ring = ring
-		ph.epoch = randomEpoch()
-		if ph.journal != nil {
-			ph.total = ph.journal.head
-			if ring != nil && ph.total > 0 {
-				var from uint64
-				if ph.total > uint64(h.replayBufferBytes) {
-					from = ph.total - uint64(h.replayBufferBytes)
-				}
-				// The ring is a cache: a bounded tail fill needs no
-				// markers, so the ordinal cursor starts at the head.
-				data, _, _, err := ph.journal.readOrd(from, ph.total, ph.journal.nextOrdinal-1)
-				if err == nil {
-					ring.Write(data)
-				}
-			}
-		}
-		h.panes[paneID] = ph
+	if h.closed {
+		return nil, ErrReplayNoHistory
 	}
-	return ph, nil
+	return h.getOrCreatePaneHubLocked(paneID), nil
+}
+
+// getOrCreatePaneHubLocked returns the live pane hub, promoting a closed
+// archive so its RAM history stays readable in-process. The caller holds
+// h.mu. Production initialization goes through InitPaneForOwner, which
+// resets a replacement owner's window and epoch.
+func (h *Hub) getOrCreatePaneHubLocked(paneID string) *PaneHub {
+	if ph := h.panes[paneID]; ph != nil {
+		return ph
+	}
+	ph := h.archives[paneID]
+	if ph != nil {
+		delete(h.archives, paneID)
+		ph.mu.Lock()
+		ph.closedAtUnixNano = 0
+		ph.retired = false
+		ph.mu.Unlock()
+	} else {
+		ph = &PaneHub{clients: make(map[*Client]bool)}
+		ph.epoch = randomEpoch()
+		ph.win = newReplayWindow(h.replayBufferBytes, 0, 0)
+	}
+	h.panes[paneID] = ph
+	return ph
 }
 
 // openPaneJournal opens the v3 journal for a pane hub. An on-disk group
@@ -448,10 +446,10 @@ func (ph *PaneHub) initRowsOrDefault() uint16 {
 	return ph.initRows
 }
 
-// InitPaneJournal stores the actual spawn geometry and opens the pane's
-// journal before the read loop admits bytes. StartPTYReadLoop calls this
-// synchronously; reopening an existing journal keeps its manifest
-// baseline. Idempotent.
+// InitPaneJournal is the RAM-only compatibility initializer: it stores
+// the spawn geometry and creates the pane's retained window. Production
+// spawn and restore use InitPaneForOwner, which also binds the owner.
+// Idempotent; it never opens a journal.
 func (h *Hub) InitPaneJournal(paneID string, cols, rows uint16) error {
 	if cols == 0 || rows == 0 {
 		cols, rows = 80, 24
@@ -462,17 +460,70 @@ func (h *Hub) InitPaneJournal(paneID string, cols, rows uint16) error {
 	}
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
-	if ph.initCols == 0 || ph.initRows == 0 {
-		ph.initCols, ph.initRows = cols, rows
+	ph.initCols, ph.initRows = cols, rows
+	ph.bindGeometryLocked(h.replayBufferBytes, cols, rows)
+	return nil
+}
+
+// bindGeometryLocked seeds a window that has never produced output.
+func (ph *PaneHub) bindGeometryLocked(capacity int, cols, rows uint16) {
+	if ph.win == nil {
+		ph.win = newReplayWindow(capacity, cols, rows)
+		return
 	}
-	if ph.journal == nil && ph.journalErr == nil {
-		ph.journal, ph.journalErr = h.openPaneJournal(paneID, ph)
-		h.takeRawClock(ph.journal)
-		if ph.journal != nil {
-			ph.total = ph.journal.head
+	if ph.win.head == 0 && len(ph.win.resizes) == 0 && ph.win.baseCols == 0 {
+		ph.win.baseCols, ph.win.baseRows = cols, rows
+	}
+}
+
+// InitPaneForOwner binds a pane to its exact PTY read-loop owner and seeds
+// its geometry before any byte is admitted. The owner and geometry bind
+// atomically under h.mu then ph.mu, so a delayed initializer cannot bind a
+// retired instance.
+//
+// A repeat call for the same instance is idempotent. A replacement
+// instance starts a fresh window and a new epoch: old clients are closed,
+// the old owner entry is dropped, and the previous history is released.
+func (h *Hub) InitPaneForOwner(inst *pty.PTYInstance) error {
+	if inst == nil || inst.Pty == nil {
+		return fmt.Errorf("pane owner is nil")
+	}
+	cols, rows := inst.Pty.Cols, inst.Pty.Rows
+	if cols == 0 || rows == 0 {
+		cols, rows = 80, 24
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed || inst.ReadOwnerRetired() {
+		return fmt.Errorf("pane owner retired")
+	}
+	ph := h.getOrCreatePaneHubLocked(inst.ID)
+	ph.mu.Lock()
+	defer ph.mu.Unlock()
+	if ph.owner == inst {
+		ph.bindGeometryLocked(h.replayBufferBytes, cols, rows)
+		return nil
+	}
+	if ph.owner != nil || ph.winHeadLocked() > 0 {
+		// A replacement owns a new lifetime, never the old reader's bytes.
+		if ph.owner != nil {
+			ph.owner.RetireReadOwner()
 		}
+		for client := range ph.clients {
+			delete(ph.clients, client)
+			close(client.Send)
+		}
+		ph.epoch = randomEpoch()
+		ph.win = newReplayWindow(h.replayBufferBytes, cols, rows)
+		ph.ckpt = nil
+		ph.closedAtUnixNano = 0
+		ph.retired = false
 	}
-	return ph.journalErr
+	ph.owner = inst
+	ph.initCols, ph.initRows = cols, rows
+	ph.bindGeometryLocked(h.replayBufferBytes, cols, rows)
+	h.paneOwners[inst.ID] = inst
+	return nil
 }
 
 func randomEpoch() uint64 {
@@ -517,6 +568,7 @@ func (h *Hub) Register(paneID string, client *Client) {
 		return
 	}
 	ph.mu.Lock()
+	client.pane = ph
 	ph.clients[client] = true
 	ph.mu.Unlock()
 	log.Printf("[ws] Registered client for pane %s", paneID)
@@ -536,21 +588,10 @@ type PanePosition struct {
 
 // positionLocked reads the pane's seq state under ph.mu.
 func (ph *PaneHub) positionLocked() PanePosition {
-	if ph.journal != nil {
-		// The raw journal never evicts: the oldest byte is always zero.
-		return PanePosition{Epoch: ph.epoch, Oldest: 0, Head: ph.total}
+	if ph.win == nil {
+		return PanePosition{Epoch: ph.epoch}
 	}
-	retained := uint64(0)
-	if ph.Ring != nil {
-		used, _ := ph.Ring.Stats()
-		retained = uint64(used)
-	}
-	oldest := ph.total
-	if retained > ph.total {
-		retained = ph.total
-	}
-	oldest = ph.total - retained
-	return PanePosition{Epoch: ph.epoch, Oldest: oldest, Head: ph.total}
+	return PanePosition{Epoch: ph.epoch, Oldest: ph.win.floor(), Head: ph.win.head}
 }
 
 // RecordingHeaderJSON is the header of the /recording HTTP response; raw
@@ -561,57 +602,145 @@ type RecordingHeaderJSON = wireproto.RecordingHeader
 // Registration and the head capture happen under the pane lock, so the
 // client is guaranteed to receive every output frame with start >= Head:
 // the boundary is atomic, no gap, no duplication. Nothing from before
-// Head is pushed — history stays off the live path.
-func (h *Hub) AttachHot(paneID string, client *Client) {
-	ph, err := h.GetOrCreatePaneHub(paneID)
+// Head is pushed — history is served over HTTP from the RAM window.
+// It reports false when the attach frame could not be queued.
+func (h *Hub) AttachHot(paneID string, client *Client) bool {
+	return h.attachHot(paneID, client, nil)
+}
+
+func (h *Hub) attachHot(paneID string, client *Client, owner *pty.PTYInstance) bool {
+	// A viewer never promotes an archive or renews its closure time.
+	ph := h.recordingForRead(paneID)
+	var err error
+	if ph == nil && owner != nil && owner.IsPtyDead() {
+		// A missing ghost archive still gets a finite empty attach + Exit,
+		// but viewing it must not recreate retained state or renew expiry.
+		ph = &PaneHub{clients: make(map[*Client]bool), epoch: randomEpoch(), win: newReplayWindow(0, 80, 24)}
+	} else if ph == nil && (owner == nil || !owner.ReadOwnerRetired()) {
+		ph, err = h.GetOrCreatePaneHub(paneID)
+	}
+	if ph == nil {
+		return false
+	}
 	if err != nil {
 		log.Printf("[ws] attach pane %s: %v", paneID, err)
 		if client.Ws != nil {
 			_ = client.Ws.Close()
 		}
-		return
+		return false
 	}
 	ph.mu.Lock()
+	if ph.retired || (owner != nil && owner.Pty != nil && ph.owner != nil && ph.owner != owner) {
+		ph.mu.Unlock()
+		return false
+	}
 	pos := ph.positionLocked()
+	floorCols, floorRows, headCols, headRows := ph.attachGeometryLocked()
 
 	attach := &wspb.TerminalAttach{
-		Epoch:  proto.Uint64(pos.Epoch),
-		Oldest: proto.Uint64(pos.Oldest),
-		Head:   proto.Uint64(pos.Head),
+		Epoch:       proto.Uint64(pos.Epoch),
+		Oldest:      proto.Uint64(pos.Oldest),
+		Head:        proto.Uint64(pos.Head),
+		InitialCols: proto.Uint32(uint32(ph.initColsOrDefault())),
+		InitialRows: proto.Uint32(uint32(ph.initRowsOrDefault())),
+		FloorCols:   proto.Uint32(uint32(floorCols)),
+		FloorRows:   proto.Uint32(uint32(floorRows)),
+		HeadCols:    proto.Uint32(uint32(headCols)),
+		HeadRows:    proto.Uint32(uint32(headRows)),
+		EventCursor: proto.String(EncodeEventCursor(pos.Epoch, pos.Head, ph.winOrdinalLocked())),
 	}
-	// The server sends no checkpoint: v2 clients replay raw bytes plus
-	// ordered geometry from byte zero. The attach carries the replay
-	// baseline (initial geometry), the head fence, and the durability
-	// warnings. Client.NativeState/AnsiState are ignored; the fields
-	// stay until the VT removal deletes them.
-	if ph.journal != nil {
-		initCols, initRows := ph.journal.initialGeometry()
-		attach.InitialCols = proto.Uint32(uint32(initCols))
-		attach.InitialRows = proto.Uint32(uint32(initRows))
-		attach.EventCursor = proto.String(EncodeEventCursor(pos.Epoch, pos.Head, ph.journal.nextOrdinal-1))
-		if ph.journal.historyIncomplete() {
-			attach.HistoryIncomplete = proto.Bool(true)
-		}
-		if ph.journal.ephemeral {
-			attach.Ephemeral = proto.Bool(true)
-		}
-	} else {
-		attach.InitialCols = proto.Uint32(uint32(ph.initColsOrDefault()))
-		attach.InitialRows = proto.Uint32(uint32(ph.initRowsOrDefault()))
-		attach.EventCursor = proto.String(EncodeEventCursor(pos.Epoch, pos.Head, 0))
-		if ph.journalErr != nil {
-			log.Printf("[ws] attach pane %s: journal unavailable: %v", paneID, ph.journalErr)
-		}
+	if ph.win != nil {
+		attach.FloorEventCursor = proto.String(EncodeEventCursor(pos.Epoch, pos.Oldest, ph.win.ordinalAt(pos.Oldest)))
 	}
-	if frame, err := wireproto.EncodeAttachFrame(attach); err != nil {
+	frame, err := wireproto.EncodeAttachFrame(attach)
+	if err != nil {
+		ph.mu.Unlock()
 		log.Printf("[ws] attach pane %s: encode error: %v", paneID, err)
-	} else {
-		client.Send <- frame
+		return false
 	}
-
+	client.pane, client.terminal = ph, true
 	ph.clients[client] = true
+	select {
+	case client.Send <- frame:
+	default:
+		delete(ph.clients, client)
+		ph.mu.Unlock()
+		log.Printf("[ws] attach pane %s: send queue full", paneID)
+		return false
+	}
 	ph.mu.Unlock()
-	log.Printf("[ws] Registered protobuf client for pane %s (epoch %d, head %d, live-only)", paneID, pos.Epoch, pos.Head)
+	log.Printf("[ws] Registered protobuf client for pane %s (epoch %d, head %d, retained from %d)", paneID, pos.Epoch, pos.Head, pos.Oldest)
+	return true
+}
+
+// attachGeometryLocked returns floor and head grids for the attach frame.
+func (ph *PaneHub) attachGeometryLocked() (floorCols, floorRows, headCols, headRows uint16) {
+	if ph.win == nil {
+		return ph.initColsOrDefault(), ph.initRowsOrDefault(), ph.initColsOrDefault(), ph.initRowsOrDefault()
+	}
+	floorCols, floorRows = ph.win.initialGeometry()
+	if floorCols == 0 || floorRows == 0 {
+		floorCols, floorRows = ph.initColsOrDefault(), ph.initRowsOrDefault()
+	}
+	headCols, headRows = ph.win.geometryAt(ph.win.head)
+	if headCols == 0 || headRows == 0 {
+		headCols, headRows = floorCols, floorRows
+	}
+	return floorCols, floorRows, headCols, headRows
+}
+
+// winOrdinalLocked is the newest applied resize ordinal, zero when none.
+func (ph *PaneHub) winOrdinalLocked() uint64 {
+	if ph.win == nil {
+		return 0
+	}
+	return ph.win.lastOrdinal()
+}
+
+// ReplayWindowInfo is the atomic window metadata returned with an expired
+// replay response. A client uses it to resume at the certified floor
+// without guessing how much history it lost.
+type ReplayWindowInfo struct {
+	Epoch            uint64 `json:"epoch"`
+	Oldest           uint64 `json:"oldest"`
+	Head             uint64 `json:"head"`
+	FloorCols        uint16 `json:"floor_cols"`
+	FloorRows        uint16 `json:"floor_rows"`
+	HeadCols         uint16 `json:"head_cols"`
+	HeadRows         uint16 `json:"head_rows"`
+	FloorEventCursor string `json:"floor_event_cursor,omitempty"`
+	EventCursor      string `json:"event_cursor,omitempty"`
+}
+
+// ReplayWindow reports the pane's current floor and head with geometry.
+// It returns false when the pane has no retained history.
+func (h *Hub) ReplayWindow(paneID string) (ReplayWindowInfo, bool) {
+	ph := h.recordingForRead(paneID)
+	if ph == nil {
+		return ReplayWindowInfo{}, false
+	}
+	ph.mu.Lock()
+	defer ph.mu.Unlock()
+	if ph.retired || ph.win == nil {
+		return ReplayWindowInfo{}, false
+	}
+	return ph.replayWindowLocked(), true
+}
+
+func (ph *PaneHub) replayWindowLocked() ReplayWindowInfo {
+	pos := ph.positionLocked()
+	floorCols, floorRows, headCols, headRows := ph.attachGeometryLocked()
+	return ReplayWindowInfo{
+		Epoch:            pos.Epoch,
+		Oldest:           pos.Oldest,
+		Head:             pos.Head,
+		FloorCols:        floorCols,
+		FloorRows:        floorRows,
+		HeadCols:         headCols,
+		HeadRows:         headRows,
+		FloorEventCursor: EncodeEventCursor(pos.Epoch, pos.Oldest, ph.win.ordinalAt(pos.Oldest)),
+		EventCursor:      EncodeEventCursor(pos.Epoch, pos.Head, ph.winOrdinalLocked()),
+	}
 }
 
 // Replay errors map to HTTP statuses at the /replay endpoint: malformed
@@ -622,6 +751,7 @@ var (
 	ErrReplayEpoch       = errors.New("replay epoch mismatch")
 	ErrReplayFuture      = errors.New("replay fence beyond head")
 	ErrReplayNoHistory   = errors.New("no replay history")
+	ErrReplayExpired     = errors.New("replay position expired")
 	ErrReplayUnavailable = errors.New("replay storage unavailable")
 )
 
@@ -643,6 +773,7 @@ type ReplayRequest struct {
 // ReplayPage is one raw replay page: output bytes plus the geometry that
 // orders them. End and EndCursor fence the next request.
 type ReplayPage struct {
+	Position      *ReplayWindowInfo // captured under the same lock as an expiry refusal
 	Through       uint64
 	ThroughCursor string
 	Epoch         uint64
@@ -655,11 +786,17 @@ type ReplayPage struct {
 	InitRows      uint16
 	Incomplete    bool
 	Ephemeral     bool
+	// Floor and head geometry of the pane this page was served from.
+	FloorEventCursor string
+	FloorCols        uint16
+	FloorRows        uint16
+	HeadCols         uint16
+	HeadRows         uint16
 }
 
-// Replay serves one raw replay page from the pane journal. The journal
-// never evicts, so every request replays a complete prefix from byte
-// zero; there is no snapshot base and no older-history import.
+// Replay serves one raw replay page from the pane's RAM window. The
+// window retains a bounded tail, so a request below its floor is refused
+// as expired rather than served under wrong geometry.
 func (h *Hub) Replay(paneID string, req ReplayRequest) (ReplayPage, error) {
 	ph := h.recordingForRead(paneID)
 	if ph == nil {
@@ -667,18 +804,27 @@ func (h *Hub) Replay(paneID string, req ReplayRequest) (ReplayPage, error) {
 	}
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
-	if ph.journal == nil {
-		return ReplayPage{}, ErrReplayUnavailable
+	if ph.retired || ph.win == nil {
+		return ReplayPage{}, ErrReplayNoHistory
 	}
-	head := ph.journal.head
+	w := ph.win
+	head := w.head
 	if req.Epoch != ph.epoch {
 		return ReplayPage{}, ErrReplayEpoch
+	}
+	floor := w.floor()
+	expired := func() (ReplayPage, error) {
+		info := ph.replayWindowLocked()
+		return ReplayPage{Position: &info}, ErrReplayExpired
+	}
+	if req.From < floor {
+		return expired()
 	}
 	if req.From > head {
 		return ReplayPage{}, fmt.Errorf("%w: from past head", ErrReplayBadRequest)
 	}
 	through := req.Through
-	throughOrdinal := ph.journal.nextOrdinal - 1
+	throughOrdinal := w.lastOrdinal()
 	if req.Latest {
 		through = head
 	} else {
@@ -695,21 +841,19 @@ func (h *Hub) Replay(paneID string, req ReplayRequest) (ReplayPage, error) {
 		if cPos != through {
 			return ReplayPage{}, fmt.Errorf("%w: fence certifies a different end", ErrReplayBadRequest)
 		}
-		if through > head || cOrd >= ph.journal.nextOrdinal {
+		if through > head || cOrd > w.lastOrdinal() {
 			return ReplayPage{}, ErrReplayFuture
+		}
+		if through < floor || cOrd < w.floorOrd {
+			return expired()
+		}
+		if !w.validFence(through, cOrd) {
+			return ReplayPage{}, fmt.Errorf("%w: inconsistent through cursor", ErrReplayBadRequest)
 		}
 		throughOrdinal = cOrd
 	}
-	// A fence may exclude later events at its own byte position, never
-	// events before that position or events that have not happened yet.
-	validPosition := func(pos, ord uint64) bool {
-		markers := ph.journal.resizes
-		return ord < ph.journal.nextOrdinal &&
-			(ord == 0 || markers[ord-1].AtSeq <= pos) &&
-			(ord == uint64(len(markers)) || markers[ord].AtSeq >= pos)
-	}
-	if !validPosition(through, throughOrdinal) {
-		return ReplayPage{}, fmt.Errorf("%w: inconsistent through cursor", ErrReplayBadRequest)
+	if through > head {
+		return ReplayPage{}, ErrReplayFuture
 	}
 	if through < req.From {
 		return ReplayPage{}, fmt.Errorf("%w: through before from", ErrReplayBadRequest)
@@ -735,49 +879,71 @@ func (h *Hub) Replay(paneID string, req ReplayRequest) (ReplayPage, error) {
 		}
 		afterOrdinal = cOrd
 	}
-	if afterOrdinal > throughOrdinal || !validPosition(req.From, afterOrdinal) {
+	if afterOrdinal < w.floorOrd {
+		return expired()
+	}
+	if afterOrdinal > throughOrdinal || !w.validFence(req.From, afterOrdinal) {
 		return ReplayPage{}, fmt.Errorf("%w: inconsistent paging cursor", ErrReplayBadRequest)
 	}
-	data, ordMarkers, endOrdinal, err := ph.journal.readOrdThrough(req.From, end, afterOrdinal, throughOrdinal)
-	if err != nil {
+	// Stop before a 257th event, even when many share the same byte.
+	pageOrdinal := throughOrdinal
+	count := 0
+	for i, m := range w.resizes {
+		ord := w.floorOrd + uint64(i) + 1
+		if ord <= afterOrdinal {
+			continue
+		}
+		if ord > throughOrdinal || m.AtSeq > end {
+			break
+		}
+		if count == 256 {
+			end, pageOrdinal = m.AtSeq, ord-1
+			break
+		}
+		count++
+	}
+	data := w.rangeView(req.From, end)
+	if uint64(len(data)) != end-req.From {
+		if req.From < w.floor() {
+			return expired()
+		}
 		return ReplayPage{}, ErrReplayUnavailable
 	}
 	finalEnd := req.From + uint64(len(data))
-	resizes := make([]ResizeMarker, len(ordMarkers))
-	for i, m := range ordMarkers {
-		resizes[i] = m.ResizeMarker
+	resizes, endOrdinal := w.markersBetween(req.From, finalEnd, afterOrdinal, pageOrdinal)
+	initCols, initRows := w.initialGeometry()
+	if initCols == 0 || initRows == 0 {
+		initCols, initRows = ph.initColsOrDefault(), ph.initRowsOrDefault()
 	}
-	initCols, initRows := ph.journal.initialGeometry()
+	headCols, headRows := w.geometryAt(head)
+	if headCols == 0 || headRows == 0 {
+		headCols, headRows = initCols, initRows
+	}
 	return ReplayPage{
-		Through:       through,
-		ThroughCursor: EncodeEventCursor(ph.epoch, through, throughOrdinal),
-		Epoch:         ph.epoch,
-		Start:         req.From,
-		End:           finalEnd,
-		Data:          data,
-		Resizes:       resizes,
-		EndCursor:     EncodeEventCursor(ph.epoch, finalEnd, endOrdinal),
-		InitCols:      initCols,
-		InitRows:      initRows,
-		Incomplete:    ph.journal.historyIncomplete(),
-		Ephemeral:     ph.journal.ephemeral,
+		Through:          through,
+		ThroughCursor:    EncodeEventCursor(ph.epoch, through, throughOrdinal),
+		Epoch:            ph.epoch,
+		Start:            req.From,
+		End:              finalEnd,
+		Data:             data,
+		Resizes:          resizes,
+		EndCursor:        EncodeEventCursor(ph.epoch, finalEnd, endOrdinal),
+		InitCols:         initCols,
+		InitRows:         initRows,
+		Incomplete:       false,
+		FloorEventCursor: EncodeEventCursor(ph.epoch, floor, w.ordinalAt(floor)),
+		FloorCols:        initCols,
+		FloorRows:        initRows,
+		HeadCols:         headCols,
+		HeadRows:         headRows,
 	}, nil
 }
 
-func (ph *PaneHub) appendResizeLocked(marker ResizeMarker) error {
-	if ph.recording == nil || ph.recording.isClosed() {
-		return fmt.Errorf("recording unavailable for resize")
+func (ph *PaneHub) appendResizeLocked(cols, rows uint16) (ResizeMarker, uint64, bool) {
+	if ph.win == nil {
+		ph.win = newReplayWindow(0, ph.initColsOrDefault(), ph.initRowsOrDefault())
 	}
-	marker.AtSeq = ph.total
-	applied, err := ph.recording.appendResize(marker, ph.snapshotBaseLocked)
-	if err != nil {
-		return err
-	}
-	for _, m := range applied {
-		ph.applyResizeToParserLocked(m)
-	}
-	ph.pendingResize = nil
-	return nil
+	return ph.win.appendResize(cols, rows)
 }
 
 func (ph *PaneHub) applyResizeToParserLocked(marker ResizeMarker) {
@@ -814,8 +980,8 @@ func (ph *PaneHub) snapshotBaseLocked() ([]byte, error) {
 }
 
 // RecordResize notes a backend resize at the pane's current head seq.
-// Retired: production resizes go through StagePaneResize. It stays until
-// the VT removal deletes the retention group it writes to.
+// Production resizes go through StagePaneResize; this helper exists for
+// callers that only need the marker and live geometry frame.
 func (h *Hub) RecordResize(paneID string, cols, rows uint16) {
 	if cols == 0 || rows == 0 {
 		return
@@ -828,19 +994,13 @@ func (h *Hub) RecordResize(paneID string, cols, rows uint16) {
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
 	if ph.pendingResize != nil {
-		if ph.pendingResize.Cols == cols && ph.pendingResize.Rows == rows {
-			return
-		}
-	} else if ph.recording != nil && !ph.recording.isClosed() {
-		if last, ok := ph.recording.lastResize(); ok && last.Cols == cols && last.Rows == rows {
-			return
-		}
+		return
 	}
-	marker := ResizeMarker{AtSeq: ph.total, Cols: cols, Rows: rows}
-	if err := ph.appendResizeLocked(marker); err != nil {
-		ph.pendingResize = &marker
-		log.Printf("[recording] resize: %v", err)
+	m, ordinal, changed := ph.appendResizeLocked(cols, rows)
+	if !changed {
+		return
 	}
+	h.publishGeometryLocked(ph, paneID, m, ordinal)
 }
 
 // journalGeometryCurrent reports whether the journal's newest geometry
@@ -854,9 +1014,9 @@ func journalGeometryCurrent(j *rawJournal, cols, rows uint16) bool {
 }
 
 // publishGeometryLocked broadcasts one committed resize to live clients.
-// The caller holds ph.mu; the marker is already durable.
-func (h *Hub) publishGeometryLocked(ph *PaneHub, paneID string, m rawOrdMarker) {
-	frame, err := wireproto.EncodeGeometryFrame(m.AtSeq, uint32(m.Cols), uint32(m.Rows), EncodeEventCursor(ph.epoch, m.AtSeq, m.ordinal))
+// The caller holds ph.mu.
+func (h *Hub) publishGeometryLocked(ph *PaneHub, paneID string, m ResizeMarker, ordinal uint64) {
+	frame, err := wireproto.EncodeGeometryFrame(m.AtSeq, uint32(m.Cols), uint32(m.Rows), EncodeEventCursor(ph.epoch, m.AtSeq, ordinal))
 	if err != nil {
 		componentLogger().With("pane", paneID).Error("terminal geometry encode failed; live clients must reattach", "err", err)
 		return
@@ -882,61 +1042,55 @@ func (h *Hub) StagePaneResize(paneID string, cols, rows uint16) (commit func() e
 		return nil, nil, err
 	}
 	ph.mu.Lock()
-	if err := h.ensurePaneJournalLocked(paneID, ph); err != nil {
+	return h.stageResizeLocked(ph, paneID, cols, rows)
+}
+
+func (h *Hub) stageResizeForOwner(inst *pty.PTYInstance, cols, rows uint16) (func() error, func(), error) {
+	h.mu.RLock()
+	ph := h.panes[inst.ID]
+	if ph == nil {
+		h.mu.RUnlock()
+		return nil, nil, ErrReplayNoHistory
+	}
+	ph.mu.Lock()
+	h.mu.RUnlock()
+	if ph.retired || (ph.owner != nil && ph.owner != inst) {
 		ph.mu.Unlock()
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("pane owner replaced")
 	}
-	if ph.journal.staged != nil {
-		// A commit that failed after its OS step resolves here, so an
-		// idle pane cannot wedge later resizes behind it. A stage
-		// whose OS step never ran means unserialized callers; refuse
-		// rather than wedge.
-		if !ph.journal.staged.osApplied {
-			ph.mu.Unlock()
-			return nil, nil, fmt.Errorf("raw journal: another commit is still staged")
-		}
-		m, err := ph.journal.finishStaged()
-		if err != nil {
-			ph.mu.Unlock()
-			return nil, nil, err
-		}
-		h.publishGeometryLocked(ph, paneID, m)
-	}
-	if journalGeometryCurrent(ph.journal, cols, rows) {
-		ph.mu.Unlock()
-		return noop, noopAbort, nil
-	}
-	if err := ph.journal.stageResize(cols, rows); err != nil {
-		ph.mu.Unlock()
-		return nil, nil, err
-	}
-	ph.mu.Unlock()
-	commit = func() error {
-		ph.mu.Lock()
-		defer ph.mu.Unlock()
-		m, err := ph.journal.commitResize()
-		if err != nil {
-			// The OS resize succeeded; the stage stays pending and the
-			// next Ingest or resize finishes the commit and publishes.
-			return err
-		}
-		h.publishGeometryLocked(ph, paneID, m)
+	return h.stageResizeLocked(ph, inst.ID, cols, rows)
+}
+
+// Keep the pane transaction locked through the physical resize. Ingest
+// and owner replacement cannot publish bytes under uncommitted geometry.
+func (h *Hub) stageResizeLocked(ph *PaneHub, paneID string, cols, rows uint16) (func() error, func(), error) {
+	var once sync.Once
+	commit := func() error {
+		once.Do(func() {
+			defer ph.mu.Unlock()
+			m, ordinal, changed := ph.appendResizeLocked(cols, rows)
+			if changed {
+				h.publishGeometryLocked(ph, paneID, m, ordinal)
+			}
+		})
 		return nil
 	}
-	abort = func() {
-		ph.mu.Lock()
-		defer ph.mu.Unlock()
-		if ph.journal != nil {
-			_ = ph.journal.abandonStaged()
-		}
-	}
+	abort := func() { once.Do(func() { ph.mu.Unlock() }) }
 	return commit, abort, nil
 }
 
-// RecordRestoreGeometry commits the restored PTY size before new output.
+// winHeadLocked is the next byte position, zero when no window exists.
+func (ph *PaneHub) winHeadLocked() uint64 {
+	if ph.win == nil {
+		return 0
+	}
+	return ph.win.head
+}
+
+// RecordRestoreGeometry records the restored PTY size before new output.
 // Unlike a live resize there is no physical step: the PTY already has
-// this size. A restored size matching the journal baseline commits
-// nothing. The caller runs InitPaneJournal first.
+// this size. A restored size matching the current geometry records
+// nothing.
 func (h *Hub) RecordRestoreGeometry(paneID string, cols, rows uint16) error {
 	if cols == 0 || rows == 0 {
 		return nil
@@ -947,23 +1101,14 @@ func (h *Hub) RecordRestoreGeometry(paneID string, cols, rows uint16) error {
 	}
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
-	if err := h.ensurePaneJournalLocked(paneID, ph); err != nil {
-		return err
+	if ph.pendingResize != nil {
+		return fmt.Errorf("terminal resize: another resize is still staged")
 	}
-	if journalGeometryCurrent(ph.journal, cols, rows) {
+	m, ordinal, changed := ph.appendResizeLocked(cols, rows)
+	if !changed {
 		return nil
 	}
-	if ph.journal.staged != nil || ph.journal.pending != nil {
-		return fmt.Errorf("raw journal: another commit is still staged")
-	}
-	if err := ph.journal.stageResize(cols, rows); err != nil {
-		return err
-	}
-	m, err := ph.journal.commitResize()
-	if err != nil {
-		return err
-	}
-	h.publishGeometryLocked(ph, paneID, m)
+	h.publishGeometryLocked(ph, paneID, m, ordinal)
 	return nil
 }
 
@@ -988,58 +1133,17 @@ var (
 	ErrEventCursorExpired = errors.New("event cursor boundary expired")
 )
 
+// recordingForRead resolves a live or archived pane hub. There is no cold
+// open: RAM history exists only in this process, and an unknown pane has
+// no history. The returned hub may be retired; its readers check that
+// under the pane lock.
 func (h *Hub) recordingForRead(paneID string) *PaneHub {
 	h.mu.RLock()
-	ph := h.panes[paneID]
-	if ph == nil {
-		ph = h.archives[paneID]
-	}
-	h.mu.RUnlock()
-	if ph != nil {
+	defer h.mu.RUnlock()
+	if ph := h.panes[paneID]; ph != nil {
 		return ph
 	}
-	// Cold opens read the certified prefix without recovery writes.
-	// Publish one owner so promotion serializes against in-flight reads.
-	h.mu.Lock()
-	if ph = h.panes[paneID]; ph != nil {
-		h.mu.Unlock()
-		return ph
-	}
-	if ph = h.archives[paneID]; ph != nil {
-		h.mu.Unlock()
-		return ph
-	}
-	path := h.recordingPath(paneID)
-	if path == "" {
-		h.mu.Unlock()
-		return nil
-	}
-	_, statErr := os.Lstat(path)
-	if statErr != nil && !os.IsNotExist(statErr) {
-		h.mu.Unlock()
-		return &PaneHub{journalErr: statErr}
-	}
-	if statErr == nil {
-		journal, err := openRawJournalReadOnly(path, h.wallClock)
-		if err != nil {
-			ph = &PaneHub{clients: make(map[*Client]bool), epoch: randomEpoch(), journalErr: err}
-			h.mu.Unlock()
-			return ph // unavailable is not absent history
-		}
-		h.takeRawClock(journal)
-		ph = &PaneHub{
-			clients: make(map[*Client]bool),
-			journal: journal,
-			epoch:   randomEpoch(),
-			total:   journal.head,
-		}
-		h.archives[paneID] = ph
-		h.mu.Unlock()
-		return ph
-	}
-	h.mu.Unlock()
-	// No v3 journal, no history: pre-upgrade files are never adopted.
-	return nil
+	return h.archives[paneID]
 }
 
 func (h *Hub) Recording(paneID string, from, through uint64) (Recording, bool) {
@@ -1049,7 +1153,9 @@ func (h *Hub) Recording(paneID string, from, through uint64) (Recording, bool) {
 	}
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
-
+	if ph.retired || ph.win == nil {
+		return Recording{}, false
+	}
 	pos := ph.positionLocked()
 	if from > pos.Head {
 		return Recording{}, false
@@ -1062,30 +1168,24 @@ func (h *Hub) Recording(paneID string, from, through uint64) (Recording, bool) {
 		end = pos.Head
 	}
 	if end < from {
-		// The window lies wholly below the floor, so none of it is left.
-		// Serve the empty span at the floor: the start is above the
-		// requested position, which is how a client learns that the
-		// prefix expired.
 		end = from
 	}
 	if end-from > MaxCheckpointBytes {
 		end = from + MaxCheckpointBytes
 	}
-	rec := Recording{Epoch: pos.Epoch, Start: from, End: end}
-	if ph.recording == nil || ph.recording.isClosed() {
+	data := ph.win.rangeView(from, end)
+	if uint64(len(data)) != end-from {
 		return Recording{}, false
 	}
-	data, ords, endOrdinal, err := ph.recording.readOrd(from, end, 0, false)
-	if err != nil {
-		return Recording{}, false
-	}
-	rec.Data = data
-	rec.Resizes = make([]ResizeMarker, len(ords))
-	for i, o := range ords {
-		rec.Resizes[i] = o.ResizeMarker
-	}
-	rec.EventCursor = EncodeEventCursor(pos.Epoch, end, endOrdinal)
-	return rec, true
+	resizes, endOrdinal := ph.win.markersBetween(from, end, 0, ph.win.lastOrdinal())
+	return Recording{
+		Epoch:       pos.Epoch,
+		Start:       from,
+		End:         from + uint64(len(data)),
+		Data:        data,
+		Resizes:     resizes,
+		EventCursor: EncodeEventCursor(pos.Epoch, from+uint64(len(data)), endOrdinal),
+	}, true
 }
 
 // RecordingAfterCursor serves a recording page after a checkpoint: only
@@ -1103,6 +1203,9 @@ func (h *Hub) RecordingAfterCursor(paneID string, from, through uint64, after st
 	}
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
+	if ph.retired || ph.win == nil {
+		return Recording{}, "", ErrEventCursorExpired
+	}
 
 	pos := ph.positionLocked()
 	if cursorEpoch != pos.Epoch {
@@ -1110,6 +1213,9 @@ func (h *Hub) RecordingAfterCursor(paneID string, from, through uint64, after st
 	}
 	if from > pos.Head {
 		return Recording{}, "", ErrEventCursorInvalid
+	}
+	if cursorPos < from || cursorPos < pos.Oldest {
+		return Recording{}, "", ErrEventCursorExpired
 	}
 	if from < pos.Oldest {
 		from = pos.Oldest
@@ -1119,31 +1225,28 @@ func (h *Hub) RecordingAfterCursor(paneID string, from, through uint64, after st
 		end = pos.Head
 	}
 	if end < from {
-		// The window lies wholly below the floor: the empty span at the
-		// floor reports the expired prefix, like Recording does.
 		end = from
 	}
 	if end-from > MaxCheckpointBytes {
 		end = from + MaxCheckpointBytes
 	}
-	if ph.recording == nil || ph.recording.isClosed() {
-		return Recording{}, "", ErrEventCursorInvalid
-	}
-	if ph.recording.cursorExpired(pos.Oldest, cursorPos, afterOrdinal) {
+	if afterOrdinal > ph.win.lastOrdinal() {
 		return Recording{}, "", ErrEventCursorExpired
 	}
-	data, ords, endOrdinal, err := ph.recording.readOrd(from, end, afterOrdinal, true)
-	if err != nil {
-		return Recording{}, "", ErrEventCursorInvalid
+	data := ph.win.rangeView(from, end)
+	if uint64(len(data)) != end-from {
+		return Recording{}, "", ErrEventCursorExpired
 	}
-	rec := Recording{Epoch: pos.Epoch, Start: from, End: end, Data: data}
-	rec.Resizes = make([]ResizeMarker, len(ords))
-	for i, o := range ords {
-		rec.Resizes[i] = o.ResizeMarker
-	}
-	endCursor := EncodeEventCursor(pos.Epoch, end, endOrdinal)
-	rec.EventCursor = endCursor
-	return rec, endCursor, nil
+	resizes, endOrdinal := ph.win.markersBetween(from, end, afterOrdinal, ph.win.lastOrdinal())
+	endCursor := EncodeEventCursor(pos.Epoch, from+uint64(len(data)), endOrdinal)
+	return Recording{
+		Epoch:       pos.Epoch,
+		Start:       from,
+		End:         from + uint64(len(data)),
+		Data:        data,
+		Resizes:     resizes,
+		EventCursor: endCursor,
+	}, endCursor, nil
 }
 
 // MaxCheckpointBytes bounds client-uploaded screen snapshots.
@@ -1191,11 +1294,11 @@ func (h *Hub) StoreCheckpoint(paneID string, up CheckpointUpload) bool {
 // Unregister removes a client from a pane and drops it from the auth fence.
 func (h *Hub) Unregister(paneID string, client *Client) {
 	h.auth.forget(client.Ws)
-	h.mu.RLock()
-	ph, exists := h.panes[paneID]
-	h.mu.RUnlock()
-
-	if !exists {
+	ph := client.pane
+	if ph == nil {
+		ph = h.recordingForRead(paneID)
+	}
+	if ph == nil {
 		return
 	}
 
@@ -1217,6 +1320,15 @@ func (h *Hub) Unregister(paneID string, client *Client) {
 // idempotent.
 func (h *Hub) Close() error {
 	h.mu.Lock()
+	if h.closed {
+		done := h.closeDone
+		h.mu.Unlock()
+		<-done
+		return nil
+	}
+	h.closed = true
+	h.closeDone = make(chan struct{})
+	defer close(h.closeDone)
 	started, done := h.sweepStarted, h.sweepDone
 	h.sweepStarted = false
 	h.sweepDone = nil
@@ -1231,6 +1343,12 @@ func (h *Hub) Close() error {
 	closeJournals := func(panes map[string]*PaneHub) {
 		for paneID, ph := range panes {
 			ph.mu.Lock()
+			ph.retired = true
+			for c := range ph.clients {
+				delete(ph.clients, c)
+				close(c.Send)
+			}
+			ph.win, ph.Ring, ph.ckpt = nil, nil, nil
 			if ph.recording != nil {
 				errs = append(errs, ph.recording.close())
 			}
@@ -1243,6 +1361,9 @@ func (h *Hub) Close() error {
 	}
 	closeJournals(h.panes)
 	closeJournals(h.archives)
+	clear(h.panes)
+	clear(h.archives)
+	clear(h.paneOwners)
 	if h.leaseFile != nil {
 		errs = append(errs, h.leaseFile.Close())
 		h.leaseFile = nil
@@ -1278,21 +1399,20 @@ func (h *Hub) closePaneLocked(paneID string) {
 			delete(ph.clients, client)
 			close(client.Send)
 		}
-		ph.Ring = nil
 		ph.ckpt = nil
 		if ph.state != nil {
 			_ = ph.state.Close()
 			ph.state = nil
 			ph.stateHead = 0
 		}
-		closedAt := h.wallClock().UnixNano()
-		ph.closedAtUnixNano = closedAt
-		h.markPaneClosedLocked(ph, paneID, closedAt)
+		// The RAM window stays with the archive so same-process closed
+		// history remains replayable until expiry.
+		ph.closedAtUnixNano = h.wallClock().UnixNano()
 		h.archives[paneID] = ph
 		ph.mu.Unlock()
 	}
 	delete(h.panes, paneID)
-	log.Printf("[ws] Closed pane %s; cold recording retained", paneID)
+	log.Printf("[ws] Closed pane %s; RAM history retained", paneID)
 }
 
 // notePaneOwner records the current read-loop owner for a pane ID.
@@ -1433,80 +1553,73 @@ func (h *Hub) injectDropWarning(client *Client, now time.Time) {
 }
 
 func (h *Hub) Ingest(paneID string, payload []byte) error {
-	persistent := h.recordingEnabled()
+	if len(payload) == 0 {
+		return nil
+	}
 	ph, err := h.GetOrCreatePaneHub(paneID)
 	if err != nil {
 		return err
 	}
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
+	return h.ingestLocked(ph, paneID, payload)
+}
 
-	// Begin parsing at the pane's first output. New sessions never replay
-	// their recording on attach; the recording remains the byte authority.
-	if persistent && ph.state == nil && ph.stateErr == nil {
-		if err := ph.prepareStateLocked(); err != nil && !errors.Is(err, errStateBaseUnavailable) {
-			ph.stateErr = err
+func (h *Hub) ingestForOwner(inst *pty.PTYInstance, payload []byte) error {
+	h.mu.RLock()
+	ph := h.panes[inst.ID]
+	if ph == nil {
+		h.mu.RUnlock()
+		return ErrReplayNoHistory
+	}
+	ph.mu.Lock()
+	h.mu.RUnlock()
+	defer ph.mu.Unlock()
+	if ph.owner != inst || ph.retired || inst.ReadOwnerRetired() {
+		return fmt.Errorf("pane owner replaced")
+	}
+	return h.ingestLocked(ph, inst.ID, payload)
+}
+
+func (h *Hub) ingestLocked(ph *PaneHub, paneID string, payload []byte) error {
+	if ph.retired {
+		return ErrReplayNoHistory
+	}
+	// Publish bounded chunks: one oversized admission is split so a
+	// subscriber's queue holds frames, not a whole burst.
+	for len(payload) > 0 {
+		chunk := payload
+		if len(chunk) > terminalPublishChunkBytes {
+			chunk = chunk[:terminalPublishChunkBytes]
 		}
-	}
+		payload = payload[len(chunk):]
+		start := ph.win.head
+		ph.win.write(chunk)
+		ph.total = ph.win.head
 
-	// Commit to the authoritative journal before publishing a frontier or
-	// admitting the bytes to the cache/live stream. A storage failure must
-	// backpressure the PTY reader, not silently drop output.
-	if err := h.ensurePaneJournalLocked(paneID, ph); err != nil {
-		return err
-	}
-	// The journal resolves a commit-after-OS-step resize before the
-	// payload, so no hub-level pending resize outlives this call.
-	applied, err := ph.journal.appendPayload(payload)
-	// A committed marker stays committed when its payload fails: adopt
-	// it for the live parser and publish it before returning the error,
-	// or live clients hold a stale grid until the next resize.
-	for _, m := range applied {
-		ph.applyResizeToParserLocked(m.ResizeMarker)
-		h.publishGeometryLocked(ph, paneID, m)
-	}
-	if err != nil {
-		return err
-	}
-	start := ph.total
-	if ph.state != nil {
-		if err := ph.state.Feed(payload); err != nil {
-			_ = ph.state.Close()
-			ph.state = nil
-			ph.stateHead = 0
-			ph.stateErr = err
-		} else {
-			ph.stateHead = start + uint64(len(payload))
-		}
-	}
-	if ph.Ring != nil {
-		ph.Ring.Write(payload)
-	}
-	ph.total = ph.journal.head
-
-	// 2. Broadcast to clients as one sequenced protobuf output frame. The
-	// bytes above are already committed: an encode failure must not become
-	// a durability error that retries them, so live clients miss this span
-	// and recover it through the recording on reattach.
-	var outMsg []byte
-	for client := range ph.clients {
-		if outMsg == nil {
-			var err error
-			if outMsg, err = wireproto.EncodeOutputFrame(start, payload); err != nil {
-				componentLogger().With("pane", paneID).Error("terminal output encode failed; live clients must reattach", "err", err)
-				return nil
+		var outMsg []byte
+		for client := range ph.clients {
+			if outMsg == nil {
+				var err error
+				if outMsg, err = wireproto.EncodeOutputFrame(start, chunk); err != nil {
+					componentLogger().With("pane", paneID).Error("terminal output encode failed; live clients must reattach", "err", err)
+					return nil
+				}
 			}
+			h.deliverPaneFrame(ph, client, outMsg)
 		}
-		h.deliverPaneFrame(ph, client, outMsg)
 	}
 	return nil
 }
+
+// terminalPublishChunkBytes bounds one encoded output frame.
+const terminalPublishChunkBytes = 64 << 10
 
 // deliverPaneFrame pushes one frame to a client of ph. Bridge-managed
 // panes close a full client instead of evicting queued frames, so PTY
 // output cannot drop an already queued bridge control.
 func (h *Hub) deliverPaneFrame(ph *PaneHub, client *Client, msg []byte) {
-	if ph.bridgeManaged {
+	if client.terminal || ph.bridgeManaged {
 		h.deliverOrClose(client, msg)
 		return
 	}
@@ -1625,8 +1738,8 @@ func (h *Hub) PaneStats(paneID string) (int, int, int) {
 	defer ph.mu.Unlock()
 	clients := len(ph.clients)
 	var used, cap int
-	if ph.Ring != nil {
-		used, cap = ph.Ring.Stats()
+	if ph.win != nil {
+		used, cap = ph.win.used(), ph.win.capacity()
 	}
 	return clients, used, cap
 }

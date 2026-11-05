@@ -24,7 +24,7 @@ import (
 // TerminalSubprotocol is the WebSocket subprotocol every pane client must
 // request. The handler rejects any other selection with HTTP 426 before
 // accepting application data.
-const TerminalSubprotocol = "phi.terminal.protobuf.v2"
+const TerminalSubprotocol = "phi.terminal.protobuf.v3"
 
 // EventsSubprotocol is the WebSocket subprotocol every listen-only
 // events client must request. Missing or wrong tokens are rejected

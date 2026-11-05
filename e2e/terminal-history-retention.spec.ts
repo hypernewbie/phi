@@ -2,22 +2,22 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { startPhi } from './_server.js';
-import { readReplay } from './_terminal-replay.js';
+import { readReplay, terminalHead } from './_terminal-replay.js';
 
 for (const situation of [
-    'replay cache disabled',
-    'tiny replay cache',
+    'history disabled',
+    'tiny RAM window',
     'Phi server restart',
 ]) {
-    test(`cold terminal bytes stay available: ${situation}`, async ({
+    test(`RAM history honors its lifetime: ${situation}`, async ({
         request,
     }) => {
         const phi = await startPhi({
             config: {
                 replay_buffer_bytes:
-                    situation === 'replay cache disabled'
+                    situation === 'history disabled'
                         ? 0
-                        : situation === 'tiny replay cache'
+                        : situation === 'tiny RAM window'
                           ? 64
                           : 8192,
             },
@@ -56,19 +56,40 @@ while True: time.sleep(1)
             const recording = async () => {
                 return (await readReplay(phi.url, pane)).data.toString('utf8');
             };
+            // Disabled history cannot retain a completion marker. The head
+            // still advances as the child emits its hundred rows.
+            await expect
+                .poll(async () => (await terminalHead(phi.url, pane)).head)
+                .toBeGreaterThan(1000);
+            if (situation === 'history disabled') {
+                expect(await recording()).toBe('');
+                return;
+            }
             await expect.poll(recording).toContain('LAST');
             if (situation === 'Phi server restart') {
                 expect(await recording()).toContain('LIFETIME 1 FIRST');
+                const old = await terminalHead(phi.url, pane);
                 await phi.restart();
                 await expect.poll(recording).toContain('LIFETIME 2 FIRST');
+                const oldRead = await request.get(
+                    `${phi.url}/api/terminals/${pane}/replay?epoch=${old.epoch}&from=0&through=latest`,
+                );
+                expect([404, 409]).toContain(oldRead.status());
+                const bytes = await recording();
+                expect(bytes).not.toContain('LIFETIME 1 FIRST');
+                expect(bytes).toContain('history row 0000');
+                expect(bytes).toContain('history row 0099');
+            } else {
+                const tail = await readReplay(phi.url, pane);
+                expect(tail.oldest).toBeGreaterThan(0);
+                expect(tail.data.length).toBeLessThanOrEqual(64);
+                expect(tail.data.toString('utf8')).not.toContain(
+                    'history row 0000',
+                );
+                expect(tail.data.toString('utf8')).toContain(
+                    'history row 0099',
+                );
             }
-            const bytes = await recording();
-            expect(
-                bytes,
-                'replay caps and restart must not erase the cold recording',
-            ).toContain('LIFETIME 1 FIRST');
-            expect(bytes).toContain('history row 0000');
-            expect(bytes).toContain('history row 0099');
         } finally {
             await phi.stop();
         }

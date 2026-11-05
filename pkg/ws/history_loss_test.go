@@ -3,8 +3,8 @@ package ws
 import (
 	"bytes"
 	"context"
+	"errors"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 
@@ -14,13 +14,13 @@ import (
 
 // A page cap is an optimization, not permission to delete replay bytes.
 // Chaining 2 MiB pages across a larger journal must return every byte.
+// The RAM window retains its capacity, never the full stream. A client
+// that asks for an evicted prefix is refused instead of silently losing
+// bytes mid-replay.
 func TestRecordingSurvivesReplayMemoryLimits(t *testing.T) {
-	source := []byte("FIRST\r\n" + strings.Repeat("retained history 你好 🙂\r\n", 80) + "LAST\r\n")
-	big := bytes.Repeat(source, (2<<20)/len(source)+2)
-	hub := NewHub(64)
-	if err := hub.SetRecordingDirectory(t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
+	big := bytes.Repeat([]byte("retained history 你好 🙂\r\n"), (2<<20)/len("retained history 你好 🙂\r\n")+2)
+	const capacity = 64
+	hub := NewHub(capacity)
 	if err := hub.InitPaneJournal("p", 80, 24); err != nil {
 		t.Fatal(err)
 	}
@@ -30,25 +30,24 @@ func TestRecordingSurvivesReplayMemoryLimits(t *testing.T) {
 	}
 	ph, _ := hub.LookupPane("p")
 	epoch := ph.EpochOf()
-	var got []byte
-	var after string
-	from := uint64(0)
-	for pages := 0; ; pages++ {
-		if pages > 16 {
-			t.Fatal("paging did not terminate")
-		}
-		page, err := hub.Replay("p", ReplayRequest{Epoch: epoch, From: from, Latest: true, AfterCursor: after})
-		if err != nil {
-			t.Fatalf("replay: %v", err)
-		}
-		got = append(got, page.Data...)
-		if page.End == uint64(len(big)) {
-			break
-		}
-		from, after = page.End, page.EndCursor
+
+	if _, err := hub.Replay("p", ReplayRequest{Epoch: epoch, From: 0, Latest: true}); !errors.Is(err, ErrReplayExpired) {
+		t.Fatalf("replay from an evicted prefix = %v, want expired", err)
 	}
-	if !bytes.Equal(got, big) {
-		t.Fatalf("paged replay cut output: got %d bytes, want %d", len(got), len(big))
+
+	page, err := hub.Replay("p", ReplayRequest{Epoch: epoch, From: uint64(len(big) - capacity), Latest: true})
+	if err != nil {
+		t.Fatalf("replay retained tail: %v", err)
+	}
+	want := big[len(big)-capacity:]
+	if !bytes.Equal(page.Data, want) {
+		t.Fatalf("retained tail = %q, want %q", page.Data, want)
+	}
+	if page.End != uint64(len(big)) {
+		t.Fatalf("retained tail ends at %d, want %d", page.End, len(big))
+	}
+	if page.Incomplete {
+		t.Fatal("normal retention must not report a recording failure")
 	}
 }
 

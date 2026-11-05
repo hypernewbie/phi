@@ -14,6 +14,53 @@ import (
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
+// replayWindow is the bounded X-Phi-Replay-Window snapshot a 409 carries.
+// Every field describes one locked server snapshot; a client validates it
+// before replacing a frontier.
+type replayWindow struct {
+	Epoch            uint64 `json:"epoch"`
+	Oldest           uint64 `json:"oldest"`
+	Head             uint64 `json:"head"`
+	FloorCols        uint32 `json:"floor_cols"`
+	FloorRows        uint32 `json:"floor_rows"`
+	HeadCols         uint32 `json:"head_cols"`
+	HeadRows         uint32 `json:"head_rows"`
+	FloorEventCursor string `json:"floor_event_cursor"`
+	EventCursor      string `json:"event_cursor"`
+}
+
+// expiredWindowError reports that the request fell below the retained
+// floor. The server certified the window it can still serve, so the
+// caller resumes there instead of guessing the lost prefix.
+type expiredWindowError struct{ info replayWindow }
+
+func (e *expiredWindowError) Error() string {
+	return fmt.Sprintf("replay expired at floor %d of epoch %d", e.info.Oldest, e.info.Epoch)
+}
+
+// parseReplayWindow validates the bounded 409 metadata before it may
+// replace any local frontier.
+func parseReplayWindow(raw string, epoch uint64) (replayWindow, bool) {
+	var info replayWindow
+	if raw == "" || len(raw) > 2048 || json.Unmarshal([]byte(raw), &info) != nil {
+		return info, false
+	}
+	if info.Epoch != epoch || info.Oldest > info.Head ||
+		info.FloorCols == 0 || info.FloorRows == 0 || info.HeadCols == 0 || info.HeadRows == 0 ||
+		info.FloorCols > 65535 || info.FloorRows > 65535 || info.HeadCols > 65535 || info.HeadRows > 65535 {
+		return info, false
+	}
+	floor, err := parseReplayPosition(info.FloorEventCursor)
+	if err != nil || floor.epoch != epoch || floor.seq != info.Oldest {
+		return info, false
+	}
+	head, err := parseReplayPosition(info.EventCursor)
+	if err != nil || head.epoch != epoch || head.seq != info.Head || head.ordinal < floor.ordinal {
+		return info, false
+	}
+	return info, true
+}
+
 // Byte positions alone cannot certify same-position geometry changes.
 // Keep this parser independent of the server package and its storage.
 type replayPosition struct{ epoch, seq, ordinal uint64 }
@@ -64,6 +111,11 @@ func (a *apiClient) replay(ctx context.Context, pane string, epoch, from, throug
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusConflict {
+			if info, ok := parseReplayWindow(resp.Header.Get("X-Phi-Replay-Window"), epoch); ok {
+				return h, nil, &expiredWindowError{info: info}
+			}
+		}
 		return h, nil, &apiError{Code: resp.StatusCode, Message: "terminal replay: " + resp.Status}
 	}
 	const maxBody = 4 + (64 << 10) + recordingPageBytes

@@ -70,9 +70,12 @@ func TestFailedRetentionOpenPreservesCommittedManifest(t *testing.T) {
 
 // A closure records itself in the journal manifest without dropping
 // committed bytes: the archived pane still replays everything.
+// Closing a pane archives its RAM window: history stays replayable and
+// the closure time is recorded for the expiry sweep. Nothing is written
+// to disk.
 func TestClosePaneRecordsClosureInManifest(t *testing.T) {
 	dir := t.TempDir()
-	h := NewHub(0)
+	h := NewHub(64)
 	t.Cleanup(func() { _ = h.Close() })
 	if err := h.SetRecordingDirectory(dir); err != nil {
 		t.Fatal(err)
@@ -88,20 +91,34 @@ func TestClosePaneRecordsClosureInManifest(t *testing.T) {
 	closedAt := time.Now()
 	h.clock = func() time.Time { return closedAt }
 	h.ClosePane("p")
+
 	ph.mu.Lock()
-	flags, closedAtNs, head := ph.journal.flags, ph.journal.closedAtNs, ph.journal.head
-	ph.mu.Unlock()
-	if flags&rawFlagClosed == 0 {
-		t.Fatal("the closure did not reach the manifest")
+	closedAtNs := ph.closedAtUnixNano
+	head := uint64(0)
+	if ph.win != nil {
+		head = ph.win.head
 	}
+	ph.mu.Unlock()
 	if closedAtNs != closedAt.UnixNano() {
-		t.Fatalf("manifest closedAtNs = %d, want %d", closedAtNs, closedAt.UnixNano())
+		t.Fatalf("closure time = %d, want %d", closedAtNs, closedAt.UnixNano())
 	}
 	page, err := h.Replay("p", ReplayRequest{Epoch: epoch, From: 0, Latest: true})
 	if err != nil || string(page.Data) != "seed" {
 		t.Fatalf("archived replay = %q %v", page.Data, err)
 	}
 	if head != 4 {
-		t.Fatalf("manifest head = %d, want 4", head)
+		t.Fatalf("retained head = %d, want 4", head)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "v3")); err != nil {
+		t.Fatalf("recording namespace missing: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, "v3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "lease" {
+			t.Fatalf("pane history wrote %q to disk", e.Name())
+		}
 	}
 }

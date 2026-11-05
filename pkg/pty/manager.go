@@ -47,16 +47,20 @@ var (
 )
 
 type PTYInstance struct {
-	ID               string       `json:"id"`
-	Pty              *Pty         `json:"-"`
-	Cwd              string       `json:"cwd"`
-	Coder            string       `json:"coder"`
-	SessionID        string       `json:"session_id"`
-	OpenCodeMode     string       `json:"opencode_mode,omitempty"` // immutable launch mode
-	PiMode           string       `json:"pi_mode,omitempty"`       // immutable launch mode
-	ExtraArgs        []string     `json:"-"`                       // private launch options, persisted separately
-	ObserveOutput    func([]byte) `json:"-"`
-	readLoopDone     chan struct{}
+	ID            string       `json:"id"`
+	Pty           *Pty         `json:"-"`
+	Cwd           string       `json:"cwd"`
+	Coder         string       `json:"coder"`
+	SessionID     string       `json:"session_id"`
+	OpenCodeMode  string       `json:"opencode_mode,omitempty"` // immutable launch mode
+	PiMode        string       `json:"pi_mode,omitempty"`       // immutable launch mode
+	ExtraArgs     []string     `json:"-"`                       // private launch options, persisted separately
+	ObserveOutput func([]byte) `json:"-"`
+	readLoopDone  chan struct{}
+	// retired is sticky: a pane ID replaced by a new instance (or a read
+	// loop that finished its final drain) must not archive or admit work
+	// for the replacement. Set under mu.
+	retired          bool
 	DetachTimer      *time.Timer `json:"-"`
 	mu               sync.Mutex
 	ActiveWS         bool
@@ -358,11 +362,26 @@ func (m *Manager) RegisterWS(id string, clientID string) bool {
 	m.mu.RLock()
 	inst, ok := m.instances[id]
 	m.mu.RUnlock()
-
 	if !ok {
 		return false
 	}
+	return m.registerWSInstance(inst, clientID)
+}
 
+// RegisterWSForInstance registers a client only while inst still owns the
+// pane ID. A socket opened against a replaced instance cannot touch the
+// replacement's client bookkeeping or its detach timer.
+func (m *Manager) RegisterWSForInstance(inst *PTYInstance, clientID string) bool {
+	if inst == nil {
+		return false
+	}
+	if cur, ok := m.Get(inst.ID); !ok || cur != inst {
+		return false
+	}
+	return m.registerWSInstance(inst, clientID)
+}
+
+func (m *Manager) registerWSInstance(inst *PTYInstance, clientID string) bool {
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
 
@@ -372,11 +391,11 @@ func (m *Manager) RegisterWS(id string, clientID string) bool {
 	inst.ActiveClients[clientID] = struct{}{}
 	inst.ActiveWSCount = len(inst.ActiveClients)
 	inst.ActiveWS = true
-	log.Printf("[pty] RegisterWS %s: ClientID=%s ActiveWSCount=%d ActiveWS=%v Pinned=%v HasTimer=%v", id, clientID, inst.ActiveWSCount, inst.ActiveWS, inst.Pinned, inst.DetachTimer != nil)
+	log.Printf("[pty] RegisterWS %s: ClientID=%s ActiveWSCount=%d ActiveWS=%v Pinned=%v HasTimer=%v", inst.ID, clientID, inst.ActiveWSCount, inst.ActiveWS, inst.Pinned, inst.DetachTimer != nil)
 	if inst.DetachTimer != nil {
 		inst.DetachTimer.Stop()
 		inst.DetachTimer = nil
-		log.Printf("[pty] WS connected to %s, stopped detach timer", id)
+		log.Printf("[pty] WS connected to %s, stopped detach timer", inst.ID)
 	}
 	return true
 }
@@ -385,11 +404,26 @@ func (m *Manager) UnregisterWS(id string, clientID string) {
 	m.mu.RLock()
 	inst, ok := m.instances[id]
 	m.mu.RUnlock()
-
 	if !ok {
 		return
 	}
+	m.unregisterWSInstance(inst, clientID)
+}
 
+// UnregisterWSForInstance removes client bookkeeping only for the exact
+// instance the socket was opened against. Old-socket teardown must not
+// clear a replacement's ActiveClients or restart its detach timer.
+func (m *Manager) UnregisterWSForInstance(inst *PTYInstance, clientID string) {
+	if inst == nil {
+		return
+	}
+	if cur, ok := m.Get(inst.ID); !ok || cur != inst {
+		return
+	}
+	m.unregisterWSInstance(inst, clientID)
+}
+
+func (m *Manager) unregisterWSInstance(inst *PTYInstance, clientID string) {
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
 
@@ -398,7 +432,7 @@ func (m *Manager) UnregisterWS(id string, clientID string) {
 	}
 	inst.ActiveWSCount = len(inst.ActiveClients)
 	inst.ActiveWS = inst.ActiveWSCount > 0
-	log.Printf("[pty] UnregisterWS %s: ClientID=%s ActiveWSCount=%d ActiveWS=%v Pinned=%v HasTimer=%v", id, clientID, inst.ActiveWSCount, inst.ActiveWS, inst.Pinned, inst.DetachTimer != nil)
+	log.Printf("[pty] UnregisterWS %s: ClientID=%s ActiveWSCount=%d ActiveWS=%v Pinned=%v HasTimer=%v", inst.ID, clientID, inst.ActiveWSCount, inst.ActiveWS, inst.Pinned, inst.DetachTimer != nil)
 
 	if inst.ActiveWS {
 		return
@@ -410,12 +444,12 @@ func (m *Manager) UnregisterWS(id string, clientID string) {
 	}
 
 	if inst.Pinned {
-		log.Printf("[pty] WS disconnected from %s, but session is pinned. Skipping detach timer.", id)
+		log.Printf("[pty] WS disconnected from %s, but session is pinned. Skipping detach timer.", inst.ID)
 		return
 	}
 
 	m.startGracePeriodTimer(inst)
-	log.Printf("[pty] WS disconnected from %s, started 30-min detach timer", id)
+	log.Printf("[pty] WS disconnected from %s, started 30-min detach timer", inst.ID)
 }
 
 func (m *Manager) Kill(id string) error {

@@ -23,6 +23,7 @@ import (
 
 func protobufTestServer(t *testing.T, hub *Hub, manager *pty.Manager, inst *pty.PTYInstance) *httptest.Server {
 	t.Helper()
+	manager.AddInstanceForTesting(inst)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		HandleWS(w, r, inst, manager, hub)
 	}))

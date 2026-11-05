@@ -393,7 +393,7 @@ export class PTYWebSocket {
         }
         if (atSeq > this.liveSeq) {
             if (this._holdFrame(atSeq, new Uint8Array(), geom))
-                this._notify(this.onGap, this.liveSeq, atSeq);
+                this._notify(this.onGap, this.liveSeq, atSeq, this);
             return;
         }
         this.onControl?.({
@@ -430,9 +430,6 @@ export class PTYWebSocket {
             catch (_e) { }
             return;
         }
-        this.mode = 'hot';
-        this.liveSeq = head;
-        this.lastFrameEnd = head;
         let ckpt = null;
         const c = attach.checkpoint;
         const validCursor = isEventCursor;
@@ -474,6 +471,34 @@ export class PTYWebSocket {
             return;
         }
         const replayFrom = toSafeInt(attach.replayFrom);
+        const headSize = (v) => typeof v === 'number' && Number.isInteger(v) && v > 0 && v <= 65535
+            ? v
+            : undefined;
+        const headCols = headSize(attach.headCols);
+        const headRows = headSize(attach.headRows);
+        const floorCols = headSize(attach.floorCols);
+        const floorRows = headSize(attach.floorRows);
+        const positionMatches = (cursor, seq) => {
+            if (!isEventCursor(cursor))
+                return false;
+            const parts = cursor.split('.').slice(1).map(Number);
+            return (parts.every(Number.isSafeInteger) &&
+                parts[0] === epoch &&
+                parts[1] === seq);
+        };
+        if (!positionMatches(attach.eventCursor, head) ||
+            ((oldest > 0 || attach.floorEventCursor !== undefined) &&
+                (!positionMatches(attach.floorEventCursor, oldest) ||
+                    !floorCols ||
+                    !floorRows ||
+                    Number(attach.floorEventCursor?.split('.').at(-1)) >
+                        Number(attach.eventCursor?.split('.').at(-1))))) {
+            this.ws.close();
+            return;
+        }
+        this.mode = 'hot';
+        this.liveSeq = head;
+        this.lastFrameEnd = head;
         this._notify(this.onAttachHead, {
             epoch,
             oldest,
@@ -482,14 +507,26 @@ export class PTYWebSocket {
             initialCols: initialCols,
             initialRows: initialRows,
             eventCursor: attach.eventCursor,
+            // v3: the certified window floor carries its own cursor, so a
+            // client that must start at the floor requests the exact fence.
+            ...(typeof attach.floorEventCursor === 'string' &&
+                isEventCursor(attach.floorEventCursor)
+                ? { floorEventCursor: attach.floorEventCursor }
+                : {}),
+            ...(floorCols !== undefined && floorRows !== undefined
+                ? { floorCols, floorRows }
+                : {}),
             historyIncomplete: attach.historyIncomplete === true,
             ephemeral: attach.ephemeral === true,
+            ...(headCols !== undefined && headRows !== undefined
+                ? { headCols, headRows }
+                : {}),
             ...(replayFrom !== undefined &&
                 replayFrom >= oldest &&
                 replayFrom <= head
                 ? { replayFrom }
                 : {}),
-        });
+        }, this);
     }
     _handleLiveOutput(out) {
         if (this.mode !== 'hot' || this.liveSeq === undefined) {
@@ -534,7 +571,7 @@ export class PTYWebSocket {
             // Gap: hold delivery until the host patches the missing range.
             if (!this._holdFrame(start, bytes))
                 return;
-            this._notify(this.onGap, this.liveSeq, start);
+            this._notify(this.onGap, this.liveSeq, start, this);
             return;
         }
         this._deliver(start, bytes);
@@ -589,7 +626,7 @@ export class PTYWebSocket {
                 this.held = frames.slice(i).concat(this.held);
                 this.heldBytes = this.held.reduce((n, f) => n + f.bytes.byteLength, 0);
                 if (!this.holding)
-                    this._notify(this.onGap, this.liveSeq ?? 0, frames[i].start);
+                    this._notify(this.onGap, this.liveSeq ?? 0, frames[i].start, this);
                 return;
             }
             if (frames[i].geometry) {
@@ -613,7 +650,7 @@ export class PTYWebSocket {
                 // held, and ask the host to patch the missing range.
                 // Delivering across it would skip bytes silently.
                 this.held = frames.slice(i);
-                this._notify(this.onGap, liveSeq, start);
+                this._notify(this.onGap, liveSeq, start, this);
                 return;
             }
             this._deliver(start, bytes);

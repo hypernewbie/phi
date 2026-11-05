@@ -70,7 +70,11 @@ func TestRecordingResponseCompressionIsExactAndTinySpansStayRaw(t *testing.T) {
 }
 
 func TestRecordingEndpointDefaultHTTPTransportInflatesWithoutChangingFrontiers(t *testing.T) {
-	setupHotHub(t)
+	// The whole fixture must fit the retained window: this test pins the
+	// transport's gzip path, not retention.
+	orig := testServer.hub
+	testServer.hub = ws.NewHub(64 << 10)
+	t.Cleanup(func() { _ = testServer.hub.Close(); testServer.hub = orig })
 	data := bytes.Repeat([]byte("\x1b[31mLINE 你🙂\x1b[0m\r\n"), 1024)
 	if err := testServer.hub.InitPaneJournal("compressed", 80, 24); err != nil {
 		t.Fatal(err)

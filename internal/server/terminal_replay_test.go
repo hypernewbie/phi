@@ -93,3 +93,50 @@ func TestRetiredTerminalAPIsRequireProtocolUpgrade(t *testing.T) {
 		}
 	}
 }
+
+// A 409 certifies the whole window in one bounded header, so a native
+// client can resume at the floor without a second unlocked lookup.
+func TestReplayExpiredCarriesTheCertifiedWindow(t *testing.T) {
+	setupHotHub(t)
+	testServer.hub.SetReplayBufferBytes(4)
+	if err := testServer.hub.InitPaneJournal("p", 90, 25); err != nil {
+		t.Fatal(err)
+	}
+	if err := testServer.hub.Ingest("p", []byte("0123456789")); err != nil {
+		t.Fatal(err)
+	}
+	ph, _ := testServer.hub.LookupPane("p")
+	epoch := ph.EpochOf()
+	w := httptest.NewRecorder()
+	q := url.Values{"epoch": {fmt.Sprint(epoch)}, "from": {"0"}, "through": {"latest"}}
+	testServer.handleFallback(w, httptest.NewRequest(http.MethodGet, "/api/terminals/p/replay?"+q.Encode(), nil))
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expired replay: %d %s", w.Code, w.Body.String())
+	}
+	raw := w.Header().Get("X-Phi-Replay-Window")
+	if len(raw) == 0 || len(raw) > 2048 {
+		t.Fatalf("window header bounds: %d", len(raw))
+	}
+	var info struct {
+		Epoch            uint64 `json:"epoch"`
+		Oldest           uint64 `json:"oldest"`
+		Head             uint64 `json:"head"`
+		FloorCols        uint16 `json:"floor_cols"`
+		FloorRows        uint16 `json:"floor_rows"`
+		HeadCols         uint16 `json:"head_cols"`
+		HeadRows         uint16 `json:"head_rows"`
+		FloorEventCursor string `json:"floor_event_cursor"`
+		EventCursor      string `json:"event_cursor"`
+	}
+	if err := json.Unmarshal([]byte(raw), &info); err != nil {
+		t.Fatalf("window header: %v (%s)", err, raw)
+	}
+	if info.Epoch != epoch || info.Oldest != 6 || info.Head != 10 ||
+		info.FloorCols != 90 || info.FloorRows != 25 || info.HeadCols != 90 || info.HeadRows != 25 {
+		t.Fatalf("window snapshot: %+v", info)
+	}
+	if info.FloorEventCursor != ws.EncodeEventCursor(epoch, 6, 0) ||
+		info.EventCursor != ws.EncodeEventCursor(epoch, 10, 0) {
+		t.Fatalf("window cursors: %+v", info)
+	}
+}

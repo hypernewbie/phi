@@ -64,6 +64,16 @@ export interface TerminalAttach {
     eventCursor?: string | undefined;
     historyIncomplete?: boolean | undefined;
     ephemeral?: boolean | undefined;
+    /**
+     * Certified RAM-window floor. Byte positions below floor are gone and
+     * a replay from there is refused. The geometry fields are the grid the
+     * server had in effect at the floor and at the head.
+     */
+    floorEventCursor?: string | undefined;
+    floorCols?: number | undefined;
+    floorRows?: number | undefined;
+    headCols?: number | undefined;
+    headRows?: number | undefined;
 }
 export interface TerminalCheckpoint {
     kind?: string | undefined;

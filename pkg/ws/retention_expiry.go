@@ -50,28 +50,40 @@ func defaultSavedReservations() (map[string]bool, error) {
 // Call once after saved-tab restoration completes, never before. Without
 // the namespace lease the worker still bounds the in-memory archive map
 // but never touches the disk namespace.
-func (h *Hub) StartRetentionSweeps() {
+func (h *Hub) StartRetentionSweeps() { h.startRetentionSweeps(false) }
+
+// StartRAMRetentionSweeps never opens or deletes pre-upgrade recordings.
+func (h *Hub) StartRAMRetentionSweeps() { h.startRetentionSweeps(true) }
+
+func (h *Hub) startRetentionSweeps(ramOnly bool) {
 	h.mu.Lock()
-	if h.sweepStarted {
+	if h.sweepStarted || h.closed {
 		h.mu.Unlock()
 		return
 	}
 	h.sweepStarted = true
 	h.sweepDone = make(chan struct{})
 	done := h.sweepDone
+	h.sweepWg.Add(1) // registered before Close can wait
 	h.mu.Unlock()
-	h.sweepRetention(h.wallClock())
-	h.sweepWg.Add(1)
 	go obs.DoFeature("terminal", func(_ context.Context) {
 		defer h.sweepWg.Done()
+		sweep := func() {
+			if !ramOnly {
+				h.sweepRetention(h.wallClock())
+				return
+			}
+			h.sweepRAMArchives(h.wallClock())
+		}
+		sweep()
 		ticker := time.NewTicker(retentionSweepInterval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-done:
 				return
-			case now := <-ticker.C:
-				h.sweepRetention(now)
+			case <-ticker.C:
+				sweep()
 			}
 		}
 	})
@@ -102,6 +114,19 @@ func (h *Hub) sweepRetention(now time.Time) retentionSweepStats {
 	return stats
 }
 
+func (h *Hub) sweepRAMArchives(now time.Time) {
+	saved := map[string]bool{}
+	if h.savedReservations != nil {
+		var err error
+		saved, err = h.savedReservations()
+		if err != nil {
+			log.Printf("[ws] RAM expiry skipped: %v", err)
+			return
+		}
+	}
+	h.sweepArchives(saved, now)
+}
+
 func (h *Hub) sweepArchives(saved map[string]bool, now time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -112,6 +137,12 @@ func (h *Hub) sweepArchives(saved map[string]bool, now time.Time) {
 		ph.mu.Lock()
 		closedAt := ph.closedAtUnixNano
 		if closedAt > 0 && now.UnixNano()-closedAt >= int64(retentionPeriod) {
+			ph.retired = true
+			for c := range ph.clients {
+				delete(ph.clients, c)
+				close(c.Send)
+			}
+			ph.win, ph.Ring, ph.ckpt = nil, nil, nil
 			if ph.recording != nil {
 				_ = ph.recording.close()
 			}
