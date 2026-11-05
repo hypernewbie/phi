@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	syncmeshb "github.com/hypernewbie/phi/internal/syncmesh/pb"
 )
@@ -30,6 +31,20 @@ const (
 	maxSyncPushValueBytes = 4 * 1024
 )
 
+// truncateUTF8 cuts value to at most limit bytes without splitting a rune. A
+// cut inside a multi-byte character would reach the browser as U+FFFD and make
+// a truncated message look corrupted rather than merely shortened.
+func truncateUTF8(value []byte, limit int) ([]byte, bool) {
+	if len(value) <= limit {
+		return value, false
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return value[:cut], true
+}
+
 // handleSyncPushes lists the addressed messages known to this Phi. Additive:
 // it is a new path and changes nothing about /api/sync/messages.
 func (app *Server) handleSyncPushes(w http.ResponseWriter, r *http.Request) {
@@ -50,11 +65,7 @@ func (app *Server) handleSyncPushes(w http.ResponseWriter, r *http.Request) {
 	}
 	list := make([]SyncPushMessage, 0, len(events))
 	for _, ev := range events {
-		value := ev.GetValue()
-		truncated := len(value) > maxSyncPushValueBytes
-		if truncated {
-			value = value[:maxSyncPushValueBytes]
-		}
+		value, truncated := truncateUTF8(ev.GetValue(), maxSyncPushValueBytes)
 		list = append(list, SyncPushMessage{
 			MessageID: ev.GetMessageId(),
 			Seq:       ev.GetSeq(),

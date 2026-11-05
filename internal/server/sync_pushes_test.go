@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -107,6 +108,37 @@ func TestSyncPushesTruncatesLargeValues(t *testing.T) {
 	}
 	if len(body.Messages[0].Value) != maxSyncPushValueBytes {
 		t.Fatalf("value length = %d, want %d", len(body.Messages[0].Value), maxSyncPushValueBytes)
+	}
+}
+
+// TestSyncPushesTruncatesOnARuneBoundary keeps a truncated value valid UTF-8.
+// Cutting at a byte offset splits the last character, so the browser showed a
+// replacement glyph and the message looked corrupted, not shortened.
+func TestSyncPushesTruncatesOnARuneBoundary(t *testing.T) {
+	// Three-byte runes straddle the limit: 1366 runes fill 4098 bytes, so the
+	// cut at 4096 lands inside the 1366th character.
+	big := strings.Repeat("世", maxSyncPushValueBytes/3+1)
+	mesh := startTestMesh(t, "m-rune", "pane-b", big)
+	app := &Server{syncMesh: mesh}
+
+	rec := httptest.NewRecorder()
+	app.handleSyncPushes(rec, httptest.NewRequest(http.MethodGet, "/api/sync/pushes", nil))
+
+	var body struct {
+		Messages []SyncPushMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got := body.Messages[0]
+	if !got.Truncated {
+		t.Fatal("oversized value was not marked truncated")
+	}
+	if !utf8.ValidString(got.Value) {
+		t.Fatal("truncated value is not valid UTF-8; the browser renders U+FFFD")
+	}
+	if len(got.Value) > maxSyncPushValueBytes {
+		t.Fatalf("value = %d bytes, want at most %d", len(got.Value), maxSyncPushValueBytes)
 	}
 }
 
