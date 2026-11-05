@@ -2998,12 +2998,21 @@ export class TabManager {
                     return;
                 return this._onLiveGap(tabInfo, from, to);
             },
+            onRefreshResult: (result, socket) => this._onRefreshResult(tabInfo, socket ?? tabInfo.ws, result),
         };
     }
     async _onAttachHead(tabInfo, info) {
         const pty = tabInfo.ws;
         if (!pty || pty.mode !== 'hot')
             return;
+        // A receipt from a replaced socket can never satisfy this attach.
+        if (tabInfo._refreshRequest && tabInfo._refreshRequest.socket !== pty) {
+            if (tabInfo._refreshRequest.timer)
+                clearTimeout(tabInfo._refreshRequest.timer);
+            tabInfo._refreshRequest = null;
+            if (tabInfo._recovery)
+                tabInfo._recovery.suppressFastPath = true;
+        }
         const prevEpoch = tabInfo.paneEpoch;
         const samePane = prevEpoch !== undefined && prevEpoch === info.epoch;
         tabInfo._attachHead = info;
@@ -3045,6 +3054,25 @@ export class TabManager {
         // Surface them once per pane lifetime, beside the terminal.
         if (!samePane)
             this._noteReplayDurability(tabInfo, info);
+        if (this._piRefreshEligible(tabInfo, info, samePane)) {
+            if (!tabInfo._termOpened) {
+                tabInfo._streamDecoder = pty.decoder ?? null;
+                try {
+                    tabInfo.term.resize(info.headCols, info.headRows);
+                }
+                catch (_e) {
+                    /* default size; post-open fit corrects it */
+                }
+                tabInfo.paneEpoch = info.epoch;
+                tabInfo.paneOldest = info.oldest;
+                tabInfo._floorCursor = info.floorEventCursor;
+                tabInfo.queuedSeq = 0;
+                tabInfo.drainedSeq = 0;
+                this._openTermAndViewport(tabInfo);
+            }
+            this._startRefreshFastPath(tabInfo, pty, info);
+            return;
+        }
         if (!tabInfo._termOpened) {
             tabInfo._streamDecoder = pty.decoder ?? null;
             // Fresh tab: size the parser to the replay baseline and open
@@ -3118,7 +3146,8 @@ export class TabManager {
             tabInfo._floorCursor = info.floorEventCursor;
             if (tabInfo._forceRedraw ||
                 tabInfo._replayBaseline ||
-                from < info.oldest) {
+                from < info.oldest ||
+                tabInfo._recovery?.suppressFastPath) {
                 tabInfo._replayHistorical = true;
                 tabInfo._historicalReplayFence = {
                     head: info.head,
@@ -3160,6 +3189,29 @@ export class TabManager {
         tabInfo._replayCursor = `v1.${info.epoch}.0.0`;
         this._bootstrappedRelease(tabInfo, pty, 0, info.head, info.eventCursor);
     }
+    // True when this attach may skip history and ask Pi for one repaint.
+    // The hint is advisory: the receipt decides. A same-epoch reconnect
+    // with a usable local frontier repairs only its missing range, and a
+    // manual Refresh Console is an explicit repaint request.
+    _piRefreshEligible(tabInfo, info, samePane) {
+        if (info.terminalRefreshAvailable !== true)
+            return false;
+        if (!info.headCols || !info.headRows)
+            return false;
+        if (tabInfo.isDead || tabInfo.finalizing)
+            return false;
+        if (this._terminalPanelVisible?.(tabInfo) === false)
+            return false;
+        const rec = tabInfo._recovery;
+        if (rec &&
+            (rec.suppressFastPath ||
+                rec.attempts >= REPLAY_RECOVERY_ATTEMPTS ||
+                Date.now() > rec.deadline))
+            return false;
+        if (tabInfo._termOpened && samePane)
+            return tabInfo._forceRedraw === true;
+        return true;
+    }
     // One recovery episode carries its deadline and attempt count across
     // replacement sockets: a WS open or a HEAD adoption never renews it.
     _beginRecoveryEpisode(tabInfo) {
@@ -3169,11 +3221,116 @@ export class TabManager {
         tabInfo._recovery = {
             deadline: Date.now() + REPLAY_RECOVERY_BUDGET_MS,
             attempts: 1,
+            suppressFastPath: false,
         };
         return tabInfo._recovery;
     }
     _finishRecoveryEpisode(tabInfo) {
+        const pending = tabInfo._refreshRequest;
+        if (pending?.timer)
+            clearTimeout(pending.timer);
+        tabInfo._refreshRequest = null;
         tabInfo._recovery = null;
+    }
+    // Starts one repaint-based attach. The parser is reset at the certified
+    // head grid and no retained bytes are replayed: the Pi repaint is the
+    // screen. Live delivery stays held until the refresh-marked resize goes
+    // out, so the repaint and the geometry reach the viewer in that order.
+    _startRefreshFastPath(tabInfo, pty, info) {
+        this._beginRecoveryEpisode(tabInfo);
+        pty.decoder = new TextDecoder('utf-8');
+        tabInfo._streamDecoder = pty.decoder;
+        try {
+            this._resetPaneBuffer(tabInfo);
+        }
+        catch (e) {
+            console.error('[term] reset before repaint failed:', e);
+        }
+        try {
+            tabInfo.term.resize(info.headCols, info.headRows);
+        }
+        catch (_e) {
+            /* the post-release fit corrects the grid */
+        }
+        tabInfo.queuedSeq = info.head;
+        tabInfo.drainedSeq = info.head;
+        tabInfo._replayCursor =
+            info.eventCursor || `v1.${info.epoch}.${info.head}.0`;
+        tabInfo._forceRedraw = false;
+        tabInfo._piRefreshNext = true;
+        this._bootstrappedRelease(tabInfo, pty, info.head, info.head, info.eventCursor);
+    }
+    // Bounds the receipt wait with what is left of the episode budget. A
+    // silent host is UNKNOWN: it is never resent.
+    _armRefreshDeadline(tabInfo) {
+        const pending = tabInfo._refreshRequest;
+        if (!pending)
+            return;
+        if (pending.timer)
+            clearTimeout(pending.timer);
+        const remaining = Math.max(0, Math.min(tabInfo._recovery?.deadline ?? Date.now(), Date.now() + 3000) - Date.now());
+        pending.timer = setTimeout(() => {
+            if (tabInfo._refreshRequest !== pending)
+                return;
+            tabInfo._refreshRequest = null;
+            this._fallbackAfterRefresh(tabInfo);
+        }, remaining);
+    }
+    // One receipt decides. A late or foreign receipt can never complete a
+    // different request; NOT_SENT and UNKNOWN are never resent.
+    _onRefreshResult(tabInfo, socket, receipt) {
+        const pending = tabInfo._refreshRequest;
+        if (!pending || pending.id !== receipt.requestId)
+            return;
+        if (pending.socket !== socket)
+            return;
+        if (pending.gen !== tabInfo._bootstrapGen)
+            return;
+        if (pending.timer)
+            clearTimeout(pending.timer);
+        pending.timer = null;
+        if (receipt.outcome === 'dispatched') {
+            // One accepted repaint for this window. Live delivery continues;
+            // the episode ends only once a drained frame passes the head.
+            if (pending.dispatched)
+                return;
+            pending.dispatched = true;
+            if ((tabInfo.drainedSeq ?? 0) > pending.head) {
+                this._finishRecoveryEpisode(tabInfo);
+            }
+            else {
+                pending.timer = setTimeout(() => {
+                    if (tabInfo._refreshRequest === pending)
+                        this._fallbackAfterRefresh(tabInfo);
+                }, Math.max(0, (tabInfo._recovery?.deadline ?? Date.now()) -
+                    Date.now()));
+            }
+            const key = `${tabInfo.paneEpoch}:${pending.head}:${tabInfo.term?.cols}x${tabInfo.term?.rows}`;
+            tabInfo._redrawnKey = key;
+            tabInfo._redraws = (tabInfo._redraws ?? 0) + 1;
+            this._debugRedraw(tabInfo, 'painted', key);
+            return;
+        }
+        tabInfo._refreshRequest = null;
+        this._fallbackAfterRefresh(tabInfo);
+    }
+    // A refused or uncertain repaint falls back to one finite history
+    // replay inside the episode budget. The fast path stays suppressed for
+    // the rest of the episode, and a spent budget leaves the last view in
+    // place with a bounded live-only note instead of an empty screen.
+    _fallbackAfterRefresh(tabInfo) {
+        const rec = tabInfo._recovery;
+        if (!rec)
+            return;
+        if (rec.attempts >= REPLAY_RECOVERY_ATTEMPTS ||
+            Date.now() > rec.deadline) {
+            this._enterLimitedRecovery(tabInfo);
+            return;
+        }
+        rec.suppressFastPath = true;
+        rec.attempts += 1;
+        rec.socket = null;
+        this.reconnectTab(tabInfo, { auto: true });
     }
     // The start spinner covers the pane until the first write. Recovery can
     // finish with an empty screen (refused history, zero-byte window), and a
@@ -3241,6 +3398,18 @@ export class TabManager {
         const gen = (tabInfo._bootstrapGen ?? 0) + 1;
         tabInfo._bootstrapGen = gen;
         tabInfo._gapInFlight = false;
+        if (tabInfo._piRefreshNext) {
+            tabInfo._piRefreshNext = false;
+            tabInfo._refreshSeq = (tabInfo._refreshSeq ?? 0) + 1;
+            tabInfo._refreshRequest = {
+                id: String(tabInfo._refreshSeq),
+                socket: pty,
+                gen,
+                head,
+                dispatched: false,
+                timer: null,
+            };
+        }
         // One barrier owns replay and sizing. Release is idempotent and
         // happens only after the parser and current geometry are settled.
         const releaseOnce = () => {
@@ -3310,7 +3479,8 @@ export class TabManager {
             switch (outcome?.kind) {
                 case 'applied':
                     releaseOnce();
-                    this._finishRecoveryEpisode(tabInfo);
+                    if (!tabInfo._refreshRequest)
+                        this._finishRecoveryEpisode(tabInfo);
                     return;
                 case 'live-now': {
                     // The reader cancelled the replay: drop the partial
@@ -3787,10 +3957,34 @@ export class TabManager {
         // Every attachment needs a real resize, including equal-size and
         // zero-delta reconnects. Only the current socket may own this sizing.
         // A dead pane keeps its final grid: no resize to a gone process.
+        const pendingRefresh = tabInfo._refreshRequest &&
+            tabInfo._refreshRequest.socket === ws &&
+            tabInfo._refreshRequest.gen === expectGen
+            ? tabInfo._refreshRequest
+            : null;
         const canSize = !tabInfo.isDead &&
             this._terminalPanelVisible?.(tabInfo) !== false &&
             tabInfo.ws === ws;
-        if (canSize &&
+        const refreshSent = pendingRefresh !== null &&
+            canSize &&
+            typeof ws?.sendRefreshResize === 'function' &&
+            ws.sendRefreshResize(tabInfo.term.cols, tabInfo.term.rows, pendingRefresh.id);
+        if (refreshSent) {
+            // The refresh-marked resize is this attach's sizing, and the
+            // repaint that follows paints the current screen at that grid.
+            tabInfo._sizedWs = ws;
+            this._armRefreshDeadline(tabInfo);
+        }
+        else if (pendingRefresh !== null &&
+            tabInfo._refreshRequest === pendingRefresh) {
+            // Nothing was sent for this request: never park a fresh viewer
+            // at HEAD with an empty screen. Fall back inside the budget.
+            if (pendingRefresh.timer)
+                clearTimeout(pendingRefresh.timer);
+            tabInfo._refreshRequest = null;
+            this._fallbackAfterRefresh(tabInfo);
+        }
+        else if (canSize &&
             typeof ws?.sendResize === 'function' &&
             ws.sendResize(tabInfo.term.cols, tabInfo.term.rows) !== false) {
             tabInfo._sizedWs = ws;
@@ -3956,7 +4150,7 @@ export class TabManager {
                 tabInfo._gapInFlight = false;
             if (tabInfo._replayAbort === abort)
                 tabInfo._replayAbort = null;
-            if (recovered)
+            if (recovered && !tabInfo._refreshRequest)
                 this._finishRecoveryEpisode(tabInfo);
             // applyGapPatch may encounter the next hole while this handler
             // owns the gate. Re-fire after relinquishing it, not before.
@@ -4381,6 +4575,11 @@ export class TabManager {
         if (frontier <= (tabInfo.drainedSeq ?? 0))
             return;
         tabInfo.drainedSeq = frontier;
+        // A repaint episode ends only after DISPATCHED and a drained frame
+        // that passes the captured head; output alone never ends it either.
+        const pending = tabInfo._refreshRequest;
+        if (pending?.dispatched && frontier > pending.head)
+            this._finishRecoveryEpisode(tabInfo);
         if (tabInfo._limitedRecovery &&
             frontier > (tabInfo._attachHead?.head ?? frontier))
             tabInfo._limitedRecovery = false;
@@ -5756,6 +5955,13 @@ export class TabManager {
         }
         tabInfo.reconnectInFlight = false;
         tabInfo._replayAbort?.abort();
+        if (tabInfo._refreshRequest) {
+            if (tabInfo._refreshRequest.timer)
+                clearTimeout(tabInfo._refreshRequest.timer);
+            tabInfo._refreshRequest = null;
+            if (tabInfo._recovery)
+                tabInfo._recovery.suppressFastPath = true;
+        }
         // Deliberately not written into the terminal buffer: the overlay
         // and disconnect banner already report the lost connection,
         // and unlike them a buffer write is permanent scrollback that
