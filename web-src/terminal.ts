@@ -4318,6 +4318,45 @@ export class TabManager {
         // Surface them once per pane lifetime, beside the terminal.
         if (!samePane) this._noteReplayDurability(tabInfo, info);
 
+        if (samePane && tabInfo._termOpened) {
+            // Both replay and Pi repaint must finish the previous parser owner.
+            while (tabInfo._bootstrapGate) {
+                const pendingBootstrap = tabInfo._bootstrapGate;
+                await pendingBootstrap.catch(() => {});
+                if (
+                    tabInfo.isDead ||
+                    tabInfo.ws !== pty ||
+                    tabInfo.paneEpoch !== info.epoch ||
+                    tabInfo.finalizing
+                )
+                    return;
+                if (tabInfo._bootstrapGate === pendingBootstrap) break;
+            }
+            // Finish old-socket writes before resetting or choosing a resume
+            // point; a received frontier is not yet a parsed frontier.
+            if (tabInfo.writePending || tabInfo.writeBuffer?.length) {
+                const drainGate = this._drainSettled(tabInfo);
+                tabInfo._bootstrapGen = (tabInfo._bootstrapGen ?? 0) + 1;
+                tabInfo._bootstrapGate = drainGate;
+                await drainGate;
+                if (
+                    tabInfo.isDead ||
+                    tabInfo.ws !== pty ||
+                    tabInfo._bootstrapGate !== drainGate ||
+                    tabInfo.finalizing
+                ) {
+                    if (tabInfo._bootstrapGate === drainGate) {
+                        tabInfo._bootstrapGate = null;
+                    }
+                    return;
+                }
+                // The queue is now actually parsed. Its gate suppressed
+                // automatic advancement; publish that proven frontier here.
+                tabInfo.drainedSeq = tabInfo.queuedSeq ?? tabInfo.drainedSeq;
+                tabInfo._bootstrapGate = null;
+            }
+        }
+
         if (this._piRefreshEligible(tabInfo, info, samePane)) {
             if (!tabInfo._termOpened) {
                 tabInfo._streamDecoder = pty.decoder ?? null;
@@ -4368,41 +4407,6 @@ export class TabManager {
         }
 
         if (samePane) {
-            // Same-epoch replay belongs to the terminal, not its old socket.
-            while (tabInfo._bootstrapGate) {
-                const pendingBootstrap = tabInfo._bootstrapGate;
-                await pendingBootstrap.catch(() => {});
-                if (
-                    tabInfo.isDead ||
-                    tabInfo.ws !== pty ||
-                    tabInfo.paneEpoch !== info.epoch
-                )
-                    return;
-                if (tabInfo._bootstrapGate === pendingBootstrap) break;
-            }
-            // Finish old-socket writes before choosing the resume point.
-            // Fetching from a stale drainedSeq while those writes are still
-            // queued would append the same bytes twice.
-            if (tabInfo.writePending || tabInfo.writeBuffer?.length) {
-                const drainGate = this._drainSettled(tabInfo);
-                tabInfo._bootstrapGen = (tabInfo._bootstrapGen ?? 0) + 1;
-                tabInfo._bootstrapGate = drainGate;
-                await drainGate;
-                if (
-                    tabInfo.isDead ||
-                    tabInfo.ws !== pty ||
-                    tabInfo._bootstrapGate !== drainGate
-                ) {
-                    if (tabInfo._bootstrapGate === drainGate) {
-                        tabInfo._bootstrapGate = null;
-                    }
-                    return;
-                }
-                // The queue is now actually parsed. Its gate suppressed
-                // automatic advancement; publish that proven frontier here.
-                tabInfo.drainedSeq = tabInfo.queuedSeq ?? tabInfo.drainedSeq;
-                tabInfo._bootstrapGate = null;
-            }
             // Same-epoch reconnect preserves the parser and decoder: resume
             // from the proven frontier without resetting anything.
             const from = tabInfo.drainedSeq ?? 0;
@@ -4537,6 +4541,10 @@ export class TabManager {
         info: AttachHeadInfo,
     ) {
         this._beginRecoveryEpisode(tabInfo);
+        tabInfo.paneEpoch = info.epoch;
+        tabInfo.paneOldest = info.oldest;
+        tabInfo._floorCursor = info.floorEventCursor;
+        tabInfo._replayBaseline = null;
         pty.decoder = new TextDecoder('utf-8');
         tabInfo._streamDecoder = pty.decoder;
         try {
@@ -4595,12 +4603,12 @@ export class TabManager {
         if (!pending || pending.id !== receipt.requestId) return;
         if (pending.socket !== socket) return;
         if (pending.gen !== tabInfo._bootstrapGen) return;
+        if (pending.dispatched) return;
         if (pending.timer) clearTimeout(pending.timer);
         pending.timer = null;
         if (receipt.outcome === 'dispatched') {
             // One accepted repaint for this window. Live delivery continues;
             // the episode ends only once a drained frame passes the head.
-            if (pending.dispatched) return;
             pending.dispatched = true;
             if ((tabInfo.drainedSeq ?? 0) > pending.head) {
                 this._finishRecoveryEpisode(tabInfo);

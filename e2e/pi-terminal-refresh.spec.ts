@@ -22,8 +22,6 @@ import { readReplay } from './_terminal-replay.js';
 import { startPhi } from './_server.js';
 import { startBridgeProxy } from './_pi-bridge-proxy.js';
 import {
-    COMPACT_MODEL,
-    COMPACT_PROVIDER,
     COMPACT_PROXY_NAME,
     COMPACT_SESSION_ID,
     seedCompactFixture,
@@ -349,7 +347,7 @@ for (const tuiMode of ['fullscreen', 'regular'] as const) {
                 ]),
             });
 
-            // First viewer paints from history: this is the reference screen.
+            // The first viewer supplies the reference live screen.
             const viewerA = await openViewer(page, phi.url, pane);
             await settledScreen(page, pane);
             // Unsent Phi and Pi drafts must both survive a repaint.
@@ -465,6 +463,9 @@ test('Refresh Console repaints in place and keeps the draft', async ({
         const reference = await settledScreen(page, pane);
         expect(reference.text).toContain('COMPACT FIXTURE REPLY 5');
         const replays = viewer.replayRequests.length;
+        const dispatchedBefore = viewer.receipts.filter(
+            (r) => r.outcome === DISPATCHED,
+        ).length;
         await page.locator('#input-textarea').fill('DRAFT ACROSS REPAINT');
 
         await page.locator('#refresh-console-btn').click();
@@ -473,7 +474,7 @@ test('Refresh Console repaints in place and keeps the draft', async ({
                 () => viewer.receipts.filter((r) => r.outcome === DISPATCHED),
                 { timeout: 30_000 },
             )
-            .toHaveLength(1);
+            .toHaveLength(dispatchedBefore + 1);
         // The repaint restores the screen, the cursor, and every mode the
         // TUI set at startup (alt screen, mouse, paste, focus reporting).
         const repainted = await settledScreen(page, pane);
@@ -484,6 +485,82 @@ test('Refresh Console repaints in place and keeps the draft', async ({
         );
         expect(viewer.problems).toEqual([]);
     } finally {
+        await fixture.cleanup();
+    }
+});
+
+test('mobile reload preserves an offline draft and repaints after reconnect', async ({
+    browser,
+    request,
+}) => {
+    test.setTimeout(240_000);
+    const fixture = await startFixture();
+    const context = await browser.newContext({
+        viewport: { width: 390, height: 844 },
+        deviceScaleFactor: 2,
+        isMobile: true,
+        hasTouch: true,
+    });
+    try {
+        const { phi, seed } = fixture;
+        const pane = await spawnPane(
+            request,
+            phi.url,
+            seed.cwd,
+            'Pi repaint mobile',
+            COMPACT_SESSION_ID,
+        );
+        await waitForPanes(request, phi.url, pane, {
+            connected: true,
+            capabilities: expect.arrayContaining(['pi.terminal-refresh.v1']),
+        });
+        const page = await context.newPage();
+        await installTermTracker(page);
+        const viewer = watchViewer(page, pane);
+        await page.goto(phi.url);
+        await expect
+            .poll(async () => (await screenState(page, pane))?.text ?? '')
+            .toContain('COMPACT FIXTURE REPLY 5');
+        const draft = page.locator('#input-textarea');
+        await draft.fill('MOBILE DRAFT KEPT');
+        // A nonempty mobile composer changes the available terminal height.
+        const reference = await settledScreen(page, pane);
+        const receiptsBefore = viewer.receipts.length;
+
+        await page.tap('#mobile-refresh-console-btn');
+        await expect
+            .poll(() => viewer.receipts.filter((r) => r.outcome === DISPATCHED))
+            .toHaveLength(receiptsBefore + 1);
+        expect(await settledScreen(page, pane)).toEqual(reference);
+        expect(viewer.problems).toEqual([]);
+
+        await context.setOffline(true);
+        await page.tap('#mobile-refresh-console-btn');
+        await expect(
+            page.locator(`#term-${pane} .reconnect-overlay`),
+        ).toBeVisible({ timeout: 15_000 });
+        await expect(draft).toHaveValue('MOBILE DRAFT KEPT');
+        await draft.fill('MOBILE DRAFT EDITED OFFLINE');
+        expect(visibleRows(await settledScreen(page, pane))).toBe(
+            visibleRows(reference),
+        );
+        expect(viewer.receipts).toHaveLength(receiptsBefore + 1);
+
+        await context.setOffline(false);
+        await page.tap('#mobile-refresh-console-btn');
+        await expect
+            .poll(() => viewer.receipts.filter((r) => r.outcome === DISPATCHED))
+            .toHaveLength(receiptsBefore + 2);
+        await expect(draft).toHaveValue('MOBILE DRAFT EDITED OFFLINE');
+        expect(await settledScreen(page, pane)).toEqual(reference);
+        expect(viewer.replayRequests).toEqual([]);
+        expect(
+            await page.evaluate(
+                () => document.documentElement.scrollWidth > innerWidth,
+            ),
+        ).toBe(false);
+    } finally {
+        await context.close();
         await fixture.cleanup();
     }
 });
@@ -577,7 +654,6 @@ test('a repaint mid-turn neither resubmits nor duplicates the turn', async ({
         expect(stub.count()).toBe(1);
 
         const receiptsBefore = viewer.receipts.length;
-        const attachesBefore = viewer.attaches.length;
         await page.locator('#refresh-console-btn').click();
         await expect
             .poll(
@@ -755,6 +831,7 @@ test('a dropped bridge keeps input and the fallback, then repaints again', async
             .poll(() => viewer.attaches.length, { timeout: 30_000 })
             .toBe(2);
         expect(viewer.attaches.at(-1)?.terminalRefreshAvailable).toBeFalsy();
+        await expect.poll(() => viewer.replayRequests.length).toBe(replays + 1);
         const afterDrop = await settledScreen(page, pane);
         expect(visibleRows(afterDrop)).toBe(visibleRows(reference));
 
@@ -786,6 +863,7 @@ test('a dropped bridge keeps input and the fallback, then repaints again', async
             )
             .toHaveLength(receiptsBefore + 1);
         expect(viewer.attaches).toHaveLength(3);
+        expect(viewer.replayRequests).toHaveLength(replays + 1);
         expect(viewer.attaches.at(-1)?.terminalRefreshAvailable).toBe(true);
         expect(viewer.problems).toEqual([]);
     } finally {

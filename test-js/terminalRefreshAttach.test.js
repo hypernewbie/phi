@@ -122,6 +122,63 @@ describe('Pi repaint fast path', () => {
         );
     });
 
+    it('adopts the new lifetime floor and discards an unfinished replay baseline', async () => {
+        const { tm, tab } = harness();
+        tab.paneOldest = 800;
+        tab._floorCursor = 'v1.7.800.4';
+        tab._replayBaseline = { cols: 60, rows: 20 };
+        await tm._onAttachHead(
+            tab,
+            refreshAttach({
+                epoch: 8,
+                oldest: 200,
+                floorEventCursor: 'v1.8.200.2',
+                eventCursor: 'v1.8.400.3',
+            }),
+        );
+
+        expect(tab.paneOldest).toBe(200);
+        expect(tab._floorCursor).toBe('v1.8.200.2');
+        expect(tab._replayBaseline).toBeNull();
+        expect(tab._replayCursor).toBe('v1.8.400.3');
+        expect(tab.drainedSeq).toBe(400);
+    });
+
+    it('waits for admitted writes before resetting for a manual repaint', async () => {
+        const { tm, tab } = harness();
+        tab._forceRedraw = true;
+        tab.writePending = true;
+        let finish;
+        const drained = new Promise((resolve) => {
+            finish = resolve;
+        });
+        tm._drainSettled = vi.fn(() => drained);
+        const attaching = tm._onAttachHead(tab, refreshAttach());
+
+        expect(tm._resetPaneBuffer).not.toHaveBeenCalled();
+        expect(tm._bootstrappedRelease).not.toHaveBeenCalled();
+        tab.writePending = false;
+        finish();
+        await attaching;
+        expect(tm._resetPaneBuffer).toHaveBeenCalledOnce();
+        expect(tab.drainedSeq).toBe(400);
+    });
+
+    it('waits for an older bootstrap before starting a manual repaint', async () => {
+        const { tm, tab } = harness();
+        tab._forceRedraw = true;
+        let finish;
+        tab._bootstrapGate = new Promise((resolve) => {
+            finish = resolve;
+        });
+        const attaching = tm._onAttachHead(tab, refreshAttach());
+
+        expect(tm._resetPaneBuffer).not.toHaveBeenCalled();
+        finish();
+        await attaching;
+        expect(tm._resetPaneBuffer).toHaveBeenCalledOnce();
+    });
+
     it('keeps the history path when the pane cannot repaint', async () => {
         const { tm, tab, pty } = harness({ drainedSeq: 0 });
         tab._termOpened = false;
@@ -239,6 +296,32 @@ describe('Pi repaint receipts', () => {
         expect(tab._recovery).toBeNull();
         expect(tab._refreshRequest).toBeNull();
     });
+
+    it.each(['dispatched', 'unknown'])(
+        'ignores a duplicate %s receipt without cancelling the output deadline',
+        (outcome) => {
+            vi.useFakeTimers();
+            const { tm, tab, pty } = harness();
+            pending(tab, pty);
+            tm._onRefreshResult(tab, pty, {
+                requestId: '5',
+                outcome: 'dispatched',
+                reason: '',
+            });
+            vi.advanceTimersByTime(1000);
+            tm._onRefreshResult(tab, pty, {
+                requestId: '5',
+                outcome,
+                reason: '',
+            });
+            expect(tm.reconnectTab).not.toHaveBeenCalled();
+            vi.advanceTimersByTime(9000);
+            expect(tm.reconnectTab).toHaveBeenCalledExactlyOnceWith(tab, {
+                auto: true,
+            });
+            expect(tab._redraws).toBe(1);
+        },
+    );
 
     it('ignores late, foreign, and stale-generation receipts', () => {
         const { tm, tab, pty } = harness();
