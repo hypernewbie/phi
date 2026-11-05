@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hypernewbie/phi/pkg/pty"
 	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
@@ -99,26 +100,26 @@ func TestAttachHotIsAtomicAndLiveOnly(t *testing.T) {
 
 func TestSeqAccountingAcrossWraparound(t *testing.T) {
 	h := NewHub(8)
-	if err := h.SetRecordingDirectory(t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.InitPaneJournal("p", 80, 24); err != nil {
-		t.Fatal(err)
-	}
 	h.Ingest("p", []byte("12345678")) // total=8
 	h.Ingest("p", []byte("9ABCDEF"))  // total=15
 	ph, _ := h.LookupPane("p")
 	epoch := ph.EpochOf()
 
-	page, err := h.Replay("p", ReplayRequest{Epoch: epoch, From: 0, Latest: true})
+	// The RAM window keeps only its capacity, so a replay from byte zero
+	// is expired instead of pretending the evicted prefix still exists.
+	if _, err := h.Replay("p", ReplayRequest{Epoch: epoch, From: 0, Latest: true}); !errors.Is(err, ErrReplayExpired) {
+		t.Fatalf("replay from an evicted prefix = %v, want expired", err)
+	}
+
+	page, err := h.Replay("p", ReplayRequest{Epoch: epoch, From: 7, Latest: true})
 	if err != nil {
 		t.Fatalf("replay: %v", err)
 	}
-	if page.Start != 0 || page.End != 15 {
-		t.Fatalf("replay span [%d,%d), want [0,15)", page.Start, page.End)
+	if page.Start != 7 || page.End != 15 {
+		t.Fatalf("replay span [%d,%d), want [7,15)", page.Start, page.End)
 	}
-	if string(page.Data) != "123456789ABCDEF" {
-		t.Fatalf("replay data = %q; the journal never evicts", page.Data)
+	if string(page.Data) != "89ABCDEF" {
+		t.Fatalf("replay data = %q, want the retained tail", page.Data)
 	}
 
 	// Partial range inside the retained window.
@@ -137,49 +138,50 @@ func TestSeqAccountingAcrossWraparound(t *testing.T) {
 
 	// A numeric through without its attach fence is an error: the fence
 	// certifies the head the caller attached to.
-	if _, err := h.Replay("p", ReplayRequest{Epoch: epoch, From: 0, Through: 15}); !errors.Is(err, ErrReplayBadRequest) {
+	if _, err := h.Replay("p", ReplayRequest{Epoch: epoch, From: 7, Through: 15}); !errors.Is(err, ErrReplayBadRequest) {
 		t.Fatalf("unfenced through must fail bad-request, got %v", err)
 	}
 }
 
+// A staged resize keeps the pane transaction open until commit or abort,
+// and its geometry frame orders against live output by byte position.
 func TestIngestPublishesCommittedResizeWhenPayloadFails(t *testing.T) {
 	h := NewHub(1024)
-	if err := h.SetRecordingDirectory(t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
 	if err := h.InitPaneJournal("p", 80, 24); err != nil {
 		t.Fatal(err)
 	}
 	c := &Client{Send: make(chan []byte, 8)}
 	h.AttachHot("p", c)
 	drainOne(c.Send) // attach
-	// The commit fails after its OS step; the stage stays pending.
-	commit, _, err := h.StagePaneResize("p", 100, 30)
+
+	commit, abort, err := h.StagePaneResize("p", 100, 30)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ph, _ := h.LookupPane("p")
-	ph.mu.Lock()
-	ph.journal.faults.manifestSync = errors.New("injected")
-	ph.mu.Unlock()
-	if err := commit(); err == nil {
-		t.Fatal("commit with manifest fault must fail")
+	if err := commit(); err != nil {
+		t.Fatal(err)
 	}
-	// Admission finishes the staged commit, then the payload fails. The
-	// marker is durable, so live clients must still receive it.
-	ph.mu.Lock()
-	ph.journal.faults.manifestSync = nil
-	ph.journal.faults.journalSync = errors.New("injected")
-	ph.mu.Unlock()
-	if err := h.Ingest("p", []byte("x")); err == nil {
-		t.Fatal("payload with journal fault must fail")
+	if err := commit(); err != nil {
+		t.Fatalf("repeated commit must release once: %v", err)
 	}
+	abort() // repeated release is a no-op
+
 	frame, err := wireproto.DecodeServerFrame(drainOne(c.Send))
 	if err != nil || frame.GetGeometry() == nil {
 		t.Fatalf("committed resize never reached live clients: %+v %v", frame, err)
 	}
 	if g := frame.GetGeometry(); g.GetCols() != 100 || g.GetRows() != 30 {
 		t.Fatalf("geometry = %dx%d", g.GetCols(), g.GetRows())
+	}
+
+	h.Ingest("p", []byte("x"))
+	ph, _ := h.LookupPane("p")
+	page, err := h.Replay("p", ReplayRequest{Epoch: ph.EpochOf(), From: 0, Latest: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Resizes) != 1 || page.Resizes[0].AtSeq != 0 || page.Resizes[0].Cols != 100 {
+		t.Fatalf("replay markers = %+v, want one marker at byte 0", page.Resizes)
 	}
 }
 
@@ -274,7 +276,13 @@ func TestEpochDiffersPerPane(t *testing.T) {
 	}
 	previousEpoch := ea.EpochOf()
 	h.ClosePane("a")
-	h.Ingest("a", []byte("z")) // recreates the pane, reusing the journal owner
+	// A replacement PTY with the same pane ID mints a fresh epoch and
+	// drops the previous owner's retained history.
+	inst := &pty.PTYInstance{ID: "a", Pty: &pty.Pty{Cols: 80, Rows: 24}}
+	if err := h.InitPaneForOwner(inst); err != nil {
+		t.Fatal(err)
+	}
+	h.Ingest("a", []byte("z"))
 	ea2, _ := h.LookupPane("a")
 	if ea2.EpochOf() == previousEpoch {
 		t.Fatal("pane recreation must mint a fresh epoch")

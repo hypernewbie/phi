@@ -669,7 +669,7 @@ describe('recording fetch', () => {
         }
     });
 
-    it('degrades without a timeout on browsers lacking AbortSignal.timeout', async () => {
+    it('keeps a deadline on browsers lacking AbortSignal.timeout', async () => {
         const c = Object.create(TabManager.prototype);
         const realTimeout = AbortSignal.timeout;
         let seenInit;
@@ -687,7 +687,9 @@ describe('recording fetch', () => {
             });
             const d = await c._fetchReplayPages('p', 0, 5);
             expect(d.text).toBe('delta');
-            expect(seenInit?.signal).toBe(undefined);
+            // A missing AbortSignal.timeout must not allow an unbounded
+            // fetch: the timer-driven controller still supplies a signal.
+            expect(seenInit?.signal).toBeInstanceOf(AbortSignal);
         } finally {
             Object.defineProperty(AbortSignal, 'timeout', {
                 configurable: true,

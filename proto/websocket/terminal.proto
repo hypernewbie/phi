@@ -47,6 +47,14 @@ message TerminalAttach {
   optional string event_cursor = 8;
   optional bool history_incomplete = 9;
   optional bool ephemeral = 10;
+  // Certified RAM-window floor. Byte positions below floor are gone and
+  // a replay from there is refused. The geometry fields are the grid the
+  // server had in effect at the floor and at the head.
+  optional string floor_event_cursor = 11;
+  optional uint32 floor_cols = 12;
+  optional uint32 floor_rows = 13;
+  optional uint32 head_cols = 14;
+  optional uint32 head_rows = 15;
 }
 
 message TerminalCheckpoint {

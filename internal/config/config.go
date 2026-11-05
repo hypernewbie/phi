@@ -435,8 +435,15 @@ func applyDefaults(cfg Config) Config {
 		cfg.MarkdownDirs = []string{".", "./temp", "./tmp"}
 	}
 	if cfg.ReplayBufferBytes == nil {
-		defaultBytes := 1048576
+		// Retain at most 32 MiB of recent output per pane in RAM.
+		defaultBytes := 32 << 20
 		cfg.ReplayBufferBytes = &defaultBytes
+	}
+	if *cfg.ReplayBufferBytes > 32<<20 {
+		// The hard ceiling is not a user preference: clamp the effective
+		// value without rewriting the stored configuration.
+		clamped := 32 << 20
+		cfg.ReplayBufferBytes = &clamped
 	}
 	if cfg.AutoReconnect == "" {
 		cfg.AutoReconnect = "visible"

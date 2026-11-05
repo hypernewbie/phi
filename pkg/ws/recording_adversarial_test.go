@@ -9,6 +9,9 @@ import (
 	"testing"
 )
 
+// Terminal history is RAM-only: a restarted hub has no history to adopt,
+// even when the previous process left files behind. Nothing is read from
+// the old namespace and nothing is deleted.
 func TestAdversarialColdReadAfterRestartWithoutLiveWriter(t *testing.T) {
 	for _, closed := range []bool{false, true} {
 		name := "live"
@@ -31,27 +34,30 @@ func TestAdversarialColdReadAfterRestartWithoutLiveWriter(t *testing.T) {
 			if closed {
 				first.ClosePane("pane")
 			}
-			// A restart closes the first owner before the second
-			// opens the same journal.
 			if err := first.Close(); err != nil {
 				t.Fatal(err)
 			}
+
 			second := NewHub(64)
 			t.Cleanup(func() { _ = second.Close() })
 			if err := second.SetRecordingDirectory(dir); err != nil {
 				t.Fatal(err)
 			}
-			// The backend respawn reopens the journal; the epoch is
-			// per-hub-lifetime, so the client learns it from attach.
 			if err := second.InitPaneJournal("pane", 80, 24); err != nil {
 				t.Fatal(err)
 			}
 			c := &Client{Send: make(chan []byte, 4)}
 			second.AttachHot("pane", c)
 			attach := parseAttach(t, drainOne(c.Send))
+			if attach.GetHead() != 0 || attach.GetOldest() != 0 {
+				t.Fatalf("restarted hub adopted old history: oldest=%d head=%d", attach.GetOldest(), attach.GetHead())
+			}
+			if err := second.Ingest("pane", []byte("new")); err != nil {
+				t.Fatal(err)
+			}
 			page, err := second.Replay("pane", ReplayRequest{Epoch: attach.GetEpoch(), From: 0, Latest: true})
-			if err != nil || !bytes.Equal(page.Data, data) {
-				t.Fatalf("existing cold data requires a new live writer: err=%v data=%q", err, page.Data)
+			if err != nil || string(page.Data) != "new" {
+				t.Fatalf("restarted hub served pre-restart history: err=%v data=%q", err, page.Data)
 			}
 		})
 	}
@@ -106,11 +112,8 @@ func TestAdversarialCorruptMiddleHeaderDoesNotDeleteRetainedSuffix(t *testing.T)
 func TestAdversarialInvalidResizeCannotPoisonAllLaterReplay(t *testing.T) {
 	for _, size := range [][2]uint16{{0, 24}, {80, 0}, {0, 0}} {
 		t.Run(fmt.Sprintf("%dx%d", size[0], size[1]), func(t *testing.T) {
-			h := NewHub(8)
+			h := NewHub(64)
 			t.Cleanup(func() { _ = h.Close() })
-			if err := h.SetRecordingDirectory(t.TempDir()); err != nil {
-				t.Fatal(err)
-			}
 			if err := h.InitPaneJournal("p", 80, 24); err != nil {
 				t.Fatal(err)
 			}

@@ -91,8 +91,8 @@ func TestMemoryStatsCheckpointReplacementAndRawReplayOwnership(t *testing.T) {
 	if !archived.Complete || *archived.LiveOwnerCount != 0 || *archived.ArchiveOwnerCount != 1 {
 		t.Fatalf("archive owner counts = %+v", archived)
 	}
-	if *archived.RingCapacityBytes != 0 || *archived.CheckpointCapacityBytes != 0 || *archived.WasmLinearBytes != 0 || *archived.NativeResidentBytes != 0 {
-		t.Fatalf("closed pane retained live buffers: %+v", archived)
+	if *archived.RingCapacityBytes != 32 || *archived.CheckpointCapacityBytes != 0 || *archived.WasmLinearBytes != 0 || *archived.NativeResidentBytes != 0 {
+		t.Fatalf("archive must retain only its bounded RAM window: %+v", archived)
 	}
 
 	pane, err = h.GetOrCreatePaneHub("owned")

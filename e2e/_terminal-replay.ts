@@ -7,18 +7,20 @@ import type {
 const ServerCodec = TerminalServerFrame as unknown as MessageFns<ServerMessage>;
 
 // For unauthenticated, isolated live fixtures. Discover the baseline through
-// the same v2 attach as a client; never inspect journal files or guess an epoch.
+// the same v3 attach as a client; never inspect journal files or guess an epoch.
 export async function terminalHead(url: string, pane: string) {
     const socket = new WebSocket(
         `${url.replace(/^http/, 'ws')}/ws/pane/${encodeURIComponent(pane)}`,
-        'phi.terminal.protobuf.v2',
+        'phi.terminal.protobuf.v3',
     );
     socket.binaryType = 'arraybuffer';
     let timer: ReturnType<typeof setTimeout>;
     try {
         return await new Promise<{
             epoch: number;
+            oldest: number;
             head: number;
+            floorEventCursor: string;
             eventCursor: string;
         }>((resolve, reject) => {
             timer = setTimeout(
@@ -34,13 +36,15 @@ export async function terminalHead(url: string, pane: string) {
                 );
                 if (frame.payload?.$case !== 'attach') return;
                 const attach = frame.payload.value;
-                if (!attach.eventCursor) {
-                    reject(new Error('terminal attach has no v2 cursor'));
+                if (!attach.eventCursor || !attach.floorEventCursor) {
+                    reject(new Error('terminal attach has no v3 window'));
                     return;
                 }
                 resolve({
                     epoch: Number(attach.epoch),
+                    oldest: Number(attach.oldest),
                     head: Number(attach.head),
+                    floorEventCursor: attach.floorEventCursor,
                     eventCursor: attach.eventCursor,
                 });
             });
@@ -56,8 +60,8 @@ export async function terminalHead(url: string, pane: string) {
 export async function readReplay(url: string, pane: string) {
     const fence = await terminalHead(url, pane);
     const chunks: Buffer[] = [];
-    let from = 0;
-    let after = '';
+    let from = fence.oldest;
+    let after = fence.floorEventCursor;
     for (;;) {
         const params = new URLSearchParams({
             epoch: String(fence.epoch),
@@ -118,6 +122,29 @@ export function replayAttach(
         initialCols: cols,
         initialRows: rows,
         eventCursor: `v1.${epoch}.${head}.0`,
+    };
+}
+
+// v3 attach after eviction: the certified window starts at `floor`, and the
+// geometry at that floor can differ from the head geometry. A client must
+// adopt the head geometry and treat bytes below `floor` as lost.
+export function replayAttachWithFloor(
+    epoch: number,
+    floor: number,
+    head: number,
+    headCols = 80,
+    headRows = 24,
+    floorCols = headCols,
+    floorRows = headRows,
+) {
+    return {
+        ...replayAttach(epoch, head, headCols, headRows),
+        oldest: BigInt(floor),
+        floorCols,
+        floorRows,
+        headCols,
+        headRows,
+        floorEventCursor: `v1.${epoch}.${floor}.0`,
     };
 }
 

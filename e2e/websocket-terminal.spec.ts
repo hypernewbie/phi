@@ -212,14 +212,14 @@ test('terminal pane flows over protobuf in Chromium', async ({ page }) => {
                     ws.onerror = () => resolve('rejected');
                 });
             return {
-                token: await open('phi.terminal.protobuf.v2'),
+                token: await open('phi.terminal.protobuf.v3'),
                 bare: await open(),
             };
         },
         { base: phi.url, id: probePane.pane_id },
     );
     await probePage.close();
-    expect(admission.token).toBe('open:phi.terminal.protobuf.v2');
+    expect(admission.token).toBe('open:phi.terminal.protobuf.v3');
     expect(admission.bare).toBe('rejected');
     consoleErrors.length = 0;
     pageErrors.length = 0;

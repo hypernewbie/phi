@@ -429,8 +429,16 @@ type TerminalAttach struct {
 	EventCursor       *string                `protobuf:"bytes,8,opt,name=event_cursor,json=eventCursor,proto3,oneof" json:"event_cursor,omitempty"`
 	HistoryIncomplete *bool                  `protobuf:"varint,9,opt,name=history_incomplete,json=historyIncomplete,proto3,oneof" json:"history_incomplete,omitempty"`
 	Ephemeral         *bool                  `protobuf:"varint,10,opt,name=ephemeral,proto3,oneof" json:"ephemeral,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Certified RAM-window floor. Byte positions below floor are gone and
+	// a replay from there is refused. The geometry fields are the grid the
+	// server had in effect at the floor and at the head.
+	FloorEventCursor *string `protobuf:"bytes,11,opt,name=floor_event_cursor,json=floorEventCursor,proto3,oneof" json:"floor_event_cursor,omitempty"`
+	FloorCols        *uint32 `protobuf:"varint,12,opt,name=floor_cols,json=floorCols,proto3,oneof" json:"floor_cols,omitempty"`
+	FloorRows        *uint32 `protobuf:"varint,13,opt,name=floor_rows,json=floorRows,proto3,oneof" json:"floor_rows,omitempty"`
+	HeadCols         *uint32 `protobuf:"varint,14,opt,name=head_cols,json=headCols,proto3,oneof" json:"head_cols,omitempty"`
+	HeadRows         *uint32 `protobuf:"varint,15,opt,name=head_rows,json=headRows,proto3,oneof" json:"head_rows,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *TerminalAttach) Reset() {
@@ -531,6 +539,41 @@ func (x *TerminalAttach) GetEphemeral() bool {
 		return *x.Ephemeral
 	}
 	return false
+}
+
+func (x *TerminalAttach) GetFloorEventCursor() string {
+	if x != nil && x.FloorEventCursor != nil {
+		return *x.FloorEventCursor
+	}
+	return ""
+}
+
+func (x *TerminalAttach) GetFloorCols() uint32 {
+	if x != nil && x.FloorCols != nil {
+		return *x.FloorCols
+	}
+	return 0
+}
+
+func (x *TerminalAttach) GetFloorRows() uint32 {
+	if x != nil && x.FloorRows != nil {
+		return *x.FloorRows
+	}
+	return 0
+}
+
+func (x *TerminalAttach) GetHeadCols() uint32 {
+	if x != nil && x.HeadCols != nil {
+		return *x.HeadCols
+	}
+	return 0
+}
+
+func (x *TerminalAttach) GetHeadRows() uint32 {
+	if x != nil && x.HeadRows != nil {
+		return *x.HeadRows
+	}
+	return 0
 }
 
 type TerminalCheckpoint struct {
@@ -1291,7 +1334,7 @@ const file_terminal_proto_rawDesc = "" +
 	"settlement\x12K\n" +
 	"\fnotification\x18\x18 \x01(\v2%.phi.websocket.events.v1.NotificationH\x00R\fnotification\x12I\n" +
 	"\bgeometry\x18\x19 \x01(\v2+.phi.websocket.terminal.v1.TerminalGeometryH\x00R\bgeometryB\t\n" +
-	"\apayload\"\xab\x04\n" +
+	"\apayload\"\xbb\x06\n" +
 	"\x0eTerminalAttach\x12\x19\n" +
 	"\x05epoch\x18\x01 \x01(\x04H\x00R\x05epoch\x88\x01\x01\x12\x1b\n" +
 	"\x06oldest\x18\x02 \x01(\x04H\x01R\x06oldest\x88\x01\x01\x12\x17\n" +
@@ -1306,7 +1349,15 @@ const file_terminal_proto_rawDesc = "" +
 	"\fevent_cursor\x18\b \x01(\tH\x06R\veventCursor\x88\x01\x01\x122\n" +
 	"\x12history_incomplete\x18\t \x01(\bH\aR\x11historyIncomplete\x88\x01\x01\x12!\n" +
 	"\tephemeral\x18\n" +
-	" \x01(\bH\bR\tephemeral\x88\x01\x01B\b\n" +
+	" \x01(\bH\bR\tephemeral\x88\x01\x01\x121\n" +
+	"\x12floor_event_cursor\x18\v \x01(\tH\tR\x10floorEventCursor\x88\x01\x01\x12\"\n" +
+	"\n" +
+	"floor_cols\x18\f \x01(\rH\n" +
+	"R\tfloorCols\x88\x01\x01\x12\"\n" +
+	"\n" +
+	"floor_rows\x18\r \x01(\rH\vR\tfloorRows\x88\x01\x01\x12 \n" +
+	"\thead_cols\x18\x0e \x01(\rH\fR\bheadCols\x88\x01\x01\x12 \n" +
+	"\thead_rows\x18\x0f \x01(\rH\rR\bheadRows\x88\x01\x01B\b\n" +
 	"\x06_epochB\t\n" +
 	"\a_oldestB\a\n" +
 	"\x05_headB\x0e\n" +
@@ -1316,7 +1367,14 @@ const file_terminal_proto_rawDesc = "" +
 	"\r_event_cursorB\x15\n" +
 	"\x13_history_incompleteB\f\n" +
 	"\n" +
-	"_ephemeral\"\xf2\x01\n" +
+	"_ephemeralB\x15\n" +
+	"\x13_floor_event_cursorB\r\n" +
+	"\v_floor_colsB\r\n" +
+	"\v_floor_rowsB\f\n" +
+	"\n" +
+	"_head_colsB\f\n" +
+	"\n" +
+	"_head_rows\"\xf2\x01\n" +
 	"\x12TerminalCheckpoint\x12\x17\n" +
 	"\x04kind\x18\x01 \x01(\tH\x00R\x04kind\x88\x01\x01\x12\x1d\n" +
 	"\athrough\x18\x02 \x01(\x04H\x01R\athrough\x88\x01\x01\x12\x17\n" +

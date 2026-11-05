@@ -195,6 +195,7 @@ func TestWebSocketProtobufAdmissionIsolation(t *testing.T) {
 	hub := NewHub(4096)
 	manager := pty.NewManager()
 	inst := aliveGhost("isolation-pane")
+	manager.AddInstanceForTesting(inst)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws/pane", func(w http.ResponseWriter, r *http.Request) {
 		HandleWS(w, r, inst, manager, hub)

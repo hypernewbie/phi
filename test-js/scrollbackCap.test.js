@@ -57,7 +57,7 @@ describe('live scrollback restored', () => {
         // The shared tokens module carries the versioned subprotocol
         // and the pane socket imports it; the query string no longer
         // carries protocol selection.
-        expect(protocols).toContain('phi.terminal.protobuf.v2');
+        expect(protocols).toContain('phi.terminal.protobuf.v3');
         expect(ws).toContain('ws-protocols.js');
         expect(ws).not.toContain('term_proto');
     });

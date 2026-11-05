@@ -52,7 +52,19 @@ export interface TerminalAttach {
   initialRows?: number | undefined;
   eventCursor?: string | undefined;
   historyIncomplete?: boolean | undefined;
-  ephemeral?: boolean | undefined;
+  ephemeral?:
+    | boolean
+    | undefined;
+  /**
+   * Certified RAM-window floor. Byte positions below floor are gone and
+   * a replay from there is refused. The geometry fields are the grid the
+   * server had in effect at the floor and at the head.
+   */
+  floorEventCursor?: string | undefined;
+  floorCols?: number | undefined;
+  floorRows?: number | undefined;
+  headCols?: number | undefined;
+  headRows?: number | undefined;
 }
 
 export interface TerminalCheckpoint {
@@ -588,6 +600,11 @@ function createBaseTerminalAttach(): TerminalAttach {
     eventCursor: undefined,
     historyIncomplete: undefined,
     ephemeral: undefined,
+    floorEventCursor: undefined,
+    floorCols: undefined,
+    floorRows: undefined,
+    headCols: undefined,
+    headRows: undefined,
   };
 }
 
@@ -634,6 +651,21 @@ export const TerminalAttach: MessageFns<TerminalAttach> = {
     }
     if (message.ephemeral !== undefined) {
       writer.uint32(80).bool(message.ephemeral);
+    }
+    if (message.floorEventCursor !== undefined) {
+      writer.uint32(90).string(message.floorEventCursor);
+    }
+    if (message.floorCols !== undefined) {
+      writer.uint32(96).uint32(message.floorCols);
+    }
+    if (message.floorRows !== undefined) {
+      writer.uint32(104).uint32(message.floorRows);
+    }
+    if (message.headCols !== undefined) {
+      writer.uint32(112).uint32(message.headCols);
+    }
+    if (message.headRows !== undefined) {
+      writer.uint32(120).uint32(message.headRows);
     }
     return writer;
   },
@@ -731,6 +763,46 @@ export const TerminalAttach: MessageFns<TerminalAttach> = {
             message.ephemeral = reader.bool();
             continue;
           }
+          case 11: {
+            if (tag !== 90) {
+              break;
+            }
+
+            message.floorEventCursor = reader.string();
+            continue;
+          }
+          case 12: {
+            if (tag !== 96) {
+              break;
+            }
+
+            message.floorCols = reader.uint32();
+            continue;
+          }
+          case 13: {
+            if (tag !== 104) {
+              break;
+            }
+
+            message.floorRows = reader.uint32();
+            continue;
+          }
+          case 14: {
+            if (tag !== 112) {
+              break;
+            }
+
+            message.headCols = reader.uint32();
+            continue;
+          }
+          case 15: {
+            if (tag !== 120) {
+              break;
+            }
+
+            message.headRows = reader.uint32();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -762,6 +834,11 @@ export const TerminalAttach: MessageFns<TerminalAttach> = {
     message.eventCursor = object.eventCursor ?? undefined;
     message.historyIncomplete = object.historyIncomplete ?? undefined;
     message.ephemeral = object.ephemeral ?? undefined;
+    message.floorEventCursor = object.floorEventCursor ?? undefined;
+    message.floorCols = object.floorCols ?? undefined;
+    message.floorRows = object.floorRows ?? undefined;
+    message.headCols = object.headCols ?? undefined;
+    message.headRows = object.headRows ?? undefined;
     return message;
   },
 };

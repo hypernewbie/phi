@@ -95,6 +95,13 @@ export interface AttachHeadInfo {
     ephemeral: boolean;
     // Server-certified plain-text line reset; unknown servers provide none.
     replayFrom?: number;
+    // v3: cursor at the certified window floor, when the server sends one.
+    floorEventCursor?: string;
+    floorCols?: number;
+    floorRows?: number;
+    // v3: geometry in effect at the certified head.
+    headCols?: number;
+    headRows?: number;
 }
 
 export interface PTYWebSocketOptions {
@@ -105,8 +112,8 @@ export interface PTYWebSocketOptions {
     // the browser's same-origin guarantees apply and the user sees
     // their chosen label in the UI rather than getting it baked into
     // a socket URL they can never connect to.
-    onAttachHead?: (info: AttachHeadInfo) => void;
-    onGap?: (from: number, to: number) => void;
+    onAttachHead?: (info: AttachHeadInfo, socket?: PTYWebSocket) => void;
+    onGap?: (from: number, to: number, socket?: PTYWebSocket) => void;
 }
 
 // Narrow one 64-bit field to a safe integer. Absent and out-of-range
@@ -158,8 +165,8 @@ export class PTYWebSocket {
     onControl?: (msg: WSControlMessage) => void;
     onClose?: () => void;
     onOpen?: () => void;
-    onAttachHead?: (info: AttachHeadInfo) => void;
-    onGap?: (from: number, to: number) => void;
+    onAttachHead?: PTYWebSocketOptions['onAttachHead'];
+    onGap?: PTYWebSocketOptions['onGap'];
     url: string;
     ws: WebSocket;
     decoder: TextDecoder;
@@ -490,7 +497,7 @@ export class PTYWebSocket {
         }
         if (atSeq > this.liveSeq) {
             if (this._holdFrame(atSeq, new Uint8Array(), geom))
-                this._notify(this.onGap, this.liveSeq, atSeq);
+                this._notify(this.onGap, this.liveSeq, atSeq, this);
             return;
         }
         this.onControl?.({
@@ -529,9 +536,6 @@ export class PTYWebSocket {
             } catch (_e) {}
             return;
         }
-        this.mode = 'hot';
-        this.liveSeq = head;
-        this.lastFrameEnd = head;
         let ckpt: AttachCheckpoint | null = null;
         const c = attach.checkpoint;
         const validCursor = isEventCursor;
@@ -574,22 +578,70 @@ export class PTYWebSocket {
             return;
         }
         const replayFrom = toSafeInt(attach.replayFrom);
-        this._notify(this.onAttachHead, {
-            epoch,
-            oldest,
-            head,
-            ckpt,
-            initialCols: initialCols as number,
-            initialRows: initialRows as number,
-            eventCursor: attach.eventCursor as string,
-            historyIncomplete: attach.historyIncomplete === true,
-            ephemeral: attach.ephemeral === true,
-            ...(replayFrom !== undefined &&
-            replayFrom >= oldest &&
-            replayFrom <= head
-                ? { replayFrom }
-                : {}),
-        });
+        const headSize = (v: unknown): number | undefined =>
+            typeof v === 'number' && Number.isInteger(v) && v > 0 && v <= 65535
+                ? v
+                : undefined;
+        const headCols = headSize(attach.headCols);
+        const headRows = headSize(attach.headRows);
+        const floorCols = headSize(attach.floorCols);
+        const floorRows = headSize(attach.floorRows);
+        const positionMatches = (cursor: string | undefined, seq: number) => {
+            if (!isEventCursor(cursor)) return false;
+            const parts = cursor.split('.').slice(1).map(Number);
+            return (
+                parts.every(Number.isSafeInteger) &&
+                parts[0] === epoch &&
+                parts[1] === seq
+            );
+        };
+        if (
+            !positionMatches(attach.eventCursor, head) ||
+            ((oldest > 0 || attach.floorEventCursor !== undefined) &&
+                (!positionMatches(attach.floorEventCursor, oldest) ||
+                    !floorCols ||
+                    !floorRows ||
+                    Number(attach.floorEventCursor?.split('.').at(-1)) >
+                        Number(attach.eventCursor?.split('.').at(-1))))
+        ) {
+            this.ws.close();
+            return;
+        }
+        this.mode = 'hot';
+        this.liveSeq = head;
+        this.lastFrameEnd = head;
+        this._notify(
+            this.onAttachHead,
+            {
+                epoch,
+                oldest,
+                head,
+                ckpt,
+                initialCols: initialCols as number,
+                initialRows: initialRows as number,
+                eventCursor: attach.eventCursor as string,
+                // v3: the certified window floor carries its own cursor, so a
+                // client that must start at the floor requests the exact fence.
+                ...(typeof attach.floorEventCursor === 'string' &&
+                isEventCursor(attach.floorEventCursor)
+                    ? { floorEventCursor: attach.floorEventCursor }
+                    : {}),
+                ...(floorCols !== undefined && floorRows !== undefined
+                    ? { floorCols, floorRows }
+                    : {}),
+                historyIncomplete: attach.historyIncomplete === true,
+                ephemeral: attach.ephemeral === true,
+                ...(headCols !== undefined && headRows !== undefined
+                    ? { headCols, headRows }
+                    : {}),
+                ...(replayFrom !== undefined &&
+                replayFrom >= oldest &&
+                replayFrom <= head
+                    ? { replayFrom }
+                    : {}),
+            },
+            this,
+        );
     }
 
     private _handleLiveOutput(out: TerminalOutput) {
@@ -633,7 +685,7 @@ export class PTYWebSocket {
         if (start > this.liveSeq) {
             // Gap: hold delivery until the host patches the missing range.
             if (!this._holdFrame(start, bytes)) return;
-            this._notify(this.onGap, this.liveSeq, start);
+            this._notify(this.onGap, this.liveSeq, start, this);
             return;
         }
         this._deliver(start, bytes);
@@ -703,6 +755,7 @@ export class PTYWebSocket {
                         this.onGap,
                         this.liveSeq ?? 0,
                         frames[i].start,
+                        this,
                     );
                 return;
             }
@@ -726,7 +779,7 @@ export class PTYWebSocket {
                 // held, and ask the host to patch the missing range.
                 // Delivering across it would skip bytes silently.
                 this.held = frames.slice(i);
-                this._notify(this.onGap, liveSeq, start);
+                this._notify(this.onGap, liveSeq, start, this);
                 return;
             }
             this._deliver(start, bytes);

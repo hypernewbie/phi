@@ -66,8 +66,12 @@ func (h *Hub) MemoryStats() memoryStats {
 			continue
 		}
 
+		ring := owner.pane.Ring
+		if owner.pane.win != nil {
+			ring = owner.pane.win.ring
+		}
 		var ringCapacity uint64
-		if capacity, ok := owner.pane.Ring.tryCapacity(); !ok {
+		if capacity, ok := ring.tryCapacity(); !ok {
 			owner.pane.mu.Unlock()
 			skippedCount++
 			complete = false

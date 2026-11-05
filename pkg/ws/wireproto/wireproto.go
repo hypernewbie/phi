@@ -61,4 +61,11 @@ type ReplayHeader struct {
 	InitRows          uint32      `json:"initial_rows"`
 	HistoryIncomplete bool        `json:"history_incomplete,omitempty"`
 	Ephemeral         bool        `json:"ephemeral,omitempty"`
+	// Certified RAM-window floor and the head geometry of the attached
+	// pane. Byte positions below the floor are gone.
+	FloorEventCursor string `json:"floor_event_cursor,omitempty"`
+	FloorCols        uint32 `json:"floor_cols,omitempty"`
+	FloorRows        uint32 `json:"floor_rows,omitempty"`
+	HeadCols         uint32 `json:"head_cols,omitempty"`
+	HeadRows         uint32 `json:"head_rows,omitempty"`
 }
