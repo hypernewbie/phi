@@ -36,7 +36,8 @@ func waitForEventsClientCount(t *testing.T, h *Hub, want int) {
 // bare Notification messages, and broadcasting after the client
 // disconnects must not panic.
 func TestHandleEventsWS_ReceivesBroadcastNotification(t *testing.T) {
-	h := NewHub(0)
+	h := NewHub(replayWindowMaxBytes)
+	t.Cleanup(func() { _ = h.Close() })
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		HandleEventsWS(w, r, h)
@@ -54,6 +55,9 @@ func TestHandleEventsWS_ReceivesBroadcastNotification(t *testing.T) {
 	// Wait until the server goroutine has registered the client before
 	// broadcasting — skipping this makes the test flaky.
 	waitForEventsClientCount(t, h, 1)
+	if _, _, capacity := h.PaneStats(EventsPaneID); capacity != 0 {
+		t.Fatalf("notification-only clients allocated %d bytes of terminal history", capacity)
+	}
 
 	h.BroadcastNotification(&wspb.Notification{
 		Kind: &wspb.Notification_MarkdownChanged{MarkdownChanged: &wspb.MarkdownChanged{

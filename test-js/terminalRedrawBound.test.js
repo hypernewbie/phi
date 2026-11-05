@@ -2,6 +2,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { setupDomHarness } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
+import { replayHarness, encode } from './_terminalReplayHarness.js';
 
 // Bounded redraw: a cold attach repaints by resetting the pane buffer and
 // replaying the retained window. Repeating that for the same window appended
@@ -134,21 +135,62 @@ describe('bounded redraw', () => {
         expect(c._fetchReplayPages).toHaveBeenCalledTimes(2);
     });
 
-    it('repaints an unchanged window after an explicit refresh', async () => {
-        const p = { mode: 'hot', sendResize: () => true };
-        const c = ctx(async () => page(0, 5, 'hello'));
-        const first = coldTab(p);
-        await c._bootstrapDelta(first, 0, 5);
+    it.each([false, true])(
+        'manual refresh restores an idle terminal (live-only recovery: %s)',
+        async (limited) => {
+            const source = encode('RETAINED-SCREEN\r\n');
+            let refuse = false;
+            const h = replayHarness(source, () =>
+                refuse ? { ok: false, status: 503 } : null,
+            );
+            try {
+                h.pty.ws.head({ epoch: 7, oldest: 0, head: source.length });
+                await h.settle();
+                // Damage only the local view. The PTY is idle and its byte
+                // frontier is unchanged, so a delta reconnect cannot repair it.
+                h.term.reset();
+                h.tab._limitedRecovery = limited;
+                h.tab._recovery = { deadline: Date.now() - 1, attempts: 2 };
+                h.manager.getActiveTab = () => h.tab;
+                h.manager.reconnectTab = () => {
+                    const pty = h.socket();
+                    pty.ws.head({ epoch: 7, oldest: 0, head: source.length });
+                };
+                h.fetcher.mockClear();
+                refuse = true;
 
-        const manual = first;
-        manual._replayBaseline = { cols: 80, rows: 24 };
-        manual._forceRedraw = true;
-        const b = await c._bootstrapDelta(manual, 0, 5);
-        expect(b.kind).toBe('applied');
-        expect(c._fetchReplayPages).toHaveBeenCalledTimes(2);
-        // The force is consumed: the next identical attach is suppressed.
-        expect(manual._forceRedraw).toBe(false);
-    });
+                h.manager.refreshConsole();
+                await h.settle();
+                expect(h.tab._forceRedraw).toBe(true);
+                expect(h.tab.ws.ws.closed).toBe(true);
+
+                // A failed first page must not turn the replacement attach
+                // into a zero-delta success that clears the view without replay.
+                refuse = false;
+                h.socket().ws.head({
+                    epoch: 7,
+                    oldest: 0,
+                    head: source.length,
+                });
+                await h.settle();
+
+                expect(h.fetcher).toHaveBeenCalledTimes(2);
+                expect(h.requests.at(-1).from).toBe(0);
+                const lines = Array.from(
+                    { length: h.term.buffer.active.length },
+                    (_, i) =>
+                        h.term.buffer.active.getLine(i).translateToString(true),
+                ).join('\n');
+                expect(lines).toContain('RETAINED-SCREEN');
+                expect(h.tab._limitedRecovery).not.toBe(true);
+                expect(h.tab.drainedSeq).toBe(source.length);
+                expect(h.tab._forceRedraw).toBe(false);
+            } finally {
+                h.dispose();
+                vi.unstubAllGlobals();
+            }
+        },
+    );
 
     it('does not reset when the window is empty and already painted', async () => {
         const p = { mode: 'hot', sendResize: () => true };

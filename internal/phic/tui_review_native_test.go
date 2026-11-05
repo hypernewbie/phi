@@ -43,7 +43,16 @@ func serveReviewRecording(w http.ResponseWriter, r *http.Request, b []byte, resi
 }
 
 func TestNativeShutdownReconnectsInsteadOfAdoptingOldChildExit(t *testing.T) {
+	for _, duringReplay := range []bool{false, true} {
+		t.Run(map[bool]string{false: "live", true: "during replay"}[duringReplay], func(t *testing.T) {
+			testNativeShutdownReconnects(t, duringReplay)
+		})
+	}
+}
+
+func testNativeShutdownReconnects(t *testing.T, duringReplay bool) {
 	all := []byte("before\r\nafter-restart\r\n")
+	replayStarted := make(chan struct{})
 	var connections atomic.Int32
 	var drainingUntil atomic.Int64
 	up := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
@@ -59,6 +68,11 @@ func TestNativeShutdownReconnectsInsteadOfAdoptingOldChildExit(t *testing.T) {
 			return
 		}
 		if strings.HasSuffix(r.URL.Path, "/replay") {
+			if duringReplay && connections.Load() == 1 {
+				close(replayStarted)
+				<-r.Context().Done()
+				return
+			}
 			serveNativeReplay(w, r, all, nil)
 			return
 		}
@@ -68,9 +82,14 @@ func TestNativeShutdownReconnectsInsteadOfAdoptingOldChildExit(t *testing.T) {
 		}
 		defer ws.Close()
 		if connections.Add(1) == 1 {
+			if duringReplay {
+				_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, uint64(len("before\r\n"))))
+				<-replayStarted
+			} else {
+				_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, 0))
+				_ = ws.WriteMessage(websocket.BinaryMessage, testOutput(t, 0, []byte("before\r\n")))
+			}
 			drainingUntil.Store(time.Now().Add(500 * time.Millisecond).UnixNano())
-			_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, 0))
-			_ = ws.WriteMessage(websocket.BinaryMessage, testOutput(t, 0, []byte("before\r\n")))
 			_ = ws.WriteMessage(websocket.BinaryMessage, shutdown)
 			_ = ws.WriteMessage(websocket.BinaryMessage, testExit(t, 143))
 		} else {

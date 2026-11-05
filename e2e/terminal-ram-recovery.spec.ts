@@ -48,6 +48,7 @@ type TrackedTerm = {
     };
     element?: { closest(selector: string): { id: string } | null };
     write(data: string | Uint8Array, cb?: () => void): void;
+    reset(): void;
 };
 type TrackedWindow = {
     tracked: TrackedTerm[];
@@ -371,6 +372,116 @@ test('a reload replays the retained tail exactly once', async ({ page }) => {
         .poll(() => paneBody(page, pane), { timeout: 60_000 })
         .toContain('AFTER-RELOAD');
 });
+
+for (const mobile of [false, true]) {
+    test.describe(
+        mobile ? 'touch manual recovery' : 'desktop manual recovery',
+        () => {
+            test.use({
+                viewport: mobile
+                    ? { width: 390, height: 844 }
+                    : { width: 1440, height: 900 },
+                hasTouch: mobile,
+                isMobile: mobile,
+            });
+
+            test('manual refresh retries history after live-only recovery', async ({
+                page,
+            }, testInfo) => {
+                const pane = await spawnShell();
+                const errors: string[] = [];
+                page.on('pageerror', (error) => errors.push(error.message));
+                await installTermTracker(page);
+                await page.goto(phi.url);
+                const screen = page.locator(`#term-${pane} .xterm-screen`);
+                await expect(screen).toBeVisible({ timeout: 30_000 });
+                if (mobile) await screen.tap();
+                else await screen.click();
+                await page.keyboard.type('echo "RECOVERED-$(printf SCREEN)"');
+                await page.keyboard.press('Enter');
+                await expect
+                    .poll(() => paneBody(page, pane))
+                    .toContain('RECOVERED-SCREEN');
+
+                // The server still owns the output, but the local view needs repair.
+                await page.evaluate((id) => {
+                    const w = window as unknown as TrackedWindow;
+                    w.tracked
+                        .find(
+                            (t) =>
+                                t.element?.closest('.term-container')?.id ===
+                                `term-${id}`,
+                        )
+                        ?.reset();
+                }, pane);
+                let refuse = true;
+                let requests = 0;
+                await page.route(
+                    '**/api/terminals/*/replay?*',
+                    async (route) => {
+                        requests++;
+                        if (refuse)
+                            await route.fulfill({
+                                status: 503,
+                                body: 'temporary replay failure',
+                            });
+                        else await route.continue();
+                    },
+                );
+                const reload = page.getByRole('button', {
+                    name: 'Reload current terminal',
+                    exact: true,
+                });
+                if (mobile) await reload.tap();
+                else await reload.click();
+                await expect(
+                    page.getByText(
+                        'History could not be recovered; showing live output only.',
+                        { exact: true },
+                    ),
+                ).toBeVisible({ timeout: 30_000 });
+                expect(await paneBody(page, pane)).not.toContain(
+                    'RECOVERED-SCREEN',
+                );
+                expect(requests).toBe(2);
+
+                // No new PTY output is needed to unlock an explicit retry.
+                refuse = false;
+                if (mobile) await reload.tap();
+                else await reload.click();
+                await expect
+                    .poll(() => paneBody(page, pane), { timeout: 30_000 })
+                    .toContain('RECOVERED-SCREEN');
+                expect(requests).toBe(3);
+                expect(
+                    (await paneBody(page, pane)).split('RECOVERED-SCREEN')
+                        .length - 1,
+                ).toBe(1);
+                await expect(
+                    page.locator(`#term-${pane} .tab-loader`),
+                ).toHaveCount(0);
+                expect(
+                    await page.evaluate(
+                        () =>
+                            document.documentElement.scrollWidth <=
+                            window.innerWidth,
+                    ),
+                ).toBe(true);
+                await page.screenshot({
+                    path: testInfo.outputPath('manual-recovery.png'),
+                });
+                if (mobile) await screen.tap();
+                else await screen.click();
+                await page.keyboard.type('echo AFTER-MANUAL-RECOVERY');
+                await page.keyboard.press('Enter');
+                await expect
+                    .poll(() => paneBody(page, pane))
+                    .toContain('AFTER-MANUAL-RECOVERY');
+                expect(errors).toEqual([]);
+            });
+        },
+    );
+}
 
 test.describe('mobile', () => {
     test.use({

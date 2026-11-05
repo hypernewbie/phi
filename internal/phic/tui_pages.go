@@ -138,6 +138,9 @@ func (p *paneActor) holdFrame(msg []byte) error {
 		return errProtocol
 	}
 	switch payload := frame.GetPayload().(type) {
+	case *wspb.TerminalServerFrame_Notification:
+		// Shutdown must preempt replay before the old child's Exit arrives.
+		return p.handleFrame(msg)
 	case *wspb.TerminalServerFrame_Exit:
 		code, err := terminalExitCode(payload.Exit)
 		if err != nil {

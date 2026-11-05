@@ -373,7 +373,11 @@ func (h *Hub) getOrCreatePaneHubLocked(paneID string) *PaneHub {
 	} else {
 		ph = &PaneHub{clients: make(map[*Client]bool)}
 		ph.epoch = randomEpoch()
-		ph.win = newReplayWindow(h.replayBufferBytes, 0, 0)
+		capacity := h.replayBufferBytes
+		if paneID == EventsPaneID {
+			capacity = 0 // Notifications have no terminal output to retain.
+		}
+		ph.win = newReplayWindow(capacity, 0, 0)
 	}
 	h.panes[paneID] = ph
 	return ph

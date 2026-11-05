@@ -4378,7 +4378,11 @@ export class TabManager {
             // reconnect must not re-open a prefix an earlier page refused.
             tabInfo.paneOldest = info.oldest;
             tabInfo._floorCursor = info.floorEventCursor;
-            if (from < info.oldest) {
+            if (
+                tabInfo._forceRedraw ||
+                tabInfo._replayBaseline ||
+                from < info.oldest
+            ) {
                 tabInfo._replayHistorical = true;
                 tabInfo._historicalReplayFence = {
                     head: info.head,
@@ -4962,7 +4966,6 @@ export class TabManager {
             redrawKey = `${epoch}:${target}:${baselineForRedraw.cols}x${baselineForRedraw.rows}`;
             const repeated =
                 !tabInfo._forceRedraw && tabInfo._redrawnKey === redrawKey;
-            tabInfo._forceRedraw = false;
             if (repeated) {
                 tabInfo._replayBaseline = null;
                 this._debugRedraw(tabInfo, 'suppressed', redrawKey);
@@ -4989,6 +4992,7 @@ export class TabManager {
             const baseline = tabInfo._replayBaseline;
             if (!baseline) return current();
             this._resetPaneBuffer(tabInfo);
+            tabInfo._forceRedraw = false;
             if (ws) {
                 ws.decoder = new TextDecoder('utf-8');
                 tabInfo._streamDecoder = ws.decoder;
@@ -16638,6 +16642,7 @@ export class TabManager {
         // episode, so a spent budget never blocks an explicit action.
         tab._forceRedraw = true;
         tab._redraws = 0;
+        tab._limitedRecovery = false;
         this._finishRecoveryEpisode(tab);
         this._clearReaderAnchor(tab);
         this.reconnectTab(tab);
