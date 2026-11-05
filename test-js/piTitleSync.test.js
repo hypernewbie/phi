@@ -108,8 +108,8 @@ describe('Pi terminal title controls', () => {
         expect(fetch).not.toHaveBeenCalled();
     });
 
-    it('rejects missing, null, and empty native-ID bindings even when they match the tab', () => {
-        for (const sessionId of [undefined, null, '']) {
+    it('rejects an absent binding but adopts the identity a bridged pane reports', () => {
+        for (const sessionId of [undefined, null]) {
             const { manager, tab, socket } = makeTabManager();
             tab.sessionId = sessionId;
             manager.handleControlMessage(
@@ -120,6 +120,30 @@ describe('Pi terminal title controls', () => {
             expect(tab.title).toBe('Saved Pi title');
             expect(tab._piTitleRevision).toBe(-1);
         }
+
+        // A bridge-managed pane lets its runtime choose the identity, so the
+        // tab stays unbound until the host reports it. The first accepted
+        // title push is that report.
+        const { manager, tab, socket } = makeTabManager({ sessionId: '' });
+        manager.handleControlMessage(
+            tab,
+            sessionTitle(tab, 'Bound title', 1, {
+                session_id: 'native-session-id',
+            }),
+            socket,
+        );
+        expect(tab.sessionId).toBe('native-session-id');
+        expect(tab.title).toBe('Bound title');
+
+        // The adopted identity governs later pushes: another session's frame
+        // is a mismatch, not a rebind.
+        manager.handleControlMessage(
+            tab,
+            sessionTitle(tab, 'Other session', 2, { session_id: 'other-id' }),
+            socket,
+        );
+        expect(tab.sessionId).toBe('native-session-id');
+        expect(tab.title).toBe('Bound title');
     });
 
     it('rejects stale sockets and replaced tabs while resetting the revision baseline on reconnect', () => {

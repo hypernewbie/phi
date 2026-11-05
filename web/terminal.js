@@ -13756,11 +13756,14 @@ export class TabManager {
             this.tabs.get(tabInfo.paneId) !== tabInfo ||
             tabInfo.coder !== 'pi' ||
             typeof tabInfo.sessionId !== 'string' ||
-            tabInfo.sessionId.length === 0 ||
             typeof control.session_id !== 'string' ||
             control.session_id.length === 0 ||
             control.pane_id !== tabInfo.paneId ||
-            control.session_id !== tabInfo.sessionId ||
+            // An empty binding is a pane whose runtime chose its own
+            // identity; the host frame is how it becomes known. A different
+            // non-empty binding is still a mismatch and stays rejected.
+            (tabInfo.sessionId.length > 0 &&
+                control.session_id !== tabInfo.sessionId) ||
             typeof control.title !== 'string' ||
             control.title.length === 0 ||
             !Number.isSafeInteger(control.revision) ||
@@ -13772,6 +13775,9 @@ export class TabManager {
             return false;
         }
         tabInfo._piTitleRevision = control.revision;
+        if (tabInfo.sessionId.length === 0) {
+            tabInfo.sessionId = control.session_id;
+        }
         this._setTabTitle(tabInfo, control.title);
         return true;
     }
