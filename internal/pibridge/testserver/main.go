@@ -129,6 +129,10 @@ type reloadOutcome struct {
 	err    error
 }
 
+type refreshCall struct {
+	done chan pibridge.TerminalRefreshResult
+}
+
 func reloadResponse(out reloadOutcome) response {
 	if out.err == nil {
 		return response{OK: true, RequestID: out.result.RequestID, Outcome: out.result.Outcome.String(), Reason: out.result.Reason}
@@ -171,8 +175,10 @@ func run() error {
 	var callsMu sync.Mutex
 	calls := map[string]*compactCall{}
 	reloadCalls := map[string]*reloadCall{}
+	refreshCalls := map[string]*refreshCall{}
 	var callSeq uint64
 	var reloadCallSeq uint64
+	var refreshCallSeq uint64
 
 	enc := json.NewEncoder(os.Stdout)
 	// Ready line first; integration asserts the target shape.
@@ -346,6 +352,37 @@ func run() error {
 				delete(reloadCalls, req.Call)
 				callsMu.Unlock()
 				_ = enc.Encode(reloadResponse(out))
+			case <-time.After(clampTimeout(req.TimeoutMs)):
+				_ = enc.Encode(fail("wait-timeout"))
+			}
+		case "refresh":
+			callsMu.Lock()
+			refreshCallSeq++
+			id := "t" + strconv.FormatUint(refreshCallSeq, 10)
+			call := &refreshCall{done: make(chan pibridge.TerminalRefreshResult, 1)}
+			refreshCalls[id] = call
+			process, timeoutMs := req.Process, req.TimeoutMs
+			callsMu.Unlock()
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), clampTimeout(timeoutMs))
+				defer cancel()
+				call.done <- srv.RequestTerminalRefresh(ctx, process)
+			}()
+			_ = enc.Encode(response{OK: true, Call: id})
+		case "refresh-wait":
+			callsMu.Lock()
+			call, ok := refreshCalls[req.Call]
+			callsMu.Unlock()
+			if !ok {
+				_ = enc.Encode(fail("unknown call %q", req.Call))
+				continue
+			}
+			select {
+			case out := <-call.done:
+				callsMu.Lock()
+				delete(refreshCalls, req.Call)
+				callsMu.Unlock()
+				_ = enc.Encode(response{OK: true, RequestID: out.RequestID, Outcome: out.Outcome.String(), Reason: out.Reason})
 			case <-time.After(clampTimeout(req.TimeoutMs)):
 				_ = enc.Encode(fail("wait-timeout"))
 			}

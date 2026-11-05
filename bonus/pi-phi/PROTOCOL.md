@@ -83,6 +83,7 @@ Runtime identity binds `(generation, runtime_id, session_id)`:
 | `pi.syncboard.v1` | Direct Pi tool for the owning Phi Syncboard      |
 | `pi.attachments.v3` | Explicit user-triggered attachment prompt dispatch |
 | `pi.state.v2` | Read-only live identity and readiness refresh |
+| `pi.terminal-refresh.v1` | Live TUI repaint without a history replay |
 | `pi.transcript-search.v2` | Read-only visible-text search on the active Pi branch |
 | `pi.syncboard.push.v1` | Reserved. Addressed Syncboard message injection. Contract only; no runtime implements or advertises it yet |
 
@@ -436,6 +437,35 @@ stream, then waits for server status before a replacement runtime sends Hello.
 If an admitted request never reaches Pi, the server cannot prove release; it
 stays pending until the Pi process exits.
 
+## Terminal refresh
+
+`pi.terminal-refresh.v1` lets Phi repaint the live Pi screen instead of
+replaying terminal history. It is advertised only while the checked
+interactive TUI surface can still be stopped and restarted; print-mode Pi and
+an already-closed TUI do not advertise it. Negotiation is rechecked on every
+Hello, so a reconnect re-advertises whatever the surface supports then.
+
+Phi sends `TerminalRefreshRequest` (field 28) with a monotonic decimal request
+ID of at most 64 bytes. The extension reprobes the TUI at dispatch, stops the
+surface with the screen preserved, and starts it again so Pi draws the live
+view. It never writes to the PTY: a refresh is not input and cannot start,
+cancel, or steer a turn. A malformed or empty request ID is dropped without a
+reply.
+
+`TerminalRefreshAck` (field 30) reports dispatch only. `DISPATCHED` means the
+repaint was started, not that it finished painting. A refusal reports one
+fixed reason: `unavailable`, `pending`, `stale`, `queue-full`,
+`resize-failed`, or `error`; any other reason is rejected as `error`.
+
+At most one refresh is in flight per peer, so a second request is refused with
+`pending` instead of queued. The request reserves lifecycle queue headroom: an
+overflowing refresh is refused with `queue-full` and never ends the stream. A
+spent request ID is never repainted twice; duplicate and older IDs are refused
+with `stale`. Phi waits one second for the acknowledgment and reports `UNKNOWN`
+when it does not arrive, and it never resends. A refusal, a lost receipt, and a
+lost stream all fall back to Phi's bounded history replay, which stays the only
+recovery when the capability is absent.
+
 ## Lifecycle events
 
 The extension maps Pi events to bridge edges with a monotonic
@@ -482,6 +512,8 @@ model text.
 | Send queue per peer          | 16 messages and 256 KiB    |
 | Pending history reads per peer | 4 (including awaiting replies) |
 | Pending compact per process    | 1, no waiting queue            |
+| Pending terminal refresh per peer | 1, no waiting queue          |
+| Terminal refresh request ID     | 64 bytes                        |
 | Pending Syncboard requests per peer | 4                         |
 | Syncboard value JSON            | 64 KiB                          |
 | Syncboard response body         | 192 KiB                         |

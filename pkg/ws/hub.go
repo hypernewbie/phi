@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -52,8 +54,12 @@ type Client struct {
 	// falls back to componentLogger().
 	Logger *slog.Logger
 
-	pane     *PaneHub // exact registration, including archived/replaced panes
-	terminal bool
+	// refreshPending marks one in-flight Pi repaint for this attachment.
+	// A second refresh request while it is set is refused with NOT_SENT,
+	// never queued: one repaint in flight per socket.
+	refreshPending atomic.Bool
+	pane           *PaneHub // exact registration, including archived/replaced panes
+	terminal       bool
 }
 
 // logger returns c.Logger if set, else componentLogger() — nil-safe so
@@ -168,6 +174,12 @@ type Hub struct {
 	// exit code. Both are set once before serving; nil disables them.
 	bridgeAttach func(snapshot pty.PTYInstanceSnapshot) *wspb.TerminalBridgeState
 	onPaneExit   func(inst *pty.PTYInstance, code int)
+	// terminalRefresh dispatches one Pi repaint for a refresh-marked
+	// resize; terminalRefreshHint is its advisory attach hint. Both are
+	// set once before serving. A nil dispatcher answers NOT_SENT, and a
+	// nil hint advertises no repaint.
+	terminalRefresh     TerminalRefreshDispatch
+	terminalRefreshHint func(paneID string) bool
 	// paneOwners tracks the current read-loop owner per pane ID. A restore
 	// retry reuses the same ID with a new instance pointer; the delayed old
 	// exit must not broadcast, close, or notify for the replacement.
@@ -242,6 +254,102 @@ func (h *Hub) notifyPaneExit(inst *pty.PTYInstance, code int) {
 	if h.onPaneExit != nil {
 		h.onPaneExit(inst, code)
 	}
+}
+
+// TerminalRefreshDispatch reports one Pi repaint attempt. It runs outside
+// every pane lock and outside the connection read loop, so typing and
+// pongs continue while the reply is pending. The outcome and reason use
+// the terminal receipt vocabulary.
+//
+// Because a nil-safety rule applies to every bridge feature, a nil
+// dispatcher must leave plain resize behavior untouched.
+type TerminalRefreshDispatch func(ctx context.Context, paneID string, inst *pty.PTYInstance) (wspb.TerminalRefreshOutcome, string)
+
+// SetTerminalRefresh registers the Pi repaint dispatcher and its advisory
+// availability hint. Set once before serving.
+func (h *Hub) SetTerminalRefresh(dispatch TerminalRefreshDispatch, hint func(paneID string) bool) {
+	h.terminalRefresh = dispatch
+	h.terminalRefreshHint = hint
+}
+
+// terminalRefreshReason keeps the wire vocabulary fixed. A host that
+// invents a reason never reaches a client verbatim.
+func terminalRefreshReason(reason string) string {
+	switch reason {
+	case "", "unavailable", "pending", "stale", "queue-full", "resize-failed", "error":
+		return reason
+	default:
+		return "error"
+	}
+}
+
+// deliverRefreshReceipt sends one repaint receipt to the requesting
+// socket only. Holding the pane lock keeps registration stable across the
+// check and the send; the send itself never blocks.
+func (h *Hub) deliverRefreshReceipt(ph *PaneHub, client *Client, requestID string, outcome wspb.TerminalRefreshOutcome, reason string) {
+	frame, err := wireproto.EncodeRefreshResultFrame(requestID, outcome, terminalRefreshReason(reason))
+	if err != nil {
+		return
+	}
+	if ph == nil {
+		// Without the pane's registration lock there is no safe way to know
+		// whether teardown already closed Send. A detached requester cannot
+		// receive this receipt anyway, so drop it instead of risking a panic.
+		return
+	}
+	ph.mu.Lock()
+	defer ph.mu.Unlock()
+	if !ph.clients[client] {
+		return
+	}
+	h.deliverOrClose(client, frame)
+}
+
+// dispatchTerminalRefresh runs one repaint for a refresh-marked resize
+// that already committed. At most one repaint is in flight per socket: an
+// excess request is answered NOT_SENT/pending instead of queueing. The
+// dispatcher may take seconds, so it never runs on the read loop.
+func (h *Hub) dispatchTerminalRefresh(paneID string, inst *pty.PTYInstance, client *Client, requestID string) {
+	ph, ok := h.LookupPane(paneID)
+	if !ok {
+		h.deliverRefreshReceipt(nil, client, requestID, wspb.TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_NOT_SENT, "unavailable")
+		return
+	}
+	if !client.refreshPending.CompareAndSwap(false, true) {
+		h.deliverRefreshReceipt(ph, client, requestID, wspb.TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_NOT_SENT, "pending")
+		return
+	}
+	dispatch := h.terminalRefresh
+	if dispatch == nil {
+		client.refreshPending.Store(false)
+		h.deliverRefreshReceipt(ph, client, requestID, wspb.TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_NOT_SENT, "unavailable")
+		return
+	}
+	go func() {
+		defer client.refreshPending.Store(false)
+		ctx, cancel := context.WithTimeout(context.Background(), terminalRefreshDispatchWait)
+		defer cancel()
+		outcome, reason := dispatch(ctx, paneID, inst)
+		h.deliverRefreshReceipt(ph, client, requestID, outcome, reason)
+	}()
+}
+
+// terminalRefreshDispatchWait bounds one repaint end to end. The host
+// receipt has its own one-second IPC deadline; this outer bound also
+// covers pane lookup and encoding.
+const terminalRefreshDispatchWait = 3 * time.Second
+
+// maxRefreshRequestIDBytes bounds one repaint correlation ID.
+const maxRefreshRequestIDBytes = 64
+
+// dispatchTerminalRefreshFailure answers a repaint request whose resize
+// never committed. Nothing reached the host, so it is NOT_SENT.
+func (h *Hub) dispatchTerminalRefreshFailure(paneID string, client *Client, requestID string) {
+	ph, ok := h.LookupPane(paneID)
+	if !ok {
+		ph = nil
+	}
+	h.deliverRefreshReceipt(ph, client, requestID, wspb.TerminalRefreshOutcome_TERMINAL_REFRESH_OUTCOME_NOT_SENT, "resize-failed")
 }
 
 // SetRecordingDirectory enables private persistence for the application's
@@ -633,6 +741,9 @@ func (h *Hub) attachHot(paneID string, client *Client, owner *pty.PTYInstance) b
 		}
 		return false
 	}
+	// The repaint hint is advisory and read outside the pane lock: a
+	// bridge lookup must never wait behind terminal state.
+	refreshAvailable := h.terminalRefreshHint != nil && h.terminalRefreshHint(paneID)
 	ph.mu.Lock()
 	if ph.retired || (owner != nil && owner.Pty != nil && ph.owner != nil && ph.owner != owner) {
 		ph.mu.Unlock()
@@ -656,6 +767,9 @@ func (h *Hub) attachHot(paneID string, client *Client, owner *pty.PTYInstance) b
 	if ph.win != nil {
 		attach.FloorEventCursor = proto.String(EncodeEventCursor(pos.Epoch, pos.Oldest, ph.win.ordinalAt(pos.Oldest)))
 	}
+	// Bridge refresh availability is a hint, rechecked at dispatch.
+	attach.TerminalRefreshAvailable = proto.Bool(refreshAvailable)
+
 	frame, err := wireproto.EncodeAttachFrame(attach)
 	if err != nil {
 		ph.mu.Unlock()

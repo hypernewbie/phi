@@ -2,6 +2,17 @@ import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 import { Notification } from "./events.js";
 export declare const protobufPackage = "phi.websocket.terminal.v1";
 export declare const protobufFileName = "terminal.proto";
+/**
+ * TerminalRefreshOutcome is the repaint receipt vocabulary. UNSPECIFIED is
+ * never sent; a client treats it as UNKNOWN.
+ */
+export declare enum TerminalRefreshOutcome {
+    TERMINAL_REFRESH_OUTCOME_UNSPECIFIED = 0,
+    TERMINAL_REFRESH_OUTCOME_DISPATCHED = 1,
+    TERMINAL_REFRESH_OUTCOME_NOT_SENT = 2,
+    TERMINAL_REFRESH_OUTCOME_UNKNOWN = 3,
+    UNRECOGNIZED = -1
+}
 export interface TerminalClientFrame {
     payload: {
         $case: "input";
@@ -17,6 +28,11 @@ export interface TerminalClientFrame {
 export interface TerminalResize {
     cols?: number | undefined;
     rows?: number | undefined;
+    /**
+     * Correlates an attach-time Pi repaint with its receipt. Absent or empty
+     * is an ordinary resize; a repaint request never travels as PTY input.
+     */
+    refreshRequestId?: string | undefined;
 }
 export interface TerminalPing {
 }
@@ -51,6 +67,9 @@ export interface TerminalServerFrame {
     } | {
         $case: "geometry";
         value: TerminalGeometry;
+    } | {
+        $case: "refreshResult";
+        value: TerminalRefreshResult;
     } | undefined;
 }
 export interface TerminalAttach {
@@ -74,6 +93,8 @@ export interface TerminalAttach {
     floorRows?: number | undefined;
     headCols?: number | undefined;
     headRows?: number | undefined;
+    /** True when the attached Pi can redraw its own live screen on request. */
+    terminalRefreshAvailable?: boolean | undefined;
 }
 export interface TerminalCheckpoint {
     kind?: string | undefined;
@@ -99,6 +120,15 @@ export interface TerminalGeometry {
     eventCursor?: string | undefined;
 }
 export interface TerminalPong {
+}
+/**
+ * TerminalRefreshResult is one repaint receipt, delivered only to the
+ * socket that asked. The repainting terminal's PTY bytes stay pane-wide.
+ */
+export interface TerminalRefreshResult {
+    requestId?: string | undefined;
+    outcome?: TerminalRefreshOutcome | undefined;
+    reason?: string | undefined;
 }
 export interface TerminalExit {
     code?: number | undefined;
@@ -171,6 +201,7 @@ export declare const TerminalCheckpoint: MessageFns<TerminalCheckpoint>;
 export declare const TerminalOutput: MessageFns<TerminalOutput>;
 export declare const TerminalGeometry: MessageFns<TerminalGeometry>;
 export declare const TerminalPong: MessageFns<TerminalPong>;
+export declare const TerminalRefreshResult: MessageFns<TerminalRefreshResult>;
 export declare const TerminalExit: MessageFns<TerminalExit>;
 export declare const TerminalDropNotice: MessageFns<TerminalDropNotice>;
 export declare const TerminalTitle: MessageFns<TerminalTitle>;

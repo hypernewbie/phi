@@ -64,6 +64,11 @@ type peer struct {
 	syncboardHighWater uint64
 	syncboardPending   map[uint64]struct{}
 
+	// refreshMu guards the one outstanding terminal repaint. A second
+	// request refuses instead of growing a queue.
+	refreshMu sync.Mutex
+	refreshOp *terminalRefreshOp
+
 	writerDone chan struct{}
 }
 

@@ -18,6 +18,7 @@ import {
     SyncboardOutcome,
     type SyncboardResponse,
     type StateSnapshot,
+    TerminalRefreshOutcome,
 } from './gen/bridge.js';
 import { LIFECYCLE_HEADROOM_BYTES } from './protocol.js';
 import { SHUTDOWN_DRAIN_MS } from './protocol.js';
@@ -33,6 +34,7 @@ import { CAPABILITY_HISTORY, CAPABILITY_LIFECYCLE } from './protocol.js';
 import { CAPABILITY_MODELS } from './protocol.js';
 import { CAPABILITY_SKILLS } from './protocol.js';
 import { CAPABILITY_SYNCBOARD } from './protocol.js';
+import { CAPABILITY_TERMINAL_REFRESH } from './protocol.js';
 import { CAPABILITY_THINKING } from './protocol.js';
 import { CAPABILITY_TRANSCRIPT_SEARCH } from './protocol.js';
 import { MAX_MODELS_ENTRIES } from './protocol.js';
@@ -5138,5 +5140,286 @@ describe('Runtime Syncboard', () => {
             vi.useRealTimers();
         }
         expect(ch.nonfatalSends).toHaveLength(2);
+    });
+});
+
+/** Live TUI that records repaint calls and exposes a stock editor. */
+function refreshUi(
+    calls: string[],
+    opts: { failStart?: boolean } = {},
+): unknown {
+    let starts = 0;
+    const tui: Record<string, unknown> = {
+        getFocusedComponent: () => ({ history: [] }),
+        stop: (options: unknown) => {
+            calls.push(`stop:${JSON.stringify(options)}`);
+        },
+        start: () => {
+            starts += 1;
+            if (opts.failStart && starts === 1) {
+                calls.push('start-failed');
+                throw new Error('start failed');
+            }
+            calls.push('start');
+        },
+        requestRender: (force: unknown) => {
+            calls.push(`requestRender:${String(force)}`);
+        },
+    };
+    return {
+        setWidget: (
+            _key: string,
+            factory: ((tui: unknown, theme: unknown) => unknown) | undefined,
+        ) => {
+            if (factory !== undefined) factory(tui, {});
+        },
+    };
+}
+
+function terminalRefreshRequest(id: string): PhiToPi {
+    return {
+        paneId: 'pane',
+        processId: 'proc',
+        runtimeGeneration: 1n,
+        payload: { $case: 'terminalRefreshRequest', value: { requestId: id } },
+    };
+}
+
+function refreshAcks(ch: MockChannel): {
+    requestId: string;
+    outcome: number;
+    reason: string;
+}[] {
+    return ch.nonfatalSends.flatMap((m) => {
+        const payload = payloadOf(m);
+        return payload.$case === 'terminalRefreshAck' ? [payload.value] : [];
+    });
+}
+
+describe('Runtime terminal refresh', () => {
+    it('advertises the capability only for a repaintable TUI', async () => {
+        const live = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            makeChannel: wired(live),
+        });
+        rt.start(ctx({ ui: refreshUi([]) }));
+        await sleep(10);
+        const hello = payloadOf(live.hellos[0]!);
+        if (hello.$case !== 'hello') throw new Error('missing hello');
+        expect(hello.value.capabilities).toContain(CAPABILITY_TERMINAL_REFRESH);
+        rt.shutdown();
+
+        // Print/RPC surfaces expose no widget host and no TUI methods; a
+        // TUI missing one repaint method is equally unusable.
+        const missingStart = {
+            setWidget: (key: string, factory: unknown) => {
+                if (typeof factory !== 'function') return;
+                (factory as (tui: unknown, theme: unknown) => void)(
+                    {
+                        getFocusedComponent: () => ({}),
+                        stop: () => {},
+                        requestRender: () => {},
+                    },
+                    {},
+                );
+                void key;
+            },
+        };
+        for (const ui of [{ setWidget: () => {} }, missingStart]) {
+            const ch = mockChannel();
+            const plain = new Runtime({
+                creds: CREDS,
+                generation: 1n,
+                compactState: freshCompactLatch(),
+                makeChannel: wired(ch),
+            });
+            plain.start(ctx({ ui }));
+            await sleep(10);
+            const advertised = payloadOf(ch.hellos[0]!);
+            if (advertised.$case !== 'hello') throw new Error('no hello');
+            expect(advertised.value.capabilities).not.toContain(
+                CAPABILITY_TERMINAL_REFRESH,
+            );
+            plain.shutdown();
+        }
+    });
+
+    it('repaints once per accepted id and never submits a prompt', async () => {
+        const calls: string[] = [];
+        const ch = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            makeChannel: wired(ch),
+        });
+        rt.start(ctx({ ui: refreshUi(calls) }));
+        await sleep(10);
+        ch.sends.length = 0;
+        ch.nonfatalSends.length = 0;
+
+        ch.hooks!.onMessage(terminalRefreshRequest('7'));
+        expect(calls).toEqual([
+            'stop:{"preserveScreen":true}',
+            'start',
+            'requestRender:true',
+        ]);
+        expect(refreshAcks(ch)).toMatchObject([
+            {
+                requestId: '7',
+                outcome:
+                    TerminalRefreshOutcome.TERMINAL_REFRESH_OUTCOME_DISPATCHED,
+                reason: '',
+            },
+        ]);
+        // A repaint is not a model action: nothing else leaves the runtime.
+        expect(ch.sends).toHaveLength(0);
+        rt.shutdown();
+    });
+
+    it('refuses duplicate and older ids without repainting again', async () => {
+        const calls: string[] = [];
+        const ch = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            makeChannel: wired(ch),
+        });
+        rt.start(ctx({ ui: refreshUi(calls) }));
+        await sleep(10);
+        ch.hooks!.onMessage(terminalRefreshRequest('7'));
+        ch.hooks!.onMessage(terminalRefreshRequest('7'));
+        ch.hooks!.onMessage(terminalRefreshRequest('6'));
+        expect(calls).toHaveLength(3);
+        const acks = refreshAcks(ch);
+        expect(acks.map((a) => a.outcome)).toEqual([
+            TerminalRefreshOutcome.TERMINAL_REFRESH_OUTCOME_DISPATCHED,
+            TerminalRefreshOutcome.TERMINAL_REFRESH_OUTCOME_NOT_SENT,
+            TerminalRefreshOutcome.TERMINAL_REFRESH_OUTCOME_NOT_SENT,
+        ]);
+        expect(acks[1]!.reason).toBe('stale');
+        expect(acks[2]!.reason).toBe('stale');
+        rt.shutdown();
+    });
+
+    it('answers unavailable when the surface can no longer repaint', async () => {
+        const calls: string[] = [];
+        const ch = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            makeChannel: wired(ch),
+        });
+        rt.start(ctx({ ui: refreshUi(calls) }));
+        await sleep(10);
+        // The event surface replaced the live TUI with a print-like one.
+        rt.onAgentStart(ctx({ ui: { setWidget: () => {} } }));
+        ch.hooks!.onMessage(terminalRefreshRequest('9'));
+        expect(calls).toHaveLength(0);
+        expect(refreshAcks(ch)).toMatchObject([
+            {
+                requestId: '9',
+                outcome:
+                    TerminalRefreshOutcome.TERMINAL_REFRESH_OUTCOME_NOT_SENT,
+                reason: 'unavailable',
+            },
+        ]);
+        rt.shutdown();
+    });
+
+    it('repaints during a streaming turn', async () => {
+        const calls: string[] = [];
+        const ui = refreshUi(calls);
+        const ch = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            makeChannel: wired(ch),
+        });
+        rt.start(ctx({ ui }));
+        await sleep(10);
+        rt.onAgentStart(ctx({ ui }));
+        ch.hooks!.onMessage(terminalRefreshRequest('12'));
+        expect(calls).toEqual([
+            'stop:{"preserveScreen":true}',
+            'start',
+            'requestRender:true',
+        ]);
+        expect(refreshAcks(ch)).toMatchObject([
+            {
+                outcome:
+                    TerminalRefreshOutcome.TERMINAL_REFRESH_OUTCOME_DISPATCHED,
+            },
+        ]);
+        rt.shutdown();
+    });
+
+    it('reports unknown when the repaint fails after stop', async () => {
+        const calls: string[] = [];
+        const ch = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            makeChannel: wired(ch),
+        });
+        rt.start(ctx({ ui: refreshUi(calls, { failStart: true }) }));
+        await sleep(10);
+        ch.hooks!.onMessage(terminalRefreshRequest('4'));
+        expect(calls).toEqual([
+            'stop:{"preserveScreen":true}',
+            'start-failed',
+            'start',
+            'requestRender:true',
+        ]);
+        expect(refreshAcks(ch)).toMatchObject([
+            {
+                requestId: '4',
+                outcome:
+                    TerminalRefreshOutcome.TERMINAL_REFRESH_OUTCOME_UNKNOWN,
+                reason: 'error',
+            },
+        ]);
+        rt.shutdown();
+    });
+
+    it('re-advertises and repaints after a stream reconnect', async () => {
+        const channels: MockChannel[] = [];
+        const calls: string[] = [];
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            backoffBaseMs: 5,
+            backoffMaxMs: 10,
+            makeChannel: (_c, hooks) => {
+                const ch = mockChannel();
+                ch.hooks = hooks;
+                channels.push(ch);
+                return ch;
+            },
+        });
+        rt.start(ctx({ ui: refreshUi(calls) }));
+        await sleep(10);
+        channels[0]!.hooks!.onMessage(terminalRefreshRequest('1'));
+        channels[0]!.hooks!.onStatus(status(14));
+        await sleep(30);
+        expect(channels.length).toBe(2);
+        const hello = payloadOf(channels[1]!.hellos[0]!);
+        if (hello.$case !== 'hello') throw new Error('missing hello');
+        expect(hello.value.capabilities).toContain(CAPABILITY_TERMINAL_REFRESH);
+        // A higher id is accepted on the new channel.
+        channels[1]!.hooks!.onMessage(terminalRefreshRequest('2'));
+        expect(calls).toHaveLength(6);
+        expect(refreshAcks(channels[1]!).map((a) => a.outcome)).toEqual([
+            TerminalRefreshOutcome.TERMINAL_REFRESH_OUTCOME_DISPATCHED,
+        ]);
+        rt.shutdown();
     });
 });
