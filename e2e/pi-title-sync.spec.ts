@@ -433,9 +433,7 @@ test('a bridge-bound Pi pane adopts the identity its runtime reports', async ({
                 timeout: 45_000,
             })
             .toBe('Bridge bound title');
-        const label = page.locator(
-            `.tab[data-pane-id="${paneID}"] .tab-title`,
-        );
+        const label = page.locator(`.tab[data-pane-id="${paneID}"] .tab-title`);
         await expect(label).toHaveText('Bridge bound title', {
             timeout: 15_000,
         });
