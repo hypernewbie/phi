@@ -691,29 +691,41 @@ test('real PTY follows desktop and touch panel geometry', async ({
                     page,
                     'before content-box resize',
                 );
+                await page.locator('.tab[data-pane-id="t2"]').click();
+                await selectDesktop(page);
+                await page.waitForTimeout(500);
+                const afterSwitch = await waitForGrid(page, 'warm activation');
+                expect(afterSwitch.seq).toBe(beforeBox.seq);
                 await page.locator('#term-t1').evaluate((node) => {
                     node.style.setProperty('width', '520px', 'important');
                     node.style.setProperty('height', '360px', 'important');
                 });
-                await waitForGrid(
+                const resized = await waitForGrid(
                     page,
                     'content-box resize',
                     beforeBox.seq,
                     'WINCH',
                     beforeBox.cols,
                 );
+                // Restore normal layout before testing activation independently.
+                await page.locator('#term-t1').evaluate((node) => {
+                    node.style.removeProperty('width');
+                    node.style.removeProperty('height');
+                });
+                await waitForGrid(
+                    page,
+                    'restored layout',
+                    resized.seq,
+                    'WINCH',
+                    resized.cols,
+                );
                 await page.locator('.tab[data-pane-id="t2"]').click();
                 await expect(
                     page.locator('#tabs-container .tab.active'),
                 ).toHaveAttribute('data-pane-id', 't2');
-                const beforeActivate = await grid(page);
                 await selectDesktop(page);
-                await waitForGrid(
-                    page,
-                    'foreground activation',
-                    beforeActivate?.seq ?? 0,
-                    'WINCH',
-                );
+                await waitForGrid(page, 'foreground activation');
+                await report(page, 'foreground activation REPORT');
                 const selectedSockets = events.sockets.filter(
                     (path) => path === '/ws/pane/t1',
                 ).length;

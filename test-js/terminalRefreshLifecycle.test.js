@@ -18,7 +18,7 @@ function harness() {
         paneId: 'p1',
         term,
         ws,
-        _sizedWs: ws,
+        _sizedGrid: { ws, cols: 80, rows: 24 },
         paneEpoch: 7,
         fitAddon: {
             proposeDimensions: () => ({ cols: 80, rows: 24 }),

@@ -34,7 +34,7 @@ it('every zero-delta resume sends current dimensions even when the grid is uncha
             await h.settle();
             expect(resize).toHaveBeenCalledExactlyOnceWith(80, 24);
             expect(next.holding).toBe(false);
-            expect(h.tab._sizedWs).toBe(next);
+            expect(h.tab._sizedGrid?.ws).toBe(next);
         }
         expect(h.requests).toEqual([]);
     } finally {

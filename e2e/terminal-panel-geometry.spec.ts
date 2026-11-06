@@ -236,10 +236,16 @@ test('actual panel CSS resize, tab activation and refresh synchronize backend di
         before?.cols,
         before?.rows,
     ]);
+    // Restore normal layout before testing activation independently.
+    await page.locator(`#term-${one}`).evaluate((node) => {
+        node.style.removeProperty('width');
+        node.style.removeProperty('height');
+    });
+    await expect.poll(async () => (await probe())?.cols).toBe(before?.cols);
+    await expect.poll(synced).toBe(true);
     await page.locator(`.tab[data-pane-id="${two}"]`).click();
-    const count = sizes.get(one)!.length;
     await page.locator(`.tab[data-pane-id="${one}"]`).click();
-    await expect.poll(() => sizes.get(one)!.length > count).toBe(true);
+    // Activation must preserve the correct grid, not force another redraw.
     await expect.poll(synced).toBe(true);
     const connectionsBeforeReload = {
         selected: connections.get(one)!,

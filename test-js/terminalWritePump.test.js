@@ -173,7 +173,7 @@ describe('single-flight terminal write pump', () => {
                 return true;
             }),
         };
-        tab._sizedWs = tab.ws;
+        tab._sizedGrid = { ws: tab.ws, cols: 80, rows: 24 };
         manager.getActiveTab = () => tab;
         manager._terminalPanelVisible = () => true;
         manager.resolveTerminalFontSize = () => 14;
@@ -230,7 +230,7 @@ describe('single-flight terminal write pump', () => {
                 return true;
             }),
         };
-        tab._sizedWs = tab.ws;
+        tab._sizedGrid = { ws: tab.ws, cols: 80, rows: 24 };
         manager.getActiveTab = () => tab;
         manager._terminalPanelVisible = () => visible;
         manager.resolveTerminalFontSize = () => 14;
