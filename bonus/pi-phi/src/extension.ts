@@ -9,6 +9,7 @@ import type {
     ExtensionContext,
 } from '@earendil-works/pi-coding-agent';
 import { isAbsolute } from 'node:path';
+import { freshSyncboardPushState, type SyncboardPushState } from './push.js';
 import type { ChannelCreds } from './channel.js';
 import {
     type AttachmentLatchState,
@@ -49,6 +50,7 @@ interface OwnerSlot {
     compact?: CompactLatchState | undefined;
     reload?: ReloadLatchState | undefined;
     syncboardOwned?: boolean | undefined;
+    syncboardPush?: SyncboardPushState | undefined;
     attachments?: AttachmentLatchState | undefined;
     attachmentRoot?: string | undefined;
 }
@@ -61,6 +63,13 @@ function ownerSlot(): OwnerSlot {
     const fresh: OwnerSlot = { active: false, generation: 0n };
     (globalThis as Record<symbol, unknown>)[OWNER_KEY] = fresh;
     return fresh;
+}
+
+/** Keep injected-message identity across reloads in the same process. */
+function ownerSyncboardPushState(): SyncboardPushState {
+    const slot = ownerSlot();
+    if (!slot.syncboardPush) slot.syncboardPush = freshSyncboardPushState();
+    return slot.syncboardPush;
 }
 
 /** Keep attachment request identity and single-flight state across reloads. */
@@ -324,6 +333,25 @@ export function createExtension(
                     ? {
                           sendUserMessage: (content, options) =>
                               nativeSkills.sendUserMessage!(content, options),
+                      }
+                    : {}),
+                syncboardPushState: ownerSyncboardPushState(),
+                // A pushed message becomes a displayed custom message that
+                // triggers a turn. followUp never interrupts a running turn.
+                ...(typeof pi.sendMessage === 'function'
+                    ? {
+                          injectSyncboardMessage: (
+                              customType: string,
+                              content: string,
+                          ) => {
+                              pi.sendMessage(
+                                  { customType, content, display: true },
+                                  {
+                                      triggerTurn: true,
+                                      deliverAs: 'followUp',
+                                  },
+                              );
+                          },
                       }
                     : {}),
                 attachmentRoot: ownerSlot().attachmentRoot,

@@ -41,8 +41,11 @@ type Server struct {
 	skillsSeq        atomic.Uint64
 	invokeSkillSeq   atomic.Uint64
 	syncboardHandler SyncboardHandler
-	attachmentSeq    atomic.Uint64
-	stateSeq         atomic.Uint64
+	// syncboardPush enables outbound addressed-message delivery. Only the
+	// negotiated capability unlocks it; the flag alone sends nothing.
+	syncboardPush bool
+	attachmentSeq atomic.Uint64
+	stateSeq      atomic.Uint64
 	// compactSeq allocates monotonic server-side Compact request
 	// IDs. IDs are positive canonical decimal uint64 strings,
 	// never wrap, and are never reused or browser-supplied.
@@ -140,6 +143,13 @@ func (s *Server) fireState(l *lease, p *peer, pubRev uint64, snap *pibridgepb.St
 // fire: detaching a peer that is no longer active is a no-op.
 func (s *Server) SetOnPeerDown(fn func(paneID, processID string, generation uint64)) {
 	s.onPeerDown = fn
+}
+
+// EnableSyncboardPush allows the Syncboard push capability to be negotiated.
+// Call before serving. Delivery still requires a live lease whose runtime
+// advertised the capability.
+func (s *Server) EnableSyncboardPush(enabled bool) {
+	s.syncboardPush = enabled
 }
 
 // SetSyncboardHandler enables the Syncboard capability. Call before serving.
@@ -540,7 +550,7 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 	if hello.GetRuntimeId() == "" || hello.GetSessionId() == "" {
 		return status.Error(codes.InvalidArgument, "runtime and session required")
 	}
-	caps := negotiateCapabilities(hello.GetCapabilities(), s.syncboardHandler != nil)
+	caps := negotiateCapabilities(hello.GetCapabilities(), s.syncboardHandler != nil, s.syncboardPush)
 
 	l.mu.Lock()
 	gen := first.GetRuntimeGeneration()
@@ -614,6 +624,7 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 	}
 	oldPeer := l.peer
 	p := newPeer(gen, hello.GetSessionId(), stream)
+	p.onWritable = func() { l.flushPendingPushes(p) }
 	l.peer = p
 	l.caps = l.caps[:0]
 	for c := range caps {
@@ -684,6 +695,12 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 		return status.Error(codes.Unavailable, "peer closed")
 	}
 	s.fireState(l, p, pubRev, publish, publishCaps)
+	// Replay what the runtime has not acknowledged. A push sent while it was
+	// away is retained, so a reconnect delivers it instead of losing it; the
+	// runtime dedupes by message_id, so a repeat never injects twice.
+	// The read loop starts after this, so no acknowledgement can arrive before
+	// the replay is queued and clear work ahead of its notification.
+	l.flushPendingPushes(p)
 
 	for {
 		msg, err := p.recv()
@@ -870,6 +887,9 @@ func (s *Server) dispatchMessage(ctx context.Context, l *lease, p *peer, msg *pi
 		return nil
 	case msg.GetSyncboardRequest() != nil:
 		s.receiveSyncboard(ctx, l, p, msg.GetSyncboardRequest())
+		return nil
+	case msg.GetSyncboardPushAck() != nil:
+		s.deliverSyncboardPushAck(l, p, msg.GetSyncboardPushAck())
 		return nil
 	case msg.GetAttachmentPromptAck() != nil:
 		s.deliverAttachmentPrompt(l, p, msg.GetAttachmentPromptAck())

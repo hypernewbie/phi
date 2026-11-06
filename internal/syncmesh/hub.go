@@ -103,6 +103,38 @@ func (h *Hub) Publish(messageID, sender, recipient string, value []byte, hops ui
 	return seq, false, nil
 }
 
+// Recent returns up to limit stored messages, newest last. The push
+// dispatcher uses it to recover after a subscriber gap. The value is copied:
+// a caller must never be able to mutate stored state.
+func (h *Hub) Recent(limit int) []*syncmeshb.SyncEvent {
+	if limit <= 0 {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	start := 0
+	if len(h.order) > limit {
+		start = len(h.order) - limit
+	}
+	out := make([]*syncmeshb.SyncEvent, 0, len(h.order)-start)
+	for _, messageID := range h.order[start:] {
+		ev, ok := h.byID[messageID]
+		if !ok {
+			continue
+		}
+		copied := &syncmeshb.SyncEvent{
+			Seq:             ev.GetSeq(),
+			Sender:          ev.GetSender(),
+			Recipient:       ev.GetRecipient(),
+			Value:           append([]byte(nil), ev.GetValue()...),
+			UpdatedAtUnixMs: ev.GetUpdatedAtUnixMs(),
+			MessageId:       ev.GetMessageId(),
+		}
+		out = append(out, copied)
+	}
+	return out
+}
+
 // Len reports the stored message count. Used by bound tests.
 func (h *Hub) Len() int {
 	h.mu.Lock()

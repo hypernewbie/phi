@@ -24597,6 +24597,7 @@ var CAPABILITY_COMPACT = "pi.compact.v1";
 var CAPABILITY_RELOAD = "pi.reload.v1";
 var CAPABILITY_SKILLS = "pi.skills.v1";
 var CAPABILITY_SYNCBOARD = "pi.syncboard.v1";
+var CAPABILITY_SYNCBOARD_PUSH = "pi.syncboard.push.v1";
 var MAX_SYNCBOARD_VALUE_BYTES = 64 * 1024;
 var MAX_SYNCBOARD_RESPONSE_BYTES = 192 * 1024;
 var MAX_SYNCBOARD_PENDING = 4;
@@ -24730,6 +24731,67 @@ var BoundedQueue = class {
 
 // src/extension.ts
 var import_node_path2 = require("node:path");
+
+// src/push.ts
+var SYNCBOARD_PUSH_CUSTOM_TYPE = "phi-syncboard";
+var MAX_SYNCBOARD_PUSH_INJECT_BYTES = 8 * 1024;
+var MAX_REMEMBERED_PUSH_IDS = 256;
+function freshSyncboardPushState() {
+  return { seen: /* @__PURE__ */ new Set() };
+}
+function formatPushContent(notification) {
+  const value = notification.value ?? new Uint8Array();
+  const total = value.byteLength;
+  const kept = total > MAX_SYNCBOARD_PUSH_INJECT_BYTES ? value.subarray(0, MAX_SYNCBOARD_PUSH_INJECT_BYTES) : value;
+  const text = new TextDecoder("utf-8").decode(kept, {
+    stream: total > MAX_SYNCBOARD_PUSH_INJECT_BYTES
+  });
+  const sender = notification.sender || "unknown";
+  const header = `[phi-syncboard from=${sender} to=${notification.recipient} message_id=${notification.messageId}]`;
+  if (total <= MAX_SYNCBOARD_PUSH_INJECT_BYTES) {
+    return `${header}
+${text}`;
+  }
+  return `${header}
+${text}
+[truncated: first ${MAX_SYNCBOARD_PUSH_INJECT_BYTES} of ${total} bytes]`;
+}
+function createSyncboardPushHandler(options) {
+  const { seen } = options.state ?? freshSyncboardPushState();
+  const remember = (messageId) => {
+    seen.add(messageId);
+    if (seen.size > MAX_REMEMBERED_PUSH_IDS) {
+      const oldest = seen.values().next().value;
+      if (oldest !== void 0) seen.delete(oldest);
+    }
+  };
+  return {
+    accept(notification) {
+      const messageId = notification.messageId;
+      const seq = notification.seq ?? 0n;
+      if (!messageId) return;
+      if (seen.has(messageId)) {
+        options.ack(seq, messageId);
+        return;
+      }
+      const inject = options.inject;
+      if (inject === void 0) return;
+      try {
+        inject(
+          SYNCBOARD_PUSH_CUSTOM_TYPE,
+          formatPushContent(notification)
+        );
+      } catch {
+        return;
+      }
+      remember(messageId);
+      options.ack(seq, messageId);
+    },
+    remembered() {
+      return seen.size;
+    }
+  };
+}
 
 // src/attachments.ts
 var import_node_crypto = require("node:crypto");
@@ -31257,6 +31319,9 @@ var Runtime = class {
   syncboardAccepted = false;
   syncboardSeq = 0n;
   syncboardPending = /* @__PURE__ */ new Map();
+  syncboardPushAccepted = false;
+  /** Created on first use: opts is assigned after field initializers. */
+  syncboardPushHandler = null;
   attachmentsAccepted = false;
   stateAccepted = false;
   terminalRefreshAccepted = false;
@@ -31671,6 +31736,7 @@ var Runtime = class {
     if (this.shutdownRequested) return;
     this.shutdownRequested = true;
     this.setSyncboardAccepted(false);
+    this.syncboardPushAccepted = false;
     if (this.compact.active?.runtimeId === this.runtimeId) {
       this.compact.active = null;
     }
@@ -31949,6 +32015,8 @@ var Runtime = class {
     if (this.opts.getSkills && this.opts.invokeSkill)
       caps.push(CAPABILITY_SKILLS);
     if (this.opts.syncboardEnabled) caps.push(CAPABILITY_SYNCBOARD);
+    if (this.opts.injectSyncboardMessage)
+      caps.push(CAPABILITY_SYNCBOARD_PUSH);
     if (this.attachmentApi)
       caps.push(CAPABILITY_ATTACHMENTS, CAPABILITY_STATE);
     if (readRefreshTui(this.ui)) caps.push(CAPABILITY_TERMINAL_REFRESH);
@@ -32004,6 +32072,7 @@ var Runtime = class {
     this.reloadAccepted = false;
     this.skillsAccepted = false;
     this.setSyncboardAccepted(false);
+    this.syncboardPushAccepted = false;
     this.attachmentsAccepted = false;
     this.stateAccepted = false;
     this.terminalRefreshAccepted = false;
@@ -32032,6 +32101,7 @@ var Runtime = class {
         this.setSyncboardAccepted(
           this.opts.syncboardEnabled === true && accepted.capabilities.includes(CAPABILITY_SYNCBOARD)
         );
+        this.syncboardPushAccepted = this.opts.injectSyncboardMessage !== void 0 && accepted.capabilities.includes(CAPABILITY_SYNCBOARD_PUSH);
         this.attachmentsAccepted = accepted.capabilities.includes(
           CAPABILITY_ATTACHMENTS
         );
@@ -32085,6 +32155,8 @@ var Runtime = class {
         msg.payload.value.requestId,
         msg.payload.value.name
       );
+    } else if (msg.payload?.$case === "syncboardNotification" && this.syncboardPushAccepted) {
+      this.syncboardPush().accept(msg.payload.value);
     } else if (msg.payload?.$case === "attachmentPromptRequest" && this.attachmentsAccepted) {
       void this.onAttachmentPromptRequest(msg.payload.value);
     } else if (msg.payload?.$case === "stateRequest" && this.stateAccepted) {
@@ -32161,6 +32233,27 @@ var Runtime = class {
         })
       }
     }) ?? false;
+  }
+  /** One handler per runtime, so deduplication survives reconnects. */
+  syncboardPush() {
+    if (this.syncboardPushHandler === null) {
+      this.syncboardPushHandler = createSyncboardPushHandler({
+        ...this.opts.syncboardPushState ? { state: this.opts.syncboardPushState } : {},
+        inject: this.opts.injectSyncboardMessage,
+        ack: (seq, messageId) => {
+          this.channel?.sendNonfatal({
+            paneId: this.opts.creds.pane,
+            processId: this.opts.creds.process,
+            runtimeGeneration: this.opts.generation,
+            payload: {
+              $case: "syncboardPushAck",
+              value: SyncboardPushAck.create({ seq, messageId })
+            }
+          });
+        }
+      });
+    }
+    return this.syncboardPushHandler;
   }
   onSyncboardResponse(response) {
     const waiter = this.syncboardPending.get(response.requestId);
@@ -33382,6 +33475,7 @@ var Runtime = class {
   }
   onStreamEnd(status) {
     this.setSyncboardAccepted(false);
+    this.syncboardPushAccepted = false;
     const channel = this.channel;
     this.cancelTranscriptSearches(channel ?? void 0);
     channel?.close();
@@ -38105,6 +38199,11 @@ function ownerSlot() {
   globalThis[OWNER_KEY] = fresh;
   return fresh;
 }
+function ownerSyncboardPushState() {
+  const slot = ownerSlot();
+  if (!slot.syncboardPush) slot.syncboardPush = freshSyncboardPushState();
+  return slot.syncboardPush;
+}
 function ownerAttachmentState() {
   const slot = ownerSlot();
   if (!slot.attachments) slot.attachments = freshAttachmentLatch();
@@ -38235,6 +38334,20 @@ function createExtension(pi, deps = {}) {
     } : {},
     ...hasInvokeApi ? {
       sendUserMessage: (content, options) => nativeSkills.sendUserMessage(content, options)
+    } : {},
+    syncboardPushState: ownerSyncboardPushState(),
+    // A pushed message becomes a displayed custom message that
+    // triggers a turn. followUp never interrupts a running turn.
+    ...typeof pi.sendMessage === "function" ? {
+      injectSyncboardMessage: (customType, content) => {
+        pi.sendMessage(
+          { customType, content, display: true },
+          {
+            triggerTurn: true,
+            deliverAs: "followUp"
+          }
+        );
+      }
     } : {},
     attachmentRoot: ownerSlot().attachmentRoot,
     attachmentState: ownerAttachmentState()
