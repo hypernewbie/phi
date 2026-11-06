@@ -547,7 +547,7 @@ html[data-sync="stale"] .brand .logo {
     color: var(--accent);
 }
 .self-hud .self-hud-metrics .glyph {
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     line-height: 1;
 }
 
@@ -720,7 +720,7 @@ html[data-sync="stale"] .brand .logo {
     padding: 6px 12px;
     border-radius: 6px;
     font-family: var(--font-ui);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     font-weight: 500;
     cursor: pointer;
     transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
@@ -796,7 +796,7 @@ html[data-sync="stale"] .brand .logo {
     border: none;
     color: var(--text-primary);
     font-family: var(--font-ui);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     outline: none;
     cursor: pointer;
     min-width: 60px;
@@ -819,7 +819,7 @@ html[data-sync="stale"] .brand .logo {
     background-color: var(--bg-panel);
     color: var(--text-primary);
     font-family: var(--font-ui);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
 }
 
 .workspace-area button {
@@ -1077,7 +1077,7 @@ html[data-sync="stale"] .brand .logo {
 }
 
 .session-title {
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     font-weight: 500;
     white-space: nowrap;
     overflow: hidden;
@@ -1175,7 +1175,7 @@ html[data-sync="stale"] .brand .logo {
     border: 1px solid var(--accent);
     color: var(--text-primary);
     font-family: var(--font-ui);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     border-radius: 4px;
     padding: 2px 6px;
     width: 100%;
@@ -1415,7 +1415,7 @@ html[data-sync="stale"] .brand .logo {
     border: none;
     border-radius: 6px;
     font-family: var(--font-ui);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     font-weight: 500;
     cursor: pointer;
     transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
@@ -1761,7 +1761,7 @@ html[data-sync="stale"] .brand .logo {
     text-align: center;
     color: var(--text-primary);
     margin-bottom: 4px;
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
 }
 .tab-hiero-preview-path {
     font-size: calc(10px * var(--ui-scale));
@@ -1851,7 +1851,7 @@ html[data-sync="stale"] .brand .logo {
     color: var(--accent-bright);
     text-shadow: 0 0 6px var(--accent-glow);
     font-family: var(--font-mono);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
 }
 .tab-overflow-closing-group {
     color: var(--accent-bright);
@@ -1980,7 +1980,7 @@ html[data-sync="stale"] .brand .logo {
     border: 1px solid transparent;
     border-bottom: none;
     color: var(--text-muted);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     font-weight: 400;
     padding: 6px 14px;
     border-radius: 7px 7px 0 0;
@@ -2592,7 +2592,7 @@ body.has-terminal-bg
 }
 
 .empty-subtitle {
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     color: var(--text-muted);
     margin-bottom: 8px;
 }
@@ -2626,7 +2626,7 @@ body.has-terminal-bg
     color: var(--text-muted);
     padding: 8px 18px;
     border-radius: 20px;
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     cursor: pointer;
     transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -2661,7 +2661,7 @@ body.has-terminal-bg
 
 .loader-text {
     font-family: var(--font-mono);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     letter-spacing: 0.5px;
     opacity: 0.8;
 }
@@ -3096,7 +3096,7 @@ body.has-terminal-bg
     border: 1px solid var(--bg-border);
     color: var(--text-primary);
     font-family: var(--font-ui);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     border-radius: 6px;
     padding: 8px 12px;
     height: 38px;
@@ -3765,7 +3765,7 @@ body.has-terminal-bg
     border: 1px solid var(--bg-border);
     color: var(--text-primary);
     font-family: var(--font-ui);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     border-radius: 6px;
     padding: 10px 14px;
     outline: none;
@@ -4531,7 +4531,7 @@ body.has-terminal-bg
     border: 1px solid var(--bg-border);
     color: var(--text-primary);
     font-family: var(--font-ui);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     border-radius: 6px;
     padding: 10px 14px;
     outline: none;
@@ -5028,7 +5028,7 @@ body.has-terminal-bg
 }
 
 .access-auth-subtitle {
-    font-size: calc(13px * var(--ui-scale)) !important;
+    font-size: calc(14px * var(--ui-scale)) !important;
     color: var(--text-muted) !important;
     margin-bottom: 4px !important;
 }
@@ -5036,7 +5036,7 @@ body.has-terminal-bg
 .access-auth-dialog label,
 .access-auth-error {
     color: var(--text-muted);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
 }
 
 .access-auth-dialog input {
@@ -5313,7 +5313,7 @@ html[data-appearance-profile="mobile"] .settings-modal :is(input, select, textar
 }
 
 .settings-row label {
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     color: var(--text-primary);
     flex: 0 0 auto;
     min-width: 120px;
@@ -5329,7 +5329,7 @@ html[data-appearance-profile="mobile"] .settings-modal :is(input, select, textar
     border-radius: 4px;
     color: var(--text-primary);
     padding: 6px 10px;
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     font-family: inherit;
     outline: none;
     transition: border-color 0.15s;
@@ -5432,7 +5432,7 @@ html[data-appearance-profile="mobile"] .settings-modal :is(input, select, textar
     border-radius: 4px;
     color: var(--text-primary);
     padding: 6px 10px;
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     font-family: inherit;
     outline: none;
     transition: border-color 0.15s;
@@ -5653,7 +5653,7 @@ html[data-phi-config-page] .settings-modal {
     border-radius: 7px;
     color: var(--text-primary);
     font-family: var(--font-ui);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     line-height: 1.45;
     outline: none;
     padding: 10px 12px;
@@ -5850,7 +5850,7 @@ html[data-phi-config-page] .settings-modal {
         padding-right: 14px;
     }
     .workspace-area button {
-        font-size: calc(13px * var(--ui-scale));
+        font-size: calc(14px * var(--ui-scale));
     }
 
     /* Hide config backup/restore pill on mobile to save critical screen space */
@@ -6474,7 +6474,7 @@ html[data-phi-config-page] .settings-modal {
         align-self: stretch;
         min-height: 44px;
         padding: 10px 12px;
-        font-size: calc(13px * var(--ui-scale));
+        font-size: calc(14px * var(--ui-scale));
     }
 
     #pi-rpc-model-dropup .pi-rpc-model-star {
@@ -6560,7 +6560,7 @@ html[data-phi-config-page] .settings-modal {
 }
 
 .worktree-name {
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     font-weight: 600;
     color: var(--text-primary);
     white-space: nowrap;
@@ -6799,7 +6799,7 @@ html[data-phi-config-page] .settings-modal {
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
     color: var(--text-primary);
     font-family: var(--font-ui);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     line-height: 1.45;
     opacity: 0;
     transform: translateX(12px);
@@ -6981,7 +6981,7 @@ html[data-phi-config-page] .settings-modal {
 .notification-item-title {
     margin: 0 0 4px;
     color: var(--text-primary);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     font-weight: 600;
 }
 
@@ -7633,7 +7633,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 
 .md-modal-title {
     font-family: var(--font-mono);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     color: var(--accent-bright);
     font-weight: 500;
     overflow: hidden;
@@ -7850,7 +7850,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     background: none;
     border: none;
     padding: 0;
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     color: var(--text-primary);
     border-radius: 0;
 }
@@ -7884,7 +7884,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     border-collapse: collapse;
     width: 100%;
     margin: 1em 0;
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
 }
 
 .md-rendered th,
@@ -8281,7 +8281,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 
 .d2h-file-name {
     font-family: var(--font-mono) !important;
-    font-size: calc(13px * var(--ui-scale)) !important;
+    font-size: calc(14px * var(--ui-scale)) !important;
     color: var(--accent-bright) !important;
 }
 
@@ -9036,7 +9036,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     gap: 8px;
 }
 .review-header-title {
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     font-weight: 600;
     color: var(--text-primary);
 }
@@ -9190,7 +9190,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     background: transparent;
     border: none;
     color: var(--text-primary);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     font-weight: 600;
     text-align: left;
     cursor: pointer;
@@ -9460,7 +9460,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 
 .hostname-dropdown-item {
     padding: 10px 14px;
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     color: var(--text-primary);
     background: none;
     border: none;
@@ -9492,7 +9492,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 .hostname-dropdown-glyph {
     flex: 0 0 auto;
     margin-right: 8px;
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     line-height: 1;
     color: var(--accent-bright);
     text-shadow:
@@ -9681,7 +9681,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     padding: 8px 10px;
     text-align: left;
     cursor: pointer;
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     color: var(--text-primary);
     display: flex;
     flex-direction: column;
@@ -9809,7 +9809,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 
 .kanban-login-desc {
     font-family: var(--font-ui);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     color: var(--text-muted);
     line-height: 1.5;
     margin: 0;
@@ -9938,7 +9938,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     border-radius: 6px;
     color: var(--text-primary);
     font-family: var(--font-ui);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     font-weight: 500;
     padding: 6px 32px 6px 12px;
     cursor: pointer;
@@ -9970,7 +9970,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     height: 32px;
     padding: 0 12px;
     font-family: var(--font-ui);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     font-weight: 500;
     transition: all 0.15s;
 }
@@ -10031,7 +10031,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     align-items: center;
     justify-content: space-between;
     padding: 12px 14px;
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     font-weight: 600;
     border-bottom: 1px solid var(--bg-border);
     flex-shrink: 0;
@@ -10091,7 +10091,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 
 .kanban-card-title {
     font-family: var(--font-ui);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     font-weight: 500;
     color: var(--text-primary);
     word-break: break-word;
@@ -10244,7 +10244,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 
 .kanban-loading-wrapper .loader-text {
     font-family: var(--font-mono);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     color: var(--text-muted);
 }
 
@@ -10262,7 +10262,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 .kanban-error-wrapper p,
 .kanban-no-view-wrapper p {
     font-family: var(--font-ui);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     color: var(--text-muted);
     margin: 0 0 20px 0;
     max-width: 360px;
@@ -10362,7 +10362,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 
 .kdp-identifier {
     font-family: var(--font-mono);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     color: var(--text-muted);
     font-weight: 500;
 }
@@ -10417,7 +10417,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 .kdp-field textarea,
 .kdp-field input[type="date"] {
     font-family: var(--font-ui);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     background: var(--bg-input);
     border: 1px solid var(--bg-border);
     color: var(--text-primary);
@@ -10467,7 +10467,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     color: var(--text-primary);
     border-radius: 6px;
     padding: 12px 14px;
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     line-height: 1.6;
     min-height: 120px;
     max-height: 350px;
@@ -10613,7 +10613,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     gap: 8px;
     cursor: pointer;
     font-family: var(--font-ui) !important;
-    font-size: calc(13px * var(--ui-scale)) !important;
+    font-size: calc(14px * var(--ui-scale)) !important;
     text-transform: none !important;
     color: var(--text-primary) !important;
     font-weight: normal !important;
@@ -11063,7 +11063,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 
 .sync-card-key {
     font-family: var(--font-mono);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     font-weight: 600;
     color: var(--text-primary);
     overflow: hidden;
@@ -11207,7 +11207,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 }
 
 .sync-action-title {
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     font-weight: 600;
     color: var(--text-primary);
     font-family: var(--font-ui);
@@ -11632,7 +11632,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     color: #ef4444;
     border-radius: 6px;
     cursor: pointer;
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     font-weight: 500;
     font-family: var(--font-ui);
     transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
@@ -11737,7 +11737,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     border: 1px solid var(--bg-border);
     border-radius: 4px;
     color: var(--text-primary);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     outline: none;
     transition: border-color 0.2s;
 }
@@ -11860,7 +11860,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     gap: 16px;
     background: #7f1d1d; /* Deep dark red */
     color: #fca5a5;
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     padding: 6px 16px;
     font-family: var(--font-mono, monospace);
     border-bottom: 1px solid #991b1b;
@@ -12064,7 +12064,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 }
 
 .update-banner-body {
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     color: var(--text-secondary);
     opacity: 0.85;
     font-family: var(--font-mono);
@@ -12758,7 +12758,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 }
 
 .kanban-note-row-title {
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     font-weight: 600;
     line-height: 1.3;
     overflow: hidden;
@@ -12900,7 +12900,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     background: var(--bg-base);
     color: var(--text-primary);
     font-family: var(--font-mono);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     line-height: 1.5;
 }
 
@@ -12916,7 +12916,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     border: 1px solid var(--bg-border);
     border-radius: 8px;
     background: var(--bg-base);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     line-height: 1.5;
     white-space: pre-wrap;
 }
@@ -13408,7 +13408,7 @@ body.md-standalone #md-view-body {
     border-radius: 6px;
     color: var(--text-primary);
     font-family: var(--font-mono);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: calc(14px * var(--ui-scale));
     padding: 8px 10px;
     width: 100%;
 }

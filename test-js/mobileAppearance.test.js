@@ -14,6 +14,8 @@ import {
     appearanceOwner,
     appearanceCacheKey,
     readAppearanceCache,
+    hasStaleDesktopFontSizes,
+    legacyAppearanceKey,
 } from '../web/mobile-appearance.js';
 import { BackendScope } from '../web/backend-scope.js';
 import { openSettingsModal } from '../web/settings.js';
@@ -488,5 +490,78 @@ describe('appearanceFontScale', () => {
         expect(appearanceFontScale('mobile', 0)).toBe(1);
         expect(appearanceFontScale('mobile', 9)).toBe(1);
         expect(appearanceFontScale('mobile', Number.NaN)).toBe(1);
+    });
+});
+
+describe('stale desktop font caches', () => {
+    // A cache written before the terminal font size existed carries a UI
+    // size but no terminal size. That stale UI value must not keep
+    // overriding a live server value while the terminal falls through
+    // to it: that is the tiny-interface / normal-terminal split.
+    // Current writes always store both size keys together.
+    it('flags a record with a UI size but no terminal size', () => {
+        expect(hasStaleDesktopFontSizes(null)).toBe(false);
+        expect(hasStaleDesktopFontSizes({})).toBe(false);
+        expect(
+            hasStaleDesktopFontSizes({
+                ui_font_size: 10,
+                ui_font_family: '',
+            }),
+        ).toBe(true);
+        expect(
+            hasStaleDesktopFontSizes({
+                ui_font_size: 10,
+                terminal_font_size: 14,
+            }),
+        ).toBe(false);
+    });
+    it('lets a live server size win over a pre-terminal-size cache', () => {
+        const scope = captureAppearanceScope();
+        localStorage.setItem(
+            legacyAppearanceKey(scope),
+            JSON.stringify({ ui_font_size: 10, ui_font_family: '' }),
+        );
+        const app = Object.create(App.prototype);
+        app.mobileAppearanceStore = null;
+        app.ingestAppearance({
+            ui_font_size: 14,
+            terminal_font_size: 14,
+        });
+        expect(app.uiFontSize).toBe(14);
+        expect(app.terminalFontSize).toBe(14);
+    });
+    it('keeps the cache when no server size is available', () => {
+        // Prepaint, broadcast, and offline paths have no server value:
+        // the cache is still better than nothing.
+        const scope = captureAppearanceScope();
+        localStorage.setItem(
+            legacyAppearanceKey(scope),
+            JSON.stringify({ ui_font_size: 10, ui_font_family: '' }),
+        );
+        const app = Object.create(App.prototype);
+        app.mobileAppearanceStore = null;
+        app.ingestAppearance({});
+        expect(app.uiFontSize).toBe(10);
+    });
+    it('keeps newer-wins precedence for current both-keys caches', () => {
+        // A debounced save is never lost by a quick reload: the cache
+        // still overrides a server that has not caught up yet.
+        const scope = captureAppearanceScope();
+        localStorage.setItem(
+            legacyAppearanceKey(scope),
+            JSON.stringify({
+                ui_font_size: 24,
+                terminal_font_size: 14,
+                ui_font_family: '',
+                terminal_font_family: '',
+            }),
+        );
+        const app = Object.create(App.prototype);
+        app.mobileAppearanceStore = null;
+        app.ingestAppearance({
+            ui_font_size: 14,
+            terminal_font_size: 14,
+        });
+        expect(app.uiFontSize).toBe(24);
     });
 });

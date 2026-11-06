@@ -175,11 +175,32 @@ export function readDesktopAppearance(scope) {
         return {};
     }
 }
+/**
+ * Reports whether a cached desktop appearance predates the terminal font
+ * size setting: it carries a UI size but no terminal size. Current
+ * writes always store both size keys together, so a missing terminal
+ * key means an older build wrote this record. Its UI size is stale: the
+ * terminal already falls through to the server (its key is absent)
+ * while the interface would keep shrinking to the stale value.
+ */
+export function hasStaleDesktopFontSizes(cached) {
+    if (!cached || typeof cached !== 'object')
+        return false;
+    const record = cached;
+    return 'ui_font_size' in record && !('terminal_font_size' in record);
+}
 export function mobileSystemTextRatio(size) {
     return Number.isFinite(size) && size > 0 ? Math.max(1, size / 17) : 1;
 }
 // Authored UI text is sized in px per profile; the profile base is the
-// setting value at which --ui-scale is 1.
+// setting value at which --ui-scale is 1. The desktop profile authors
+// its primary text at 14px (the tab title, the session title, the
+// buttons), so the base is that authored primary size: a configured
+// ui_font_size of 14 then renders 14px primary text, the same size the
+// terminal renders for terminal_font_size = 14. The base used to be the
+// default setting while the primary text was authored at 13px, which
+// made the configured size a multiplier over the authored sizes: 14
+// rendered 13px, and the interface read smaller than the terminal.
 const UI_SCALE_BASE = {
     mobile: 13,
     desktop: 14,

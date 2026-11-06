@@ -41,6 +41,7 @@ import {
     applyAppearanceFonts,
     legacyAppearanceKey,
     readDesktopAppearance,
+    hasStaleDesktopFontSizes,
 } from './mobile-appearance.js';
 import { BackendStore, backendStores } from './backend-store.js';
 import { PiLaunchStore } from './pi-launch.js';
@@ -2292,9 +2293,23 @@ export class App {
         const ls = readDesktopAppearance(
             this.scope || captureAppearanceScope(),
         );
+        // A cache that predates the terminal font size carries a stale UI
+        // size: the terminal already falls through to the server (its key
+        // is absent) while the interface would keep shrinking to the
+        // stale value. When the server names a UI size it wins over such
+        // a record. Otherwise the cache still applies: prepaint,
+        // broadcast, and offline paths have no server value to use, and
+        // current (both-keys) caches keep their newer-wins precedence so
+        // a debounced save is never lost by a quick reload.
+        const staleUiSize =
+            hasStaleDesktopFontSizes(ls) && data.ui_font_size != null;
         this.desktopAppearance = {
             ui_font_family: ls.ui_font_family ?? data.ui_font_family ?? '',
-            ui_font_size: Number(ls.ui_font_size ?? data.ui_font_size) || 0,
+            ui_font_size:
+                Number(
+                    (staleUiSize ? undefined : ls.ui_font_size) ??
+                        data.ui_font_size,
+                ) || 0,
             terminal_font_family:
                 ls.terminal_font_family ?? data.terminal_font_family ?? '',
             terminal_font_size:
