@@ -32,9 +32,10 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// SyncEvent is one ordered change from a single publisher. gap means every
-// event before this one is unavailable; the receiver refetches board state
-// instead of inferring a gap from a missing seq.
+// SyncEvent is one ordered change from a single publisher. gap means this
+// stream lost events and the receiver must resync full state before trusting
+// later events. gap.seq is a diagnostic boundary, not a resume cursor; never
+// infer a hole from a missing seq.
 type SyncEvent struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Seq             uint64                 `protobuf:"varint,1,opt,name=seq,proto3" json:"seq,omitempty"`
@@ -43,8 +44,14 @@ type SyncEvent struct {
 	Value           []byte                 `protobuf:"bytes,4,opt,name=value,proto3" json:"value,omitempty"`
 	UpdatedAtUnixMs int64                  `protobuf:"varint,5,opt,name=updated_at_unix_ms,json=updatedAtUnixMs,proto3" json:"updated_at_unix_ms,omitempty"`
 	Gap             bool                   `protobuf:"varint,6,opt,name=gap,proto3" json:"gap,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Caller-supplied idempotency key. Receivers dedupe on it, so a replayed
+	// event after a reconnect never produces a second injection.
+	MessageId string `protobuf:"bytes,7,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
+	// Identifies this publisher's sequence lifetime. A reconnect supplies the
+	// epoch from its last event so a restarted publisher cannot reuse its cursor.
+	PublisherEpoch string `protobuf:"bytes,8,opt,name=publisher_epoch,json=publisherEpoch,proto3" json:"publisher_epoch,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *SyncEvent) Reset() {
@@ -119,15 +126,33 @@ func (x *SyncEvent) GetGap() bool {
 	return false
 }
 
+func (x *SyncEvent) GetMessageId() string {
+	if x != nil {
+		return x.MessageId
+	}
+	return ""
+}
+
+func (x *SyncEvent) GetPublisherEpoch() string {
+	if x != nil {
+		return x.PublisherEpoch
+	}
+	return ""
+}
+
 // SubscribeRequest opens one publisher-scoped stream. since_seq 0 starts at
 // the oldest retained event. recipient filters on the receiving agent id;
 // "*" or an empty value accepts every recipient.
 type SubscribeRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SinceSeq      uint64                 `protobuf:"varint,1,opt,name=since_seq,json=sinceSeq,proto3" json:"since_seq,omitempty"`
-	Recipient     string                 `protobuf:"bytes,2,opt,name=recipient,proto3" json:"recipient,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	SinceSeq  uint64                 `protobuf:"varint,1,opt,name=since_seq,json=sinceSeq,proto3" json:"since_seq,omitempty"`
+	Recipient string                 `protobuf:"bytes,2,opt,name=recipient,proto3" json:"recipient,omitempty"`
+	// Epoch from the last received event. With a nonzero since_seq, an empty or
+	// mismatched epoch forces a gap and replay from zero; this also protects
+	// older clients that do not send an epoch.
+	PublisherEpoch string `protobuf:"bytes,3,opt,name=publisher_epoch,json=publisherEpoch,proto3" json:"publisher_epoch,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *SubscribeRequest) Reset() {
@@ -170,6 +195,13 @@ func (x *SubscribeRequest) GetSinceSeq() uint64 {
 func (x *SubscribeRequest) GetRecipient() string {
 	if x != nil {
 		return x.Recipient
+	}
+	return ""
+}
+
+func (x *SubscribeRequest) GetPublisherEpoch() string {
+	if x != nil {
+		return x.PublisherEpoch
 	}
 	return ""
 }
@@ -308,17 +340,21 @@ var File_sync_proto protoreflect.FileDescriptor
 const file_sync_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"sync.proto\x12\vphi.sync.v1\"\xa8\x01\n" +
+	"sync.proto\x12\vphi.sync.v1\"\xf0\x01\n" +
 	"\tSyncEvent\x12\x10\n" +
 	"\x03seq\x18\x01 \x01(\x04R\x03seq\x12\x16\n" +
 	"\x06sender\x18\x02 \x01(\tR\x06sender\x12\x1c\n" +
 	"\trecipient\x18\x03 \x01(\tR\trecipient\x12\x14\n" +
 	"\x05value\x18\x04 \x01(\fR\x05value\x12+\n" +
 	"\x12updated_at_unix_ms\x18\x05 \x01(\x03R\x0fupdatedAtUnixMs\x12\x10\n" +
-	"\x03gap\x18\x06 \x01(\bR\x03gap\"M\n" +
+	"\x03gap\x18\x06 \x01(\bR\x03gap\x12\x1d\n" +
+	"\n" +
+	"message_id\x18\a \x01(\tR\tmessageId\x12'\n" +
+	"\x0fpublisher_epoch\x18\b \x01(\tR\x0epublisherEpoch\"v\n" +
 	"\x10SubscribeRequest\x12\x1b\n" +
 	"\tsince_seq\x18\x01 \x01(\x04R\bsinceSeq\x12\x1c\n" +
-	"\trecipient\x18\x02 \x01(\tR\trecipient\"w\n" +
+	"\trecipient\x18\x02 \x01(\tR\trecipient\x12'\n" +
+	"\x0fpublisher_epoch\x18\x03 \x01(\tR\x0epublisherEpoch\"w\n" +
 	"\x0ePublishRequest\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1c\n" +

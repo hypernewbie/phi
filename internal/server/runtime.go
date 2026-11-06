@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/hypernewbie/phi/internal/attachments"
 	"github.com/hypernewbie/phi/internal/piapp"
+	"github.com/hypernewbie/phi/internal/syncmesh"
 	"github.com/hypernewbie/phi/internal/webassets"
 	"github.com/hypernewbie/phi/pkg/bindaddr"
 	"github.com/hypernewbie/phi/pkg/coders"
@@ -26,6 +28,7 @@ import (
 	"github.com/hypernewbie/phi/pkg/update"
 	"github.com/hypernewbie/phi/pkg/ws"
 	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
+	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -221,6 +224,12 @@ func (app *Server) Run(ctx context.Context) error {
 	// Start fleet poller with current peer config
 	app.startFleetPoller()
 
+	// The mesh listener is opt-in: with sync_mesh off nothing binds here and
+	// the process keeps exactly its previous network face.
+	if cfg.SyncMesh {
+		app.syncMesh = syncmesh.New()
+	}
+
 	// Start update checker (release builds only; dev builds hide the badge anyway).
 	if app.buildSource == "release" {
 		app.updateChecker = update.NewChecker(app.version, update.DetectInstallMethod(app.buildSource))
@@ -328,6 +337,21 @@ func (app *Server) Run(ctx context.Context) error {
 	}
 	servers, errCh := app.serveAll(listeners)
 	remaining := len(servers)
+	// The mesh listener joins the same error channel so a mesh failure shuts
+	// the process down instead of failing silently behind a healthy HTTP face.
+	if app.syncMesh != nil {
+		remaining++
+		mesh := app.syncMesh
+		go func() {
+			err := mesh.Serve(net.JoinHostPort("127.0.0.1", "0"))
+			if err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+				slog.Error("sync mesh listener exited", "err", err)
+				errCh <- err
+				return
+			}
+			errCh <- nil
+		}()
+	}
 	var last error
 	select {
 	case <-ctx.Done():
@@ -369,10 +393,12 @@ func (app *Server) runGatedUpdateCheck(checker *update.Checker, label string) {
 // serveAll starts one HTTP server per listener over this application's handler.
 // It publishes the handles immediately so shutdown can drain active requests.
 // Each listener reports its result once; ErrServerClosed is a clean stop.
-func (app *Server) serveAll(listeners []net.Listener) ([]*http.Server, <-chan error) {
+func (app *Server) serveAll(listeners []net.Listener) ([]*http.Server, chan error) {
 	handler := app.Handler()
 	servers := make([]*http.Server, len(listeners))
-	errCh := make(chan error, len(listeners))
+	// One slot per HTTP listener plus one for the optional mesh producer, so
+	// no producer blocks on a send during shutdown.
+	errCh := make(chan error, len(listeners)+1)
 	for i, ln := range listeners {
 		srv := &http.Server{Handler: handler}
 		servers[i] = srv
@@ -433,6 +459,12 @@ func isInteractiveTTY() bool {
 
 func (app *Server) gracefulShutdown(servers []*http.Server, drainDelay, ptyGrace, grace time.Duration) {
 	app.shuttingDown.Store(true) // /readyz -> 503
+	// Stop the mesh before draining errCh: its Serve goroutine only reports
+	// through that channel once gRPC stops, so stopping it later would
+	// deadlock the drain.
+	if app.syncMesh != nil {
+		app.syncMesh.Stop()
+	}
 	app.stopOpenCodeIdleWatcher()
 	if app.mdWatcher != nil {
 		app.mdWatcher.Close()
