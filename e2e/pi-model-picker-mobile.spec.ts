@@ -142,9 +142,12 @@ test('slow lists stay visible, offline picks wait, and lost acks are never repla
 });
 
 // Real picker code and stylesheet; synthetic catalog, no provider calls.
+// prepaint publishes the root font size exactly as every real page does,
+// so the authored rem ladder renders at the configured size.
 const fixture = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/style.css">
+<script type="module" src="/prepaint.js"></script>
 <div class="terminal-content" style="position:relative;width:100%;height:100dvh">
   <div id="presets-container" class="presets-container" style="position:absolute;bottom:0;width:100%"></div>
   <div id="pi-rpc-model-dropup" class="model-presets-dropup hidden"></div>
@@ -227,11 +230,16 @@ test('phone picker uses short names, wide rows, scrolling and full-width tap tar
                             .boundingBox()
                     )?.width,
                 ).toBeGreaterThanOrEqual(44);
+                // iOS zooms a page when a focused field is smaller than
+                // 16px, so that is the invariant, not one exact size: the
+                // field still scales with a larger UI setting.
                 expect(
-                    await picker
-                        .locator('.pi-rpc-model-search')
-                        .evaluate((el) => getComputedStyle(el).fontSize),
-                ).toBe('16px');
+                    Number.parseFloat(
+                        await picker
+                            .locator('.pi-rpc-model-search')
+                            .evaluate((el) => getComputedStyle(el).fontSize),
+                    ),
+                ).toBeGreaterThanOrEqual(16);
                 const list = picker.locator('.pi-rpc-model-list-container');
                 expect(
                     await list.evaluate(

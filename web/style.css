@@ -6493,7 +6493,9 @@ html[data-phi-config-page] .settings-modal {
     }
 
     #pi-rpc-model-dropup .pi-rpc-model-search {
-        font-size: 1.1429rem; /* Prevent iOS focus zoom. */
+        /* Scales with the UI size, but never below the 16px that stops
+           iOS from zooming the page on focus. */
+        font-size: max(16px, 1.1429rem);
     }
 
     #pi-rpc-skills-dropup {
