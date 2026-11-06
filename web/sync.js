@@ -24,10 +24,21 @@ function parsePushMessages(value) {
             msg.recipient.length > 128 ||
             typeof msg.value !== 'string' ||
             msg.value.length > 4096 ||
-            !Number.isFinite(msg.updated_at_unix_ms))
+            !Number.isFinite(msg.updated_at_unix_ms) ||
+            (msg.seq !== undefined && !Number.isFinite(msg.seq)) ||
+            (msg.truncated !== undefined &&
+                typeof msg.truncated !== 'boolean'))
             return null;
     }
     return value;
+}
+/**
+ * The mesh stamps the sender as the peer address it received from. The port
+ * is transport detail, so the card shows the host and keeps the full address
+ * in the title.
+ */
+function displaySender(sender) {
+    return sender.replace(/:\d+$/, '');
 }
 function asString(value) {
     return typeof value === 'string' ? value : undefined;
@@ -177,26 +188,26 @@ export class SyncManager {
             </div>
 
             <div class="sync-sections">
-            <div class="sync-section">
-                <div class="sync-section-header">
-                    <div class="sync-section-title">Board</div>
-                    <div class="sync-header-actions">
-                        <button id="sync-clear-btn" class="sync-btn-secondary" title="Clear all board messages">Clear all</button>
-                        <button id="sync-add-btn" class="sync-btn-primary" title="Add Message">
-                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                        </button>
+                <div class="sync-section">
+                    <div class="sync-section-header">
+                        <div class="sync-section-title">Board</div>
+                        <div class="sync-header-actions">
+                            <button id="sync-clear-btn" class="sync-btn-secondary" title="Clear all board messages">Clear all</button>
+                            <button id="sync-add-btn" class="sync-btn-primary" title="Add Message">
+                                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div id="sync-messages-list" class="sync-messages-list">
+                        <div class="sync-empty-state">No messages synced.</div>
                     </div>
                 </div>
-                <div id="sync-messages-list" class="sync-messages-list">
-                    <div class="sync-empty-state">No messages synced.</div>
-                </div>
-            </div>
 
-            <div id="sync-push-section" class="sync-section hidden">
-                <div class="sync-section-title">Addressed messages · this server</div>
-                <div class="sync-push-note hidden" role="status"></div>
-                <div id="sync-push-list" class="sync-messages-list"></div>
-            </div>
+                <div id="sync-push-section" class="sync-section hidden">
+                    <div class="sync-section-title">Addressed messages · this server</div>
+                    <div class="sync-push-note hidden" role="status"></div>
+                    <div id="sync-push-list" class="sync-messages-list"></div>
+                </div>
             </div>
         `;
         this.coordinatorInput = document.getElementById('sync-coordinator-input');
@@ -517,7 +528,9 @@ export class SyncManager {
         if (!note)
             return;
         note.textContent = failed
-            ? 'Refresh unavailable. Showing saved addressed messages.'
+            ? this.pushList.children.length
+                ? 'Refresh unavailable. Showing saved addressed messages.'
+                : 'Refresh unavailable.'
             : '';
         note.classList.toggle('hidden', !failed);
         this.pushSection.classList.toggle('hidden', !failed && this.pushList.children.length === 0);
@@ -535,7 +548,10 @@ export class SyncManager {
             if (!ids.has(id))
                 this._pushExpanded.delete(id);
         const focused = document.activeElement?.closest('.sync-card-push')?.dataset.messageId;
-        const sorted = [...messages].sort((a, b) => b.updated_at_unix_ms - a.updated_at_unix_ms);
+        const sorted = [...messages].sort((a, b) => b.updated_at_unix_ms - a.updated_at_unix_ms ||
+            // The mesh stamps milliseconds, so two messages can share a
+            // timestamp. The hub sequence is the publish order.
+            (b.seq ?? 0) - (a.seq ?? 0));
         const frag = document.createDocumentFragment();
         for (const msg of sorted) {
             const card = document.createElement('details');
@@ -543,14 +559,15 @@ export class SyncManager {
             card.dataset.messageId = msg.message_id;
             card.open = this._pushExpanded.has(msg.message_id);
             const when = new Date(msg.updated_at_unix_ms).toLocaleString();
+            const sender = msg.sender || 'unknown';
             card.innerHTML = `
-                <summary class="sync-push-summary" aria-label="Read message from ${this.escapeHtml(msg.sender || 'unknown')} to ${this.escapeHtml(msg.recipient)} · ${this.escapeHtml(when)}">
+                <summary class="sync-push-summary">
                     <span class="sync-card-header">
-                        <span class="sync-card-key">${this.escapeHtml(msg.sender || 'unknown')} → ${this.escapeHtml(msg.recipient)}</span>
+                        <span class="sync-card-key" title="${this.escapeHtml(sender)}">${this.escapeHtml(displaySender(sender))} → ${this.escapeHtml(msg.recipient)}</span>
                         <span class="sync-push-disclosure" aria-hidden="true">▸</span>
                     </span>
-                    <span class="sync-push-preview">${this.escapeHtml(msg.value)}</span>
-                    <span class="sync-card-footer">${this.escapeHtml(when)}${msg.truncated ? ' · preview limited to 4 KiB' : ''}</span>
+                    <span class="sync-push-preview" aria-hidden="true">${this.escapeHtml(msg.value)}</span>
+                    <span class="sync-card-footer">${this.escapeHtml(when)}${msg.truncated ? ' · body limited to 4 KiB' : ''}</span>
                 </summary>
                 <div class="sync-card-value">${this.escapeHtml(msg.value)}</div>
             `;

@@ -69,5 +69,7 @@ func (app *Server) handleSyncPushes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	// The list changes while the panel is open. No proxy may keep a copy.
+	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(list)
 }
