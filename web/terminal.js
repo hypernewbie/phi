@@ -16080,6 +16080,33 @@ export class TabManager {
             }
             term.loadAddon(webgl);
             phi._phiWebgl = webgl;
+            // The IntersectionObserver callback for this reveal runs after this
+            // task. Until it does, the render service is still paused and the
+            // addon's forced refresh is parked in _needsFullRefresh, so the
+            // revealed pane shows its stale DOM rows over a transparent canvas
+            // for a frame. Resume and paint now, the way WebglRenderer renders
+            // synchronously after a resize. Only the visible tab reaches here.
+            // Missing internals degrade to the old deferred paint.
+            if (document.hidden)
+                return;
+            const render = phi._core?._renderService;
+            if (typeof render?.refreshRows !== 'function')
+                return;
+            try {
+                if (typeof render._handleIntersectionChange === 'function') {
+                    render._handleIntersectionChange({ isIntersecting: true });
+                }
+                else {
+                    render._isPaused = false;
+                }
+                render._needsFullRefresh = false;
+                render.refreshRows(0, term.rows - 1, true);
+            }
+            catch (e) {
+                // A rendering shortcut must never break a tab switch: the
+                // parked refresh still paints when the observer resumes.
+                console.warn('[term] sync GL paint skipped:', e);
+            }
         }
         catch (_e) {
             // One attempt per terminal: a browser without a usable GL context

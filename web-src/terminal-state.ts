@@ -163,6 +163,22 @@ export interface TerminalInternals {
                 measure?(): { width: number; height: number };
             };
         };
+        /** xterm's render service. Read while the visible tab swaps in a GL
+         *  addon, so the first GL frame lands in the reveal task instead of a
+         *  later animation frame. */
+        _renderService?: {
+            _isPaused?: boolean;
+            _needsFullRefresh?: boolean;
+            _handleIntersectionChange?(entry: {
+                isIntersecting?: boolean;
+            }): void;
+            refreshRows?(
+                start: number,
+                end: number,
+                sync?: boolean,
+                redrawOnly?: boolean,
+            ): void;
+        };
     };
 }
 
