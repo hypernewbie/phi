@@ -98,7 +98,14 @@ describe('SyncManager coordinator', () => {
                 sessionsManager: { config: undefined },
                 showToast: vi.fn(),
             });
-            expect(fetchMock).not.toHaveBeenCalled();
+            // Addressed messages are a local read, so they do not wait for a
+            // coordinator that this shell may never have.
+            expect(
+                fetchMock.mock.calls.filter(
+                    ([url]) => url === '/api/sync/pushes',
+                ),
+            ).toHaveLength(1);
+            expect(boardCalls(fetchMock)).toHaveLength(0);
 
             manager.app.sessionsManager.config = {
                 sync_coordinator: 'http://127.0.0.1:17170',

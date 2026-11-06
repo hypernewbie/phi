@@ -3,7 +3,6 @@ package server
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"unicode/utf8"
 
 	syncmeshb "github.com/hypernewbie/phi/internal/syncmesh/pb"
@@ -51,16 +50,9 @@ func (app *Server) handleSyncPushes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	limit := maxSyncPushList
-	if raw := r.URL.Query().Get("limit"); raw != "" {
-		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed < limit {
-			limit = parsed
-		}
-	}
-
 	var events []*syncmeshb.SyncEvent
 	if app.syncMesh != nil {
-		events = app.syncMesh.RecentAddressed(limit)
+		events = app.syncMesh.RecentAddressed(maxSyncPushList)
 	}
 	list := make([]SyncPushMessage, 0, len(events))
 	for _, ev := range events {

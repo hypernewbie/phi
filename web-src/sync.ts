@@ -402,13 +402,15 @@ export class SyncManager {
     }
 
     async refreshMessages(): Promise<void> {
+        // Addressed messages are a local read, so they still refresh where the
+        // board itself cannot be reached.
+        void this.refreshPushes();
         if (
             window.location.protocol === 'phi-app:' &&
             !this.app.sessionsManager.config?.sync_coordinator
         ) {
             return;
         }
-        void this.refreshPushes();
         try {
             if (document.activeElement !== this.coordinatorInput) {
                 this.coordinatorInput.value = await this.getCoordinatorUrl();
