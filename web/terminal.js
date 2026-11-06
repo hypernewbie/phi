@@ -542,6 +542,30 @@ function termPerfMeasureSince(name, startTime) {
         return 0;
     }
 }
+// Redraw tracepoints. A redraw is anything that changes the grid or forces the
+// renderer: a window resize, a panel resize, a tab reveal, an explicit
+// refresh. Every one is recorded, fast or slow — this is the series a
+// regression shows up in, and a threshold would hide its cheapest members.
+//
+// console.timeStamp writes a custom track into a DevTools trace and nothing
+// else: no User Timing entry accumulates, so the bounded-buffer rule that
+// governs termPerfMark does not apply, and a session without DevTools
+// recording pays one feature check. The Performance panel draws the track
+// only with Capture settings → Show custom tracks enabled.
+const REDRAW_TRACE_MAX_MS = 3000;
+const REDRAW_TRACE_TRACK = 'redraw';
+function redrawTraceEmit(reason, startTs, endTs) {
+    try {
+        const stamp = console.timeStamp;
+        if (typeof stamp !== 'function')
+            return;
+        // The performance panel reads start/end and draws the bar. Chrome
+        // drops the optional trailing payload argument, so none is passed:
+        // no per-redraw object is allocated for data nobody renders.
+        stamp.call(console, reason, startTs, endTs, REDRAW_TRACE_TRACK, 'phi', 'primary');
+    }
+    catch (_e) { }
+}
 /**
  * Inspects the terminal buffer around the cursor line to distinguish
  * between an actively running process (e.g. spinning animated spinners,
@@ -4455,7 +4479,10 @@ export class TabManager {
                     tabInfo._panelBox.height !== rect.height);
             if (rect)
                 tabInfo._panelBox = { width: rect.width, height: rect.height };
-            this._queuePanelFit(tabInfo, { forceResize: Boolean(changed) });
+            this._queuePanelFit(tabInfo, {
+                forceResize: Boolean(changed),
+                trace: 'panel',
+            });
         });
         tabInfo._panelObserver.observe(tabInfo.termContainer);
     }
@@ -4466,6 +4493,7 @@ export class TabManager {
         return !rect || (rect.width > 0 && rect.height > 0);
     }
     _fitVisibleTerminal(tabInfo) {
+        this._beginRedrawTrace(tabInfo, 'fit-visible');
         if (!this._terminalPanelVisible(tabInfo)) {
             tabInfo._pendingPanelFit = true;
             tabInfo._pendingForceResize = true;
@@ -4475,6 +4503,7 @@ export class TabManager {
             tabInfo._pendingPanelFit = true;
             return;
         }
+        this._restartRedrawTrace(tabInfo);
         this._resizeWithReaderAnchor(tabInfo, () => tabInfo.fitAddon?.fit?.());
     }
     // A resize emits onScroll before the reader's marker has been restored.
@@ -4509,7 +4538,57 @@ export class TabManager {
         if (tab)
             this._queuePanelFit(tab, { forceResize: true });
     }
+    // A redraw tracepoint spans the paint work: from the fit or the refresh
+    // that runs to the frame that paints. The first request of a coalesced
+    // redraw owns the reason — one resize can queue a fit, a refresh and a
+    // backend resize — and _restartRedrawTrace re-bases the clock when work
+    // parked behind a gate finally executes, so the wait is not charged to the
+    // paint.
+    //
+    // Only the pane being painted has a redraw to measure. The panel observer
+    // fires for every open tab and a hidden pane paints nothing, so a span
+    // started there would surface on a later reveal as a stall that never
+    // happened.
+    _beginRedrawTrace(tabInfo, reason) {
+        if (tabInfo._redrawTraceAt !== undefined)
+            return;
+        if (tabInfo !== this.getActiveTab())
+            return;
+        tabInfo._redrawTraceAt = performance.now();
+        tabInfo._redrawTraceReason = reason;
+    }
+    // The clock starts when the redraw actually runs. A request parked behind a
+    // bootstrap gate, a pending write or a hidden panel would otherwise report
+    // the wait as paint time, which on a slow link is the whole bar.
+    _restartRedrawTrace(tabInfo) {
+        if (tabInfo._redrawTraceAt === undefined)
+            return;
+        tabInfo._redrawTraceAt = performance.now();
+    }
+    // A pane that stops painting (deactivated, closed) must not carry its
+    // request into a later frame.
+    _dropRedrawTrace(tabInfo) {
+        tabInfo._redrawTraceAt = undefined;
+        tabInfo._redrawTraceReason = undefined;
+    }
+    // xterm fires onRender once a frame has painted. A pane that never paints
+    // (hidden, renderer paused) keeps its span pending until a real paint; a
+    // span older than the cap is dropped instead of reported as a stall that
+    // never happened.
+    _endRedrawTrace(tabInfo) {
+        const start = tabInfo._redrawTraceAt;
+        if (start === undefined)
+            return;
+        const reason = tabInfo._redrawTraceReason ?? 'redraw';
+        tabInfo._redrawTraceAt = undefined;
+        tabInfo._redrawTraceReason = undefined;
+        const now = performance.now();
+        if (now - start > REDRAW_TRACE_MAX_MS)
+            return;
+        redrawTraceEmit(reason, start, now);
+    }
     _refreshTerminalScreen(tabInfo, { resync = true } = {}) {
+        this._beginRedrawTrace(tabInfo, 'refresh');
         internals(tabInfo.term)._core?.viewport?.syncScrollArea(true);
         if (resync)
             this._resyncViewportScroll(tabInfo);
@@ -4520,7 +4599,8 @@ export class TabManager {
             console.warn('[term] renderer refresh deferred:', error);
         }
     }
-    _queuePanelFit(tabInfo, { forceResize = false } = {}) {
+    _queuePanelFit(tabInfo, { forceResize = false, trace = 'fit' } = {}) {
+        this._beginRedrawTrace(tabInfo, trace);
         tabInfo._pendingForceResize = Boolean(tabInfo._pendingForceResize || forceResize);
         if (tabInfo._panelFitRAF !== undefined && tabInfo._panelFitRAF !== null)
             return;
@@ -5717,6 +5797,11 @@ export class TabManager {
                 capture: true,
                 passive: true,
             });
+        });
+        // Redraw tracepoint end. xterm fires onRender after a frame paints, so
+        // the span closes on the pixels, not on the resize call.
+        tabInfo._postOpenHooks.push((openedTerm) => {
+            openedTerm.onRender(() => this._endRedrawTrace(tabInfo));
         });
         // Escape hatch: when the DOM scroll area is stale, wheel-down clamps
         // at a fake bottom while real output sits below (viewportY < baseY).
@@ -8696,6 +8781,7 @@ export class TabManager {
             prevTab.tabEl.classList.remove('active');
             prevTab.termContainer.classList.remove('active');
             this._detachTermWebgl(prevTab);
+            this._dropRedrawTrace(prevTab);
             // Leaving a Pi tab revokes its pending Thinking operation so a
             // late reply cannot act after the user navigates back.
             if (prevTab.coder === 'pi')
@@ -9322,6 +9408,7 @@ export class TabManager {
         catch (e) {
             console.error('[tab] Term dispose error:', e);
         }
+        this._dropRedrawTrace(tab);
         try {
             if (tab.tabEl)
                 tab.tabEl.remove();
@@ -15943,6 +16030,7 @@ export class TabManager {
             activeTab._pendingForceResize = Boolean(activeTab._pendingForceResize || forceResize || !visible);
             return;
         }
+        this._restartRedrawTrace(activeTab);
         try {
             if (forceResize)
                 internals(activeTab.term)._core?._charSizeService?.measure?.();
@@ -16161,7 +16249,10 @@ export class TabManager {
         this._attachTermWebgl(tabInfo);
         // Fit after layout, not after a guessed 50ms settling interval.
         // Coalescing retains the force bit through bootstrap/history gates.
-        this._queuePanelFit(tabInfo, { forceResize: true });
+        this._queuePanelFit(tabInfo, {
+            forceResize: true,
+            trace: 'tab-switch',
+        });
         // A tab shown again with no new output would otherwise never restore
         // the reader's row; the fit above may also skip unchanged geometry.
         if (internals(tabInfo.term)._phiReaderAnchor) {

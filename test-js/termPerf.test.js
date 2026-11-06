@@ -125,4 +125,160 @@ describe('terminal performance instrumentation', () => {
         const names = measureSpy.mock.calls.map((c) => c[0]);
         expect(names).not.toContain('phi:fit');
     });
+
+    // Redraw tracepoints: every resize/redraw lands on one DevTools custom
+    // track, fast ones included. console.timeStamp leaves the User Timing
+    // buffer alone, so no bound is needed here.
+    describe('redraw tracepoint', () => {
+        let stampSpy;
+
+        beforeEach(() => {
+            // jsdom ships no console.timeStamp; the tracepoint must work with
+            // the real one and stay silent without it.
+            stampSpy = vi.fn();
+            console.timeStamp = stampSpy;
+        });
+
+        afterEach(() => {
+            delete console.timeStamp;
+        });
+
+        // Only the pane being painted carries the span.
+        function traced(tab) {
+            const tm = makeTm();
+            tm.getActiveTab = () => tab;
+            return tm;
+        }
+
+        it('closes the span on paint with reason, grid and duration', () => {
+            const tab = { term: { cols: 80, rows: 24 } };
+            const tm = traced(tab);
+
+            tm._beginRedrawTrace(tab, 'tab-switch');
+            tm._endRedrawTrace(tab);
+
+            expect(stampSpy).toHaveBeenCalledTimes(1);
+            const [label, start, end, track, group, color] =
+                stampSpy.mock.calls[0];
+            expect(label).toBe('tab-switch');
+            expect(end).toBeGreaterThanOrEqual(start);
+            expect(track).toBe('redraw');
+            expect(group).toBe('phi');
+            expect(color).toBe('primary');
+            // Only what the performance panel renders: a trailing payload is
+            // dropped by Chrome and would cost an allocation per redraw.
+            expect(stampSpy.mock.calls[0]).toHaveLength(6);
+            // The span is consumed: a second paint records nothing.
+            tm._endRedrawTrace(tab);
+            expect(stampSpy).toHaveBeenCalledTimes(1);
+        });
+
+        it('keeps the first request of a coalesced redraw', () => {
+            const tab = { term: { cols: 10, rows: 5 } };
+            const tm = traced(tab);
+
+            tm._beginRedrawTrace(tab, 'panel');
+            const first = tab._redrawTraceAt;
+            tm._beginRedrawTrace(tab, 'refresh');
+            expect(tab._redrawTraceAt).toBe(first);
+
+            tm._endRedrawTrace(tab);
+            expect(stampSpy.mock.calls[0][0]).toBe('panel');
+        });
+
+        it('records a fast redraw instead of dropping it', () => {
+            const tab = { term: { cols: 80, rows: 24 } };
+            const tm = traced(tab);
+
+            tm._beginRedrawTrace(tab, 'panel');
+            tab._redrawTraceAt = performance.now();
+            tm._endRedrawTrace(tab);
+
+            expect(stampSpy).toHaveBeenCalledTimes(1);
+            const [, start, end] = stampSpy.mock.calls[0];
+            expect(end - start).toBeLessThan(16);
+        });
+
+        it('ignores a background pane, which paints nothing', () => {
+            const active = { term: { cols: 80, rows: 24 } };
+            const background = { term: { cols: 80, rows: 24 } };
+            const tm = traced(active);
+
+            // The panel observer fires for every open tab.
+            tm._beginRedrawTrace(background, 'panel');
+            expect(background._redrawTraceAt).toBeUndefined();
+            tm._endRedrawTrace(background);
+            expect(stampSpy).not.toHaveBeenCalled();
+        });
+
+        it('drops a pending span when the pane leaves', () => {
+            const tab = { term: { cols: 80, rows: 24 } };
+            const tm = traced(tab);
+
+            tm._beginRedrawTrace(tab, 'panel');
+            tm._dropRedrawTrace(tab);
+            expect(tab._redrawTraceAt).toBeUndefined();
+
+            // A later reveal must not report the abandoned request.
+            tm._endRedrawTrace(tab);
+            expect(stampSpy).not.toHaveBeenCalled();
+        });
+
+        // On a slow link a fit can be parked behind a bootstrap or a pending
+        // write. The bar must report the redraw, not the wait before it.
+        it('starts the clock when a parked fit finally runs', () => {
+            const tm = makeTm();
+            const tab = {
+                paneId: 'p4',
+                isDead: false,
+                writeBuffer: '',
+                writePending: false,
+                term: {
+                    options: { fontSize: 14 },
+                    cols: 80,
+                    rows: 24,
+                    buffer: { active: { viewportY: 0, baseY: 0 } },
+                },
+                fitAddon: { fit: () => {} },
+            };
+            tm.getActiveTab = () => tab;
+            tm.resolveTerminalFontSize = () => 14;
+            tm.isResizing = false;
+            tm._spamScroll = () => {};
+            tm.sendResizeToBackend = () => {};
+            tm._refreshTerminalScreen = () => {};
+
+            tm._beginRedrawTrace(tab, 'tab-switch');
+            tab._redrawTraceAt = performance.now() - 2000;
+            tm.fitActiveTerminal();
+            tm._endRedrawTrace(tab);
+
+            expect(stampSpy).toHaveBeenCalledTimes(1);
+            expect(stampSpy.mock.calls[0][0]).toBe('tab-switch');
+            const [, start, end] = stampSpy.mock.calls[0];
+            expect(end - start).toBeLessThan(16);
+        });
+
+        it('drops a span that never painted in time', () => {
+            const tab = { term: { cols: 80, rows: 24 } };
+            const tm = traced(tab);
+
+            tm._beginRedrawTrace(tab, 'tab-switch');
+            tab._redrawTraceAt = performance.now() - 5000;
+            tm._endRedrawTrace(tab);
+
+            expect(stampSpy).not.toHaveBeenCalled();
+            expect(tab._redrawTraceAt).toBeUndefined();
+        });
+
+        it('stays silent when the browser has no console.timeStamp', () => {
+            const tab = { term: { cols: 80, rows: 24 } };
+            const tm = traced(tab);
+            delete console.timeStamp;
+
+            tm._beginRedrawTrace(tab, 'fit');
+            expect(() => tm._endRedrawTrace(tab)).not.toThrow();
+            expect(tab._redrawTraceAt).toBeUndefined();
+        });
+    });
 });
