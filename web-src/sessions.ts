@@ -826,7 +826,15 @@ export class SessionsManager {
         const textWidth = this._measureSpan.getBoundingClientRect().width;
 
         const isMobile = isCompactViewport();
-        const padding = isMobile ? 24 : 28;
+        // The select's own padding holds the chevron and scales with the UI
+        // size, so read it instead of assuming a fixed value: a stale
+        // assumption truncates the label as soon as the font grows.
+        const padding = Math.max(
+            isMobile ? 24 : 28,
+            (parseFloat(style.paddingLeft) || 0) +
+                (parseFloat(style.paddingRight) || 0) +
+                8,
+        );
         const calculatedWidth = Math.ceil(textWidth + padding);
 
         const minW = isMobile ? 50 : 60;

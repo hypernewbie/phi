@@ -1932,12 +1932,10 @@ test('narrow screens scale with the UI size and keep inputs zoom-safe', async ({
         const phone = await mobile.newPage();
         const px = async (selector: string) =>
             parseFloat(await fontSize(phone, selector));
-        const scale = async () =>
+        const rootPx = async () =>
             parseFloat(
-                await phone.evaluate(() =>
-                    getComputedStyle(document.documentElement).getPropertyValue(
-                        '--ui-scale',
-                    ),
+                await phone.evaluate(
+                    () => getComputedStyle(document.documentElement).fontSize,
                 ),
             );
         await phone.goto(phi.url);
@@ -1946,7 +1944,32 @@ test('narrow screens scale with the UI size and keep inputs zoom-safe', async ({
         await expect(phone.locator('#settings-mobile-status')).toHaveText(
             'Saved',
         );
-        await expect.poll(scale).toBeGreaterThan(1.8);
+        await expect.poll(rootPx).toBe(24);
+        // The mobile header height must grow with the root font size. At
+        // 24px the brand term is 56.8px, above the 44px floor only when the
+        // calc() is valid; a malformed calc would leave the floor in place.
+        const headerHeight = await phone
+            .locator('.app-header')
+            .evaluate((el) => el.getBoundingClientRect().height);
+        expect(headerHeight).toBeGreaterThan(44);
+        // A long hostname must shorten before it squeezes the action strip
+        // down to a few pixels. At least one complete control stays visible.
+        await expect
+            .poll(() =>
+                phone.evaluate(() => {
+                    const strip = document.querySelector('.header-actions');
+                    const button = document.querySelector(
+                        '#mobile-close-all-tabs-btn',
+                    );
+                    if (!strip || !button)
+                        throw new Error('missing header actions');
+                    return (
+                        strip.clientWidth >=
+                        button.getBoundingClientRect().width
+                    );
+                }),
+            )
+            .toBe(true);
         await phone.locator('.settings-overlay .modal-close-btn').click();
         await expect.poll(() => px('#input-textarea')).toBeGreaterThan(23);
         expect(
@@ -1966,12 +1989,14 @@ test('narrow screens scale with the UI size and keep inputs zoom-safe', async ({
         await phone.locator('.settings-overlay .modal-close-btn').click();
         await expect.poll(() => px('#input-textarea')).toBe(16);
 
-        // Cached appearance keeps the last applied scale when the API is
-        // blocked: no reset to 1, no dependency on the round trip.
-        const before = await scale();
+        // Cached appearance keeps the last applied root size when the API
+        // is blocked: no reset to the default, no dependency on the round
+        // trip.
+        const before = await rootPx();
+        expect(before).toBe(10);
         await phone.route('**/api/config**', (route) => route.abort());
         await phone.reload();
-        await expect.poll(scale).toBeCloseTo(before, 3);
+        await expect.poll(rootPx).toBe(before);
     } finally {
         await mobile.close();
     }

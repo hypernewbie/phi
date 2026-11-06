@@ -192,7 +192,10 @@ export interface ReloadHttpCall {
 }
 
 // Capture native reload HTTP round trips issued from the page.
-export function recordReloadCalls(page: Page): { calls: ReloadHttpCall[] } {
+export function recordReloadCalls(page: Page): {
+    calls: ReloadHttpCall[];
+    dispatched: () => ReloadHttpCall[];
+} {
     const calls: ReloadHttpCall[] = [];
     page.on('response', (response) => {
         if (
@@ -207,7 +210,12 @@ export function recordReloadCalls(page: Page): { calls: ReloadHttpCall[] } {
                 calls.push({ status: response.status(), body });
             });
     });
-    return { calls };
+    return {
+        calls,
+        // Refusals are HTTP-visible too. A 'stale' refusal dispatches
+        // nothing, so only these count as native reload work.
+        dispatched: () => calls.filter((call) => call.status === 202),
+    };
 }
 
 // Click the Cmds Reload entry with the keyboard and wait for the
@@ -239,6 +247,58 @@ export async function expectNewToast(
     await expect(
         page.locator('.toast:not([data-toast-seen])', { hasText: text }),
     ).toBeVisible({ timeout: 60_000 });
+}
+
+// Press Reload and require the "requested" receipt, tolerating the one
+// safe refusal. A 'stale' refusal means the page's Pi bridge snapshot had
+// not reached the pane yet: the host was never invoked and no request ID
+// was allocated, so pressing again after it lands cannot double-dispatch.
+// Every other outcome is final, and the retries are bounded so a broken
+// path still fails loudly.
+export async function expectReloadRequested(
+    page: Page,
+    openAndClick: () => Promise<void>,
+    attempts = 3,
+): Promise<void> {
+    const REQUESTED = 'Reload requested — check Pi';
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+        const seen = page.locator('.toast', { hasText: 'Reload' });
+        const before = await seen.count();
+        for (let index = 0; index < before; index++) {
+            await seen
+                .nth(index)
+                .evaluate((toast) => toast.setAttribute('data-toast-seen', ''));
+        }
+
+        await openAndClick();
+
+        const requested = page.locator('.toast:not([data-toast-seen])', {
+            hasText: REQUESTED,
+        });
+        const refused = page.locator('.toast:not([data-toast-seen])', {
+            hasText: 'Reload refused',
+        });
+        const deadline = Date.now() + 30_000;
+        let refusedText: string | null = null;
+        while (Date.now() < deadline) {
+            if (await requested.count()) return;
+            if (await refused.count()) {
+                refusedText = (await refused.first().textContent()) ?? '';
+                break;
+            }
+            await page.waitForTimeout(100);
+        }
+        if (refusedText === null)
+            throw new Error(
+                `Reload produced no receipt toast (attempt ${attempt}/${attempts})`,
+            );
+        if (!refusedText.includes('stale'))
+            throw new Error(`Reload refused: ${refusedText}`);
+        await page.waitForTimeout(750);
+    }
+    throw new Error(
+        'Reload kept refusing as stale: the page never picked up the pane snapshot',
+    );
 }
 
 // Review hold for PHI_RELOAD_REVIEW=1: print the owned server and
