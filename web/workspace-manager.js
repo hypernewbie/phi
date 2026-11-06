@@ -576,6 +576,21 @@ export class WorkspaceManager {
             rootPath.className = 'ws-manager-root-path';
             rootPath.textContent = path;
             element.appendChild(rootPath);
+            // The failure sits above the rows: the rows can be a cached
+            // listing, and the reader must see that they may be out of date
+            // without scrolling to the bottom of the section.
+            if (section.error) {
+                const note = document.createElement('p');
+                note.className = 'ws-manager-note';
+                note.textContent = section.error;
+                const retry = document.createElement('button');
+                retry.type = 'button';
+                retry.className = 'ws-manager-link ws-manager-retry-btn';
+                retry.textContent = 'Retry';
+                retry.addEventListener('click', () => void this.loadRoot(path, this.generation));
+                note.appendChild(retry);
+                element.appendChild(note);
+            }
             const list = document.createElement('div');
             list.className = 'ws-manager-list';
             if (section.rows.length === 0 && !section.error) {
@@ -601,18 +616,6 @@ export class WorkspaceManager {
                 }));
             }
             element.appendChild(list);
-            if (section.error) {
-                const note = document.createElement('p');
-                note.className = 'ws-manager-note';
-                note.textContent = section.error;
-                const retry = document.createElement('button');
-                retry.type = 'button';
-                retry.className = 'ws-manager-link ws-manager-retry-btn';
-                retry.textContent = 'Retry';
-                retry.addEventListener('click', () => void this.loadRoot(path, this.generation));
-                note.appendChild(retry);
-                element.appendChild(note);
-            }
             if (section.truncated) {
                 const note = document.createElement('p');
                 note.className = 'ws-manager-note';
@@ -624,7 +627,8 @@ export class WorkspaceManager {
             actions.className = 'ws-manager-group-actions';
             const removeRoot = document.createElement('button');
             removeRoot.type = 'button';
-            removeRoot.className = 'btn btn-red ws-manager-root-remove';
+            removeRoot.className =
+                'ws-manager-link ws-manager-link-danger ws-manager-root-remove';
             removeRoot.textContent = 'Remove root';
             removeRoot.disabled = this.isPending();
             removeRoot.addEventListener('click', () => void this.removeRoot(path));
@@ -870,15 +874,6 @@ export class WorkspaceManager {
         if (this.isOpen())
             void this.loadRoots(this.generation);
     }
-    /**
-     * What the reloaded config proves about a write. `null` means the stored
-     * list cannot answer it, so the message must not claim an outcome.
-     */
-    mutationLanded(mutation) {
-        if (!mutation)
-            return null;
-        return this.landedIn(mutation, this.sessions.workspaces, this.rootPaths);
-    }
     /** Compares one write with one config snapshot. Workspaces compare by
      *  normalized path; roots are stored expanded, so they compare exactly. */
     landedIn(mutation, workspaces, roots) {
@@ -937,7 +932,12 @@ export class WorkspaceManager {
         }
     }
     setReconcileStatus(mutation) {
-        const landed = this.mutationLanded(mutation);
+        // The pending write is cleared before this runs, so the live lists are
+        // the server's own. `null` means the stored list cannot answer it, so
+        // the message must not claim an outcome.
+        const landed = mutation
+            ? this.landedIn(mutation, this.sessions.workspaces, this.rootPaths)
+            : null;
         if (landed === false) {
             this.setStatus('This change is not in the current server state. Nothing was resent.', 'error');
             return;

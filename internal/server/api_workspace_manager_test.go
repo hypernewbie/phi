@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -259,6 +260,30 @@ func TestWorkspaceRootsRejectInvalidDirectories(t *testing.T) {
 		`{"path":"`+root+`"}`); rec.Code != http.StatusOK {
 		t.Fatalf("root POST status %d: %s", rec.Code, rec.Body.String())
 	}
+	// A "~" root is stored expanded, so the client can compare it with the
+	// listing it reads back. The home directory is redirected so the test
+	// never touches the real one.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if err := os.Mkdir(filepath.Join(home, "phi-root"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if rec := workspaceRequest(t, http.MethodPost, "/api/config/workspace-roots",
+		`{"path":"~/phi-root"}`); rec.Code != http.StatusOK {
+		t.Fatalf("tilde root POST status %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := testServer.loadConfig().WorkspaceRoots; len(got) != 2 ||
+		got[1] != filepath.Join(home, "phi-root") {
+		t.Fatalf("tilde root was not expanded: %v", got)
+	}
+	if rec := workspaceRequest(t, http.MethodDelete, "/api/config/workspace-roots",
+		`{"path":"~/phi-root"}`); rec.Code != http.StatusOK {
+		t.Fatalf("tilde root DELETE status %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := testServer.loadConfig().WorkspaceRoots; len(got) != 1 || got[0] != root {
+		t.Fatalf("tilde root survived DELETE: %v", got)
+	}
 	if err := os.Remove(root); err != nil {
 		t.Fatal(err)
 	}
@@ -344,13 +369,5 @@ func TestWorkspaceMutationsReportReadFailure(t *testing.T) {
 }
 
 func equalStrings(got, want []string) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	for i := range got {
-		if got[i] != want[i] {
-			return false
-		}
-	}
-	return true
+	return slices.Equal(got, want)
 }

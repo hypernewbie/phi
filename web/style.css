@@ -4756,7 +4756,9 @@ body.has-terminal-bg
 }
 
 .ws-manager-name {
-    flex: 0 1 auto;
+    /* The name is the label; it never shrinks below its own text. The path
+       beside it takes the leftover space and truncates instead. */
+    flex: 0 0 auto;
     max-width: 50%;
     overflow: hidden;
     color: var(--text-primary);
@@ -4812,7 +4814,8 @@ body.has-terminal-bg
 }
 
 /* Destructive and recovery actions are text links, like the rest of Phi;
-   only the additive action carries the accent fill. */
+   only the additive action carries the accent fill. A destructive link keeps
+   the quiet color until the pointer lands on it. */
 .ws-manager-link {
     width: auto;
     padding: 4px 6px;
@@ -4831,6 +4834,13 @@ body.has-terminal-bg
 .ws-manager-link:hover:not(:disabled) {
     color: var(--text-primary);
     background-color: var(--bg-elevated);
+}
+
+/* Destructive links follow the settings grammar: quiet until hovered, then
+   red. Only the additive action carries the accent fill. */
+.ws-manager-link-danger:hover:not(:disabled) {
+    color: var(--red);
+    background-color: rgba(255, 80, 80, 0.08);
 }
 
 /* Keep every mutation control visibly disabled while a write is pending. */
@@ -4874,6 +4884,16 @@ body.has-terminal-bg
 }
 
 @media (max-width: 480px) {
+    /* The path input keeps its own row: beside two buttons it is too narrow
+       for the placeholder, and a clipped hint reads as a broken field. */
+    .ws-manager-root-form .path-input-row {
+        flex-wrap: wrap;
+    }
+
+    .ws-manager-root-form .path-input-row .input-autocomplete-wrapper {
+        flex: 1 1 100%;
+    }
+
     /* Keep the path visible on touch: names alone cannot distinguish projects
        with the same basename, and a hover title is not available. */
     .ws-manager-row {
