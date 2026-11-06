@@ -1051,6 +1051,47 @@ describe('checkpoint upload', () => {
         expect(upload).toHaveBeenCalledWith(tab, { unload: true });
     });
 
+    it('hide keeps the fetch fallback when a beacon is refused', () => {
+        const tm = Object.create(TabManager.prototype);
+        tm.tabs = new Map();
+        tm.saveActiveDraft = vi.fn();
+        const fetcher = vi.fn(async () => ({ ok: true }));
+        vi.stubGlobal('fetch', fetcher);
+        const beacon = vi.fn(() => false);
+        const original = Object.getOwnPropertyDescriptor(
+            navigator,
+            'sendBeacon',
+        );
+        Object.defineProperty(navigator, 'sendBeacon', {
+            value: beacon,
+            configurable: true,
+        });
+
+        try {
+            const tab = {
+                paneId: 'p14',
+                paneEpoch: 7,
+                drainedSeq: 5,
+                isDead: false,
+                serializeAddon: { serialize: () => 'SNAPSHOT' },
+                ws: { mode: 'hot' },
+                term: { cols: 80, rows: 24 },
+            };
+            tm.tabs.set('p14', tab);
+            tm._checkpointOnLeave(false);
+        } finally {
+            if (original) {
+                Object.defineProperty(navigator, 'sendBeacon', original);
+            } else {
+                delete navigator.sendBeacon;
+            }
+            vi.unstubAllGlobals();
+        }
+
+        expect(beacon).toHaveBeenCalledTimes(1);
+        expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+
     it('drops the upload when the terminal is gone instead of throwing', () => {
         stubTerminalGlobal();
         const tm = makeTm();
