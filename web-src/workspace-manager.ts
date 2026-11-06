@@ -1064,11 +1064,7 @@ export class WorkspaceManager {
         // the server's own. `null` means the stored list cannot answer it, so
         // the message must not claim an outcome.
         const landed = mutation
-            ? this.landedIn(
-                  mutation,
-                  this.sessions.workspaces,
-                  this.rootPaths,
-              )
+            ? this.landedIn(mutation, this.sessions.workspaces, this.rootPaths)
             : null;
         if (landed === false) {
             this.setStatus(
