@@ -216,6 +216,15 @@ test('actual panel CSS resize, tab activation and refresh synchronize backend di
         )
         .toBe(true);
     const before = await probe();
+    // A warm switch on a settled grid must not put a resize on the wire. The
+    // server answers an equal-size resize with an explicit SIGWINCH, and a TUI
+    // host redraws its whole document for it.
+    const warmCount = sizes.get(one)!.length;
+    await page.locator(`.tab[data-pane-id="${two}"]`).click();
+    await page.locator(`.tab[data-pane-id="${one}"]`).click();
+    await page.waitForTimeout(500);
+    expect(sizes.get(one)!.length).toBe(warmCount);
+    await expect.poll(synced).toBe(true);
     // No window resize or controller call: content-box observation owns it.
     await page.locator(`#term-${one}`).evaluate((node) => {
         node.style.setProperty('width', '520px', 'important');
@@ -227,10 +236,16 @@ test('actual panel CSS resize, tab activation and refresh synchronize backend di
         before?.cols,
         before?.rows,
     ]);
+    // Restore normal layout before testing activation independently.
+    await page.locator(`#term-${one}`).evaluate((node) => {
+        node.style.removeProperty('width');
+        node.style.removeProperty('height');
+    });
+    await expect.poll(async () => (await probe())?.cols).toBe(before?.cols);
+    await expect.poll(synced).toBe(true);
     await page.locator(`.tab[data-pane-id="${two}"]`).click();
-    const count = sizes.get(one)!.length;
     await page.locator(`.tab[data-pane-id="${one}"]`).click();
-    await expect.poll(() => sizes.get(one)!.length > count).toBe(true);
+    // Activation must preserve the correct grid, not force another redraw.
     await expect.poll(synced).toBe(true);
     const connectionsBeforeReload = {
         selected: connections.get(one)!,

@@ -37,9 +37,16 @@ function tab(cols, rows, proposed) {
     return t;
 }
 
+// The backend PTY already has this grid on this socket.
+function sized(t, ws = t.ws ?? { id: 'sock-1' }) {
+    t.ws = ws;
+    t._sizedGrid = { ws, cols: t.term.cols, rows: t.term.rows };
+    return t;
+}
+
 describe('fitActiveTerminal skips same-geometry fits', () => {
     it('returns before fit, scroll restore, and backend resize when dims match', () => {
-        const t = tab(80, 24, { cols: 80, rows: 24 });
+        const t = sized(tab(80, 24, { cols: 80, rows: 24 }));
         const c = ctx(t);
         c.fitActiveTerminal();
         expect(t.fitAddon.fit).not.toHaveBeenCalled();
@@ -48,7 +55,7 @@ describe('fitActiveTerminal skips same-geometry fits', () => {
     });
 
     it('measures the DOM once per fit with the real font resolver', () => {
-        const t = tab(80, 24, { cols: 80, rows: 24 });
+        const t = sized(tab(80, 24, { cols: 80, rows: 24 }));
         const c = Object.create(TabManager.prototype);
         c.getActiveTab = vi.fn(() => t);
         c.app = { terminalFontSize: 14 };
@@ -65,7 +72,7 @@ describe('fitActiveTerminal skips same-geometry fits', () => {
     });
 
     it('fits when the proposed geometry differs', () => {
-        const t = tab(80, 24, { cols: 100, rows: 30 });
+        const t = sized(tab(80, 24, { cols: 100, rows: 30 }));
         const c = ctx(t);
         c.fitActiveTerminal();
         expect(t.fitAddon.fit).toHaveBeenCalledTimes(1);
@@ -73,12 +80,13 @@ describe('fitActiveTerminal skips same-geometry fits', () => {
     });
 
     it('fits when the font size still needs applying', () => {
-        const t = tab(80, 24, { cols: 80, rows: 24 });
+        const t = sized(tab(80, 24, { cols: 80, rows: 24 }));
         t.term.options.fontSize = 12; // differs from resolved 14
         const c = ctx(t);
-        c.fitActiveTerminal();
+        c.fitActiveTerminal({ forceResize: true });
         expect(t.term.options.fontSize).toBe(14);
         expect(t.fitAddon.fit).toHaveBeenCalledTimes(1);
+        expect(c.sendResizeToBackend).not.toHaveBeenCalled();
     });
 
     it('falls through when geometry is unmeasurable', () => {
@@ -89,14 +97,15 @@ describe('fitActiveTerminal skips same-geometry fits', () => {
     });
 
     it('does not skip mid-resize fits (cached scroll coords lifecycle)', () => {
-        const t = tab(80, 24, { cols: 80, rows: 24 });
+        const t = sized(tab(80, 24, { cols: 80, rows: 24 }));
         const c = ctx(t);
         c.isResizing = true;
-        c.fitActiveTerminal();
+        c.fitActiveTerminal({ forceResize: true });
         // Same dims, but the resize-owned coordinate cache must keep
         // its exact current behavior: fit runs, _spamScroll runs.
         expect(t.fitAddon.fit).toHaveBeenCalledTimes(1);
         expect(c._spamScroll).toHaveBeenCalled();
+        expect(c.sendResizeToBackend).not.toHaveBeenCalled();
     });
 
     it('sizes a fresh socket once, then stays silent on later skips', () => {
@@ -116,9 +125,7 @@ describe('fitActiveTerminal skips same-geometry fits', () => {
     });
 
     it('a skip clears resize-cached scroll coordinates like a real fit', () => {
-        const t = tab(80, 24, { cols: 80, rows: 24 });
-        t.ws = { id: 'sock-1' };
-        t._sizedWs = t.ws;
+        const t = sized(tab(80, 24, { cols: 80, rows: 24 }));
         // Stale leftovers from an earlier continuous resize.
         t.isAtBottom = false;
         t.lastScrollY = 41;
@@ -158,7 +165,7 @@ describe('fitActiveTerminal skips same-geometry fits', () => {
         c.fitActiveTerminal();
         expect(t.fitAddon.fit).not.toHaveBeenCalled();
         expect(c.sendResizeToBackend).toHaveBeenCalledTimes(1);
-        expect(t._sizedWs).toBe(undefined);
+        expect(t._sizedGrid).toBe(undefined);
         c.fitActiveTerminal();
         expect(c.sendResizeToBackend).toHaveBeenCalledTimes(2);
     });

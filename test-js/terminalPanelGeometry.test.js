@@ -49,7 +49,7 @@ function geometryHarness() {
         width: visible ? 800 : 0,
         height: visible ? 480 : 0,
     });
-    tab._sizedWs = tab.ws;
+    tab._sizedGrid = { ws: tab.ws, cols: 80, rows: 24 };
     let active = tab;
     const m = Object.assign(Object.create(TabManager.prototype), {
         app: { config: {} },
@@ -143,23 +143,77 @@ it('panel drags coalesce to the latest dimensions without a periodic timer', () 
     expect(h.frames.size).toBe(0);
 });
 
-it('activation/refresh forces a backend resize even after a same-grid fit was skipped', () => {
+it('a forced fit on an unchanged grid stays off the wire until the socket swaps', () => {
     const h = geometryHarness();
     h.m.fitActiveTerminal();
     expect(h.tab.ws.sendResize).not.toHaveBeenCalled();
+    // Tab activation forces a fit, but an equal-size resize is not free: the
+    // server answers it with an explicit SIGWINCH and a TUI host redraws its
+    // whole document for it.
     h.m.fitActiveTerminal({ forceResize: true });
     expect(h.tab.fitAddon.fit).not.toHaveBeenCalled();
+    expect(h.tab.ws.sendResize).not.toHaveBeenCalled();
+    // A reconnect swaps the socket, which re-arms the one-time sync.
+    h.tab.ws = { sendResize: vi.fn(() => true) };
+    h.m.fitActiveTerminal({ forceResize: true });
     expect(h.tab.ws.sendResize).toHaveBeenCalledExactlyOnceWith(80, 24);
+    expect(h.tab._sizedGrid?.ws).toBe(h.tab.ws);
+});
+
+it('a dropped resize is sent again once the grid settles', () => {
+    const h = geometryHarness();
+    h.desired.cols = 61;
+    h.desired.rows = 17;
+    // The socket refuses this send after the local fit has changed the grid.
+    h.tab.ws.sendResize.mockReturnValueOnce(false);
+    h.observer.callback([]);
+    h.flush();
+    expect(h.tab.ws.sendResize).toHaveBeenCalledExactlyOnceWith(61, 17);
+    // The client already shows the new grid, so the next fit skips the
+    // reflow. The backend still has the old size and must still hear it.
+    expect([h.tab.term.cols, h.tab.term.rows]).toEqual([61, 17]);
+    h.observer.callback([]);
+    h.flush();
+    expect(h.tab.ws.sendResize).toHaveBeenCalledTimes(2);
+    expect(h.tab.ws.sendResize).toHaveBeenLastCalledWith(61, 17);
+    h.observer.callback([]);
+    h.flush();
+    expect(h.tab.ws.sendResize).toHaveBeenCalledTimes(2);
+});
+
+it('restores the panel grid after another viewer resized the same PTY', async () => {
+    const h = geometryHarness();
+    Object.assign(h.tab, {
+        paneEpoch: 7,
+        drainedSeq: 0,
+        _replayCursor: 'v1.7.0.0',
+    });
+    h.tab.ws.mode = 'hot';
+    h.tab.term.resize = (cols, rows) =>
+        Object.assign(h.tab.term, { cols, rows });
+    await h.m._adoptLiveGeometry(h.tab, {
+        cols: 100,
+        rows: 30,
+        event_cursor: 'v1.7.0.1',
+    });
+    expect(h.tab.ws.sendResize).not.toHaveBeenCalled();
+    expect([h.tab.term.cols, h.tab.term.rows]).toEqual([100, 30]);
+    h.reactivate();
+    h.flush();
+    expect(h.tab.ws.sendResize).toHaveBeenCalledExactlyOnceWith(80, 24);
+    h.reactivate();
+    h.flush();
+    expect(h.tab.ws.sendResize).toHaveBeenCalledOnce();
 });
 
 it('unsent forced sizing stays retryable', () => {
     const h = geometryHarness();
-    h.tab._sizedWs = null;
+    h.tab._sizedGrid = null;
     h.tab.ws.sendResize.mockReturnValueOnce(false);
     h.m.fitActiveTerminal({ forceResize: true });
-    expect(h.tab._sizedWs).toBeNull();
+    expect(h.tab._sizedGrid).toBeNull();
     h.m.fitActiveTerminal({ forceResize: true });
-    expect(h.tab._sizedWs).toBe(h.tab.ws);
+    expect(h.tab._sizedGrid?.ws).toBe(h.tab.ws);
 });
 
 it('panel sizing waits for replay and ignores inactive or finalized tabs', () => {

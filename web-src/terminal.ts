@@ -1289,7 +1289,8 @@ export interface TabInfo {
     reconnectAttempts: number;
     reconnectInFlight: boolean;
     _resyncNeeded?: boolean;
-    _sizedWs?: TabSocket | null;
+    /** Last queued or server-certified grid, scoped to its socket. */
+    _sizedGrid?: { ws: TabSocket | null; cols: number; rows: number };
     _piBridgeState?: unknown;
     _piBridgeLive?: boolean;
     /** Bridge snapshot: null before provision, undefined once dropped. */
@@ -5052,6 +5053,9 @@ export class TabManager {
                 this._resizeWithReaderAnchor(tabInfo, () =>
                     tabInfo.term.resize(cols, rows),
                 );
+            // Another viewer may have resized the PTY since our last send.
+            // Remember the committed grid without echoing it back.
+            this._markBackendGrid(tabInfo);
             tabInfo._replayCursor = geom.event_cursor ?? null;
         } catch (_e) {
             try {
@@ -5414,7 +5418,7 @@ export class TabManager {
         if (refreshSent) {
             // The refresh-marked resize is this attach's sizing, and the
             // repaint that follows paints the current screen at that grid.
-            tabInfo._sizedWs = ws;
+            this._markBackendGrid(tabInfo);
             this._armRefreshDeadline(tabInfo);
         } else if (
             pendingRefresh !== null &&
@@ -5430,7 +5434,7 @@ export class TabManager {
             typeof ws?.sendResize === 'function' &&
             ws.sendResize(tabInfo.term.cols, tabInfo.term.rows) !== false
         ) {
-            tabInfo._sizedWs = ws;
+            this._markBackendGrid(tabInfo);
         } else {
             tabInfo._pendingPanelFit = true;
             tabInfo._pendingForceResize = true;
@@ -6666,7 +6670,11 @@ export class TabManager {
                             });
                         } else {
                             this._fitVisibleTerminal(tabInfo);
-                            this.sendResizeToBackend(tabInfo);
+                            if (
+                                !this._backendHasGrid(tabInfo) &&
+                                this.sendResizeToBackend(tabInfo)
+                            )
+                                this._markBackendGrid(tabInfo);
                         }
                     } catch (e) {
                         console.error(
@@ -18969,8 +18977,6 @@ export class TabManager {
         try {
             if (forceResize)
                 internals(activeTab.term)._core?._charSizeService?.measure?.();
-            const oldCols = activeTab.term.cols,
-                oldRows = activeTab.term.rows;
             // One DOM measurement per fit: the proposal feeds both font
             // resolution and the same-geometry skip check below.
             const proposed = activeTab.fitAddon?.proposeDimensions?.();
@@ -19007,17 +19013,16 @@ export class TabManager {
                     // restore a stale viewport position (visible jump).
                     activeTab.isAtBottom = undefined;
                     activeTab.lastScrollY = undefined;
-                    if (forceResize || activeTab._sizedWs !== activeTab.ws) {
-                        // First fit on a fresh socket: the client reflow is
-                        // correctly skipped, but the backend PTY still has
-                        // its spawn size (not the grid the user sees).
-                        // Tell it once; later skips stay silent. The mark
-                        // records only a resize that actually went out — a
-                        // send swallowed while CONNECTING must not suppress
-                        // the retry after open.
+                    // Equal-size resizes trigger SIGWINCH. Force only the
+                    // local paint; failed sends leave the old grid retryable.
+                    const needsBackend = !this._backendHasGrid(activeTab);
+                    if (forceResize || needsBackend) {
                         this._refreshTerminalScreen?.(activeTab);
-                        if (this.sendResizeToBackend(activeTab)) {
-                            activeTab._sizedWs = activeTab.ws;
+                        if (
+                            needsBackend &&
+                            this.sendResizeToBackend(activeTab)
+                        ) {
+                            this._markBackendGrid(activeTab);
                         }
                     }
                     this._restoreReaderAnchor(activeTab);
@@ -19089,16 +19094,13 @@ export class TabManager {
             }
 
             this._refreshTerminalScreen?.(activeTab);
-            // Coalesce sub-cell drag movements; final settle/activation forces
-            // a redraw even at the same grid without SIGWINCH on every pixel.
+            // A forced fit alone must not request a PTY redraw. Compare with
+            // the last known backend grid, not the already-resized local grid.
             if (
-                (forceResize ||
-                    activeTab._sizedWs !== activeTab.ws ||
-                    oldCols !== activeTab.term.cols ||
-                    oldRows !== activeTab.term.rows) &&
+                !this._backendHasGrid(activeTab) &&
                 this.sendResizeToBackend(activeTab)
             ) {
-                activeTab._sizedWs = activeTab.ws;
+                this._markBackendGrid(activeTab);
             }
         } catch (e) {
             console.error('[term] Fit error:', e);
@@ -19272,6 +19274,26 @@ export class TabManager {
             if (force) this.reconnectTab(tabInfo, { auto: false });
             else this.maybeAutoReconnect(tabInfo);
         }
+    }
+
+    // Compare against the last queued send or committed server geometry.
+    _backendHasGrid(tab: TabInfo): boolean {
+        const sized = tab._sizedGrid;
+        return (
+            !!sized &&
+            sized.ws === tab.ws &&
+            sized.cols === tab.term.cols &&
+            sized.rows === tab.term.rows
+        );
+    }
+
+    // Record only queued sends or validated geometry, never a failed send.
+    _markBackendGrid(tab: TabInfo) {
+        tab._sizedGrid = {
+            ws: tab.ws,
+            cols: tab.term.cols,
+            rows: tab.term.rows,
+        };
     }
 
     // Reports whether the resize went out so first-fit sync can retry
@@ -21028,7 +21050,11 @@ export class TabManager {
             if (tab.fitAddon && typeof tab.fitAddon.fit === 'function') {
                 try {
                     this._fitVisibleTerminal(tab);
-                    this.sendResizeToBackend(tab);
+                    if (
+                        !this._backendHasGrid(tab) &&
+                        this.sendResizeToBackend(tab)
+                    )
+                        this._markBackendGrid(tab);
                 } catch (_e) {
                     /* tolerate closed term */
                 }
