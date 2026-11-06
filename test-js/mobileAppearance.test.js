@@ -493,6 +493,32 @@ describe('appearanceFontScale', () => {
 });
 
 describe('server-authoritative font sizes', () => {
+    it('never materializes a default size into the cache', () => {
+        // The unset sentinel (0) must survive the boot write-through: a
+        // cache that stores the RENDERED default (14) pins that number
+        // as a fake user choice, so a future default change can never
+        // reach the user (the 2026-11 tailnet poison).
+        const scope = captureAppearanceScope();
+        const app = Object.create(App.prototype);
+        app.mobileAppearanceStore = null;
+        app.scope = scope;
+        app.uiFontSize = 0;
+        app.terminalFontSize = 0;
+        app.uiFontFamily = '';
+        app.terminalFontFamily = '';
+        app.desktopAppearance = {
+            ui_font_size: 0,
+            terminal_font_size: 0,
+            ui_font_family: '',
+            terminal_font_family: '',
+        };
+        app._saveAppearanceLocal();
+        const cached = JSON.parse(
+            localStorage.getItem(legacyAppearanceKey(scope)) || '{}',
+        );
+        expect(cached.ui_font_size).toBe(0);
+        expect(cached.terminal_font_size).toBe(0);
+    });
     // A cached size is a prepaint/offline fallback and must never
     // override a live server value: a stale notebook entry otherwise
     // pins the interface to an obsolete size and re-saves itself on
