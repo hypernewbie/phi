@@ -64,6 +64,10 @@ export class WorkspaceManager {
     pendingState = 'idle';
     scope;
     storageKey = serverKey(OUTBOX_KEY);
+    /** Bumped by every fresh (non-cached) config apply, whoever requested it. */
+    configEpoch = 0;
+    /** A write confirmed while the dialog was closed, shown on next open. */
+    confirmNote = '';
     checking = false;
     status = '';
     statusTone = 'info';
@@ -135,7 +139,8 @@ export class WorkspaceManager {
                 document.activeElement !== document.body
                 ? document.activeElement
                 : null;
-        this.status = '';
+        this.status = this.confirmNote;
+        this.confirmNote = '';
         this.statusTone = 'info';
         this.rowSeq = 0;
         this.filter = '';
@@ -191,6 +196,7 @@ export class WorkspaceManager {
         this.pending = null;
         this.pendingState = 'idle';
         this.checking = false;
+        this.confirmNote = '';
         this.rootPaths = [];
         this.sections.clear();
         this.projectSelection.clear();
@@ -203,18 +209,26 @@ export class WorkspaceManager {
         this.closeRootTree();
         window.removeEventListener('online', this.onOnline);
     }
-    /** Apply the local intent over every config read, not just dialog refreshes. */
-    onConfigApplied() {
+    /** Applies the local intent over every config read, not just dialog
+     *  refreshes. `stale` marks a cached replay: it may paint, but it must not
+     *  settle a write that only a live read can confirm. */
+    onConfigApplied({ stale = false } = {}) {
         if (this.scope !== this.app?.scope ||
             this.storageKey !== serverKey(OUTBOX_KEY)) {
             this.resetForBackend();
         }
         this.restoreOutbox();
         this.syncFromConfig();
+        if (!stale)
+            this.configEpoch++;
         if (this.isOpen())
             this.render();
-        if (this.pendingState === 'unsent' && this.isOnline())
+        if (this.pendingState === 'unsent' && this.isOnline()) {
             void this.flushPending();
+        }
+        else if (!stale && this.pendingState === 'unconfirmed') {
+            this.reconcileUnconfirmed();
+        }
     }
     isCurrent(scope = this.scope) {
         return (this.scope === scope && this.app?.scope === scope && !scope?.aborted);
@@ -826,13 +840,19 @@ export class WorkspaceManager {
             return;
         const mutation = this.pending;
         const scope = this.scope;
+        const epoch = this.configEpoch;
         this.checking = true;
         this.setStatus('Checking the server…');
         const ok = await this.sessions.loadConfig({ refreshPanels: false });
-        if (!this.isCurrent(scope) || this.pending !== mutation)
+        if (!this.isCurrent(scope) || this.pending !== mutation) {
+            // A newer read already settled this write (its own message stands).
+            this.checking = false;
             return;
+        }
         this.checking = false;
-        if (!ok) {
+        // A read that lost the request race reports false. If any fresh config
+        // arrived meanwhile, the write is settled just as well.
+        if (!ok && this.configEpoch === epoch) {
             this.pendingState = 'unconfirmed';
             this.setStatus(confirmed
                 ? 'Saved on the server. The reload failed; check status when connected.'
@@ -857,12 +877,17 @@ export class WorkspaceManager {
     mutationLanded(mutation) {
         if (!mutation)
             return null;
-        const roots = this.rootPaths;
+        return this.landedIn(mutation, this.sessions.workspaces, this.rootPaths);
+    }
+    /** Compares one write with one config snapshot. Workspaces compare by
+     *  normalized path; roots are stored expanded, so they compare exactly. */
+    landedIn(mutation, workspaces, roots) {
+        const registered = (path) => this.sessions.isWorkspaceIn(workspaces, path);
         switch (mutation.kind) {
             case 'add':
-                return mutation.paths.every((path) => this.sessions.isWorkspaceRegistered(path));
+                return mutation.paths.every(registered);
             case 'remove':
-                return mutation.paths.every((path) => !this.sessions.isWorkspaceRegistered(path));
+                return mutation.paths.every((path) => !registered(path));
             case 'addRoot': {
                 const path = mutation.paths[0] ?? '';
                 if (roots.includes(path))
@@ -872,6 +897,43 @@ export class WorkspaceManager {
             }
             case 'removeRoot':
                 return mutation.paths.every((path) => !roots.includes(path));
+        }
+    }
+    /**
+     * A fresh read is the only thing that may settle an unconfirmed write,
+     * because the request itself must never be sent twice. It compares the
+     * server's own lists, not the projected view, which always reflects the
+     * pending intent.
+     */
+    reconcileUnconfirmed() {
+        const mutation = this.pending;
+        if (!mutation)
+            return;
+        const config = this.sessions.config;
+        const workspaces = Array.isArray(config?.workspaces)
+            ? config.workspaces.filter(isString)
+            : [];
+        const roots = Array.isArray(config?.workspace_roots)
+            ? config.workspace_roots.filter(isString)
+            : [];
+        const landed = this.landedIn(mutation, workspaces, roots);
+        // Only a positive read may clear the warning. A negative one can be a
+        // read that raced a write still being committed, so the ambiguous state
+        // stays visible and the explicit Check status remains the way out.
+        if (landed !== true)
+            return;
+        this.pending = null;
+        this.pendingState = 'idle';
+        this.writeOutbox(null);
+        this.syncFromConfig();
+        // The dialog may be closed when the confirming read arrives (on load,
+        // for example); keep the outcome for the next open instead of losing it.
+        if (this.isOpen()) {
+            this.setStatus('Saved.');
+            void this.loadRoots(this.generation);
+        }
+        else {
+            this.confirmNote = 'Saved.';
         }
     }
     setReconcileStatus(mutation) {
@@ -905,6 +967,10 @@ export class WorkspaceManager {
         catch {
             if (!this.isCurrent(scope) || this.pending !== mutation)
                 return;
+            // A rejection cannot prove the request never arrived: the response
+            // can be lost after the server accepted the write, even with the
+            // browser already reporting offline. Never resend it; a read
+            // settles it instead.
             this.pendingState = 'unconfirmed';
             this.setStatus('Change not confirmed. It may or may not have been saved.', 'error');
             await this.checkStatus();

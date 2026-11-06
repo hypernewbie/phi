@@ -887,11 +887,17 @@ export class SessionsManager {
 
     /** True when `path` names a registered workspace (OS-agnostic compare). */
     isWorkspaceRegistered(path: string): boolean {
-        const wanted = normalizePath(path);
-        return this.workspaces.some((ws) => normalizePath(ws) === wanted);
+        return this.isWorkspaceIn(this.workspaces, path);
     }
 
-    applyConfigData(data: any, _options: { stale?: boolean } = {}): void {
+    /** Same compare against any list, so a caller can check the server's own
+     *  config instead of the list already projected from local intent. */
+    isWorkspaceIn(list: readonly string[], path: string): boolean {
+        const wanted = normalizePath(path);
+        return list.some((ws) => normalizePath(ws) === wanted);
+    }
+
+    applyConfigData(data: any, options: { stale?: boolean } = {}): void {
         if (!data || typeof data !== 'object') return;
         this.config = data;
         if (this.app) {
@@ -901,7 +907,9 @@ export class SessionsManager {
         if (Array.isArray(data.workspaces)) {
             this.applyWorkspaceList(data.workspaces, data.active_cwd);
         }
-        this.workspaceManager?.onConfigApplied();
+        this.workspaceManager?.onConfigApplied({
+            stale: options.stale === true,
+        });
 
         if (
             !this.activeCWD ||
@@ -966,8 +974,9 @@ export class SessionsManager {
         }
     }
 
-    /** Reloads /api/config. Returns false when the config could not be read, so
-     *  callers can tell a confirmed write from a failed reconcile. */
+    /** Reloads /api/config. False means this call produced no fresh config —
+     *  either the read failed or a newer request superseded it, so callers must
+     *  not read it alone as a failed write. */
     async loadConfig({ refreshPanels = true } = {}): Promise<boolean> {
         const scope = this.app?.scope;
         this.configRequestId = (this.configRequestId || 0) + 1;

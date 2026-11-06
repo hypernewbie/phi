@@ -4839,24 +4839,12 @@ body.has-terminal-bg
     cursor: not-allowed;
 }
 
-.ws-manager-group-actions .btn {
-    width: auto;
-    height: 32px;
-    padding: 0 14px;
-    font-size: calc(12px * var(--ui-scale));
-}
-
 .ws-manager-root-tree {
     display: flex;
     flex-direction: column;
     gap: 8px;
     min-height: 0;
     margin-top: 8px;
-}
-
-.ws-manager-root-form .path-input-row .btn {
-    height: 34px;
-    font-size: calc(13px * var(--ui-scale));
 }
 
 .ws-manager-note {
@@ -4930,9 +4918,6 @@ body.has-terminal-bg
 html[data-appearance-profile="mobile"]
     :is(.ws-manager-row, .ws-manager-all, .ws-manager-link) {
     min-height: 44px;
-}
-html[data-appearance-profile="mobile"] .ws-manager-list {
-    max-height: none;
 }
 
 .directory-tree-controls {
