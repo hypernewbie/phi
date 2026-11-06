@@ -158,18 +158,16 @@ describe('terminal performance instrumentation', () => {
             tm._endRedrawTrace(tab);
 
             expect(stampSpy).toHaveBeenCalledTimes(1);
-            const [label, start, end, track, group, color, data] =
+            const [label, start, end, track, group, color] =
                 stampSpy.mock.calls[0];
             expect(label).toBe('tab-switch');
             expect(end).toBeGreaterThanOrEqual(start);
             expect(track).toBe('redraw');
             expect(group).toBe('phi');
             expect(color).toBe('primary');
-            expect(data).toEqual({
-                ms: expect.any(Number),
-                cols: 80,
-                rows: 24,
-            });
+            // Only what the performance panel renders: a trailing payload is
+            // dropped by Chrome and would cost an allocation per redraw.
+            expect(stampSpy.mock.calls[0]).toHaveLength(6);
             // The span is consumed: a second paint records nothing.
             tm._endRedrawTrace(tab);
             expect(stampSpy).toHaveBeenCalledTimes(1);
@@ -197,7 +195,8 @@ describe('terminal performance instrumentation', () => {
             tm._endRedrawTrace(tab);
 
             expect(stampSpy).toHaveBeenCalledTimes(1);
-            expect(stampSpy.mock.calls[0][6].ms).toBeLessThan(16);
+            const [, start, end] = stampSpy.mock.calls[0];
+            expect(end - start).toBeLessThan(16);
         });
 
         it('ignores a background pane, which paints nothing', () => {
@@ -223,6 +222,41 @@ describe('terminal performance instrumentation', () => {
             // A later reveal must not report the abandoned request.
             tm._endRedrawTrace(tab);
             expect(stampSpy).not.toHaveBeenCalled();
+        });
+
+        // On a slow link a fit can be parked behind a bootstrap or a pending
+        // write. The bar must report the redraw, not the wait before it.
+        it('starts the clock when a parked fit finally runs', () => {
+            const tm = makeTm();
+            const tab = {
+                paneId: 'p4',
+                isDead: false,
+                writeBuffer: '',
+                writePending: false,
+                term: {
+                    options: { fontSize: 14 },
+                    cols: 80,
+                    rows: 24,
+                    buffer: { active: { viewportY: 0, baseY: 0 } },
+                },
+                fitAddon: { fit: () => {} },
+            };
+            tm.getActiveTab = () => tab;
+            tm.resolveTerminalFontSize = () => 14;
+            tm.isResizing = false;
+            tm._spamScroll = () => {};
+            tm.sendResizeToBackend = () => {};
+            tm._refreshTerminalScreen = () => {};
+
+            tm._beginRedrawTrace(tab, 'tab-switch');
+            tab._redrawTraceAt = performance.now() - 2000;
+            tm.fitActiveTerminal();
+            tm._endRedrawTrace(tab);
+
+            expect(stampSpy).toHaveBeenCalledTimes(1);
+            expect(stampSpy.mock.calls[0][0]).toBe('tab-switch');
+            const [, start, end] = stampSpy.mock.calls[0];
+            expect(end - start).toBeLessThan(16);
         });
 
         it('drops a span that never painted in time', () => {

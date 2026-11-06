@@ -22,7 +22,6 @@ type RedrawEntry = {
     end: number;
     track: string;
     group: string;
-    data: { ms: number; cols: number; rows: number };
 };
 
 type TracedWindow = Window & { phiRedrawEntries: RedrawEntry[] };
@@ -54,16 +53,14 @@ async function installTraceSpy(page: Page): Promise<void> {
             | ((...args: unknown[]) => void)
             | undefined;
         console.timeStamp = (...args: unknown[]) => {
-            const [label, start, end, track, group, , data] = args as [
+            const [label, start, end, track, group] = args as [
                 string,
                 number,
                 number,
                 string,
                 string,
-                string,
-                { ms: number; cols: number; rows: number },
             ];
-            w.phiRedrawEntries.push({ label, start, end, track, group, data });
+            w.phiRedrawEntries.push({ label, start, end, track, group });
             passThrough?.(...args);
         };
     });
@@ -112,10 +109,9 @@ test('every redraw lands on the trace track, fast ones included', async ({
         expect(entry.track).toBe('redraw');
         expect(entry.group).toBe('phi');
         expect(entry.end).toBeGreaterThanOrEqual(entry.start);
-        expect(entry.data.ms).toBeGreaterThanOrEqual(0);
-        expect(entry.data.cols).toBeGreaterThan(0);
-        expect(entry.data.rows).toBeGreaterThan(0);
     }
     // Every span closes on a painted frame, so none may sit at the drop cap.
-    expect(recorded.every((entry) => entry.data.ms < 3000)).toBe(true);
+    expect(recorded.every((entry) => entry.end - entry.start < 3000)).toBe(
+        true,
+    );
 });

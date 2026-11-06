@@ -741,16 +741,13 @@ function termPerfMeasureSince(name: string, startTime: number) {
 // only with Capture settings → Show custom tracks enabled.
 const REDRAW_TRACE_MAX_MS = 3000;
 const REDRAW_TRACE_TRACK = 'redraw';
-function redrawTraceEmit(
-    reason: string,
-    startTs: number,
-    endTs: number,
-    cols: number,
-    rows: number,
-) {
+function redrawTraceEmit(reason: string, startTs: number, endTs: number) {
     try {
         const stamp = (console as unknown as { timeStamp?: unknown }).timeStamp;
         if (typeof stamp !== 'function') return;
+        // The performance panel reads start/end and draws the bar. Chrome
+        // drops the optional trailing payload argument, so none is passed:
+        // no per-redraw object is allocated for data nobody renders.
         stamp.call(
             console,
             reason,
@@ -759,11 +756,6 @@ function redrawTraceEmit(
             REDRAW_TRACE_TRACK,
             'phi',
             'primary',
-            {
-                ms: Math.round(endTs - startTs),
-                cols,
-                rows,
-            },
         );
     } catch (_e) {}
 }
@@ -6013,6 +6005,7 @@ export class TabManager {
             tabInfo._pendingPanelFit = true;
             return;
         }
+        this._restartRedrawTrace(tabInfo);
         this._resizeWithReaderAnchor(tabInfo, () => tabInfo.fitAddon?.fit?.());
     }
 
@@ -6065,6 +6058,14 @@ export class TabManager {
         tabInfo._redrawTraceReason = reason;
     }
 
+    // The clock starts when the redraw actually runs. A request parked behind a
+    // bootstrap gate, a pending write or a hidden panel would otherwise report
+    // the wait as paint time, which on a slow link is the whole bar.
+    _restartRedrawTrace(tabInfo: TabInfo) {
+        if (tabInfo._redrawTraceAt === undefined) return;
+        tabInfo._redrawTraceAt = performance.now();
+    }
+
     // A pane that stops painting (deactivated, closed) must not carry its
     // request into a later frame.
     _dropRedrawTrace(tabInfo: TabInfo) {
@@ -6084,13 +6085,7 @@ export class TabManager {
         tabInfo._redrawTraceReason = undefined;
         const now = performance.now();
         if (now - start > REDRAW_TRACE_MAX_MS) return;
-        redrawTraceEmit(
-            reason,
-            start,
-            now,
-            tabInfo.term?.cols ?? 0,
-            tabInfo.term?.rows ?? 0,
-        );
+        redrawTraceEmit(reason, start, now);
     }
 
     _refreshTerminalScreen(tabInfo: TabInfo, { resync = true } = {}) {
@@ -19074,6 +19069,8 @@ export class TabManager {
             );
             return;
         }
+
+        this._restartRedrawTrace(activeTab);
 
         try {
             if (forceResize)
