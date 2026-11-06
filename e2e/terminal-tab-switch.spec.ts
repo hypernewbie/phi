@@ -80,6 +80,70 @@ const grid = (page: Page, pane: string) =>
         return term ? `${term.cols}x${term.rows}` : '';
     }, pane);
 
+// Reads the GL canvas in the same task that reveals the pane. The reveal task
+// is the only moment that proves the first painted frame is the GL frame: a
+// later read cannot tell it apart from a frame rendered after the DOM rows were
+// already shown.
+const switchAndCountPaintedPixels = (page: Page, from: string, to: string) =>
+    page.evaluate(
+        ({ fromPane, toPane }) => {
+            const w = window as unknown as TrackedWindow;
+            const termFor = (id: string) =>
+                w.trackedTerms.find(
+                    (candidate) =>
+                        candidate.element?.closest('.term-container')?.id ===
+                        `term-${id}`,
+                );
+            const painted = (id: string) => {
+                const addon = termFor(id)?._phiWebgl as
+                    | { _renderer?: { _gl?: WebGL2RenderingContext } }
+                    | null
+                    | undefined;
+                const gl = addon?._renderer?._gl;
+                if (!gl) return -1;
+                const { width, height } = gl.canvas;
+                const pixels = new Uint8Array(width * height * 4);
+                gl.readPixels(
+                    0,
+                    0,
+                    width,
+                    height,
+                    gl.RGBA,
+                    gl.UNSIGNED_BYTE,
+                    pixels,
+                );
+                let count = 0;
+                for (let i = 0; i < pixels.length; i += 4) {
+                    if (
+                        pixels[i] |
+                        pixels[i + 1] |
+                        pixels[i + 2] |
+                        pixels[i + 3]
+                    )
+                        count++;
+                }
+                return count;
+            };
+            const fromTab = document.querySelector(
+                `.tab[data-pane-id="${fromPane}"]`,
+            );
+            const toTab = document.querySelector(
+                `.tab[data-pane-id="${toPane}"]`,
+            );
+            if (!fromTab || !toTab) return { missing: true };
+            (fromTab as HTMLElement).click();
+            (toTab as HTMLElement).click();
+            return {
+                missing: false,
+                incomingPixels: painted(toPane),
+                incomingHasContext: Boolean(termFor(toPane)?._phiWebgl),
+                outgoingHasContext: Boolean(termFor(fromPane)?._phiWebgl),
+                visible: !document.hidden,
+            };
+        },
+        { fromPane: from, toPane: to },
+    );
+
 test('warm tab switches do not resize either terminal', async ({ page }) => {
     test.setTimeout(120_000);
     const a = await spawnShell();
@@ -151,4 +215,57 @@ test('warm tab switches do not resize either terminal', async ({ page }) => {
         )) - resizesBefore,
     ).toBe(0);
     expect(errors).toEqual([]);
+});
+
+// A revealed tab is paused until xterm's IntersectionObserver resumes it in a
+// later task. The addon's own refresh is deferred to an animation frame, so
+// without a synchronous paint the first composited frame of the switch is the
+// stale DOM renderer output. Widgets that count frames here read the GL canvas
+// inside the reveal task, where a deferred paint is still blank.
+test('a warm tab switch paints the GL canvas in the reveal task', async ({
+    page,
+}) => {
+    test.setTimeout(120_000);
+    const a = await spawnShell();
+    const b = await spawnShell();
+    const skippedPaints: string[] = [];
+    page.on('console', (message) => {
+        if (message.text().includes('sync GL paint skipped'))
+            skippedPaints.push(message.text());
+    });
+    await installTracker(page);
+    await page.goto(phi.url);
+
+    const tabA = page.locator(`.tab[data-pane-id="${a}"]`);
+    const tabB = page.locator(`.tab[data-pane-id="${b}"]`);
+    await expect(page.locator(`#term-${a} .xterm-screen`)).toBeAttached({
+        timeout: 30_000,
+    });
+    await expect(page.locator(`#term-${b} .xterm-screen`)).toBeAttached({
+        timeout: 30_000,
+    });
+    await page.evaluate(() => document.fonts.ready);
+
+    // Warm both panes: a pane's first activation still replaces its spawn grid
+    // and attaches its first context.
+    await tabA.click();
+    await expect(page.locator(`#term-${a} .xterm-screen`)).toBeVisible();
+    await tabB.click();
+    await expect(page.locator(`#term-${b} .xterm-screen`)).toBeVisible();
+    await tabA.click();
+    await expect(page.locator(`#term-${a} .xterm-screen`)).toBeVisible();
+    await page.waitForTimeout(500);
+
+    const result = await switchAndCountPaintedPixels(page, a, b);
+    if (result.missing) test.skip(true, 'tabs were not rendered');
+    if (result.incomingPixels === -1)
+        test.skip(true, 'no WebGL context in this browser');
+    if (!result.visible)
+        test.skip(true, 'page is not visible; sync paint is skipped by design');
+
+    expect(result.incomingPixels).toBeGreaterThan(0);
+    expect(result.incomingHasContext).toBe(true);
+    // One live GL context: the outgoing pane hands rendering back to the DOM.
+    expect(result.outgoingHasContext).toBe(false);
+    expect(skippedPaints).toEqual([]);
 });

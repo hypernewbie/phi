@@ -84,6 +84,35 @@ describe('terminal WebGL lifecycle', () => {
         expect(tab.term._phiWebgl).toBe(created[1]);
     });
 
+    it('paints synchronously when the GL addon attaches', () => {
+        installAddon();
+        const c = context();
+        const tab = liveTab('p1');
+        c.tabs.set('p1', tab);
+        // A revealed tab starts paused: xterm's IntersectionObserver resumed it
+        // in a later task, so without the sync paint the reveal frame shows the
+        // stale DOM rows over a blank GL canvas.
+        const render = {
+            _isPaused: true,
+            _needsFullRefresh: true,
+            _handleIntersectionChange(entry) {
+                this._isPaused = !entry.isIntersecting;
+            },
+            refreshRows: vi.fn(function () {
+                if (this._isPaused) return;
+            }),
+        };
+        tab.term.rows = 37;
+        tab.term._core = { _renderService: render };
+
+        TabManager.prototype.activateTabViewport.call(c, tab, viewportOpts);
+
+        expect(render._isPaused).toBe(false);
+        expect(render._needsFullRefresh).toBe(false);
+        expect(render.refreshRows).toHaveBeenCalledTimes(1);
+        expect(render.refreshRows).toHaveBeenCalledWith(0, 36, true);
+    });
+
     it('stops attempting WebGL after the first construction failure', () => {
         let attempts = 0;
         window.WebglAddon = {
