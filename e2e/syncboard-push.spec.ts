@@ -1,50 +1,10 @@
-import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { startPhi, type PhiServer } from './_server.js';
 import { seedSyncboardPi, startPushProvider } from './_pi-syncboard.js';
+import { meshAddrFromLog, publishToMesh } from './_syncmesh.js';
 
 const MARKER = 'PHI_SYNCBOARD_PUSH_9f42';
 const PUSH_TEXT = `Pushed by another agent. Marker ${MARKER}.`;
-
-/**
- * Read the mesh port the server logged when it bound the listener. The log is
- * written asynchronously, so this waits instead of assuming the line landed.
- */
-async function meshAddrFromLog(logPath: string): Promise<string> {
-    const deadline = Date.now() + 30_000;
-    let last = '';
-    while (Date.now() < deadline) {
-        try {
-            last = readFileSync(logPath, 'utf8');
-        } catch {
-            last = '';
-        }
-        const match = /sync mesh listening"?\s+addr=(\S+)/.exec(last);
-        if (match) return match[1]!;
-        await new Promise((resolve) => setTimeout(resolve, 200));
-    }
-    const tail = last.split('\n').slice(-15).join('\n');
-    throw new Error(`no mesh listener in ${logPath}\ntail:\n${tail}`);
-}
-
-function publish(addr: string, recipient: string, value: string): string {
-    return execFileSync(
-        'go',
-        [
-            'run',
-            './e2e/fixtures/syncpush',
-            '-addr',
-            addr,
-            '-recipient',
-            recipient,
-            '-value',
-            value,
-        ],
-        { cwd: process.cwd(), encoding: 'utf8', timeout: 120_000 },
-    ).trim();
-}
 
 test('a pushed message reaches the receiving Pi model without a tool call', async () => {
     test.setTimeout(180_000);
@@ -81,7 +41,7 @@ test('a pushed message reaches the receiving Pi model without a tool call', asyn
             .toBe(true);
 
         const addr = await meshAddrFromLog(owner.logPath);
-        const result = JSON.parse(publish(addr, pane, PUSH_TEXT)) as {
+        const result = JSON.parse(publishToMesh(addr, pane, PUSH_TEXT)) as {
             seq: number;
         };
         expect(result.seq).toBeGreaterThan(0);

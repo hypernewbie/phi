@@ -65,10 +65,54 @@ describe('Syncboard addressed messages', () => {
         expect(cards[0].querySelector('img')).toBeNull();
         expect(
             cards[0].querySelector('.sync-card-footer').textContent,
-        ).toContain('preview limited to 4 KiB');
+        ).toContain('body limited to 4 KiB');
         manager.renderPushes([]);
         expect(manager.pushSection.classList.contains('hidden')).toBe(true);
         expect(manager.pushList.children).toHaveLength(0);
+    });
+
+    it('orders messages that share a timestamp by the mesh sequence', () => {
+        newManager();
+        manager.renderPushes([
+            push({ message_id: 'first', seq: 1, updated_at_unix_ms: 5_000 }),
+            push({ message_id: 'second', seq: 2, updated_at_unix_ms: 5_000 }),
+        ]);
+        expect(
+            [...manager.pushList.children].map(
+                (card) => card.dataset.messageId,
+            ),
+        ).toEqual(['second', 'first']);
+    });
+
+    it('shows the peer host without its ephemeral port', () => {
+        newManager();
+        manager.renderPushes([push({ sender: '127.0.0.1:60517' })]);
+        const key = manager.pushList.querySelector('.sync-card-key');
+        expect(key.textContent).toBe('127.0.0.1 → pane-b');
+        expect(key.getAttribute('title')).toBe('127.0.0.1:60517');
+    });
+
+    it('names the disclosure from the visible label, not the whole body', () => {
+        newManager();
+        manager.renderPushes([push({ value: 'x'.repeat(4096) })]);
+        const summary = manager.pushList.querySelector('summary');
+        expect(summary.getAttribute('aria-label')).toBeNull();
+        expect(
+            summary
+                .querySelector('.sync-push-preview')
+                .getAttribute('aria-hidden'),
+        ).toBe('true');
+        expect(summary.textContent).toContain('laptop-a → pane-b');
+    });
+
+    it('does not claim a saved list when the first refresh fails', async () => {
+        newManager(() => {
+            throw new TypeError('offline');
+        });
+        await manager.refreshPushes();
+        const note = manager.pushSection.querySelector('[role=status]');
+        expect(note.textContent).toBe('Refresh unavailable.');
+        expect(manager.pushSection.classList.contains('hidden')).toBe(false);
     });
 
     it('keeps native disclosure state and keyboard focus across background refresh', () => {

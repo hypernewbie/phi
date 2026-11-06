@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,9 +18,10 @@ import (
 	syncmeshb "github.com/hypernewbie/phi/internal/syncmesh/pb"
 )
 
-// startTestMesh boots a loopback mesh and publishes one message through the
-// real wire, so the endpoint test exercises the same path the browser reads.
-func startTestMesh(t *testing.T, messageID, recipient, value string) *syncmesh.Server {
+// startTestMesh boots a loopback mesh and returns a publish function, so a
+// test can push messages through the real wire the same way the browser
+// reads them.
+func startTestMesh(t *testing.T) (*syncmesh.Server, func(messageID, recipient, value string)) {
 	t.Helper()
 	mesh := syncmesh.New()
 	done := make(chan error, 1)
@@ -41,23 +43,26 @@ func startTestMesh(t *testing.T, messageID, recipient, value string) *syncmesh.S
 		t.Fatalf("dial: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if _, err := syncmeshb.NewSyncMeshClient(conn).Publish(ctx, &syncmeshb.PublishRequest{
-		MessageId: messageID,
-		Recipient: recipient,
-		Value:     []byte(value),
-	}); err != nil {
-		t.Fatalf("publish: %v", err)
+	client := syncmeshb.NewSyncMeshClient(conn)
+	return mesh, func(messageID, recipient, value string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := client.Publish(ctx, &syncmeshb.PublishRequest{
+			MessageId: messageID,
+			Recipient: recipient,
+			Value:     []byte(value),
+		}); err != nil {
+			t.Fatalf("publish: %v", err)
+		}
 	}
-	return mesh
 }
 
 // TestSyncPushesEndpointListsAddressedMessages is the browser contract: the
 // endpoint reports what was addressed on this Phi, with sender and recipient
 // intact so the UI can show the direction.
 func TestSyncPushesEndpointListsAddressedMessages(t *testing.T) {
-	mesh := startTestMesh(t, "m-1", "pane-b", "hello from a")
+	mesh, publish := startTestMesh(t)
+	publish("m-1", "pane-b", "hello from a")
 	app := &Server{syncMesh: mesh}
 
 	rec := httptest.NewRecorder()
@@ -86,7 +91,8 @@ func TestSyncPushesEndpointListsAddressedMessages(t *testing.T) {
 // list response unbounded, and that truncation is stated rather than hidden.
 func TestSyncPushesTruncatesLargeValues(t *testing.T) {
 	big := strings.Repeat("a", maxSyncPushValueBytes+100)
-	mesh := startTestMesh(t, "m-big", "pane-b", big)
+	mesh, publish := startTestMesh(t)
+	publish("m-big", "pane-b", big)
 	app := &Server{syncMesh: mesh}
 
 	rec := httptest.NewRecorder()
@@ -114,7 +120,8 @@ func TestSyncPushesTruncatesOnARuneBoundary(t *testing.T) {
 	// Three-byte runes straddle the limit: 1366 runes fill 4098 bytes, so the
 	// cut at 4096 lands inside the 1366th character.
 	big := strings.Repeat("世", maxSyncPushValueBytes/3+1)
-	mesh := startTestMesh(t, "m-rune", "pane-b", big)
+	mesh, publish := startTestMesh(t)
+	publish("m-rune", "pane-b", big)
 	app := &Server{syncMesh: mesh}
 
 	rec := httptest.NewRecorder()
@@ -133,6 +140,40 @@ func TestSyncPushesTruncatesOnARuneBoundary(t *testing.T) {
 	}
 	if len(got.Value) > maxSyncPushValueBytes {
 		t.Fatalf("value = %d bytes, want at most %d", len(got.Value), maxSyncPushValueBytes)
+	}
+}
+
+// TestSyncPushesListsTheNewestWindow proves the list is the newest messages
+// and not the first ones: the panel exists to show what just arrived, so an
+// overflowing hub must drop the oldest entries, and the sequence must keep
+// rising so the browser can order messages that share a timestamp.
+func TestSyncPushesListsTheNewestWindow(t *testing.T) {
+	mesh, publish := startTestMesh(t)
+	published := maxSyncPushList + 5
+	for i := 1; i <= published; i++ {
+		publish(fmt.Sprintf("m-%03d", i), "pane-b", "body")
+	}
+	app := &Server{syncMesh: mesh}
+
+	rec := httptest.NewRecorder()
+	app.handleSyncPushes(rec, httptest.NewRequest(http.MethodGet, "/api/sync/pushes", nil))
+
+	var body []SyncPushMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body) != maxSyncPushList {
+		t.Fatalf("got %d messages, want %d", len(body), maxSyncPushList)
+	}
+	if body[0].MessageID != "m-006" {
+		t.Fatalf("oldest listed = %s, want m-006", body[0].MessageID)
+	}
+	last := body[len(body)-1]
+	if last.MessageID != fmt.Sprintf("m-%03d", published) {
+		t.Fatalf("newest listed = %s, want m-%03d", last.MessageID, published)
+	}
+	if last.Seq <= body[0].Seq {
+		t.Fatalf("sequence did not rise: first %d, last %d", body[0].Seq, last.Seq)
 	}
 }
 
