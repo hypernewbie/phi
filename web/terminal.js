@@ -4538,9 +4538,12 @@ export class TabManager {
         if (tab)
             this._queuePanelFit(tab, { forceResize: true });
     }
-    // A redraw tracepoint spans request → painted frame. The first request
-    // wins: one resize can queue a fit, a refresh and a backend resize, and
-    // the interval a reader feels is the whole of it, not the last leg.
+    // A redraw tracepoint spans the paint work: from the fit or the refresh
+    // that runs to the frame that paints. The first request of a coalesced
+    // redraw owns the reason — one resize can queue a fit, a refresh and a
+    // backend resize — and _restartRedrawTrace re-bases the clock when work
+    // parked behind a gate finally executes, so the wait is not charged to the
+    // paint.
     //
     // Only the pane being painted has a redraw to measure. The panel observer
     // fires for every open tab and a hidden pane paints nothing, so a span
