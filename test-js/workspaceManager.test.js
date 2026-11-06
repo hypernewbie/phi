@@ -1172,6 +1172,31 @@ describe('workspace manager', () => {
         ).toBe(true);
     });
 
+    it('removes a root without unregistering the projects inside it', async () => {
+        const { calls } = installFetch({ browse: () => browseEntries('psi') });
+        const sessions = makeSessions({
+            workspaces: ['/code/psi'],
+            roots: [BROWSE_ROOT],
+        });
+        await openManager(sessions);
+
+        document.querySelector('.ws-manager-root-remove').click();
+
+        await vi.waitFor(() => expect(calls.length).toBe(1));
+        expect(calls[0]).toEqual({
+            url: '/api/config/workspace-roots',
+            method: 'DELETE',
+            body: { path: BROWSE_ROOT },
+        });
+        await vi.waitFor(() =>
+            expect(
+                document.querySelector('#ws-manager-roots').textContent,
+            ).toContain('No roots yet'),
+        );
+        // A root is only a grouping: removing it keeps its projects.
+        expect(sessions.workspaces).toEqual(['/code/psi']);
+    });
+
     it('adds a root without touching the workspace list', async () => {
         const { calls } = installFetch({
             browse: (path) =>
