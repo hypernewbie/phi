@@ -25,6 +25,25 @@ it('phone checkpoints bound copied history without reducing the live buffer or b
     vi.unstubAllGlobals();
 });
 
+it('desktop snapshots keep a bounded screen restore, not the live buffer', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: false }));
+    const serialize = vi.fn(() => 'SCREEN');
+    const fetcher = vi.fn(async () => ({ ok: true }));
+    vi.stubGlobal('fetch', fetcher);
+    const term = { cols: 80, rows: 24, options: { scrollback: 10000 } };
+    Object.create(TabManager.prototype)._uploadCheckpoint({
+        paneId: 'p',
+        paneEpoch: 7,
+        drainedSeq: 100,
+        ws: { mode: 'hot' },
+        term,
+        serializeAddon: { serialize },
+    });
+    expect(serialize).toHaveBeenCalledWith({ scrollback: 512 });
+    expect(term.options.scrollback).toBe(10000);
+    vi.unstubAllGlobals();
+});
+
 it.each([
     ['multibyte text', '你'.repeat(800000)],
     ['mouse mode at the size boundary', 'x'.repeat(2 * 1024 * 1024)],
@@ -38,7 +57,7 @@ it.each([
         drainedSeq: 100,
         serializeAddon: {
             serialize: ({ scrollback }) =>
-                scrollback === 10000 ? large : 'SMALL',
+                scrollback === 512 ? large : 'SMALL',
         },
         ws: { mode: 'hot' },
         term: {

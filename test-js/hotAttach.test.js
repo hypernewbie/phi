@@ -798,7 +798,7 @@ describe('TabManager hot attach bootstrap', () => {
 });
 
 describe('checkpoint upload', () => {
-    it('uploads a scrollback snapshot preserving history with the drain watermark', async () => {
+    it('uploads a bounded scrollback snapshot with the drain watermark', async () => {
         stubTerminalGlobal();
         const tm = makeTm();
         let serializeOpts;
@@ -823,7 +823,7 @@ describe('checkpoint upload', () => {
         tm._uploadCheckpoint(tab);
         await new Promise((r) => setTimeout(r, 0));
 
-        expect(serializeOpts).toEqual({ scrollback: 10000 });
+        expect(serializeOpts).toEqual({ scrollback: 512 });
         const request = fetchMock.mock.calls.find(
             ([url, init]) =>
                 String(url).includes('/api/terminals/p7/checkpoint') &&

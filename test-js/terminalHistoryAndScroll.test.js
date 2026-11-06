@@ -247,8 +247,8 @@ describe('Terminal History Preservation', () => {
         tm._uploadCheckpoint(tab);
         await new Promise((r) => setTimeout(r, 0));
 
-        // Must request full 10,000 live scrollback, NOT scrollback: 0
-        expect(serializeOpts).toEqual({ scrollback: 10000 });
+        // Must request the bounded checkpoint history, NOT scrollback: 0
+        expect(serializeOpts).toEqual({ scrollback: 512 });
         expect(fetchMock).toHaveBeenCalledWith(
             expect.stringContaining('/api/terminals/p-hist-1/checkpoint'),
             expect.objectContaining({ method: 'POST' }),

@@ -97,9 +97,12 @@ describe('checkpoint continuation is equivalent to uninterrupted xterm', () => {
         const fetcher = vi.fn(async () => ({ ok: true }));
         vi.stubGlobal('fetch', fetcher);
         try {
+            // Snapshot history is bounded (CHECKPOINT_SCROLLBACK_ROWS), so the
+            // fixture stays inside that window and the round-trip can still be
+            // compared line for line.
             await write(
                 baseline,
-                'NORMAL HISTORY\r\n'.repeat(1000) +
+                'NORMAL HISTORY\r\n'.repeat(400) +
                     '\x1b[?1049hALT SCREEN\x1b[3;5H\x1b[4:3;58:2::10:20:30m',
             );
             Object.create(TabManager.prototype)._uploadCheckpoint({

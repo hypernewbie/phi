@@ -631,6 +631,11 @@ const REPLAY_RECOVERY_ATTEMPTS = 2;
 // A phone checkpoint is an instant screen restore, not an archive copy.
 // Older output remains in the recording and arrives through raw replay.
 const PHONE_CHECKPOINT_ROWS = 256;
+// The desktop lane carries the same intent with a little more history. The
+// live buffer keeps LIVE_SCROLLBACK_ROWS rows; the snapshot keeps only the
+// visible screen plus this many, because a 10k-row serialize costs 1-2 MB and
+// hundreds of milliseconds for a restore point that replay already covers.
+const CHECKPOINT_SCROLLBACK_ROWS = 512;
 // A bounded recording span can arrive in several positive-progress parts.
 // No client byte/hash cache participates in recovery.
 // After output stays quiet this long, the client uploads a screen
@@ -5750,7 +5755,7 @@ export class TabManager {
         try {
             let scrollback = isCoarseViewport()
                 ? PHONE_CHECKPOINT_ROWS
-                : LIVE_SCROLLBACK_ROWS;
+                : CHECKPOINT_SCROLLBACK_ROWS;
             const budget = isCoarseViewport()
                 ? COARSE_CHECKPOINT_BYTES
                 : MAX_CHECKPOINT_BYTES;
