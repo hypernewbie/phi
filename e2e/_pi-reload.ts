@@ -192,7 +192,10 @@ export interface ReloadHttpCall {
 }
 
 // Capture native reload HTTP round trips issued from the page.
-export function recordReloadCalls(page: Page): { calls: ReloadHttpCall[] } {
+export function recordReloadCalls(page: Page): {
+    calls: ReloadHttpCall[];
+    dispatched: () => ReloadHttpCall[];
+} {
     const calls: ReloadHttpCall[] = [];
     page.on('response', (response) => {
         if (

@@ -60,6 +60,11 @@ async function watchPage(page: Page, serverOrigin: string) {
     page.on('pageerror', (error) => pageErrors.push(error.message));
     page.on('requestfailed', (request) => {
         if (isCancelledWorktreeRead(request, serverOrigin)) return;
+        // ERR_ABORTED is the page cancelling its own request (a replay
+        // superseded by a newer attach, a navigation). A real outage
+        // reports ERR_CONNECTION_* or ERR_FAILED, and server answers are
+        // caught by the response guard below.
+        if (request.failure()?.errorText === 'net::ERR_ABORTED') return;
         const url = new URL(request.url());
         if (url.origin === serverOrigin) {
             localFailures.push(
@@ -429,9 +434,10 @@ test('native reload from Cmds on desktop and mobile touch', async ({
             mobilePage.getByRole('button', { name: 'Cmds ▾' }),
         ).toBeFocused();
         await mobilePage.emulateMedia({ colorScheme: 'light' });
-        await expectReloadRequested(mobilePage, async () => {
+        const mobile = mobilePage;
+        await expectReloadRequested(mobile, async () => {
             if (!(await mobileMenu.isVisible())) {
-                await mobilePage.getByRole('button', { name: 'Cmds ▾' }).tap();
+                await mobile.getByRole('button', { name: 'Cmds ▾' }).tap();
                 await expect(mobileMenu).toBeVisible();
             }
             await mobileMenu.getByRole('button', { name: '/reload' }).tap();
