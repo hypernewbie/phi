@@ -235,20 +235,6 @@ export function readDesktopAppearance(
     }
 }
 
-/**
- * Reports whether a cached desktop appearance predates the terminal font
- * size setting: it carries a UI size but no terminal size. Current
- * writes always store both size keys together, so a missing terminal
- * key means an older build wrote this record. Its UI size is stale: the
- * terminal already falls through to the server (its key is absent)
- * while the interface would keep shrinking to the stale value.
- */
-export function hasStaleDesktopFontSizes(cached: unknown): boolean {
-    if (!cached || typeof cached !== 'object') return false;
-    const record = cached as Record<string, unknown>;
-    return 'ui_font_size' in record && !('terminal_font_size' in record);
-}
-
 export function mobileSystemTextRatio(size: number): number {
     return Number.isFinite(size) && size > 0 ? Math.max(1, size / 17) : 1;
 }

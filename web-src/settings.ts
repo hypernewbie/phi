@@ -134,7 +134,7 @@ interface SettingsApp {
         options?: { type?: string; title?: string },
     ): void;
     _saveAppearanceLocal(): void;
-    persistAppearance(patch: AppearancePatch): void;
+    persistAppearance(patch: AppearancePatch, keepalive?: boolean): void;
     applyUIFont(): void;
     applyFastMode(): void;
     applyAccentTheme(color: string): void;
@@ -166,6 +166,13 @@ export function broadcastConfigSync(
         }
     } catch {}
 }
+
+// Latest pending desktop-appearance save; refreshed on every Settings
+// open (only one modal is ever live). A single pagehide listener drains
+// it so a reload inside the debounce window still lands the typed
+// values on the server.
+let pendingLegacyFlush: (() => void) | null = null;
+let legacyFlushOnHideInstalled = false;
 
 export function openSettingsModal(
     app: SettingsApp,
@@ -773,19 +780,35 @@ export function openSettingsModal(
 
     let persistTimer: ReturnType<typeof setTimeout> | null = null;
     let legacyPatch: AppearancePatch = {};
-    const flushLegacy = () => {
+    const flushLegacy = (keepalive = false) => {
         if (!Object.keys(legacyPatch).length) return;
         const fields = legacyPatch;
         legacyPatch = {};
-        app.persistAppearance(fields);
+        app.persistAppearance(fields, keepalive);
         broadcast('appearance');
     };
+    // A reload inside the 300ms debounce window would otherwise drop the
+    // pending save (the timer dies with the page) while the cache already
+    // holds the typed value. Drain it with keepalive so the value lands
+    // on the server first; the server is authoritative for font sizes.
+    pendingLegacyFlush = () => {
+        if (persistTimer !== null) {
+            clearTimeout(persistTimer);
+            persistTimer = null;
+        }
+        flushLegacy(true);
+    };
+    if (!legacyFlushOnHideInstalled && typeof window !== 'undefined') {
+        legacyFlushOnHideInstalled = true;
+        window.addEventListener('pagehide', () => pendingLegacyFlush?.());
+    }
     const debouncedPersist = (fields: AppearancePatch) => {
         Object.assign(legacyPatch, fields);
         if (persistTimer !== null) clearTimeout(persistTimer);
         persistTimer = setTimeout(flushLegacy, 300);
     };
     uiFontRow.querySelector('select')?.addEventListener('change', (e) => {
+        (e.target as HTMLElement).dataset.settingsEdited = '1';
         app.uiFontFamily = (e.target as HTMLInputElement).value;
         app.applyUIFont();
         app._saveAppearanceLocal();
@@ -794,12 +817,14 @@ export function openSettingsModal(
     uiSizeRow.querySelector('input')?.addEventListener('input', (e) => {
         const n = parseInt((e.target as HTMLInputElement).value, 10);
         if (!Number.isFinite(n) || n < 10 || n > 24) return;
+        (e.target as HTMLElement).dataset.settingsEdited = '1';
         app.uiFontSize = n;
         app.applyUIFont();
         app._saveAppearanceLocal();
         debouncedPersist({ ui_font_size: app.uiFontSize });
     });
     termFontRow.querySelector('select')?.addEventListener('change', (e) => {
+        (e.target as HTMLElement).dataset.settingsEdited = '1';
         app.terminalFontFamily = (e.target as HTMLInputElement).value;
         app.tabManager?.applyFontToAllActiveTerminals(
             app.terminalFontFamily || 'JetBrains Mono, monospace',
@@ -810,6 +835,7 @@ export function openSettingsModal(
     termSizeRow.querySelector('input')?.addEventListener('input', (e) => {
         const n = parseInt((e.target as HTMLInputElement).value, 10);
         if (!Number.isFinite(n) || n < 8 || n > 32) return;
+        (e.target as HTMLElement).dataset.settingsEdited = '1';
         app.terminalFontSize = n;
         app.tabManager?.applyTerminalFontSizeToAll(n);
         app._saveAppearanceLocal();
@@ -1577,6 +1603,27 @@ export function openSettingsModal(
                 storedLowPower === null
             )
                 lowPower.checked = !!app.config.fast_mode;
+            // Font sizes are server-authoritative: once a background
+            // refresh lands, resync the appearance rows from the ingest
+            // result so they no longer show the boot snapshot. The rows
+            // were built from a possibly stale cache; without this the
+            // inputs display an obsolete size while the page already
+            // renders the server's. An edit in this session wins.
+            const liveDesktop = app.desktopAppearance || desktop;
+            const uiFontSelect = uiFontRow.querySelector('select');
+            if (uiFontSelect && !uiFontSelect.dataset.settingsEdited)
+                uiFontSelect.value = liveDesktop.ui_font_family ?? '';
+            const uiSizeInput = uiSizeRow.querySelector('input');
+            if (uiSizeInput && !uiSizeInput.dataset.settingsEdited)
+                uiSizeInput.value = String(liveDesktop.ui_font_size || 14);
+            const termFontSelect = termFontRow.querySelector('select');
+            if (termFontSelect && !termFontSelect.dataset.settingsEdited)
+                termFontSelect.value = liveDesktop.terminal_font_family ?? '';
+            const termSizeInput = termSizeRow.querySelector('input');
+            if (termSizeInput && !termSizeInput.dataset.settingsEdited)
+                termSizeInput.value = String(
+                    liveDesktop.terminal_font_size || 14,
+                );
             if (app.useHiddenTerminal) {
                 const reuse = reuseRow.querySelector('input');
                 if (reuse) reuse.disabled = true;

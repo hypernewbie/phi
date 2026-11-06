@@ -41,7 +41,6 @@ import {
     applyAppearanceFonts,
     legacyAppearanceKey,
     readDesktopAppearance,
-    hasStaleDesktopFontSizes,
 } from './mobile-appearance.js';
 import { BackendStore, backendStores } from './backend-store.js';
 import { PiLaunchStore } from './pi-launch.js';
@@ -2293,27 +2292,21 @@ export class App {
         const ls = readDesktopAppearance(
             this.scope || captureAppearanceScope(),
         );
-        // A cache that predates the terminal font size carries a stale UI
-        // size: the terminal already falls through to the server (its key
-        // is absent) while the interface would keep shrinking to the
-        // stale value. When the server names a UI size it wins over such
-        // a record. Otherwise the cache still applies: prepaint,
-        // broadcast, and offline paths have no server value to use, and
-        // current (both-keys) caches keep their newer-wins precedence so
-        // a debounced save is never lost by a quick reload.
-        const staleUiSize =
-            hasStaleDesktopFontSizes(ls) && data.ui_font_size != null;
+        // The server is authoritative for font sizes whenever it names
+        // one: a cached size is only a prepaint/offline/broadcast-hint
+        // fallback and must never override a live server value. A stale
+        // notebook entry otherwise pins the interface to an obsolete size
+        // and re-saves itself on every boot, while the terminal (whose
+        // key the stale record lacks) keeps the configured size. Families
+        // keep cache precedence: they carry no size contract and the
+        // Settings surface always displays the effective value.
         this.desktopAppearance = {
             ui_font_family: ls.ui_font_family ?? data.ui_font_family ?? '',
-            ui_font_size:
-                Number(
-                    (staleUiSize ? undefined : ls.ui_font_size) ??
-                        data.ui_font_size,
-                ) || 0,
+            ui_font_size: Number(data.ui_font_size ?? ls.ui_font_size) || 0,
             terminal_font_family:
                 ls.terminal_font_family ?? data.terminal_font_family ?? '',
             terminal_font_size:
-                Number(ls.terminal_font_size ?? data.terminal_font_size) || 0,
+                Number(data.terminal_font_size ?? ls.terminal_font_size) || 0,
         };
         this.mobileScrollbackRows =
             Number(ls.mobile_scrollback_rows ?? data.mobile_scrollback_rows) ||
@@ -2662,7 +2655,7 @@ export class App {
     }
 
     // Legacy/shared settings retain their endpoint; only edited fields are sent.
-    async persistAppearance(fields = {}) {
+    async persistAppearance(fields = {}, keepalive = false) {
         if (!Object.keys(fields).length) return;
         const context =
             this.authContext ||
@@ -2673,6 +2666,8 @@ export class App {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(fields),
+                // Pagehide flushes must survive the dying document.
+                ...(keepalive ? { keepalive: true } : {}),
             });
         } catch (e) {
             console.warn('[appearance] failed to persist:', e);

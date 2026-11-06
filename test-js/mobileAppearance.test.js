@@ -14,7 +14,6 @@ import {
     appearanceOwner,
     appearanceCacheKey,
     readAppearanceCache,
-    hasStaleDesktopFontSizes,
     legacyAppearanceKey,
 } from '../web/mobile-appearance.js';
 import { BackendScope } from '../web/backend-scope.js';
@@ -493,42 +492,37 @@ describe('appearanceFontScale', () => {
     });
 });
 
-describe('stale desktop font caches', () => {
-    // A cache written before the terminal font size existed carries a UI
-    // size but no terminal size. That stale UI value must not keep
-    // overriding a live server value while the terminal falls through
-    // to it: that is the tiny-interface / normal-terminal split.
-    // Current writes always store both size keys together.
-    it('flags a record with a UI size but no terminal size', () => {
-        expect(hasStaleDesktopFontSizes(null)).toBe(false);
-        expect(hasStaleDesktopFontSizes({})).toBe(false);
-        expect(
-            hasStaleDesktopFontSizes({
-                ui_font_size: 10,
-                ui_font_family: '',
-            }),
-        ).toBe(true);
-        expect(
-            hasStaleDesktopFontSizes({
-                ui_font_size: 10,
-                terminal_font_size: 14,
-            }),
-        ).toBe(false);
-    });
-    it('lets a live server size win over a pre-terminal-size cache', () => {
+describe('server-authoritative font sizes', () => {
+    // A cached size is a prepaint/offline fallback and must never
+    // override a live server value: a stale notebook entry otherwise
+    // pins the interface to an obsolete size and re-saves itself on
+    // every boot, while the terminal keeps the configured size.
+    it('lets a live server size win over any cached size', () => {
         const scope = captureAppearanceScope();
-        localStorage.setItem(
-            legacyAppearanceKey(scope),
-            JSON.stringify({ ui_font_size: 10, ui_font_family: '' }),
-        );
-        const app = Object.create(App.prototype);
-        app.mobileAppearanceStore = null;
-        app.ingestAppearance({
-            ui_font_size: 14,
-            terminal_font_size: 14,
-        });
-        expect(app.uiFontSize).toBe(14);
-        expect(app.terminalFontSize).toBe(14);
+        for (const cached of [
+            // Pre-terminal-size record: UI half only.
+            { ui_font_size: 10, ui_font_family: '' },
+            // Current record: both halves, cache newer than the server.
+            {
+                ui_font_size: 24,
+                terminal_font_size: 14,
+                ui_font_family: '',
+                terminal_font_family: '',
+            },
+        ]) {
+            localStorage.setItem(
+                legacyAppearanceKey(scope),
+                JSON.stringify(cached),
+            );
+            const app = Object.create(App.prototype);
+            app.mobileAppearanceStore = null;
+            app.ingestAppearance({
+                ui_font_size: 14,
+                terminal_font_size: 14,
+            });
+            expect(app.uiFontSize).toBe(14);
+            expect(app.terminalFontSize).toBe(14);
+        }
     });
     it('keeps the cache when no server size is available', () => {
         // Prepaint, broadcast, and offline paths have no server value:
@@ -543,25 +537,21 @@ describe('stale desktop font caches', () => {
         app.ingestAppearance({});
         expect(app.uiFontSize).toBe(10);
     });
-    it('keeps newer-wins precedence for current both-keys caches', () => {
-        // A debounced save is never lost by a quick reload: the cache
-        // still overrides a server that has not caught up yet.
+    it('keeps cache precedence for families', () => {
         const scope = captureAppearanceScope();
         localStorage.setItem(
             legacyAppearanceKey(scope),
             JSON.stringify({
-                ui_font_size: 24,
-                terminal_font_size: 14,
-                ui_font_family: '',
-                terminal_font_family: '',
+                ui_font_family: 'Cached family',
+                ui_font_size: 14,
             }),
         );
         const app = Object.create(App.prototype);
         app.mobileAppearanceStore = null;
         app.ingestAppearance({
+            ui_font_family: 'Server family',
             ui_font_size: 14,
-            terminal_font_size: 14,
         });
-        expect(app.uiFontSize).toBe(24);
+        expect(app.uiFontFamily).toBe('Cached family');
     });
 });
