@@ -51,7 +51,7 @@ func NewHub() *Hub {
 
 // Subscribe registers a live subscriber filtered by recipient.
 func (h *Hub) Subscribe(recipient string) (<-chan *syncmeshb.SyncEvent, func()) {
-	return h.broker.Subscribe(context.Background(), 0, recipient)
+	return h.broker.Subscribe(context.Background(), 0, recipient, "")
 }
 
 // Publish validates, deduplicates, stores, and fans out one message. sender is

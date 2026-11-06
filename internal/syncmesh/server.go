@@ -145,7 +145,7 @@ func (s *service) Subscribe(req *syncmeshb.SubscribeRequest, stream grpc.ServerS
 	if len(req.GetRecipient()) > MaxRecipientBytes {
 		return status.Error(codes.InvalidArgument, "syncmesh: recipient exceeds limit")
 	}
-	ch, cancel := s.hub.broker.Subscribe(stream.Context(), req.GetSinceSeq(), req.GetRecipient())
+	ch, cancel := s.hub.broker.Subscribe(stream.Context(), req.GetSinceSeq(), req.GetRecipient(), req.GetPublisherEpoch())
 	defer cancel()
 	for {
 		select {

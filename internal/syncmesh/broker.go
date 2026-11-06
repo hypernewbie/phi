@@ -5,6 +5,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	syncmeshb "github.com/hypernewbie/phi/internal/syncmesh/pb"
 )
 
@@ -23,6 +25,7 @@ const (
 type Broker struct {
 	mu     sync.Mutex
 	seq    uint64
+	epoch  string
 	nextID uint64
 	subs   map[uint64]*brokerSub
 	// history retains recent events so Subscribe can hand a new subscriber
@@ -39,7 +42,7 @@ type brokerSub struct {
 
 // NewBroker returns an empty broker.
 func NewBroker() *Broker {
-	return &Broker{subs: make(map[uint64]*brokerSub)}
+	return &Broker{subs: make(map[uint64]*brokerSub), epoch: uuid.NewString()}
 }
 
 // WildcardRecipient accepts every event regardless of its recipient.
@@ -49,34 +52,38 @@ const WildcardRecipient = "*"
 //
 // The snapshot and the registration happen under one lock, so an event is
 // either in the replay or arrives live — never in the gap between them.
-// sinceSeq 0 replays the whole retained history.
+// sinceSeq 0 replays the whole retained history. A nonzero sinceSeq must
+// include the publisher epoch from the last received event. An empty or
+// mismatched epoch forces a gap and replay from zero, including for older
+// clients that do not send an epoch.
 //
-// A gap event carries the first sequence this subscriber is missing. Refetching
-// from there (cursor gap.seq-1) recovers the hole; an event before the marker is
-// only a hole when history trimmed it, and the marker reports that same point.
-func (b *Broker) Subscribe(_ context.Context, sinceSeq uint64, recipient string) (<-chan *syncmeshb.SyncEvent, func()) {
+// A gap event requires a full state resync. Its seq is a diagnostic boundary,
+// not a resume cursor; replay windows and live queues can have different holes.
+func (b *Broker) Subscribe(_ context.Context, sinceSeq uint64, recipient, publisherEpoch string) (<-chan *syncmeshb.SyncEvent, func()) {
 	b.mu.Lock()
 	ch := make(chan *syncmeshb.SyncEvent, subscriberQueue)
 
+	// A sequence proves continuity only within one publisher lifetime.
+	resync := sinceSeq > b.seq || (sinceSeq > 0 && publisherEpoch != b.epoch)
+	if resync {
+		sinceSeq = 0
+	}
 	pending := make([]*syncmeshb.SyncEvent, 0, len(b.history))
 	for _, ev := range b.history {
 		if ev.Seq > sinceSeq && matches(ev, recipient) {
 			pending = append(pending, ev)
 		}
 	}
-	if sinceSeq > b.seq {
-		// A publisher restart resets its sequence; the old cursor is unusable.
-		gapSeq := uint64(1)
+	gapSeq := uint64(0)
+	if resync {
+		gapSeq = 1
 		if len(b.history) > 0 {
 			gapSeq = b.history[0].Seq
 		}
-		ch <- &syncmeshb.SyncEvent{Seq: gapSeq, Recipient: recipient, Gap: true}
-		pending = pending[:0]
 	}
 	// A cursor older than anything still retained cannot be served
 	// continuously. Say so with a gap event instead of handing the receiver a
 	// stream that looks complete but silently skips history.
-	gapSeq := uint64(0)
 	if len(b.history) > 0 {
 		oldest := b.history[0].Seq
 		if oldest > sinceSeq && oldest-sinceSeq > 1 {
@@ -90,7 +97,7 @@ func (b *Broker) Subscribe(_ context.Context, sinceSeq uint64, recipient string)
 		gapSeq = pending[0].Seq
 	}
 	if gapSeq > 0 {
-		ch <- &syncmeshb.SyncEvent{Seq: gapSeq, Recipient: recipient, Gap: true}
+		ch <- &syncmeshb.SyncEvent{Seq: gapSeq, Recipient: recipient, Gap: true, PublisherEpoch: b.epoch}
 	}
 	for _, ev := range pending {
 		ch <- ev
@@ -127,6 +134,7 @@ func (b *Broker) Publish(ev *syncmeshb.SyncEvent) uint64 {
 
 	b.seq++
 	ev.Seq = b.seq
+	ev.PublisherEpoch = b.epoch
 	if ev.UpdatedAtUnixMs == 0 {
 		ev.UpdatedAtUnixMs = time.Now().UnixMilli()
 	}
@@ -155,10 +163,8 @@ func matches(ev *syncmeshb.SyncEvent, filter string) bool {
 }
 
 // deliver never blocks. A full queue loses its oldest event and receives a gap
-// marker in its place. The marker carries the first sequence this subscriber is
-// missing, so refetching from that point recovers the hole instead of stepping
-// over it. Naming the event being published would sit above the hole and hide
-// the dropped events below it.
+// marker in its place. The dropped sequence is a diagnostic boundary; the
+// receiver must resync full state rather than treating it as a resume cursor.
 func deliver(ch chan *syncmeshb.SyncEvent, ev *syncmeshb.SyncEvent) {
 	select {
 	case ch <- ev:
@@ -174,7 +180,7 @@ func deliver(ch chan *syncmeshb.SyncEvent, ev *syncmeshb.SyncEvent) {
 	default:
 	}
 	select {
-	case ch <- &syncmeshb.SyncEvent{Seq: missing, Recipient: ev.Recipient, Gap: true}:
+	case ch <- &syncmeshb.SyncEvent{Seq: missing, Recipient: ev.Recipient, Gap: true, PublisherEpoch: ev.GetPublisherEpoch()}:
 	default:
 	}
 }

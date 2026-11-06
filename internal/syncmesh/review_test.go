@@ -26,7 +26,7 @@ func TestUnauthenticatedMeshRefusesRoutableAndAmbiguousBind(t *testing.T) {
 }
 
 func TestMeshSubscriberAdmissionIsGloballyBounded(t *testing.T) {
-	addr, s := startServer(t)
+	addr, s, _ := startServer(t)
 	defer s.Stop()
 	client := dial(t, addr)
 	ctx, cancel := streamContext(t)
@@ -53,17 +53,88 @@ func TestMeshSubscriberAdmissionIsGloballyBounded(t *testing.T) {
 	}
 }
 
-func TestCursorFromPreviousPublisherLifetimeRequiresResync(t *testing.T) {
-	b := NewBroker()
-	b.Publish(&syncmeshb.SyncEvent{Recipient: "mine", Value: []byte("after restart")})
-	ch, cancel := b.Subscribe(context.Background(), 500, "mine")
+func TestSubscribePublisherEpochOverGRPC(t *testing.T) {
+	addr, s, _ := startServer(t)
+	defer s.Stop()
+	client := dial(t, addr)
+	ctx, cancel := streamContext(t)
 	defer cancel()
-	gap := drainN(t, ch, 1)[0]
-	if !gap.GetGap() {
-		t.Fatal("old lifetime cursor silently skipped new publisher history")
+
+	if _, err := client.Publish(ctx, &syncmeshb.PublishRequest{MessageId: "new-lifetime", Recipient: "mine"}); err != nil {
+		t.Fatal(err)
 	}
-	b.Publish(&syncmeshb.SyncEvent{Recipient: "mine", Value: []byte("live")})
-	if ev := drainN(t, ch, 1)[0]; string(ev.GetValue()) != "live" {
-		t.Fatalf("live stream did not recover: %v", ev)
+	stream, err := client.Subscribe(ctx, &syncmeshb.SubscribeRequest{
+		SinceSeq: 1, Recipient: "mine", PublisherEpoch: "previous-lifetime",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gap := receiveOne(t, stream)
+	if !gap.GetGap() || gap.GetPublisherEpoch() == "" || gap.GetPublisherEpoch() == "previous-lifetime" {
+		t.Fatalf("epoch mismatch did not produce a new-lifetime gap: %v", gap)
+	}
+	if ev := receiveOne(t, stream); ev.GetSeq() != 1 || ev.GetMessageId() != "new-lifetime" {
+		t.Fatalf("resync did not replay from the new lifetime's start: %v", ev)
+	}
+
+	matching, err := client.Subscribe(ctx, &syncmeshb.SubscribeRequest{
+		SinceSeq: 1, Recipient: "mine", PublisherEpoch: gap.GetPublisherEpoch(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Publish(ctx, &syncmeshb.PublishRequest{MessageId: "same-lifetime", Recipient: "mine"}); err != nil {
+		t.Fatal(err)
+	}
+	if ev := receiveOne(t, matching); ev.GetGap() || ev.GetSeq() != 2 || ev.GetMessageId() != "same-lifetime" {
+		t.Fatalf("matching epoch did not resume at the cursor: %v", ev)
+	}
+}
+
+func TestCursorFromPreviousPublisherLifetimeRequiresResync(t *testing.T) {
+	previous := NewBroker()
+	for i := 0; i < 5; i++ {
+		previous.Publish(&syncmeshb.SyncEvent{Recipient: "mine"})
+	}
+
+	for _, tc := range []struct {
+		name      string
+		newEvents int
+	}{{"below old cursor", 1}, {"equal to old cursor", 5}, {"above old cursor", 8}} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := NewBroker()
+			for i := 0; i < tc.newEvents; i++ {
+				b.Publish(&syncmeshb.SyncEvent{Recipient: "mine"})
+			}
+			ch, cancel := b.Subscribe(context.Background(), 5, "mine", previous.epoch)
+			defer cancel()
+
+			gap := drainN(t, ch, 1)[0]
+			if !gap.GetGap() {
+				t.Fatal("old lifetime cursor silently skipped new publisher history")
+			}
+			if gap.GetPublisherEpoch() != b.epoch {
+				t.Fatal("gap does not identify the new publisher lifetime")
+			}
+			for i, ev := range drainN(t, ch, tc.newEvents) {
+				if ev.GetSeq() != uint64(i+1) {
+					t.Fatalf("replayed seq = %d, want %d", ev.GetSeq(), i+1)
+				}
+			}
+		})
+	}
+}
+
+func TestCursorWithoutPublisherEpochRequiresResync(t *testing.T) {
+	b := NewBroker()
+	b.Publish(&syncmeshb.SyncEvent{Recipient: "mine"})
+	ch, cancel := b.Subscribe(context.Background(), 1, "mine", "")
+	defer cancel()
+
+	if !drainN(t, ch, 1)[0].GetGap() {
+		t.Fatal("an unverifiable cursor did not force resync")
+	}
+	if ev := drainN(t, ch, 1)[0]; ev.GetSeq() != 1 {
+		t.Fatalf("replayed seq = %d, want full replay from 1", ev.GetSeq())
 	}
 }

@@ -18,10 +18,10 @@ option go_package = "github.com/hypernewbie/phi/internal/syncmesh/pb;syncmeshb";
 // Wire types
 // ---------------------------------------------------------------------------
 
-// SyncEvent is one ordered change from a single publisher. gap marks a hole in
-// this stream and carries the first seq that was never delivered: a receiver
-// resyncs from gap.seq (cursor gap.seq-1) instead of inferring a hole from a
-// missing seq.
+// SyncEvent is one ordered change from a single publisher. gap means this
+// stream lost events and the receiver must resync full state before trusting
+// later events. gap.seq is a diagnostic boundary, not a resume cursor; never
+// infer a hole from a missing seq.
 message SyncEvent {
   uint64 seq = 1;
   string sender = 2;
@@ -32,6 +32,9 @@ message SyncEvent {
   // Caller-supplied idempotency key. Receivers dedupe on it, so a replayed
   // event after a reconnect never produces a second injection.
   string message_id = 7;
+  // Identifies this publisher's sequence lifetime. A reconnect supplies the
+  // epoch from its last event so a restarted publisher cannot reuse its cursor.
+  string publisher_epoch = 8;
 }
 
 // SubscribeRequest opens one publisher-scoped stream. since_seq 0 starts at
@@ -40,6 +43,10 @@ message SyncEvent {
 message SubscribeRequest {
   uint64 since_seq = 1;
   string recipient = 2;
+  // Epoch from the last received event. With a nonzero since_seq, an empty or
+  // mismatched epoch forces a gap and replay from zero; this also protects
+  // older clients that do not send an epoch.
+  string publisher_epoch = 3;
 }
 
 // PublishRequest asks a Phi to accept one addressed message. sender is

@@ -14,7 +14,7 @@ import (
 // startServer binds an ephemeral loopback port and returns a dial target plus a
 // stop function. A bind failure fails the test: a mesh that silently fails to
 // bind is exactly the failure this package must not have.
-func startServer(t *testing.T) (string, *Server) {
+func startServer(t *testing.T) (string, *Server, <-chan error) {
 	t.Helper()
 	s := New()
 	errCh := make(chan error, 1)
@@ -31,13 +31,13 @@ func startServer(t *testing.T) (string, *Server) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	return s.Addr(), s
+	return s.Addr(), s, errCh
 }
 
 // TestStopReleasesPort proves shutdown frees the port. A leaked listener would
 // survive a server restart and block the next bind.
 func TestStopReleasesPort(t *testing.T) {
-	addr, s := startServer(t)
+	addr, s, _ := startServer(t)
 	s.Stop()
 
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -48,15 +48,52 @@ func TestStopReleasesPort(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if _, err := syncmeshb.NewSyncMeshClient(conn).Subscribe(ctx, &syncmeshb.SubscribeRequest{}); err == nil {
-		t.Fatal("Subscribe succeeded after Stop; the listener was not released")
+	stream, err := syncmeshb.NewSyncMeshClient(conn).Subscribe(ctx, &syncmeshb.SubscribeRequest{})
+	if err == nil {
+		_, err = stream.Recv()
+	}
+	if err == nil {
+		t.Fatal("Subscribe received events after Stop; the listener was not released")
+	}
+}
+
+func TestStopWithLingeringSubscriberIsBounded(t *testing.T) {
+	addr, s, served := startServer(t)
+	defer s.Stop()
+	client := dial(t, addr)
+	ctx, cancel := streamContext(t)
+	defer cancel()
+
+	if _, err := client.Publish(ctx, &syncmeshb.PublishRequest{MessageId: "seed", Recipient: "mine"}); err != nil {
+		t.Fatal(err)
+	}
+	stream, err := client.Subscribe(ctx, &syncmeshb.SubscribeRequest{Recipient: "mine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiveOne(t, stream) // Replay proves the subscriber registered.
+
+	stopped := make(chan struct{})
+	go func() {
+		s.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(gracefulStopTimeout + 2*time.Second):
+		t.Fatal("Stop was held open by a lingering subscriber")
+	}
+	select {
+	case <-served:
+	case <-time.After(time.Second):
+		t.Fatal("Serve did not return after Stop")
 	}
 }
 
 // TestServeReportsBindFailure proves a taken port surfaces as an error instead
 // of a silently missing mesh.
 func TestServeReportsBindFailure(t *testing.T) {
-	addr, first := startServer(t)
+	addr, first, _ := startServer(t)
 	defer first.Stop()
 
 	second := New()

@@ -25,7 +25,7 @@ func drainN(t *testing.T, ch <-chan *syncmeshb.SyncEvent, n int) []*syncmeshb.Sy
 // registered before the write sees it, with a positive ordered sequence.
 func TestSubscribeReceivesPublished(t *testing.T) {
 	b := NewBroker()
-	ch, cancel := b.Subscribe(context.Background(), 0, WildcardRecipient)
+	ch, cancel := b.Subscribe(context.Background(), 0, WildcardRecipient, "")
 	defer cancel()
 
 	seq := b.Publish(&syncmeshb.SyncEvent{Sender: "a", Recipient: "b", Value: []byte("hello")})
@@ -43,13 +43,16 @@ func TestSubscribeReceivesPublished(t *testing.T) {
 	if ev.GetGap() {
 		t.Fatal("a delivered event is marked as a gap")
 	}
+	if ev.GetPublisherEpoch() != b.epoch {
+		t.Fatal("event does not identify its publisher lifetime")
+	}
 }
 
 // TestSequenceIsMonotonic guards ordering: a receiver resuming from a cursor
 // depends on strictly increasing values.
 func TestSequenceIsMonotonic(t *testing.T) {
 	b := NewBroker()
-	ch, cancel := b.Subscribe(context.Background(), 0, WildcardRecipient)
+	ch, cancel := b.Subscribe(context.Background(), 0, WildcardRecipient, "")
 	defer cancel()
 
 	for i := 0; i < 5; i++ {
@@ -67,9 +70,9 @@ func TestSequenceIsMonotonic(t *testing.T) {
 // asked for. Without this, every pane on a Phi would react to every message.
 func TestRecipientFilter(t *testing.T) {
 	b := NewBroker()
-	mine, cancelMine := b.Subscribe(context.Background(), 0, "agent-b")
+	mine, cancelMine := b.Subscribe(context.Background(), 0, "agent-b", "")
 	defer cancelMine()
-	other, cancelOther := b.Subscribe(context.Background(), 0, "agent-c")
+	other, cancelOther := b.Subscribe(context.Background(), 0, "agent-c", "")
 	defer cancelOther()
 
 	b.Publish(&syncmeshb.SyncEvent{Recipient: "agent-b", Value: []byte("for b")})
@@ -87,9 +90,9 @@ func TestRecipientFilter(t *testing.T) {
 // has to learn that it missed something.
 func TestSlowSubscriberGetsGap(t *testing.T) {
 	b := NewBroker()
-	slow, cancelSlow := b.Subscribe(context.Background(), 0, WildcardRecipient)
+	slow, cancelSlow := b.Subscribe(context.Background(), 0, WildcardRecipient, "")
 	defer cancelSlow()
-	fast, cancelFast := b.Subscribe(context.Background(), 0, WildcardRecipient)
+	fast, cancelFast := b.Subscribe(context.Background(), 0, WildcardRecipient, "")
 	defer cancelFast()
 
 	// Overflow the slow subscriber's queue while draining the fast one.
@@ -113,56 +116,9 @@ func TestSlowSubscriberGetsGap(t *testing.T) {
 	}
 }
 
-// TestCancelIsIdempotentAndStopsDelivery guards double-cancel, which would
-// otherwise close a channel twice and panic the publisher.
-// TestLiveOverflowGapBoundaryIsRecoverable pins the promise a gap marker makes:
-// resyncing from its sequence recovers every event the subscriber never saw.
-// The marker used to name the sequence of the event being published rather than
-// the one dropped from the head, so resuming from it stepped over events that
-// were already gone from the subscriber's queue.
-func TestLiveOverflowGapBoundaryIsRecoverable(t *testing.T) {
-	b := NewBroker()
-	ch, cancel := b.Subscribe(context.Background(), 0, WildcardRecipient)
-	defer cancel()
-
-	const total = subscriberQueue * 2
-	for i := 0; i < total; i++ {
-		b.Publish(&syncmeshb.SyncEvent{Recipient: WildcardRecipient, Value: []byte("x")})
-	}
-	events := drainN(t, ch, subscriberQueue)
-
-	delivered := make(map[uint64]bool, len(events))
-	boundary := uint64(0)
-	for _, ev := range events {
-		if ev.GetGap() {
-			if boundary == 0 || ev.GetSeq() < boundary {
-				boundary = ev.GetSeq()
-			}
-			continue
-		}
-		delivered[ev.GetSeq()] = true
-	}
-	if boundary == 0 {
-		t.Fatal("overflow produced no gap marker")
-	}
-	missing := uint64(0)
-	for seq := uint64(1); seq <= total; seq++ {
-		if !delivered[seq] {
-			missing = seq
-			break
-		}
-	}
-	if missing == 0 {
-		t.Fatal("overflow lost nothing; the test setup is wrong")
-	}
-	if boundary != missing {
-		t.Fatalf("gap marker names %d, but the first event this subscriber never saw is %d; refetching from the marker skips %d", boundary, missing, missing)
-	}
-}
-
 func TestCancelIsIdempotentAndStopsDelivery(t *testing.T) {
 	b := NewBroker()
-	ch, cancel := b.Subscribe(context.Background(), 0, WildcardRecipient)
+	ch, cancel := b.Subscribe(context.Background(), 0, WildcardRecipient, "")
 	cancel()
 	cancel()
 
@@ -180,7 +136,7 @@ func TestSubscribeReplaysBeforeJoining(t *testing.T) {
 	b := NewBroker()
 	b.Publish(&syncmeshb.SyncEvent{Recipient: "agent-b", Value: []byte("early"), MessageId: "m-early"})
 
-	ch, cancel := b.Subscribe(context.Background(), 0, "agent-b")
+	ch, cancel := b.Subscribe(context.Background(), 0, "agent-b", "")
 	defer cancel()
 
 	ev := drainN(t, ch, 1)[0]
@@ -199,7 +155,7 @@ func TestSubscribeResumesFromCursor(t *testing.T) {
 	first := b.Publish(&syncmeshb.SyncEvent{Recipient: "*", Value: []byte("seen")})
 	b.Publish(&syncmeshb.SyncEvent{Recipient: "*", Value: []byte("missed")})
 
-	ch, cancel := b.Subscribe(context.Background(), first, WildcardRecipient)
+	ch, cancel := b.Subscribe(context.Background(), first, WildcardRecipient, b.epoch)
 	defer cancel()
 
 	ev := drainN(t, ch, 1)[0]
@@ -225,29 +181,23 @@ func TestCursorPredatingRetentionYieldsGap(t *testing.T) {
 	for i := 0; i < replayHistory+10; i++ {
 		b.Publish(&syncmeshb.SyncEvent{Recipient: "elsewhere", Value: []byte("x")})
 	}
-	oldest := b.history[0].Seq
-
-	ch, cancel := b.Subscribe(context.Background(), 1, "mine")
+	ch, cancel := b.Subscribe(context.Background(), 1, "mine", b.epoch)
 	defer cancel()
 
 	gap := drainN(t, ch, 1)[0]
 	if !gap.GetGap() {
 		t.Fatal("cursor older than retention did not produce a gap event")
 	}
-	if gap.GetSeq() != oldest {
-		t.Fatalf("gap seq = %d, want the oldest retained seq %d", gap.GetSeq(), oldest)
-	}
 }
 
-// TestReplayOverflowGapMarksDeliveryBoundary covers the second way a gap
-// arises: the receiver asked for more retained events than its queue holds, so
-// the newest are kept and the boundary names the first one actually delivered.
-func TestReplayOverflowGapMarksDeliveryBoundary(t *testing.T) {
+// TestReplayOverflowKeepsNewestAndYieldsGap covers a replay larger than the
+// queue: the receiver gets a resync signal followed by the newest events.
+func TestReplayOverflowKeepsNewestAndYieldsGap(t *testing.T) {
 	b := NewBroker()
 	for i := 0; i < subscriberQueue*2; i++ {
 		b.Publish(&syncmeshb.SyncEvent{Recipient: WildcardRecipient, Value: []byte("x")})
 	}
-	ch, cancel := b.Subscribe(context.Background(), 0, WildcardRecipient)
+	ch, cancel := b.Subscribe(context.Background(), 0, WildcardRecipient, "")
 	defer cancel()
 
 	gap := drainN(t, ch, 1)[0]
@@ -255,8 +205,9 @@ func TestReplayOverflowGapMarksDeliveryBoundary(t *testing.T) {
 		t.Fatal("replay larger than the queue produced no gap event")
 	}
 	next := drainN(t, ch, 1)[0]
-	if next.GetSeq() != gap.GetSeq() {
-		t.Fatalf("first delivered seq = %d, want the gap boundary %d", next.GetSeq(), gap.GetSeq())
+	want := uint64(subscriberQueue + 2)
+	if next.GetGap() || next.GetSeq() != want {
+		t.Fatalf("first delivered event = %v, want non-gap seq %d", next, want)
 	}
 }
 
@@ -268,7 +219,7 @@ func TestFreshSubscriberOnTrimmedHistoryYieldsGap(t *testing.T) {
 	for i := 0; i < replayHistory+5; i++ {
 		b.Publish(&syncmeshb.SyncEvent{Recipient: WildcardRecipient, Value: []byte("x")})
 	}
-	ch, cancel := b.Subscribe(context.Background(), 0, WildcardRecipient)
+	ch, cancel := b.Subscribe(context.Background(), 0, WildcardRecipient, "")
 	defer cancel()
 
 	if !drainN(t, ch, 1)[0].GetGap() {
@@ -283,7 +234,7 @@ func TestCurrentCursorYieldsNoGap(t *testing.T) {
 	b.Publish(&syncmeshb.SyncEvent{Recipient: "*", Value: []byte("one")})
 	second := b.Publish(&syncmeshb.SyncEvent{Recipient: "*", Value: []byte("two")})
 
-	ch, cancel := b.Subscribe(context.Background(), second, WildcardRecipient)
+	ch, cancel := b.Subscribe(context.Background(), second, WildcardRecipient, b.epoch)
 	defer cancel()
 	select {
 	case ev := <-ch:
@@ -305,7 +256,7 @@ func TestReplayIsContiguous(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		b.Publish(&syncmeshb.SyncEvent{Recipient: "*", Value: []byte{byte('a' + i)}})
 	}
-	ch, cancel := b.Subscribe(context.Background(), 2, WildcardRecipient)
+	ch, cancel := b.Subscribe(context.Background(), 2, WildcardRecipient, b.epoch)
 	defer cancel()
 
 	want := []string{"c", "d", "e"}

@@ -53,7 +53,7 @@ func receiveOne(t *testing.T, stream grpc.ServerStreamingClient[syncmeshb.SyncEv
 // gRPC connection: one addressed message published by one client arrives at a
 // subscriber with its value and a caller-visible message id.
 func TestPublishReachesSubscriber(t *testing.T) {
-	addr, s := startServer(t)
+	addr, s, _ := startServer(t)
 	defer s.Stop()
 	client := dial(t, addr)
 	ctx, cancel := streamContext(t)
@@ -95,10 +95,12 @@ func TestPublishReachesSubscriber(t *testing.T) {
 // retries after an unknown outcome must not create a second message or a
 // second injection.
 func TestDuplicateMessageIdPublishesOnce(t *testing.T) {
-	addr, s := startServer(t)
+	addr, s, _ := startServer(t)
 	defer s.Stop()
 	client := dial(t, addr)
 	ctx := testContext(t)
+	events, cancel := s.SubscribePush()
+	defer cancel()
 
 	first, err := client.Publish(ctx, &syncmeshb.PublishRequest{
 		MessageId: "m-dup", Recipient: "agent-b", Value: []byte("once"),
@@ -108,6 +110,14 @@ func TestDuplicateMessageIdPublishesOnce(t *testing.T) {
 	}
 	if first.GetDuplicate() {
 		t.Fatal("first publish reported duplicate")
+	}
+	select {
+	case ev := <-events:
+		if ev.GetMessageId() != "m-dup" {
+			t.Fatalf("first event id = %q, want m-dup", ev.GetMessageId())
+		}
+	case <-ctx.Done():
+		t.Fatal("first publish did not emit an event")
 	}
 
 	second, err := client.Publish(ctx, &syncmeshb.PublishRequest{
@@ -125,11 +135,16 @@ func TestDuplicateMessageIdPublishesOnce(t *testing.T) {
 	if n := s.hub.Len(); n != 1 {
 		t.Fatalf("stored %d messages, want 1", n)
 	}
+	select {
+	case ev := <-events:
+		t.Fatalf("duplicate emitted a second event: %v", ev)
+	default:
+	}
 }
 
 // TestSenderIsStampedNotSupplied proves the request cannot choose its sender.
 func TestSenderIsStampedNotSupplied(t *testing.T) {
-	addr, s := startServer(t)
+	addr, s, _ := startServer(t)
 	defer s.Stop()
 	client := dial(t, addr)
 	ctx, cancel := streamContext(t)
@@ -154,7 +169,7 @@ func TestSenderIsStampedNotSupplied(t *testing.T) {
 // TestPublishRefusals guards the boundary checks: an invalid message must not
 // reach the store or the subscribers.
 func TestPublishRefusals(t *testing.T) {
-	addr, s := startServer(t)
+	addr, s, _ := startServer(t)
 	defer s.Stop()
 	client := dial(t, addr)
 	ctx := testContext(t)
@@ -197,5 +212,12 @@ func TestStoreEvictsOldest(t *testing.T) {
 	}
 	if n := h.Len(); n != MaxStoredMessages {
 		t.Fatalf("stored %d messages, want %d", n, MaxStoredMessages)
+	}
+	latest := strconv.Itoa(MaxStoredMessages + 4)
+	if _, duplicate, err := h.Publish(latest, "s", "*", nil, 0); err != nil || !duplicate {
+		t.Fatalf("newest message was not retained: duplicate=%v err=%v", duplicate, err)
+	}
+	if _, duplicate, err := h.Publish("0", "s", "*", nil, 0); err != nil || duplicate {
+		t.Fatalf("oldest message was not evicted: duplicate=%v err=%v", duplicate, err)
 	}
 }
