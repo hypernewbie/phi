@@ -2264,7 +2264,11 @@ export class App {
         const store = new PiLaunchStore(this.scope, writer);
         this.piLaunchStore = store;
         store.subscribe(() => {
-            if (this.piLaunchStore === store)
+            // A late notification can outlive a torn-down test environment
+            // where `document` no longer exists; the app itself always has
+            // one, but a leaked retry timer after dispose must not crash
+            // the worker with a ReferenceError.
+            if (this.piLaunchStore === store && typeof document !== 'undefined')
                 document.dispatchEvent(new Event('phi-pi-launch-change'));
         });
     }
