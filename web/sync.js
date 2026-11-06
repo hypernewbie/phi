@@ -25,9 +25,7 @@ function parsePushMessages(value) {
             typeof msg.value !== 'string' ||
             msg.value.length > 4096 ||
             !Number.isFinite(msg.updated_at_unix_ms) ||
-            (msg.seq !== undefined && !Number.isFinite(msg.seq)) ||
-            (msg.truncated !== undefined &&
-                typeof msg.truncated !== 'boolean'))
+            (msg.truncated !== undefined && typeof msg.truncated !== 'boolean'))
             return null;
     }
     return value;
@@ -159,7 +157,6 @@ export class SyncManager {
     _syncDebounce = null;
     _pushRefresh = null;
     _pushScope;
-    _pushExpanded = new Set();
     _pushRendered = '';
     constructor(app) {
         this.app = app;
@@ -464,7 +461,7 @@ export class SyncManager {
         catch {
             /* A damaged or unavailable cache is not a UI error. */
         }
-        this._pushExpanded.clear();
+        this.pushList?.replaceChildren();
         this._pushRendered = '';
         this.renderPushes(messages ?? []);
         this.setPushError(false);
@@ -543,21 +540,17 @@ export class SyncManager {
             return;
         this._pushRendered = rendered;
         this.pushSection.classList.toggle('hidden', messages.length === 0);
-        const ids = new Set(messages.map((msg) => msg.message_id));
-        for (const id of this._pushExpanded)
-            if (!ids.has(id))
-                this._pushExpanded.delete(id);
+        const expanded = new Set([
+            ...this.pushList.querySelectorAll('details[open]'),
+        ].map((card) => card.dataset.messageId));
         const focused = document.activeElement?.closest('.sync-card-push')?.dataset.messageId;
-        const sorted = [...messages].sort((a, b) => b.updated_at_unix_ms - a.updated_at_unix_ms ||
-            // The mesh stamps milliseconds, so two messages can share a
-            // timestamp. The hub sequence is the publish order.
-            (b.seq ?? 0) - (a.seq ?? 0));
         const frag = document.createDocumentFragment();
-        for (const msg of sorted) {
+        // The API returns publish order, newest last; wall clocks can go back.
+        for (const msg of [...messages].reverse()) {
             const card = document.createElement('details');
             card.className = 'sync-card sync-card-push';
             card.dataset.messageId = msg.message_id;
-            card.open = this._pushExpanded.has(msg.message_id);
+            card.open = expanded.has(msg.message_id);
             const when = new Date(msg.updated_at_unix_ms).toLocaleString();
             const sender = msg.sender || 'unknown';
             card.innerHTML = `
@@ -571,14 +564,6 @@ export class SyncManager {
                 </summary>
                 <div class="sync-card-value">${this.escapeHtml(msg.value)}</div>
             `;
-            card.addEventListener('toggle', () => {
-                if (!card.isConnected)
-                    return;
-                if (card.open)
-                    this._pushExpanded.add(msg.message_id);
-                else
-                    this._pushExpanded.delete(msg.message_id);
-            });
             frag.appendChild(card);
         }
         this.pushList.replaceChildren(frag);

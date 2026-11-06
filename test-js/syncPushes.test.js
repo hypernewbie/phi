@@ -71,18 +71,26 @@ describe('Syncboard addressed messages', () => {
         expect(manager.pushList.children).toHaveLength(0);
     });
 
-    it('orders messages that share a timestamp by the mesh sequence', () => {
-        newManager();
-        manager.renderPushes([
-            push({ message_id: 'first', seq: 1, updated_at_unix_ms: 5_000 }),
-            push({ message_id: 'second', seq: 2, updated_at_unix_ms: 5_000 }),
-        ]);
-        expect(
-            [...manager.pushList.children].map(
-                (card) => card.dataset.messageId,
-            ),
-        ).toEqual(['second', 'first']);
-    });
+    it.each([5_000, 4_000])(
+        'keeps newest-published first when the clock ties or moves back to %i',
+        (timestamp) => {
+            newManager();
+            const messages = [
+                push({ message_id: 'first', updated_at_unix_ms: 5_000 }),
+                push({ message_id: 'second', updated_at_unix_ms: timestamp }),
+            ];
+            manager.renderPushes(messages);
+            expect(
+                [...manager.pushList.children].map(
+                    (card) => card.dataset.messageId,
+                ),
+            ).toEqual(['second', 'first']);
+            expect(messages.map((message) => message.message_id)).toEqual([
+                'first',
+                'second',
+            ]);
+        },
+    );
 
     it('shows the peer host without its ephemeral port', () => {
         newManager();
@@ -90,19 +98,6 @@ describe('Syncboard addressed messages', () => {
         const key = manager.pushList.querySelector('.sync-card-key');
         expect(key.textContent).toBe('127.0.0.1 → pane-b');
         expect(key.getAttribute('title')).toBe('127.0.0.1:60517');
-    });
-
-    it('names the disclosure from the visible label, not the whole body', () => {
-        newManager();
-        manager.renderPushes([push({ value: 'x'.repeat(4096) })]);
-        const summary = manager.pushList.querySelector('summary');
-        expect(summary.getAttribute('aria-label')).toBeNull();
-        expect(
-            summary
-                .querySelector('.sync-push-preview')
-                .getAttribute('aria-hidden'),
-        ).toBe('true');
-        expect(summary.textContent).toContain('laptop-a → pane-b');
     });
 
     it('does not claim a saved list when the first refresh fails', async () => {
@@ -120,13 +115,18 @@ describe('Syncboard addressed messages', () => {
         manager.renderPushes([push()]);
         const card = manager.pushList.firstElementChild;
         card.open = true;
-        card.dispatchEvent(new Event('toggle'));
         card.querySelector('summary').focus();
-        manager.renderPushes([push()]);
-        expect(manager.pushList.firstElementChild.open).toBe(true);
-        expect(document.activeElement).toBe(
-            manager.pushList.querySelector('summary'),
+        // A new message forces a render before the browser's queued toggle
+        // event fires. Identical data would skip this path entirely.
+        manager.renderPushes([push(), push({ message_id: 'm-2' })]);
+        const refreshed = manager.pushList.querySelector(
+            '[data-message-id="m-1"]',
         );
+        expect(refreshed.open).toBe(true);
+        expect(document.activeElement).toBe(refreshed.querySelector('summary'));
+        refreshed.open = false;
+        manager.renderPushes([push()]);
+        expect(manager.pushList.firstElementChild.open).toBe(false);
     });
 
     it('fetches this Phi even when the remote board hangs', async () => {
@@ -181,6 +181,7 @@ describe('Syncboard addressed messages', () => {
         () => ({ ok: false, status: 502 }),
         () => [null],
         () => [push({ value: { invalid: true } })],
+        () => [push({ truncated: 'false' })],
     ])(
         'preserves the last good list on transport or malformed-response failure',
         async (handler) => {

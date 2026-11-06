@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -69,6 +68,9 @@ func TestSyncPushesEndpointListsAddressedMessages(t *testing.T) {
 	app.handleSyncPushes(rec, httptest.NewRequest(http.MethodGet, "/api/sync/pushes", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
 	}
 
 	var body []SyncPushMessage
@@ -135,11 +137,11 @@ func TestSyncPushesTruncatesOnARuneBoundary(t *testing.T) {
 	if !got.Truncated {
 		t.Fatal("oversized value was not marked truncated")
 	}
-	if !utf8.ValidString(got.Value) {
-		t.Fatal("truncated value is not valid UTF-8; the browser renders U+FFFD")
-	}
-	if len(got.Value) > maxSyncPushValueBytes {
-		t.Fatalf("value = %d bytes, want at most %d", len(got.Value), maxSyncPushValueBytes)
+	want := strings.Repeat("世", maxSyncPushValueBytes/3)
+	// JSON decoding repairs invalid UTF-8, so checking ValidString here
+	// cannot detect a split rune. Compare the exact prefix instead.
+	if got.Value != want {
+		t.Fatalf("truncated value did not preserve the complete-rune prefix")
 	}
 }
 
@@ -192,6 +194,22 @@ func TestSyncPushesWithoutMeshIsEmpty(t *testing.T) {
 	}
 	if len(body) != 0 {
 		t.Fatalf("got %d messages, want none", len(body))
+	}
+}
+
+// Addressed bodies must not inherit the public board's auth exemption.
+func TestSyncPushesRequiresAccessAuth(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	if err := setTestAccessRecord(auth, testAccessHash()); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/sync/pushes", testServer.handleSyncPushes)
+	rec := httptest.NewRecorder()
+	auth.Middleware(mux).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/sync/pushes", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d, want 401", rec.Code)
 	}
 }
 
