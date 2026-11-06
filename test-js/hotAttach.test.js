@@ -987,23 +987,28 @@ describe('checkpoint upload', () => {
         expect(upload).toHaveBeenCalledTimes(1);
     });
 
-    it('schedules nothing while the document is hidden', () => {
+    it('schedules nothing while the document is hidden, and drops an armed timer', () => {
         stubTerminalGlobal();
         const tm = makeTm();
         const upload = vi
             .spyOn(tm, '_uploadCheckpoint')
             .mockImplementation(() => {});
+        const visibility = (value) =>
+            Object.defineProperty(document, 'visibilityState', {
+                value,
+                configurable: true,
+            });
         vi.useFakeTimers();
-        Object.defineProperty(document, 'visibilityState', {
-            value: 'hidden',
-            configurable: true,
-        });
 
         try {
             tm.createTab('p12', 's12', 'T', 'bash', '', '', false);
             const tab = tm.tabs.get('p12');
             tab.serializeAddon = { serialize: () => 'SNAPSHOT' };
             tab._ckptEnabled = true;
+            // A quiet timer armed while visible must not survive the hide.
+            tm._scheduleCheckpointUpload(tab);
+            expect(tab._ckptTimer).not.toBeNull();
+            visibility('hidden');
             for (let i = 0; i < 60; i++) {
                 tm._scheduleCheckpointUpload(tab);
                 vi.advanceTimersByTime(100);
@@ -1011,10 +1016,7 @@ describe('checkpoint upload', () => {
             expect(tab._ckptTimer).toBeNull();
         } finally {
             vi.useRealTimers();
-            Object.defineProperty(document, 'visibilityState', {
-                value: 'visible',
-                configurable: true,
-            });
+            visibility('visible');
         }
 
         expect(upload).not.toHaveBeenCalled();
@@ -1090,6 +1092,48 @@ describe('checkpoint upload', () => {
 
         expect(beacon).toHaveBeenCalledTimes(1);
         expect(fetcher).toHaveBeenCalledTimes(1);
+        // The fallback outlives a hidden page or a navigation.
+        expect(fetcher.mock.calls[0][1]).toMatchObject({ keepalive: true });
+    });
+
+    it('pagehide never retries over fetch when the beacon is refused', () => {
+        const tm = Object.create(TabManager.prototype);
+        tm.tabs = new Map();
+        tm.saveActiveDraft = vi.fn();
+        const fetcher = vi.fn(async () => ({ ok: true }));
+        vi.stubGlobal('fetch', fetcher);
+        const beacon = vi.fn(() => false);
+        const original = Object.getOwnPropertyDescriptor(
+            navigator,
+            'sendBeacon',
+        );
+        Object.defineProperty(navigator, 'sendBeacon', {
+            value: beacon,
+            configurable: true,
+        });
+
+        try {
+            tm.tabs.set('p15', {
+                paneId: 'p15',
+                paneEpoch: 7,
+                drainedSeq: 5,
+                isDead: false,
+                serializeAddon: { serialize: () => 'SNAPSHOT' },
+                ws: { mode: 'hot' },
+                term: { cols: 80, rows: 24 },
+            });
+            tm._checkpointOnLeave();
+        } finally {
+            if (original) {
+                Object.defineProperty(navigator, 'sendBeacon', original);
+            } else {
+                delete navigator.sendBeacon;
+            }
+            vi.unstubAllGlobals();
+        }
+
+        expect(beacon).toHaveBeenCalledTimes(1);
+        expect(fetcher).not.toHaveBeenCalled();
     });
 
     it('drops the upload when the terminal is gone instead of throwing', () => {

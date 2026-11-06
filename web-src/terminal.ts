@@ -5723,10 +5723,7 @@ export class TabManager {
         }
     }
 
-    _uploadCheckpoint(
-        tabInfo: TabInfo,
-        options: { force?: boolean; unload?: boolean } = {},
-    ) {
+    _uploadCheckpoint(tabInfo: TabInfo, options: { unload?: boolean } = {}) {
         const pty = tabInfo.ws;
         if (
             !tabInfo.serializeAddon ||
@@ -5822,15 +5819,19 @@ export class TabManager {
                 url,
                 new Blob([json], { type: 'application/json' }),
             );
-        if ((options as { unload?: boolean } | null)?.unload) {
+        if (options.unload) {
             beacon();
             return;
         }
         if (beacon()) return;
+        // keepalive lets the fallback outlive a navigation or a freeze, the
+        // property the beacon would have provided. CHECKPOINT_BYTES keeps the
+        // body inside the browser's 64 KiB keepalive limit.
         fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: json,
+            keepalive: true,
         })
             .then((res) => {
                 if (res.ok) termPerfMark('ckpt-uploaded');

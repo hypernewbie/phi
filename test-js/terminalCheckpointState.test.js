@@ -112,3 +112,42 @@ it.each([
         expect(body.through).toBe(100);
     },
 );
+
+it('drops the upload rather than post a body over the budget', () => {
+    const manager = Object.create(TabManager.prototype);
+    const fetcher = vi.fn(async () => ({ ok: true }));
+    vi.stubGlobal('fetch', fetcher);
+    const beacon = vi.fn(() => true);
+    const original = Object.getOwnPropertyDescriptor(navigator, 'sendBeacon');
+    Object.defineProperty(navigator, 'sendBeacon', {
+        value: beacon,
+        configurable: true,
+    });
+
+    try {
+        manager._uploadCheckpoint({
+            paneId: 'p',
+            paneEpoch: 7,
+            drainedSeq: 100,
+            // Over budget even at zero scrollback rows: no upload is better
+            // than a body the browser refuses.
+            serializeAddon: { serialize: () => 'x'.repeat(64 * 1024) },
+            ws: { mode: 'hot' },
+            term: {
+                cols: 80,
+                rows: 24,
+                buffer: { active: { baseY: 10000 } },
+            },
+        });
+    } finally {
+        if (original) {
+            Object.defineProperty(navigator, 'sendBeacon', original);
+        } else {
+            delete navigator.sendBeacon;
+        }
+        vi.unstubAllGlobals();
+    }
+
+    expect(beacon).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();
+});
