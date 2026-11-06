@@ -111,7 +111,12 @@ func sendPush(p *peer, pane, proc string, gen uint64, notification *pibridgepb.S
 }
 
 // A replaced peer must not retire work belonging to the new stream.
+// notifyMu serializes retirement with state and peer-down callbacks: an
+// acknowledgement that arrives while a capability change is being published
+// must not clear retention for work the new stream never accepted.
 func (s *Server) deliverSyncboardPushAck(l *lease, p *peer, ack *pibridgepb.SyncboardPushAck) {
+	l.notifyMu.Lock()
+	defer l.notifyMu.Unlock()
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.peer != p || l.state != leaseLive || p.generation != l.maxGen ||

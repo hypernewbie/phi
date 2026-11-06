@@ -1,6 +1,7 @@
 package pibridge
 
 import (
+	"errors"
 	"strconv"
 	"testing"
 	"time"
@@ -64,6 +65,58 @@ func TestPushWriterProgressDrainsBacklogWithoutReconnect(t *testing.T) {
 		case <-timer.C:
 			t.Fatalf("writer sent only %d of %d retained pushes without reconnect", i, maxPendingPushes)
 		}
+	}
+}
+
+// TestPushAckWaitsForStatePublication pins the ordering the ack path needs:
+// a capability change is published under notifyMu, so an acknowledgement that
+// lands mid-publication must wait rather than retire work the about-to-be
+// published stream state has not accounted for.
+func TestPushAckWaitsForStatePublication(t *testing.T) {
+	p := newPeer(1, "session", nil)
+	l := &lease{state: leaseLive, maxGen: 1, peer: p, caps: []string{CapabilitySyncboardPush},
+		pendingPushes: map[string]*pendingPush{"message": {notification: &pibridgepb.SyncboardNotification{Seq: 7, MessageId: "message"}, sentTo: p}},
+		pendingOrder:  []string{"message"}}
+	s := &Server{}
+	l.notifyMu.Lock() // A state change is being published.
+	done := make(chan struct{})
+	go func() {
+		s.deliverSyncboardPushAck(l, p, &pibridgepb.SyncboardPushAck{Seq: 7, MessageId: "message"})
+		close(done)
+	}()
+	time.Sleep(20 * time.Millisecond)
+	if l.pendingPushCount() != 1 {
+		t.Fatal("acknowledgement retired work during state publication")
+	}
+	l.notifyMu.Unlock()
+	<-done
+	if l.pendingPushCount() != 0 {
+		t.Fatal("acknowledgement did not retire work after publication")
+	}
+}
+
+// TestPushBacklogAdmitsKnownIDAtCapacity is the retry-under-pressure
+// invariant: a full backlog refuses new work, but a repeat of an already
+// retained message is a retry, not new work, and must still be accepted.
+func TestPushBacklogAdmitsKnownIDAtCapacity(t *testing.T) {
+	p := newPeer(1, "session", nil)
+	l := &lease{paneID: "pane", processID: "process", state: leaseLive, peer: p,
+		maxGen: 1, caps: []string{CapabilitySyncboardPush}}
+	s := &Server{reg: newRegistry()}
+	s.reg.byPane["pane"] = l
+	for i := 0; i < maxPendingPushes; i++ {
+		if err := s.SendSyncboardPush("pane", SyncboardPush{Recipient: "pane", MessageID: strconv.Itoa(i), Value: []byte("body")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.SendSyncboardPush("pane", SyncboardPush{Recipient: "pane", MessageID: "new", Value: []byte("body")}); !errors.Is(err, ErrPushBacklogFull) {
+		t.Fatalf("new work at capacity: %v, want ErrPushBacklogFull", err)
+	}
+	if err := s.SendSyncboardPush("pane", SyncboardPush{Recipient: "pane", MessageID: "0", Value: []byte("body")}); err != nil {
+		t.Fatalf("retry of retained work refused at capacity: %v", err)
+	}
+	if got := l.pendingPushCount(); got != maxPendingPushes {
+		t.Fatalf("pending = %d, want %d: a retry must not consume a slot", got, maxPendingPushes)
 	}
 }
 

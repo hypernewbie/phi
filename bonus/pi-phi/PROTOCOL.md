@@ -272,8 +272,11 @@ acknowledgement to the current peer and the notification's sequence.
 
 Pi dispatches a displayed `phi-syncboard` custom message with
 `triggerTurn: true` and `deliverAs: 'followUp'`. The public extension API
-returns void. An acknowledgement means the call returned normally, not
-that a provider completed a turn. A synchronous refusal is not acknowledged.
+returns void and reports a failure asynchronously, as a host error, not as a
+thrown exception. An acknowledgement means the dispatch call was accepted by
+the extension API; it is not a turn receipt, and a dispatch that fails after
+acceptance is not retried. The handler still guards the synchronous-refusal
+case for hosts whose injection hook throws.
 The text names sender, recipient, and message ID. Its body is capped at 8 KiB
 with an explicit truncation note. Partial UTF-8 characters are not injected.
 
@@ -281,14 +284,20 @@ Phi retains up to 32 unacknowledged notifications per lease. A full backlog
 refuses new work without evicting accepted work. Writer progress queues work
 that was never sent; reconnect replays unacknowledged work. Pi remembers the
 last 256 injected IDs in process-owned state across reconnects and reloads,
-so a lost acknowledgement does not repeat a turn within that window.
+so a lost acknowledgement does not repeat a turn within that window. That
+deduplication is process-owned: a Pi process restart between dispatch and
+acknowledgement loses the remembered ID, so the replay injects the message
+again. Delivery is at-most-once per `message_id` within one Pi process
+lifetime, not across restarts.
 
 The local mesh dispatcher retains the hub's 1024-message window, retries
 unavailable panes, and recovers retained events after a subscriber gap. Its
 window is memory-only: process restart or retention expiry can lose pending
-work. There is no cross-Phi follower, durable delivery, or authenticated
-routable mesh in this increment. The mesh is opt-in and loopback-only.
-`GET /api/sync/pushes` is a bounded local history view, not a delivery receipt.
+work, including an unacknowledged message that a Phi restart drops before its
+own dispatcher replayed it. There is no cross-Phi follower, durable delivery,
+or authenticated routable mesh in this increment. The mesh is opt-in and
+loopback-only. No HTTP endpoint exposes the push window; it is internal state,
+not a delivery receipt.
 
 ## Live state reads
 

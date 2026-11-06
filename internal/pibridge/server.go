@@ -698,6 +698,8 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 	// Replay what the runtime has not acknowledged. A push sent while it was
 	// away is retained, so a reconnect delivers it instead of losing it; the
 	// runtime dedupes by message_id, so a repeat never injects twice.
+	// The read loop starts after this, so no acknowledgement can arrive before
+	// the replay is queued and clear work ahead of its notification.
 	l.flushPendingPushes(p)
 
 	for {

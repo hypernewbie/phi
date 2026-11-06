@@ -103,9 +103,9 @@ func (h *Hub) Publish(messageID, sender, recipient string, value []byte, hops ui
 	return seq, false, nil
 }
 
-// Recent returns up to limit stored messages, newest last, so the browser can
-// render what was addressed on this Phi. The value is copied: a caller must
-// never be able to mutate stored state.
+// Recent returns up to limit stored messages, newest last. The push
+// dispatcher uses it to recover after a subscriber gap. The value is copied:
+// a caller must never be able to mutate stored state.
 func (h *Hub) Recent(limit int) []*syncmeshb.SyncEvent {
 	if limit <= 0 {
 		return nil
