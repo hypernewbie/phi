@@ -936,37 +936,119 @@ describe('checkpoint upload', () => {
         expect(usedScrollback).toBeLessThan(256);
     });
 
-    it('leaves a snapshot behind during output that never goes quiet', () => {
+    it('waits for silence instead of snapshotting a stream that never goes quiet', () => {
         stubTerminalGlobal();
         const tm = makeTm();
         const upload = vi
             .spyOn(tm, '_uploadCheckpoint')
             .mockImplementation(() => {});
         vi.useFakeTimers();
-        const originalMatchMedia = window.matchMedia;
-        window.matchMedia = (query) => ({
-            matches: query === '(pointer: coarse)',
-            media: query,
-        });
 
         try {
             tm.createTab('p11', 's11', 'T', 'bash', '', '', false);
             const tab = tm.tabs.get('p11');
             tab.serializeAddon = { serialize: () => 'SNAPSHOT' };
             tab._ckptEnabled = true;
-            // Every parsed batch re-arms the quiet timer, so continuous
-            // output would otherwise never store a snapshot.
+            // Every parsed batch re-arms the quiet timer, so output that keeps
+            // arriving must not serialize a full scrollback snapshot.
             for (let i = 0; i < 60; i++) {
                 tm._scheduleCheckpointUpload(tab);
                 vi.advanceTimersByTime(100);
             }
+            expect(tab._ckptTimer).not.toBeNull();
         } finally {
             vi.useRealTimers();
-            if (originalMatchMedia === undefined) delete window.matchMedia;
-            else window.matchMedia = originalMatchMedia;
         }
 
-        expect(upload).toHaveBeenCalled();
+        expect(upload).not.toHaveBeenCalled();
+    });
+
+    it('uploads one snapshot once the output goes quiet', () => {
+        stubTerminalGlobal();
+        const tm = makeTm();
+        const upload = vi
+            .spyOn(tm, '_uploadCheckpoint')
+            .mockImplementation(() => {});
+        vi.useFakeTimers();
+
+        try {
+            tm.createTab('p11b', 's11b', 'T', 'bash', '', '', false);
+            const tab = tm.tabs.get('p11b');
+            tab.serializeAddon = { serialize: () => 'SNAPSHOT' };
+            tab._ckptEnabled = true;
+            tm._scheduleCheckpointUpload(tab);
+            vi.advanceTimersByTime(1_999);
+            expect(upload).not.toHaveBeenCalled();
+            vi.advanceTimersByTime(1);
+        } finally {
+            vi.useRealTimers();
+        }
+
+        expect(upload).toHaveBeenCalledTimes(1);
+    });
+
+    it('schedules nothing while the document is hidden', () => {
+        stubTerminalGlobal();
+        const tm = makeTm();
+        const upload = vi
+            .spyOn(tm, '_uploadCheckpoint')
+            .mockImplementation(() => {});
+        vi.useFakeTimers();
+        Object.defineProperty(document, 'visibilityState', {
+            value: 'hidden',
+            configurable: true,
+        });
+
+        try {
+            tm.createTab('p12', 's12', 'T', 'bash', '', '', false);
+            const tab = tm.tabs.get('p12');
+            tab.serializeAddon = { serialize: () => 'SNAPSHOT' };
+            tab._ckptEnabled = true;
+            for (let i = 0; i < 60; i++) {
+                tm._scheduleCheckpointUpload(tab);
+                vi.advanceTimersByTime(100);
+            }
+            expect(tab._ckptTimer).toBeNull();
+        } finally {
+            vi.useRealTimers();
+            Object.defineProperty(document, 'visibilityState', {
+                value: 'visible',
+                configurable: true,
+            });
+        }
+
+        expect(upload).not.toHaveBeenCalled();
+    });
+
+    it('hide leaves one snapshot and cancels the queued quiet timer', () => {
+        stubTerminalGlobal();
+        const tm = makeTm();
+        tm.saveActiveDraft = vi.fn();
+        const upload = vi
+            .spyOn(tm, '_uploadCheckpoint')
+            .mockImplementation(() => {});
+        vi.useFakeTimers();
+        let tab;
+
+        try {
+            tm.createTab('p13', 's13', 'T', 'bash', '', '', false);
+            tab = tm.tabs.get('p13');
+            tab.serializeAddon = { serialize: () => 'SNAPSHOT' };
+            tab._ckptEnabled = true;
+            tm._scheduleCheckpointUpload(tab);
+            expect(tab._ckptTimer).not.toBeNull();
+
+            tm._checkpointOnLeave();
+
+            expect(tab._ckptTimer).toBeNull();
+            vi.advanceTimersByTime(10_000);
+        } finally {
+            vi.useRealTimers();
+        }
+
+        expect(tm.saveActiveDraft).toHaveBeenCalledTimes(1);
+        expect(upload).toHaveBeenCalledTimes(1);
+        expect(upload).toHaveBeenCalledWith(tab, { unload: true });
     });
 
     it('drops the upload when the terminal is gone instead of throwing', () => {

@@ -467,13 +467,11 @@ const PHONE_CHECKPOINT_ROWS = 256;
 // A bounded recording span can arrive in several positive-progress parts.
 // No client byte/hash cache participates in recovery.
 // After output stays quiet this long, the client uploads a screen
-// checkpoint so the next attach restores instantly.
+// checkpoint so the next attach restores instantly. A stream that never
+// pauses uploads nothing: re-serializing the whole scrollback on a timer
+// costs more than the snapshot is worth, and raw replay already covers a
+// mid-stream attach.
 const CHECKPOINT_QUIET_MS = 2000;
-// Sustained output never goes quiet. Without a ceiling the snapshot waits for
-// the first silence, so a reader who reloads mid-stream has nothing to
-// restore. The upload is bounded by COARSE_CHECKPOINT_BYTES, so this costs at
-// most one beacon of that size per window.
-const CHECKPOINT_MAX_WAIT_MS = 5000;
 function isTerminalFindShortcut(e) {
     return (e.type === 'keydown' &&
         !e.altKey &&
@@ -855,14 +853,7 @@ export class TabManager {
         // page counts as leaving: iOS can kill a backgrounded page without
         // ever firing pagehide, and the beacon needs to be queued first.
         if (typeof window !== 'undefined') {
-            const leaveCheckpoint = () => {
-                this.saveActiveDraft();
-                for (const tab of this.tabs.values()) {
-                    if (tab.serializeAddon && !tab.isDead) {
-                        this._uploadCheckpoint(tab, { unload: true });
-                    }
-                }
-            };
+            const leaveCheckpoint = () => this._checkpointOnLeave();
             window.addEventListener('pagehide', leaveCheckpoint);
             document.addEventListener('visibilitychange', () => {
                 if (document.visibilityState === 'hidden')
@@ -4254,16 +4245,33 @@ export class TabManager {
         if (!tabInfo.serializeAddon || !tabInfo._ckptEnabled)
             return;
         clearTimeout(tabInfo._ckptTimer ?? undefined);
-        const now = Date.now();
-        if (!tabInfo._ckptWaitingSince)
-            tabInfo._ckptWaitingSince = now;
-        const wait = now - tabInfo._ckptWaitingSince >= CHECKPOINT_MAX_WAIT_MS
-            ? 0
-            : CHECKPOINT_QUIET_MS;
+        tabInfo._ckptTimer = null;
+        // A hidden page already left its snapshot behind in
+        // _checkpointOnLeave and must not serialize its scrollback on a timer.
+        if (document.visibilityState === 'hidden')
+            return;
         tabInfo._ckptTimer = setTimeout(() => {
             tabInfo._ckptTimer = null;
             this._uploadCheckpoint(tabInfo);
-        }, wait);
+        }, CHECKPOINT_QUIET_MS);
+    }
+    /**
+     * Leaves one last snapshot behind when the page is going away or hiding.
+     * Queued quiet-timer uploads are cancelled first: the hide beacon already
+     * covers the restore point, and a hidden page must not keep serializing
+     * its scrollback on a timer.
+     */
+    _checkpointOnLeave() {
+        this.saveActiveDraft();
+        for (const tab of this.tabs.values()) {
+            if (tab._ckptTimer) {
+                clearTimeout(tab._ckptTimer);
+                tab._ckptTimer = null;
+            }
+            if (tab.serializeAddon && !tab.isDead) {
+                this._uploadCheckpoint(tab, { unload: true });
+            }
+        }
     }
     _uploadCheckpoint(tabInfo, options = {}) {
         const pty = tabInfo.ws;
@@ -4335,7 +4343,6 @@ export class TabManager {
         // navigation or close cannot abort it into a failed request. An
         // unload upload has no time to retry, so a refused beacon is simply
         // lost; while the page is still alive a refusal falls back to fetch.
-        tabInfo._ckptWaitingSince = 0;
         const url = `/api/terminals/${encodeURIComponent(tabInfo.paneId)}/checkpoint`;
         const json = JSON.stringify(payload);
         const beacon = () => navigator.sendBeacon?.(url, new Blob([json], { type: 'application/json' }));
