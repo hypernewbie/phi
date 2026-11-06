@@ -110,6 +110,9 @@ type Bridge struct {
 	Syncboard http.Handler
 	// LoadConfig reads the live config for sync routing; nil refuses sync.
 	LoadConfig func() (config.Config, error)
+	// bindSession records a session ID the Pi runtime reported for a live
+	// pane. nil leaves the pane's stored identity untouched.
+	bindSession func(*pty.PTYInstance, string)
 
 	mu     sync.Mutex
 	panes  map[string]*bridgePane
@@ -121,6 +124,7 @@ type bridgePane struct {
 	managed           bool
 	reason            string
 	inst              *pty.PTYInstance
+	sessionID         string // identity last reported by the runtime
 	pubRev            uint64 // latest applied publication; 0 means unseeded
 	gen               uint64
 	hasGen            bool
@@ -412,6 +416,17 @@ func (b *Bridge) SetListenerAddr(addr net.Addr) {
 	b.mu.Unlock()
 }
 
+// SetSessionBinder registers the sink for session IDs the runtime reports on
+// Hello. A nil bridge or nil fn leaves the launched identity untouched.
+func (b *Bridge) SetSessionBinder(fn func(*pty.PTYInstance, string)) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.bindSession = fn
+	b.mu.Unlock()
+}
+
 // Complete binds the spawned instance and marks a provisioned lease live
 // after successful spawn. Unknown panes are ignored. The first instance
 // wins: a duplicate provision for a live pane never clobbers the owner.
@@ -425,11 +440,21 @@ func (b *Bridge) Complete(inst *pty.PTYInstance) {
 		b.mu.Unlock()
 		return
 	}
+	var bind func(*pty.PTYInstance, string)
+	var bindID string
 	if p.inst == nil {
 		p.inst = inst
+		// The runtime can state its identity before the spawn path
+		// registers the instance; onState defers to this side, so the
+		// first registration adopts an already reported identity.
+		bind = b.bindSession
+		bindID = p.sessionID
 	}
 	processID, managed := p.processID, p.managed
 	b.mu.Unlock()
+	if bindID != "" && bind != nil {
+		bind(inst, bindID)
+	}
 	if !managed {
 		return
 	}
@@ -942,12 +967,25 @@ func (b *Bridge) PaneSnapshot(paneID string) BridgePaneState {
 // older-or-equal publication revisions are dropped. A newer
 // generation clears the obsolete retained settlement and the stale
 // model/usage of the old process. A callback without state advances
-// the revision floor but keeps model/thinking unknown. It never calls
-// back into the Server; all live values arrive as arguments.
+// the revision floor but keeps model/thinking unknown. The session
+// identity is the one exception to arguments-only: it is read from the
+// lease, which is owned by the Server, because the runtime states it
+// on Hello and a pane launched without a forced --session-id adopts it
+// here.
 func (b *Bridge) onState(paneID, processID string, generation, pubRev uint64, running, hasState bool, model, thinkingLevel string, caps []string, usage *pibridge.ContextUsage, readiness *pibridge.Readiness, reload *pibridge.ReloadReadiness) {
+	// The runtime states its own session identity on Hello, so a pane launched
+	// without a forced --session-id learns it here. Read outside b.mu: the
+	// lease lock is a separate domain.
+	sessionID := ""
+	if state, ok := b.server.PaneState(processID); ok {
+		sessionID = state.SessionID
+	}
 	b.mu.Lock()
 	p, ok := b.panes[paneID]
 	var view bridgeStateView
+	var bindInst *pty.PTYInstance
+	var bindID string
+	bind := b.bindSession
 	if ok && p.managed && p.processID == processID {
 		if p.hasGen && generation < p.gen {
 			ok = false
@@ -990,12 +1028,26 @@ func (b *Bridge) onState(paneID, processID string, generation, pubRev uint64, ru
 			}
 			connected := true
 			p.lastConnected = &connected
+			// A reported identity that differs from the stored one is
+			// bound after the lock: the pane's saved identity is what a
+			// restore resumes. Before the spawn path registers the
+			// instance the identity is only recorded — Complete adopts
+			// it on registration — so the bind happens exactly once.
+			if sessionID != "" && sessionID != p.sessionID {
+				p.sessionID = sessionID
+				if p.inst != nil {
+					bindInst, bindID = p.inst, sessionID
+				}
+			}
 			view = p.snapshot()
 		}
 	} else {
 		ok = false
 	}
 	b.mu.Unlock()
+	if bindInst != nil && bind != nil {
+		bind(bindInst, bindID)
+	}
 	if !ok {
 		return
 	}

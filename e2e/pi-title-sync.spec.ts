@@ -14,6 +14,7 @@ import {
     type WebSocketRoute,
 } from '@playwright/test';
 import { configToToml, startPhi } from './_server.js';
+import { syntheticPiSource } from './_pi-bridge.js';
 
 const secondSessionID = 'e2e-second-worktree-native-id';
 const promptTitle = 'Implement Pi title synchronization';
@@ -63,6 +64,20 @@ async function apiTitle(
     return tabs.find((tab) => tab.id === paneID)?.title;
 }
 
+async function apiSessionID(
+    request: APIRequestContext,
+    url: string,
+    paneID: string,
+) {
+    const response = await request.get(`${url}/api/terminals`);
+    if (!response.ok()) return undefined;
+    const tabs = (await response.json()) as Array<{
+        id: string;
+        session_id: string;
+    }>;
+    return tabs.find((tab) => tab.id === paneID)?.session_id;
+}
+
 test('Pi terminal labels follow native file titles through reload and reconnect', async ({
     page,
     request,
@@ -84,6 +99,10 @@ test('Pi terminal labels follow native file titles through reload and reconnect'
                 configToToml({
                     workspaces: [realpathSync(cwdA), realpathSync(cwdB)],
                     theme_color: 'purple',
+                    // The stand-in never loads the bridge extension, so it
+                    // reports no session ID: Phi keeps choosing one, which is
+                    // the identity these native title files are written under.
+                    pi_bridge_no_inject: true,
                 }),
             );
             const command = join(dir, 'fake-pi');
@@ -314,6 +333,109 @@ done
         });
         await expect(freshLabel).toHaveText('Browser acknowledged name', {
             timeout: 10_000,
+        });
+    } finally {
+        await phi.stop();
+    }
+});
+
+// A pane whose runtime chooses its own identity has no --session-id to start
+// from. The browser opens the tab from the spawn response, which carries no
+// identity, so the first title push is where it learns one. A client that
+// refused a push for an unbound tab leaves the label at its placeholder.
+test('a bridge-bound Pi pane adopts the identity its runtime reports', async ({
+    page,
+    request,
+}) => {
+    test.setTimeout(180_000);
+    const worktree = 'pi-bridge-title-worktree';
+    const bridgeSessionID = 'e2e-bridge-session';
+    const phi = await startPhi({
+        setup(dir) {
+            const home = join(dir, 'home');
+            const cwd = join(dir, worktree);
+            mkdirSync(cwd, { recursive: true });
+            const backends = join(home, '.phi', 'backends');
+            mkdirSync(backends, { recursive: true });
+            writeFileSync(
+                join(home, '.phi', 'config.toml'),
+                configToToml({ workspaces: [realpathSync(cwd)] }),
+            );
+            const synthetic = join(dir, 'synthetic-pi.cjs');
+            writeFileSync(
+                synthetic,
+                syntheticPiSource(
+                    join(
+                        process.cwd(),
+                        'bonus',
+                        'pi-phi',
+                        'dist',
+                        'pi-phi-extension.cjs',
+                    ),
+                ),
+                { mode: 0o755 },
+            );
+            writeFileSync(
+                join(backends, 'pi.json'),
+                JSON.stringify({ id: 'pi', command: synthetic }),
+            );
+        },
+    });
+
+    try {
+        const home = join(phi.dir, 'home');
+        const cwd = realpathSync(join(phi.dir, worktree));
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await page.goto(phi.url);
+
+        // Spawn from the UI: the tab is created from the spawn response, which
+        // carries no identity for a bridge-managed pane.
+        await page
+            .locator('#empty-quick-launch .empty-launch-btn[data-coder="pi"]')
+            .click();
+        let paneID = '';
+        let paneCwd = '';
+        await expect
+            .poll(
+                async () => {
+                    const response = await request.get(
+                        `${phi.url}/api/terminals`,
+                    );
+                    if (!response.ok()) return '';
+                    const tabs = (await response.json()) as Array<{
+                        id: string;
+                        coder: string;
+                        cwd: string;
+                    }>;
+                    const pane = tabs.find((tab) => tab.coder === 'pi');
+                    paneID = pane?.id ?? '';
+                    paneCwd = pane?.cwd ?? '';
+                    return paneID;
+                },
+                { timeout: 15_000 },
+            )
+            .not.toBe('');
+
+        // Hello binds the identity the runtime reports.
+        await expect
+            .poll(() => apiSessionID(request, phi.url, paneID), {
+                timeout: 15_000,
+            })
+            .toBe(bridgeSessionID);
+
+        // The runtime records its own title; the push that carries it is the
+        // first time the browser sees this identity.
+        writeSession(home, paneCwd, bridgeSessionID, [
+            { type: 'session_info', name: 'Bridge bound title' },
+        ]);
+        await expect
+            .poll(() => apiTitle(request, phi.url, paneID), {
+                timeout: 45_000,
+            })
+            .toBe('Bridge bound title');
+        const label = page.locator(`.tab[data-pane-id="${paneID}"] .tab-title`);
+        await expect(label).toHaveText('Bridge bound title', {
+            timeout: 15_000,
         });
     } finally {
         await phi.stop();

@@ -1881,3 +1881,129 @@ func TestHandlePiBridgeInvokeSkill(t *testing.T) {
 		t.Fatalf("dead peer code %d, want 503", rec.Code)
 	}
 }
+
+// A pane launched without a forced --session-id learns the identity the
+// runtime reports on Hello. Rebinding is idempotent: repeated snapshots with
+// the same identity do not touch the stored value again.
+func TestBridgeBindsReportedSessionID(t *testing.T) {
+	b := startTestBridge(t)
+
+	type bound struct {
+		inst *pty.PTYInstance
+		id   string
+	}
+	calls := make(chan bound, 4)
+	b.SetSessionBinder(func(inst *pty.PTYInstance, id string) { calls <- bound{inst, id} })
+
+	env, _, managed := b.Provision("pane-bind", true)
+	if !managed {
+		t.Fatal("provision not managed")
+	}
+	inst := &pty.PTYInstance{ID: "pane-bind"}
+	b.Complete(inst)
+
+	stream, _ := dialBridge(t, b, "pane-bind", env[piBridgeEnvProcess], env[piBridgeEnvToken])
+	hello := &pibridgepb.PiToPhi{
+		PaneId: "pane-bind", ProcessId: env[piBridgeEnvProcess], RuntimeGeneration: 1,
+		Payload: &pibridgepb.PiToPhi_Hello{Hello: &pibridgepb.Hello{
+			ProtocolVersion: 1, SessionId: "reported-session", RuntimeId: "rt",
+			Capabilities: []string{"pi.lifecycle.v1"},
+			CurrentState: &pibridgepb.StateSnapshot{
+				State: pibridgepb.LogicalState_LOGICAL_STATE_IDLE, SessionId: "reported-session",
+			},
+		}},
+	}
+	if err := stream.Send(hello); err != nil {
+		t.Fatalf("hello: %v", err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("accepted: %v", err)
+	}
+	select {
+	case got := <-calls:
+		if got.inst != inst || got.id != "reported-session" {
+			t.Fatalf("bound %+v, want the pane instance and reported id", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no session bind")
+	}
+
+	state := &pibridgepb.PiToPhi{
+		PaneId: "pane-bind", ProcessId: env[piBridgeEnvProcess], RuntimeGeneration: 1,
+		Payload: &pibridgepb.PiToPhi_StateSnapshot{StateSnapshot: &pibridgepb.StateSnapshot{
+			State: pibridgepb.LogicalState_LOGICAL_STATE_RUNNING, SessionId: "reported-session",
+		}},
+	}
+	if err := stream.Send(state); err != nil {
+		t.Fatalf("state: %v", err)
+	}
+	select {
+	case got := <-calls:
+		t.Fatalf("rebound unchanged identity: %+v", got)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// The runtime may state its identity before the spawn path registers the
+// instance. The bind must still happen exactly once, whichever side wins.
+func TestBridgeBindsReportedSessionIDBeforeInstanceRegistration(t *testing.T) {
+	b := startTestBridge(t)
+
+	type bound struct {
+		inst *pty.PTYInstance
+		id   string
+	}
+	calls := make(chan bound, 4)
+	b.SetSessionBinder(func(inst *pty.PTYInstance, id string) { calls <- bound{inst, id} })
+
+	env, _, managed := b.Provision("pane-race", true)
+	if !managed {
+		t.Fatal("provision not managed")
+	}
+
+	// Hello arrives first: no instance is registered yet, so the identity is
+	// deferred, not lost.
+	stream, _ := dialBridge(t, b, "pane-race", env[piBridgeEnvProcess], env[piBridgeEnvToken])
+	hello := &pibridgepb.PiToPhi{
+		PaneId: "pane-race", ProcessId: env[piBridgeEnvProcess], RuntimeGeneration: 1,
+		Payload: &pibridgepb.PiToPhi_Hello{Hello: &pibridgepb.Hello{
+			ProtocolVersion: 1, SessionId: "race-session", RuntimeId: "rt",
+			Capabilities: []string{"pi.lifecycle.v1"},
+			CurrentState: &pibridgepb.StateSnapshot{
+				State: pibridgepb.LogicalState_LOGICAL_STATE_IDLE, SessionId: "race-session",
+			},
+		}},
+	}
+	if err := stream.Send(hello); err != nil {
+		t.Fatalf("hello: %v", err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("accepted: %v", err)
+	}
+	select {
+	case got := <-calls:
+		t.Fatalf("bound before instance registration: %+v", got)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// Registration adopts the deferred identity exactly once.
+	inst := &pty.PTYInstance{ID: "pane-race"}
+	b.Complete(inst)
+	select {
+	case got := <-calls:
+		if got.inst != inst || got.id != "race-session" {
+			t.Fatalf("bound %+v, want the pane instance and reported id", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no session bind on registration")
+	}
+
+	// A repeated Complete for the same pane never rebinds.
+	replacement := &pty.PTYInstance{ID: "pane-race"}
+	b.Complete(replacement)
+	select {
+	case got := <-calls:
+		t.Fatalf("rebound on duplicate registration: %+v", got)
+	case <-time.After(200 * time.Millisecond):
+	}
+}

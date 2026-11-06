@@ -75,10 +75,6 @@ func (app *Server) spawnTerminal(ctx context.Context, c coders.Coder, req SpawnR
 			req.SessionID = ""
 		}
 	}
-	id := req.SessionID
-	if id == "" {
-		c, id = coders.FreshSession(c)
-	}
 	// Bridge provisioning precedes launch resolution so credentials and
 	// extension args enter the plan. The pane ID is fixed up front for
 	// managed coders; SpawnWithOptions adopts an explicit opts.ID.
@@ -98,6 +94,13 @@ func (app *Server) spawnTerminal(ctx context.Context, c coders.Coder, req SpawnR
 		if managedPane && opts.ID != "" {
 			bridge.RevokePane(opts.ID)
 		}
+	}
+	// A pane that received the bridge extension reports its own session ID on
+	// Hello, so the launch does not force one. Every other path keeps the
+	// caller-chosen ID: without the bridge nothing would report it back.
+	id := req.SessionID
+	if id == "" && len(bridgeExtArgs) == 0 {
+		c, id = coders.FreshSession(c)
 	}
 	plan, err := coders.ResolveLaunch(c, coders.SpawnRequest{Coder: req.Coder, Cwd: req.Cwd, SessionID: req.SessionID, ExtraArgs: req.ExtraArgs, ExtensionArgs: bridgeExtArgs}, coders.LaunchOptions{
 		Config: coders.ConfigView{PiOffline: cfg.PiOffline, ClaudeDangerouslySkipPermissions: cfg.ClaudeDangerouslySkipPermissions}, DefaultCwd: app.activeCWD,

@@ -26,6 +26,20 @@ async function paneBridge(
     return tabs.find((tab) => tab.id === paneID)?.pi_bridge;
 }
 
+async function paneSessionID(
+    request: APIRequestContext,
+    url: string,
+    paneID: string,
+): Promise<string> {
+    const response = await request.get(`${url}/api/terminals`);
+    if (!response.ok()) return '';
+    const tabs = (await response.json()) as Array<{
+        id: string;
+        session_id?: string;
+    }>;
+    return tabs.find((tab) => tab.id === paneID)?.session_id ?? '';
+}
+
 async function paneInput(
     request: APIRequestContext,
     url: string,
@@ -105,9 +119,25 @@ test('Pi bridge reports managed state and rings the bell on settlement', async (
             })
             .toMatchObject({ state: 'managed', running: false });
 
-        // Reattach to the live session returns the same pane and bridge.
+        // Reattach to the live session returns the same pane and bridge. The
+        // runtime reports its own session ID on Hello, so the pane adopts it
+        // after spawn: read the identity the server now stores.
+        let sessionID = '';
+        await expect
+            .poll(
+                async () => {
+                    sessionID = await paneSessionID(
+                        request,
+                        phi.url,
+                        pane.pane_id,
+                    );
+                    return sessionID;
+                },
+                { timeout: 15_000 },
+            )
+            .not.toBe('');
         const reattached = await request.post(`${phi.url}/api/terminals`, {
-            data: { coder: 'pi', session_id: pane.session_id },
+            data: { coder: 'pi', session_id: sessionID },
         });
         expect(reattached.ok()).toBe(true);
         const reattachBody = (await reattached.json()) as {
