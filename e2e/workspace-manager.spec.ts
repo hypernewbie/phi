@@ -181,9 +181,13 @@ test('never resends an accepted write after its reply is lost and the page reloa
         await context.setOffline(false);
         await page.reload();
         await openManager(page);
-        await expect(projectRow(page, 'alpha')).toHaveCount(1);
-        await page.getByRole('button', { name: 'Check status' }).click();
+        // The first fresh read confirms the write by itself: no resend, and no
+        // manual Check status step for a reply that was only lost.
         await expect(page.locator(STATUS)).toContainText('Saved.');
+        await expect(
+            page.getByRole('button', { name: 'Check status' }),
+        ).toHaveCount(0);
+        await expect(projectRow(page, 'alpha')).toHaveCount(1);
         expect(writes).toBe(1);
         const config = await (
             await page.request.get(`${server.url}/api/config`)

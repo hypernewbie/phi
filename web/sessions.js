@@ -684,10 +684,15 @@ export class SessionsManager {
     }
     /** True when `path` names a registered workspace (OS-agnostic compare). */
     isWorkspaceRegistered(path) {
-        const wanted = normalizePath(path);
-        return this.workspaces.some((ws) => normalizePath(ws) === wanted);
+        return this.isWorkspaceIn(this.workspaces, path);
     }
-    applyConfigData(data, _options = {}) {
+    /** Same compare against any list, so a caller can check the server's own
+     *  config instead of the list already projected from local intent. */
+    isWorkspaceIn(list, path) {
+        const wanted = normalizePath(path);
+        return list.some((ws) => normalizePath(ws) === wanted);
+    }
+    applyConfigData(data, options = {}) {
         if (!data || typeof data !== 'object')
             return;
         this.config = data;
@@ -697,7 +702,9 @@ export class SessionsManager {
         if (Array.isArray(data.workspaces)) {
             this.applyWorkspaceList(data.workspaces, data.active_cwd);
         }
-        this.workspaceManager?.onConfigApplied();
+        this.workspaceManager?.onConfigApplied({
+            stale: options.stale === true,
+        });
         if (!this.activeCWD ||
             (Array.isArray(data.workspaces) && this.workspaces?.length === 0)) {
             this.activeCWD = this.activeWorkspace || '';
@@ -752,8 +759,9 @@ export class SessionsManager {
                 ?.dispatchEvent(new Event('phi-settings-refresh'));
         }
     }
-    /** Reloads /api/config. Returns false when the config could not be read, so
-     *  callers can tell a confirmed write from a failed reconcile. */
+    /** Reloads /api/config. False means this call produced no fresh config —
+     *  either the read failed or a newer request superseded it, so callers must
+     *  not read it alone as a failed write. */
     async loadConfig({ refreshPanels = true } = {}) {
         const scope = this.app?.scope;
         this.configRequestId = (this.configRequestId || 0) + 1;

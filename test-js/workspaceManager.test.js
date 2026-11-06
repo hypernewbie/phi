@@ -996,6 +996,80 @@ describe('workspace manager', () => {
         expect(calls).toHaveLength(1);
     });
 
+    it('settles a saved write even when its own read lost the request race', async () => {
+        installFetch({ browse: () => browseEntries('psi') });
+        const sessions = makeSessions({
+            workspaces: ['/code/keep'],
+            roots: [BROWSE_ROOT],
+        });
+        // A real read applies the payload, then reports false once a newer
+        // request has bumped the counter inside the same call.
+        let superseded = false;
+        sessions.loadConfig = async () => {
+            sessions.applyConfigData(structuredClone(serverConfig));
+            return !superseded;
+        };
+        await openManager(sessions);
+        superseded = true;
+
+        toggle('/code/psi', true);
+        document.querySelector('#ws-manager-roots .ws-manager-add-btn').click();
+
+        await vi.waitFor(() => expect(statusText()).toContain('Saved.'));
+        expect(statusText()).not.toContain('reload failed');
+        expect(document.querySelector('.ws-manager-check-btn')).toBeNull();
+        expect(localStorage.getItem('phi_workspace_manager_outbox')).toBeNull();
+    });
+
+    it('settles an unconfirmed write from the first fresh read, without a resend', async () => {
+        const { calls } = installFetch({ browse: () => browseEntries('psi') });
+        localStorage.setItem(
+            'phi_workspace_manager_outbox',
+            JSON.stringify({
+                kind: 'add',
+                paths: ['/code/psi'],
+                state: 'unconfirmed',
+            }),
+        );
+        // The server did save it; only the reply was lost.
+        const sessions = makeSessions({
+            workspaces: ['/code/psi'],
+            roots: [BROWSE_ROOT],
+        });
+
+        await openManager(sessions);
+
+        expect(localStorage.getItem('phi_workspace_manager_outbox')).toBeNull();
+        expect(document.querySelector('.ws-manager-check-btn')).toBeNull();
+        expect(projects().map((row) => row.path)).toEqual(['/code/psi']);
+        expect(calls).toHaveLength(0);
+    });
+
+    it('keeps an unconfirmed write when the read cannot confirm it', async () => {
+        installFetch({ browse: () => browseEntries('psi') });
+        localStorage.setItem(
+            'phi_workspace_manager_outbox',
+            JSON.stringify({
+                kind: 'add',
+                paths: ['/code/ghost'],
+                state: 'unconfirmed',
+            }),
+        );
+        // A single read that does not show the write may have raced a commit
+        // still in flight, so it must not discard the queued change.
+        const sessions = makeSessions({ workspaces: [], roots: [BROWSE_ROOT] });
+
+        await openManager(sessions);
+
+        expect(statusText()).toContain('Change not confirmed');
+        expect(document.querySelector('.ws-manager-check-btn')).not.toBeNull();
+        expect(projects().map((row) => row.path)).toEqual(['/code/ghost']);
+        expect(
+            JSON.parse(localStorage.getItem('phi_workspace_manager_outbox'))
+                .state,
+        ).toBe('unconfirmed');
+    });
+
     it('drops older config responses instead of overwriting a newer read', async () => {
         const replies = [];
         installFetch({
