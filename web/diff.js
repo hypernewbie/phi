@@ -3518,12 +3518,110 @@ export class DiffController {
             });
         });
     }
+    /** Destination path of a `diff --git`/`diff --cc` header, without
+     *  the `b/` prefix. Git quotes paths that need it:
+     *  `diff --git "a/caf\303\251.txt" "b/caf\303\251.txt"`. Combined
+     *  headers carry a bare path: `diff --cc f.txt`. */
+    _diffHeaderName(line) {
+        const afterKind = line.slice('diff '.length);
+        const rest = afterKind.slice(afterKind.indexOf(' ') + 1);
+        const quoted = /^"((?:[^"\\]|\\.)*)"\s+"((?:[^"\\]|\\.)*)"$/.exec(rest);
+        if (quoted)
+            return quoted[2].replace(/^b\//, '');
+        const separator = rest.lastIndexOf(' b/');
+        return separator >= 0 ? rest.slice(separator + 3) : rest;
+    }
+    /** Split a raw patch into per-file sections at each `diff --git`
+     *  line; anything before the first header stays its own chunk. Each
+     *  chunk records the binary markers diff2html recognises, so binary
+     *  sections can be dropped before rendering. Re-joining the kept
+     *  chunks with `\n` reproduces the original patch byte for byte. */
+    _splitDiffChunks(rawDiffText) {
+        const chunks = [];
+        for (const line of rawDiffText.split('\n')) {
+            // `git show` writes merge commits with `diff --cc`/`--combined`
+            // headers instead of `diff --git`. A content line never starts
+            // at column 0 with any of these, so the prefixes are safe
+            // boundaries; matching prefixes (not path shapes) keeps quoted
+            // paths in their own section too.
+            if (line.startsWith('diff --git ') ||
+                line.startsWith('diff --cc ') ||
+                line.startsWith('diff --combined ')) {
+                chunks.push({
+                    lines: [line],
+                    name: this._diffHeaderName(line),
+                    isBinary: false,
+                });
+                continue;
+            }
+            if (chunks.length === 0) {
+                chunks.push({ lines: [line], name: '', isBinary: false });
+                continue;
+            }
+            const current = chunks[chunks.length - 1];
+            // Full form names both paths; the combined-diff form (merge
+            // commits) is just `Binary files differ`.
+            if (/^Binary files( .*|) differ/.test(line) ||
+                /^GIT binary patch/.test(line)) {
+                current.isBinary = true;
+            }
+            current.lines.push(line);
+        }
+        return chunks.map((chunk) => {
+            const text = chunk.lines.join('\n');
+            // A NUL byte cannot occur in a text patch. Its presence means
+            // raw binary bytes leaked into the diff: a cache written
+            // before the server learned to mark binaries, or an older
+            // server paired with this frontend. Such a section has no
+            // line structure, so drop it like a marked binary section.
+            return {
+                text,
+                name: chunk.name,
+                isBinary: chunk.isBinary || text.includes('\u0000'),
+            };
+        });
+    }
+    /** One muted line above the diff naming the skipped binary files.
+     *  Names are capped so a build-artifact dump cannot flood the panel. */
+    _insertBinaryNote(binaryNames) {
+        const note = document.createElement('div');
+        note.className = 'git-binary-note';
+        const shown = binaryNames.slice(0, 5).join(', ');
+        const rest = binaryNames.length - 5;
+        note.textContent = `Skipped ${binaryNames.length} binary file${binaryNames.length === 1 ? '' : 's'}: ${shown}${rest > 0 ? `, +${rest} more` : ''}`;
+        this.diffModalBody?.prepend(note);
+    }
     renderRichDiff(rawDiffText) {
         if (!rawDiffText?.trim()) {
             this.diffModalBody.innerHTML =
                 '<div style="padding: 40px; text-align: center; color: var(--text-muted); font-family: var(--font-mono);">No changes detected.</div>';
             // The project buttons stay usable with no diff: opening the
             // project root is independent of which commit is selected.
+            this._refreshDiffProjectActions();
+            return;
+        }
+        // Binary sections are dropped before diff2html sees them: a
+        // binary blob has no line structure to render. Filtering the
+        // patch text (not the rendered DOM) keeps parsed file records
+        // and wrapper indices aligned, so VS Code actions and review
+        // overlays still pair with the right file.
+        const binaryNames = [];
+        const renderText = this._splitDiffChunks(rawDiffText)
+            .filter((chunk) => {
+            if (!chunk.isBinary)
+                return true;
+            if (chunk.name)
+                binaryNames.push(chunk.name);
+            return false;
+        })
+            .map((chunk) => chunk.text)
+            .join('\n');
+        if (!renderText.trim()) {
+            const message = binaryNames.length > 0
+                ? `Only binary changes (${binaryNames.length}) \u2014 not shown.`
+                : 'No changes detected.';
+            this.diffModalBody.innerHTML =
+                `<div style="padding: 40px; text-align: center; color: var(--text-muted); font-family: var(--font-mono);">${message}</div>`;
             this._refreshDiffProjectActions();
             return;
         }
@@ -3540,13 +3638,13 @@ export class DiffController {
             try {
                 if (typeof window.Diff2Html?.parse !== 'function')
                     return [];
-                return window.Diff2Html.parse(rawDiffText);
+                return window.Diff2Html.parse(renderText);
             }
             catch {
                 return [];
             }
         })();
-        const diffHtml = window.Diff2Html.html(rawDiffText, {
+        const diffHtml = window.Diff2Html.html(renderText, {
             drawFileList: !isDrawer,
             matching: 'lines',
             outputFormat,
@@ -3583,6 +3681,9 @@ export class DiffController {
             : diffHtml;
         const parsed = new DOMParser().parseFromString(safeDiffHtml, 'text/html');
         this.diffModalBody?.replaceChildren(...Array.from(parsed.body.childNodes));
+        if (binaryNames.length > 0) {
+            this._insertBinaryNote(binaryNames);
+        }
         if (this.syntaxHighlightEnabled) {
             this._applySyntaxHighlighting();
         }
