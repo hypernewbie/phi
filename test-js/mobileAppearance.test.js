@@ -9,7 +9,7 @@ import {
     effectiveAppearance,
     applyAppearanceFonts,
     mobileSystemTextRatio,
-    appearanceFontScale,
+    appearanceRootFontSize,
     captureAppearanceScope,
     appearanceOwner,
     appearanceCacheKey,
@@ -168,9 +168,11 @@ describe('appearance profile, not viewport layout', () => {
         );
         applyAppearanceFonts('mobile', appearance);
         expect(document.body.style.fontSize).toBe('22px');
+        expect(document.documentElement.style.fontSize).toBe('22px');
         systemSize = '34px';
         resize();
         expect(document.body.style.fontSize).toBe('44px');
+        expect(document.documentElement.style.fontSize).toBe('44px');
         applyAppearanceFonts('mobile', appearance);
         expect(document.body.style.fontSize).toBe('44px');
         expect(document.body.style.fontFamily).toBe('Georgia, serif');
@@ -186,6 +188,7 @@ describe('appearance profile, not viewport layout', () => {
             effectiveAppearance('desktop', { ui_font_size: 16 }, EMPTY_MOBILE),
         );
         expect(document.body.style.fontSize).toBe('16px');
+        expect(document.documentElement.style.fontSize).toBe('16px');
         expect(document.getElementById('phi-system-text-probe')).toBeNull();
         expect(disconnect).toHaveBeenCalledOnce();
     });
@@ -399,8 +402,25 @@ describe('existing Settings mobile event handlers', () => {
         expect(document.body.style.fontSize).toBe('17px');
         writeProfileOverride('desktop');
         applyPrepaintAppearance();
+        // Prepaint has no server answer yet, so a cached record still
+        // paints the first frame; the live read replaces it when it lands.
         expect(document.body.style.fontFamily).toBe('"stale legacy"');
         expect(document.body.style.fontSize).toBe('24px');
+    });
+    it('prepaints a complete desktop cache before the server answers', () => {
+        localStorage.setItem(
+            'phi_appearance',
+            JSON.stringify({
+                ui_font_family: 'Roboto',
+                ui_font_size: 16,
+                terminal_font_family: 'Fira Code',
+                terminal_font_size: 15,
+            }),
+        );
+        writeProfileOverride('desktop');
+        applyPrepaintAppearance();
+        expect(document.body.style.fontFamily).toBe('Roboto');
+        expect(document.body.style.fontSize).toBe('16px');
     });
     it('updates existing xterm, diff and bridge-free Pi RPC containers through the shared terminal path', () => {
         const rpc = {
@@ -478,17 +498,35 @@ describe('existing Settings mobile event handlers', () => {
     });
 });
 
-describe('appearanceFontScale', () => {
-    it('scales from the authored px base and clamps the setting range', () => {
-        expect(appearanceFontScale('mobile', 13)).toBe(1);
-        expect(appearanceFontScale('mobile', 24)).toBeCloseTo(24 / 13, 5);
-        expect(appearanceFontScale('mobile', 10)).toBeCloseTo(10 / 13, 5);
-        expect(appearanceFontScale('desktop', 14)).toBe(1);
-        expect(appearanceFontScale('desktop', 24)).toBeCloseTo(24 / 14, 5);
-        expect(appearanceFontScale('desktop', 99)).toBeCloseTo(24 / 14, 5);
-        expect(appearanceFontScale('mobile', 0)).toBe(1);
-        expect(appearanceFontScale('mobile', 9)).toBe(1);
-        expect(appearanceFontScale('mobile', Number.NaN)).toBe(1);
+describe('appearanceRootFontSize', () => {
+    it('publishes the configured size as the root font size', () => {
+        expect(appearanceRootFontSize('desktop', 14)).toBe(14);
+        expect(appearanceRootFontSize('desktop', 24)).toBe(24);
+        expect(appearanceRootFontSize('mobile', 21)).toBe(21);
+    });
+    it('falls back to the profile default and clamps the range', () => {
+        expect(appearanceRootFontSize('desktop', 0)).toBe(14);
+        expect(appearanceRootFontSize('desktop', 9)).toBe(14);
+        expect(appearanceRootFontSize('desktop', Number.NaN)).toBe(14);
+        expect(appearanceRootFontSize('mobile', 0)).toBe(17);
+        expect(appearanceRootFontSize('desktop', 99)).toBe(24);
+        expect(appearanceRootFontSize('mobile', 99)).toBe(24);
+    });
+    it('makes 1rem the configured size on the document root', () => {
+        applyAppearanceFonts(
+            'desktop',
+            effectiveAppearance('desktop', { ui_font_size: 14 }, EMPTY_MOBILE),
+        );
+        // Authored primary text is 1rem over a 13px anchor, so the root
+        // font size must BE the setting, not a multiplier of it.
+        expect(document.documentElement.style.fontSize).toBe('14px');
+        applyAppearanceFonts(
+            'desktop',
+            effectiveAppearance('desktop', {}, EMPTY_MOBILE),
+        );
+        // Unset keeps the desktop default; an empty root would render every
+        // rem rule against the browser default 16px.
+        expect(document.documentElement.style.fontSize).toBe('14px');
     });
 });
 

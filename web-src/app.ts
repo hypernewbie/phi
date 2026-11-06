@@ -2652,6 +2652,9 @@ export class App {
             terminal_font_family: this.terminalFontFamily || '',
             terminal_font_size: this.terminalFontSize || 0,
         });
+        // The workspace label is sized from its measured text, so a new UI
+        // size leaves the old width in place and truncates the label.
+        this.sessionsManager?.updateWorkspaceSelectWidth?.();
     }
 
     // Legacy/shared settings retain their endpoint; only edited fields are sent.

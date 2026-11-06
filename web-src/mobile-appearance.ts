@@ -239,30 +239,20 @@ export function mobileSystemTextRatio(size: number): number {
     return Number.isFinite(size) && size > 0 ? Math.max(1, size / 17) : 1;
 }
 
-// Authored UI text is sized in px per profile; the profile base is the
-// setting value at which --ui-scale is 1. The desktop profile authors
-// its primary text at 14px (the tab title, the session title, the
-// buttons), so the base is that authored primary size: a configured
-// ui_font_size of 14 then renders 14px primary text, the same size the
-// terminal renders for terminal_font_size = 14. The base used to be the
-// default setting while the primary text was authored at 13px, which
-// made the configured size a multiplier over the authored sizes: 14
-// rendered 13px, and the interface read smaller than the terminal.
-const UI_SCALE_BASE: Record<AppearanceProfile, number> = {
-    mobile: 13,
-    desktop: 14,
-};
-
-// Clamp to the range the Settings control offers (10..24) so a corrupt or
-// stale stored value cannot blow up the layout. A value below 10 means
-// "unset" and keeps the profile's authored sizes.
-export function appearanceFontScale(
+// UI text is authored in rem over a 14px anchor (the authored primary
+// text), so the configured setting is the root font size and 1rem renders
+// exactly that size. Both profiles author the same ladder.
+//
+// The root font size in px: the clamped setting, or the profile default when
+// unset. Clamped to the Settings range (10..24) so a corrupt or stale stored
+// value cannot blow up the layout.
+export function appearanceRootFontSize(
     profile: AppearanceProfile,
     size: number,
 ): number {
-    if (!Number.isFinite(size) || size < 10) return 1;
-    const clamped = Math.min(24, Math.max(10, size));
-    return clamped / UI_SCALE_BASE[profile];
+    const fallback = profile === 'mobile' ? 17 : 14;
+    if (!Number.isFinite(size) || size < 10) return fallback;
+    return Math.min(24, Math.max(10, size));
 }
 let systemTextProbe: HTMLSpanElement | null = null;
 let systemTextObserver: ResizeObserver | null = null;
@@ -321,17 +311,13 @@ export function applyAppearanceFonts(
     }
     const size =
         appearance.ui_font_size * (profile === 'mobile' ? systemTextRatio : 1);
-    // Authored UI text is sized in px; this scale carries the font-size
-    // setting into every rule. 1 keeps the profile's default size.
-    document.documentElement.style.setProperty(
-        '--ui-scale',
-        String(
-            appearance.ui_font_size >= 10
-                ? appearanceFontScale(profile, appearance.ui_font_size) *
-                      (profile === 'mobile' ? systemTextRatio : 1)
-                : 1,
-        ),
-    );
+    // Every authored UI size is rem, so the root font size IS the configured
+    // size. Always published: an empty root would leave the browser default
+    // 16px and every rem rule would render off the intended default.
+    document.documentElement.style.fontSize = `${
+        appearanceRootFontSize(profile, appearance.ui_font_size) *
+        (profile === 'mobile' ? systemTextRatio : 1)
+    }px`;
     document.documentElement.dataset.appearanceProfile = profile;
     document.documentElement.style.setProperty(
         '--mobile-ui-size',

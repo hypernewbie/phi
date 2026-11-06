@@ -42,7 +42,7 @@
  *
  * Both halves of the invariant fail today. That is deliberate: this spec
  * is the reproduction, not the fix. The fix belongs to the code that
- * publishes the appearance scale, not to this file.
+ * publishes the root font size, not to this file.
  */
 import { mkdirSync, writeFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
@@ -54,6 +54,10 @@ import { startPhi, type PhiServer } from './_server.js';
 // is only meaningful when both are asked for the same size.
 const UI_FONT_SIZE = 14;
 const TERMINAL_FONT_SIZE = 14;
+
+// The interface's primary text is authored as 1rem over a 13px anchor, so
+// the root font size is the setting itself. Asserting the root pins the
+// mechanism; asserting rendered px below pins the result.
 
 // The browser-side cache key for an ordinary (non-embedded) tab. The
 // embedded desktop view uses `phi:desktop-appearance:v1:<owner>`; the
@@ -101,23 +105,34 @@ function seedShellPane(dir: string): void {
     );
 }
 
-/** The computed font size of the first match, in CSS pixels. */
+/** The settled computed font size of the first match, in CSS pixels. */
 async function fontSize(page: Page, selector: string): Promise<number> {
     const locator = page.locator(selector).first();
     await expect(locator).toBeVisible();
-    return locator.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    // A published root font size changes the computed size of every authored
+    // rule, and `.btn` transitions `all`, so its font size animates for
+    // 200ms after the root lands. Measure the settled value, not a frame of
+    // it.
+    const read = () =>
+        locator.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    let settled = await read();
+    for (let attempt = 0; attempt < 20; attempt++) {
+        await page.waitForTimeout(50);
+        const current = await read();
+        if (current === settled) return settled;
+        settled = current;
+    }
+    return settled;
 }
 
-/** The published appearance scale and the cached appearance, for diagnostics. */
+/** The published root font size and the cached appearance, for diagnostics. */
 async function appearanceState(page: Page): Promise<{
-    scale: string;
+    root: string;
     cached: string;
 }> {
     return page.evaluate((key) => {
-        const scale = getComputedStyle(document.documentElement)
-            .getPropertyValue('--ui-scale')
-            .trim();
-        return { scale, cached: localStorage.getItem(key) || '' };
+        const root = getComputedStyle(document.documentElement).fontSize;
+        return { root, cached: localStorage.getItem(key) || '' };
     }, LEGACY_APPEARANCE_KEY);
 }
 
@@ -141,19 +156,20 @@ test('the configured UI font size is the size of the interface text', async ({
     await page.goto(phi.url);
     await page.locator('.tab-title').first().waitFor({ state: 'visible' });
 
-    const { scale, cached } = await appearanceState(page);
+    const { root, cached } = await appearanceState(page);
     const terminal = await fontSize(page, '.xterm');
     const tabTitle = await fontSize(page, '.tab-title');
     const newSession = await fontSize(page, '#new-session-btn');
 
-    // The scale the appearance code publishes must track the configured
-    // size. A scale below 1 shrinks the whole interface without the
-    // config ever changing, which is how this stayed invisible.
+    // The interface's rem text reads its size from the root font size, so
+    // the root must BE the configured size. A smaller root shrinks the whole
+    // interface without the config ever changing, which is how this stayed
+    // invisible.
     expect(
-        scale,
-        `the published UI scale must follow ui_font_size=${UI_FONT_SIZE}; ` +
+        Number.parseFloat(root),
+        `the root font size must follow ui_font_size=${UI_FONT_SIZE}; ` +
             `cached appearance=${cached}`,
-    ).toBe('1');
+    ).toBe(UI_FONT_SIZE);
 
     // The terminal honours its configured size exactly.
     expect(
@@ -168,12 +184,12 @@ test('the configured UI font size is the size of the interface text', async ({
     expect(
         tabTitle,
         `ui_font_size=${UI_FONT_SIZE} must render the interface tab title ` +
-            `at ${UI_FONT_SIZE}px; scale=${scale} cached=${cached}`,
+            `at ${UI_FONT_SIZE}px; root=${root} cached=${cached}`,
     ).toBe(UI_FONT_SIZE);
     expect(
         newSession,
         `ui_font_size=${UI_FONT_SIZE} must render the interface button at ` +
-            `${UI_FONT_SIZE}px; scale=${scale} cached=${cached}`,
+            `${UI_FONT_SIZE}px; root=${root} cached=${cached}`,
     ).toBe(UI_FONT_SIZE);
 });
 
@@ -183,7 +199,7 @@ test('the interface is never rendered smaller than the terminal', async ({
     await page.goto(phi.url);
     await page.locator('.tab-title').first().waitFor({ state: 'visible' });
 
-    const { scale, cached } = await appearanceState(page);
+    const { root, cached } = await appearanceState(page);
     const terminal = await fontSize(page, '.xterm');
     const tabTitle = await fontSize(page, '.tab-title');
 
@@ -193,8 +209,130 @@ test('the interface is never rendered smaller than the terminal', async ({
     expect(
         tabTitle,
         `the interface text must not render smaller than the terminal ` +
-            `(${tabTitle}px vs ${terminal}px); scale=${scale} cached=${cached}`,
+            `(${tabTitle}px vs ${terminal}px); root=${root} cached=${cached}`,
     ).toBeGreaterThanOrEqual(terminal);
+});
+
+test('the interface text fits its containers at the largest UI size', async ({
+    page,
+}) => {
+    // A failed save must not undo the local preview or pollute the shared
+    // server's settings for other tests.
+    await page.route('**/api/config/appearance', (route) =>
+        route.fulfill({ status: 503, body: 'Unavailable' }),
+    );
+    await page.goto(phi.url);
+    await page.locator('.tab-title').first().waitFor({ state: 'visible' });
+    await page.locator('#header-config-pill .pill-label').click();
+    const input = page.locator('#settings-ui-font-size');
+    await expect(input).toBeVisible();
+    await Promise.all([
+        page.waitForResponse(
+            (response) =>
+                response.url().endsWith('/api/config/appearance') &&
+                response.status() === 503,
+        ),
+        input.fill('24'),
+    ]);
+    await expect
+        .poll(() =>
+            page.evaluate(
+                () => getComputedStyle(document.documentElement).fontSize,
+            ),
+        )
+        .toBe('24px');
+    await page.locator('.settings-overlay .modal-close-btn').click();
+    await expect(page.locator('.settings-overlay')).toHaveCount(0);
+    await expect.poll(() => fontSize(page, '.tab-title')).toBe(24);
+
+    // The containers that hold scaled text must grow with it: a fixed
+    // header crops the brand and the action buttons, a fixed tab bar crops
+    // the tab titles.
+    const fit = await page.evaluate(() => {
+        const box = (selector: string) => {
+            const el = document.querySelector(selector);
+            if (!el) throw new Error(`missing ${selector}`);
+            return el.getBoundingClientRect();
+        };
+        const header = box('.app-header');
+        const brand = box('.brand');
+        const actions = box('.header-actions');
+        const bar = box('.terminal-tabs-bar');
+        const tab = box('.tab');
+        const select = document.querySelector('#workspace-select');
+        if (!(select instanceof HTMLSelectElement))
+            throw new Error('missing workspace select');
+        const style = getComputedStyle(select);
+        const measure = document.createElement('span');
+        measure.style.cssText =
+            'position:fixed;visibility:hidden;white-space:pre';
+        measure.style.font = style.font;
+        measure.style.letterSpacing = style.letterSpacing;
+        measure.textContent = select.selectedOptions[0].text;
+        document.body.appendChild(measure);
+        const textWidth = measure.getBoundingClientRect().width;
+        measure.remove();
+        const fits = (parent: DOMRect, child: DOMRect) =>
+            child.top >= parent.top - 1 && child.bottom <= parent.bottom + 1;
+        return {
+            headerFitsBrand: fits(header, brand),
+            headerFitsActions: fits(header, actions),
+            barFitsTab: fits(bar, tab),
+            workspaceFitsLabel:
+                select.clientWidth -
+                    parseFloat(style.paddingLeft) -
+                    parseFloat(style.paddingRight) >=
+                textWidth,
+            geometry: {
+                header: `${header.top}-${header.bottom}`,
+                brand: `${brand.top}-${brand.bottom}`,
+                actions: `${actions.top}-${actions.bottom}`,
+                bar: `${bar.top}-${bar.bottom}`,
+                tab: `${tab.top}-${tab.bottom}`,
+            },
+        };
+    });
+    expect(
+        fit,
+        `the interface must not crop its own text at 24px: ${JSON.stringify(fit)}`,
+    ).toMatchObject({
+        headerFitsBrand: true,
+        headerFitsActions: true,
+        barFitsTab: true,
+        workspaceFitsLabel: true,
+    });
+
+    // All diff tabs must remain reachable without displacing panel actions.
+    const lastDiffTab = page.locator('.diff-tab-btn').last();
+    await lastDiffTab.focus();
+    expect(
+        await lastDiffTab.evaluate((el) => {
+            const strip = el.closest('.diff-tabs');
+            const header = el.closest('.diff-header');
+            if (!strip || !header) throw new Error('missing diff tab strip');
+            const tab = el.getBoundingClientRect();
+            const bounds = strip.getBoundingClientRect();
+            return (
+                tab.left >= bounds.left - 1 &&
+                tab.right <= bounds.right + 1 &&
+                header.scrollWidth <= header.clientWidth + 1
+            );
+        }),
+    ).toBe(true);
+
+    // Compact layout does not imply the mobile appearance profile.
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(
+        await page.locator('.app-header').evaluate((el) => {
+            const header = el.getBoundingClientRect();
+            const brand = el.querySelector('.brand')?.getBoundingClientRect();
+            return (
+                !!brand &&
+                brand.top >= header.top - 1 &&
+                brand.bottom <= header.bottom + 1
+            );
+        }),
+    ).toBe(true);
 });
 
 test('a stale browser appearance cache cannot shrink the interface below the configured size', async ({
@@ -216,15 +354,15 @@ test('a stale browser appearance cache cannot shrink the interface below the con
     await page.goto(phi.url);
     await page.locator('.tab-title').first().waitFor({ state: 'visible' });
 
-    const { scale, cached } = await appearanceState(page);
+    const { root, cached } = await appearanceState(page);
     const terminal = await fontSize(page, '.xterm');
     const tabTitle = await fontSize(page, '.tab-title');
 
     expect(
-        scale,
-        `a stale browser cache must not publish a UI scale below 1; ` +
-            `cached=${cached}`,
-    ).toBe('1');
+        Number.parseFloat(root),
+        `a stale browser cache must not shrink the root font size below the ` +
+            `configured ${UI_FONT_SIZE}px; cached=${cached}`,
+    ).toBe(UI_FONT_SIZE);
     expect(
         tabTitle,
         `a stale browser cache must not render the interface below the ` +

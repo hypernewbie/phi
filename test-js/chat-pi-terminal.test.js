@@ -158,16 +158,21 @@ function hasDeclaration(body, property, value) {
             maskCssComments(body),
         );
     };
-    // UI typography is authored in px and scaled by the appearance setting,
-    // so an authored size is expected as calc(<px> * var(--ui-scale)).
-    const scaled = value.match(/^([0-9.]+)px( !important)?$/);
+    // UI text is authored in rem over a 14px anchor, so an authored px size
+    // is expected as <px/14>rem. Legacy calc(<px> * var(--ui-scale)) and the
+    // plain px form stay accepted.
+    const REM_ANCHOR_PX = 14;
+    const bang = value.endsWith(' !important') ? ' !important' : '';
+    const px = value.replace(/ !important$/, '').match(/^([0-9.]+)px$/);
+    const rem = px
+        ? `${Math.round((Number(px[1]) / REM_ANCHOR_PX) * 10000) / 10000}rem${bang}`
+        : null;
     return (
         declares(value) ||
         (property === 'font-size' &&
-            !!scaled &&
-            declares(
-                `calc(${scaled[1]}px * var(--ui-scale))${scaled[2] || ''}`,
-            ))
+            !!px &&
+            declares(`calc(${px[1]}px * var(--ui-scale))${bang}`)) ||
+        (!!rem && declares(rem))
     );
 }
 

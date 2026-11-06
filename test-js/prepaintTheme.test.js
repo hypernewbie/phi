@@ -100,6 +100,9 @@ describe('theme.js & prepaint parity', () => {
             'Inter, sans-serif',
         );
         expect(styleEl.sheet.cssRules[0].style.fontSize).toBe('14px');
+        // The authored rem ladder reads its size from the root, so prepaint
+        // must publish it before first paint.
+        expect(document.documentElement.style.fontSize).toBe('14px');
     });
 
     it('all html entry pages load prepaint.js, fonts.css, and style.css', () => {
