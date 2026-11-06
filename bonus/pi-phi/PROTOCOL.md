@@ -296,8 +296,14 @@ window is memory-only: process restart or retention expiry can lose pending
 work, including an unacknowledged message that a Phi restart drops before its
 own dispatcher replayed it. There is no cross-Phi follower, durable delivery,
 or authenticated routable mesh in this increment. The mesh is opt-in and
-loopback-only. No HTTP endpoint exposes the push window; it is internal state,
-not a delivery receipt.
+loopback-only.
+
+`GET /api/sync/pushes` lists what this Phi's local hub still holds, in
+publish order: at most 100 events, each value capped at 4 KiB with
+`truncated` set when the body was cut on a rune boundary. It is a local read
+with no mesh round trip, and it is not a delivery receipt: a listed message
+may be unacknowledged, and an acknowledged one may already be gone from the
+window.
 
 ## Live state reads
 
