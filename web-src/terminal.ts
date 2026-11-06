@@ -729,6 +729,45 @@ function termPerfMeasureSince(name: string, startTime: number) {
     }
 }
 
+// Redraw tracepoints. A redraw is anything that changes the grid or forces the
+// renderer: a window resize, a panel resize, a tab reveal, an explicit
+// refresh. Every one is recorded, fast or slow — this is the series a
+// regression shows up in, and a threshold would hide its cheapest members.
+//
+// console.timeStamp writes a custom track into a DevTools trace and nothing
+// else: no User Timing entry accumulates, so the bounded-buffer rule that
+// governs termPerfMark does not apply, and a session without DevTools
+// recording pays one feature check. The Performance panel draws the track
+// only with Capture settings → Show custom tracks enabled.
+const REDRAW_TRACE_MAX_MS = 3000;
+const REDRAW_TRACE_TRACK = 'redraw';
+function redrawTraceEmit(
+    reason: string,
+    startTs: number,
+    endTs: number,
+    cols: number,
+    rows: number,
+) {
+    try {
+        const stamp = (console as unknown as { timeStamp?: unknown }).timeStamp;
+        if (typeof stamp !== 'function') return;
+        stamp.call(
+            console,
+            reason,
+            startTs,
+            endTs,
+            REDRAW_TRACE_TRACK,
+            'phi',
+            'primary',
+            {
+                ms: Math.round(endTs - startTs),
+                cols,
+                rows,
+            },
+        );
+    } catch (_e) {}
+}
+
 /**
  * Inspects the terminal buffer around the cursor line to distinguish
  * between an actively running process (e.g. spinning animated spinners,
@@ -1429,6 +1468,9 @@ export interface TabInfo {
     _viewportIntentSeq?: number;
     _perfAttachAt: number;
     _perfWrote: boolean;
+    /** First unpainted redraw request: tracepoint start, and why it came. */
+    _redrawTraceAt?: number;
+    _redrawTraceReason?: string;
     _streamDecoder: TextDecoder | null;
     softCloseCountdownTimer: ReturnType<typeof setTimeout> | null;
     writeRuns: WriteRun[] | undefined;
@@ -5946,7 +5988,10 @@ export class TabManager {
                     tabInfo._panelBox.height !== rect.height);
             if (rect)
                 tabInfo._panelBox = { width: rect.width, height: rect.height };
-            this._queuePanelFit(tabInfo, { forceResize: Boolean(changed) });
+            this._queuePanelFit(tabInfo, {
+                forceResize: Boolean(changed),
+                trace: 'panel',
+            });
         });
         tabInfo._panelObserver.observe(tabInfo.termContainer);
     }
@@ -5958,6 +6003,7 @@ export class TabManager {
     }
 
     _fitVisibleTerminal(tabInfo: TabInfo) {
+        this._beginRedrawTrace(tabInfo, 'fit-visible');
         if (!this._terminalPanelVisible(tabInfo)) {
             tabInfo._pendingPanelFit = true;
             tabInfo._pendingForceResize = true;
@@ -6004,7 +6050,51 @@ export class TabManager {
         if (tab) this._queuePanelFit(tab, { forceResize: true });
     }
 
+    // A redraw tracepoint spans request → painted frame. The first request
+    // wins: one resize can queue a fit, a refresh and a backend resize, and
+    // the interval a reader feels is the whole of it, not the last leg.
+    //
+    // Only the pane being painted has a redraw to measure. The panel observer
+    // fires for every open tab and a hidden pane paints nothing, so a span
+    // started there would surface on a later reveal as a stall that never
+    // happened.
+    _beginRedrawTrace(tabInfo: TabInfo, reason: string) {
+        if (tabInfo._redrawTraceAt !== undefined) return;
+        if (tabInfo !== this.getActiveTab()) return;
+        tabInfo._redrawTraceAt = performance.now();
+        tabInfo._redrawTraceReason = reason;
+    }
+
+    // A pane that stops painting (deactivated, closed) must not carry its
+    // request into a later frame.
+    _dropRedrawTrace(tabInfo: TabInfo) {
+        tabInfo._redrawTraceAt = undefined;
+        tabInfo._redrawTraceReason = undefined;
+    }
+
+    // xterm fires onRender once a frame has painted. A pane that never paints
+    // (hidden, renderer paused) keeps its span pending until a real paint; a
+    // span older than the cap is dropped instead of reported as a stall that
+    // never happened.
+    _endRedrawTrace(tabInfo: TabInfo) {
+        const start = tabInfo._redrawTraceAt;
+        if (start === undefined) return;
+        const reason = tabInfo._redrawTraceReason ?? 'redraw';
+        tabInfo._redrawTraceAt = undefined;
+        tabInfo._redrawTraceReason = undefined;
+        const now = performance.now();
+        if (now - start > REDRAW_TRACE_MAX_MS) return;
+        redrawTraceEmit(
+            reason,
+            start,
+            now,
+            tabInfo.term?.cols ?? 0,
+            tabInfo.term?.rows ?? 0,
+        );
+    }
+
     _refreshTerminalScreen(tabInfo: TabInfo, { resync = true } = {}) {
+        this._beginRedrawTrace(tabInfo, 'refresh');
         internals(tabInfo.term)._core?.viewport?.syncScrollArea(true);
         if (resync) this._resyncViewportScroll(tabInfo);
         try {
@@ -6014,7 +6104,11 @@ export class TabManager {
         }
     }
 
-    _queuePanelFit(tabInfo: TabInfo, { forceResize = false } = {}) {
+    _queuePanelFit(
+        tabInfo: TabInfo,
+        { forceResize = false, trace = 'fit' } = {},
+    ) {
+        this._beginRedrawTrace(tabInfo, trace);
         tabInfo._pendingForceResize = Boolean(
             tabInfo._pendingForceResize || forceResize,
         );
@@ -7366,6 +7460,11 @@ export class TabManager {
                     capture: true,
                     passive: true,
                 });
+        });
+        // Redraw tracepoint end. xterm fires onRender after a frame paints, so
+        // the span closes on the pixels, not on the resize call.
+        tabInfo._postOpenHooks.push((openedTerm: Terminal) => {
+            openedTerm.onRender(() => this._endRedrawTrace(tabInfo));
         });
 
         // Escape hatch: when the DOM scroll area is stale, wheel-down clamps
@@ -10649,6 +10748,7 @@ export class TabManager {
             prevTab.tabEl.classList.remove('active');
             prevTab.termContainer.classList.remove('active');
             this._detachTermWebgl(prevTab);
+            this._dropRedrawTrace(prevTab);
             // Leaving a Pi tab revokes its pending Thinking operation so a
             // late reply cannot act after the user navigates back.
             if (prevTab.coder === 'pi')
@@ -11338,6 +11438,7 @@ export class TabManager {
         } catch (e) {
             console.error('[tab] Term dispose error:', e);
         }
+        this._dropRedrawTrace(tab);
 
         try {
             if (tab.tabEl) tab.tabEl.remove();
@@ -19214,7 +19315,10 @@ export class TabManager {
 
         // Fit after layout, not after a guessed 50ms settling interval.
         // Coalescing retains the force bit through bootstrap/history gates.
-        this._queuePanelFit(tabInfo, { forceResize: true });
+        this._queuePanelFit(tabInfo, {
+            forceResize: true,
+            trace: 'tab-switch',
+        });
 
         // A tab shown again with no new output would otherwise never restore
         // the reader's row; the fit above may also skip unchanged geometry.
