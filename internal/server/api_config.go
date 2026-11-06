@@ -174,6 +174,9 @@ func (app *Server) handleWorkspaceRoots(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if r.Method == http.MethodPost {
+		// Any existing absolute directory is a valid root, symlinks included.
+		// That grants no visibility beyond the existing /api/fs/browse rules
+		// (same auth gate, non-recursive, direct child directories only).
 		info, err := os.Stat(path)
 		if err != nil || !info.IsDir() {
 			http.Error(w, "Not a directory", http.StatusBadRequest)
