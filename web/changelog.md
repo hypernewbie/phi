@@ -4,6 +4,15 @@ All notable changes to phi are documented here. Newest versions first.
 
 ## Unreleased
 
+## v0.38.0 — 2026-11-06
+
+### Added
+- **The Syncboard panel shows the pushes addressed to this node** (`91c1931a`). A pushed message entered the receiving Pi's context but left no trace a human could inspect, so an operator could not confirm what had been addressed here, or to whom. `GET /api/sync/pushes` reads this node's hub only: up to 100 messages, each value capped at 4 KiB with a `truncated` flag, in the same shape as `/api/sync/messages`. The panel renders them under a **Pushed to panes** heading by reusing the existing card markup, hides the section while the list is empty, restores the last list from local storage on reload, and keeps the last good list with no banner when a fetch fails, so a rendered board is never blanked. An oversized value is cut on a rune boundary instead of splitting the last character into U+FFFD, and the board's **Clear all** and **Add** controls move into the Board header so they no longer read as acting on both lists.
+- **Every terminal redraw is a span on a DevTools custom track** (`09a6272a`). A redraw — panel or window resize, tab reveal, explicit refresh — emits one `console.timeStamp` entry on the `redraw` track, group `phi`, spanning request to painted frame through xterm's `onRender`, so a trace reads terminal cost beside layout and scripting instead of inferring it. Every redraw is recorded, fast or slow: a threshold would hide the cheapest members of the series a regression shows up in, and `console.timeStamp` adds no User Timing entry, so the bounded-buffer rule that governs the existing `phi:` marks does not apply. The span starts when the redraw actually runs, so a fit parked behind a bootstrap gate or a pending write is not reported as paint time — a tab reveal on an isolated server measured 134.7 ms before that change and 1.0–3.7 ms after — and the first request of a coalesced redraw owns the interval, so a fit, a refresh and a backend resize report once. A pane that is not the painted one starts nothing, deactivation or close drops a pending span, and a span that never paints is dropped after 3 s. Without DevTools recording nothing is emitted, and terminal behaviour is unchanged.
+
+### Fixed
+- **A warm tab switch no longer resizes the backend** (`2479b14b`). Every tab activation forced a panel fit, which sent a resize frame even when the socket and the grid were unchanged, and the server turns an equal-size resize into an explicit SIGWINCH — so each switch, and each click on the active tab, cost one full repaint of the running TUI application, with no layout change behind it. The fit now puts a resize on the wire only when the grid changed or the socket is fresh; a forced fit keeps its local xterm repaint so the reveal still paints, and a reconnect or Refresh Console still re-arms the sizing. Socket and dimensions are tracked together, so a refused send stays retryable after the local fit has settled, and committed server geometry is adopted without echoing it, so a later activation restores its grid after another viewer resizes the PTY.
+
 ## v0.37.0 — 2026-11-06
 
 ### Added
