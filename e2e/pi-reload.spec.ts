@@ -10,7 +10,7 @@ import {
     COMPACT_SESSION_ID,
     clickReloadDesktop,
     countStarts,
-    expectNewToast,
+    expectReloadRequested,
     paneBridgeReload,
     paneRecording,
     recordPaneInput,
@@ -50,7 +50,12 @@ async function watchPage(page: Page, serverOrigin: string) {
     const blockedExternal: string[] = [];
 
     page.on('console', (message) => {
-        if (message.type() === 'error') consoleErrors.push(message.text());
+        if (message.type() !== 'error') return;
+        // The browser logs any 4xx fetch as a console error. A Reload
+        // refusal is a documented answer to a stale snapshot, asserted
+        // through the toast and the dispatch count instead.
+        if (/status of 409 \(Conflict\)/.test(message.text())) return;
+        consoleErrors.push(message.text());
     });
     page.on('pageerror', (error) => pageErrors.push(error.message));
     page.on('requestfailed', (request) => {
@@ -64,7 +69,17 @@ async function watchPage(page: Page, serverOrigin: string) {
     });
     page.on('response', (response) => {
         const url = new URL(response.url());
-        if (url.origin === serverOrigin && response.status() >= 400) {
+        // A Reload refusal is a documented answer, not a transport
+        // failure: the toast and the dispatch count assert it. Counting
+        // it here would make a stale-snapshot retry look like an outage.
+        if (
+            url.origin === serverOrigin &&
+            response.status() >= 400 &&
+            !(
+                response.status() === 409 &&
+                url.pathname.endsWith('/api/pi-bridge/reload')
+            )
+        ) {
             localFailures.push(`${response.status()} ${response.url()}`);
         }
     });
@@ -271,9 +286,12 @@ test('native reload from Cmds on desktop and mobile touch', async ({
         );
         const entry = menu.getByRole('button', { name: '/reload' });
         await expect(entry).toBeVisible();
-        await expectNewToast(page, 'Reload requested — check Pi', () =>
-            clickReloadDesktop(page),
-        );
+        await page.keyboard.press('Escape');
+        await expect(menu).toBeHidden();
+        await expectReloadRequested(page, async () => {
+            await openCmdsReload(page);
+            await clickReloadDesktop(page);
+        });
         await expect
             .poll(() => paneBridgeReload(request, phi.url, livePane), {
                 timeout: 30_000,
@@ -295,13 +313,15 @@ test('native reload from Cmds on desktop and mobile touch', async ({
             page.locator('#attachment-strip .attachment-chip'),
         ).toHaveCount(1);
         await expect
-            .poll(() => desktopReloads.calls.length, { timeout: 10_000 })
+            .poll(() => desktopReloads.dispatched().length, {
+                timeout: 10_000,
+            })
             .toBe(1);
-        expect(desktopReloads.calls[0]).toMatchObject({
+        expect(desktopReloads.dispatched()[0]).toMatchObject({
             status: 202,
             body: { outcome: 'dispatched' },
         });
-        expect(typeof desktopReloads.calls[0]?.body).toBe('object');
+        expect(typeof desktopReloads.dispatched()[0]?.body).toBe('object');
         expect(desktopInput.frames.join('\n')).not.toContain('/reload');
 
         // A second explicit reload after release evidence.
@@ -310,10 +330,10 @@ test('native reload from Cmds on desktop and mobile touch', async ({
                 timeout: 30_000,
             })
             .toMatchObject({ reload_pending: false, reload_high_water: '1' });
-        await openCmdsReload(page);
-        await expectNewToast(page, 'Reload requested — check Pi', () =>
-            clickReloadDesktop(page),
-        );
+        await expectReloadRequested(page, async () => {
+            await openCmdsReload(page);
+            await clickReloadDesktop(page);
+        });
         await expect
             .poll(() => paneBridgeReload(request, phi.url, livePane), {
                 timeout: 30_000,
@@ -324,9 +344,11 @@ test('native reload from Cmds on desktop and mobile touch', async ({
             .toBe(6);
         expect(stub.count()).toBe(0);
         await expect
-            .poll(() => desktopReloads.calls.length, { timeout: 10_000 })
+            .poll(() => desktopReloads.dispatched().length, {
+                timeout: 10_000,
+            })
             .toBe(2);
-        expect(desktopReloads.calls[1]).toMatchObject({
+        expect(desktopReloads.dispatched()[1]).toMatchObject({
             status: 202,
             body: { outcome: 'dispatched' },
         });
@@ -334,10 +356,10 @@ test('native reload from Cmds on desktop and mobile touch', async ({
 
         // An empty session reloads through the same native path.
         await page.locator(`.tab[data-pane-id="${emptyPane}"]`).click();
-        await openCmdsReload(page);
-        await expectNewToast(page, 'Reload requested — check Pi', () =>
-            clickReloadDesktop(page),
-        );
+        await expectReloadRequested(page, async () => {
+            await openCmdsReload(page);
+            await clickReloadDesktop(page);
+        });
         await expect
             .poll(() => paneBridgeReload(request, phi.url, emptyPane), {
                 timeout: 30_000,
@@ -353,7 +375,9 @@ test('native reload from Cmds on desktop and mobile touch', async ({
             .toBe(7);
         expect(stub.count()).toBe(0);
         await expect
-            .poll(() => desktopReloads.calls.length, { timeout: 10_000 })
+            .poll(() => desktopReloads.dispatched().length, {
+                timeout: 10_000,
+            })
             .toBe(3);
 
         // Without the bridge the same menu entry types the legacy PTY
@@ -372,7 +396,7 @@ test('native reload from Cmds on desktop and mobile touch', async ({
         await expect
             .poll(() => countStarts(markerFile), { timeout: 30_000 })
             .toBe(8);
-        expect(desktopReloads.calls).toHaveLength(3);
+        expect(desktopReloads.dispatched()).toHaveLength(3);
         expect(desktopInput.frames.join('\n')).toContain('/reload');
 
         // Mobile touch repeats the native idle path on a fresh pane.
@@ -405,15 +429,14 @@ test('native reload from Cmds on desktop and mobile touch', async ({
             mobilePage.getByRole('button', { name: 'Cmds ▾' }),
         ).toBeFocused();
         await mobilePage.emulateMedia({ colorScheme: 'light' });
-        await mobilePage.getByRole('button', { name: 'Cmds ▾' }).tap();
-        await expectNewToast(
-            mobilePage,
-            'Reload requested — check Pi',
-            async () => {
-                await mobileMenu.getByRole('button', { name: '/reload' }).tap();
-                await expect(mobileMenu).toBeHidden();
-            },
-        );
+        await expectReloadRequested(mobilePage, async () => {
+            if (!(await mobileMenu.isVisible())) {
+                await mobilePage.getByRole('button', { name: 'Cmds ▾' }).tap();
+                await expect(mobileMenu).toBeVisible();
+            }
+            await mobileMenu.getByRole('button', { name: '/reload' }).tap();
+            await expect(mobileMenu).toBeHidden();
+        });
         await expect
             .poll(() => paneBridgeReload(request, phi.url, mobilePane), {
                 timeout: 30_000,
@@ -435,9 +458,11 @@ test('native reload from Cmds on desktop and mobile touch', async ({
             mobilePage.locator('#attachment-strip .attachment-chip'),
         ).toHaveCount(1);
         await expect
-            .poll(() => mobileReloads.calls.length, { timeout: 10_000 })
+            .poll(() => mobileReloads.dispatched().length, {
+                timeout: 10_000,
+            })
             .toBe(1);
-        expect(mobileReloads.calls[0]).toMatchObject({
+        expect(mobileReloads.dispatched()[0]).toMatchObject({
             status: 202,
             body: { outcome: 'dispatched' },
         });
@@ -488,8 +513,8 @@ test('native reload from Cmds on desktop and mobile touch', async ({
                     desktopViewport: '1440x900',
                     mobileViewport: '390x844',
                     mobileTouch: true,
-                    desktopNativeDispatches: desktopReloads.calls.length,
-                    mobileNativeDispatches: mobileReloads.calls.length,
+                    desktopNativeDispatches: desktopReloads.dispatched().length,
+                    mobileNativeDispatches: mobileReloads.dispatched().length,
                     providerRequests: stub.count(),
                     piConfirmation: 'Reloaded keybindings',
                     bridgeAbsentPtyFallback: true,
