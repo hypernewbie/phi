@@ -15974,6 +15974,10 @@ export class TabManager {
                     activeTab.isAtBottom = undefined;
                     activeTab.lastScrollY = undefined;
                     if (forceResize || activeTab._sizedWs !== activeTab.ws) {
+                        // Repaint the local renderer only. A forced fit keeps
+                        // the grid it already had, so the screen is re-derived
+                        // without a round trip.
+                        this._refreshTerminalScreen?.(activeTab);
                         // First fit on a fresh socket: the client reflow is
                         // correctly skipped, but the backend PTY still has
                         // its spawn size (not the grid the user sees).
@@ -15981,8 +15985,15 @@ export class TabManager {
                         // records only a resize that actually went out — a
                         // send swallowed while CONNECTING must not suppress
                         // the retry after open.
-                        this._refreshTerminalScreen?.(activeTab);
-                        if (this.sendResizeToBackend(activeTab)) {
+                        //
+                        // An unchanged grid on the same socket stays silent
+                        // even when the fit is forced: the server answers an
+                        // equal-size resize with an explicit SIGWINCH, and a
+                        // TUI host redraws its whole document for it. Tab
+                        // switches keep their grid, so they must not send
+                        // one; a reconnect swaps the socket and re-arms this.
+                        if (activeTab._sizedWs !== activeTab.ws &&
+                            this.sendResizeToBackend(activeTab)) {
                             activeTab._sizedWs = activeTab.ws;
                         }
                     }
@@ -16042,10 +16053,12 @@ export class TabManager {
                 activeTab.lastScrollY = undefined;
             }
             this._refreshTerminalScreen?.(activeTab);
-            // Coalesce sub-cell drag movements; final settle/activation forces
-            // a redraw even at the same grid without SIGWINCH on every pixel.
-            if ((forceResize ||
-                activeTab._sizedWs !== activeTab.ws ||
+            // Coalesce sub-cell drag movements. The wire carries only a grid
+            // the backend does not have yet: a changed size, or a fresh
+            // socket. A forced fit that settles on the same grid stays local,
+            // because an equal-size resize becomes an explicit SIGWINCH and a
+            // TUI host redraws its whole document for it.
+            if ((activeTab._sizedWs !== activeTab.ws ||
                 oldCols !== activeTab.term.cols ||
                 oldRows !== activeTab.term.rows) &&
                 this.sendResizeToBackend(activeTab)) {

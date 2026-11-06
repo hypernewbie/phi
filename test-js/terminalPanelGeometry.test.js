@@ -143,13 +143,21 @@ it('panel drags coalesce to the latest dimensions without a periodic timer', () 
     expect(h.frames.size).toBe(0);
 });
 
-it('activation/refresh forces a backend resize even after a same-grid fit was skipped', () => {
+it('a forced fit on an unchanged grid stays off the wire until the socket swaps', () => {
     const h = geometryHarness();
     h.m.fitActiveTerminal();
     expect(h.tab.ws.sendResize).not.toHaveBeenCalled();
+    // Tab activation forces a fit, but an equal-size resize is not free: the
+    // server answers it with an explicit SIGWINCH and a TUI host redraws its
+    // whole document for it.
     h.m.fitActiveTerminal({ forceResize: true });
     expect(h.tab.fitAddon.fit).not.toHaveBeenCalled();
+    expect(h.tab.ws.sendResize).not.toHaveBeenCalled();
+    // A reconnect swaps the socket, which re-arms the one-time sync.
+    h.tab.ws = { sendResize: vi.fn(() => true) };
+    h.m.fitActiveTerminal({ forceResize: true });
     expect(h.tab.ws.sendResize).toHaveBeenCalledExactlyOnceWith(80, 24);
+    expect(h.tab._sizedWs).toBe(h.tab.ws);
 });
 
 it('unsent forced sizing stays retryable', () => {

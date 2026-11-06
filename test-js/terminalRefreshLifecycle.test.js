@@ -162,13 +162,16 @@ it.each([
     expect(h.fetchSpy).not.toHaveBeenCalled();
 });
 
-it('a same-size forced refresh repaints xterm, resyncs its viewport and resizes the backend', () => {
+it('a same-size forced refresh repaints xterm and resyncs its viewport without a resize', () => {
     const h = harness();
     h.manager.fitActiveTerminal({ forceResize: true });
     expect(h.term.refresh).toHaveBeenCalledWith(0, 23);
     expect(h.manager._resyncViewportScroll).toHaveBeenCalledWith(h.tab);
     expect(h.term._core._charSizeService.measure).toHaveBeenCalledOnce();
-    expect(h.ws.sendResize).toHaveBeenCalledWith(80, 24);
+    // The backend already has this grid on this socket. An equal-size resize
+    // becomes an explicit SIGWINCH server-side, and a TUI host redraws its
+    // whole document for it, so a same-size refresh keeps it local.
+    expect(h.ws.sendResize).not.toHaveBeenCalled();
     expect(h.tab.fitAddon.fit).not.toHaveBeenCalled();
 });
 it('ordinary identical fits stay quiet instead of repeatedly redrawing an idle TUI', () => {
@@ -187,7 +190,9 @@ it('activation and wake refreshes coalesce on layout admission, not a guessed ti
     expect(h.frames).toHaveLength(1);
     expect(h.ws.sendResize).not.toHaveBeenCalled();
     h.frames.shift()();
-    expect(h.ws.sendResize).toHaveBeenCalledOnce();
+    // Both the switch and the wake refresh paint the local renderer once and
+    // leave the wire alone: the grid did not change.
+    expect(h.ws.sendResize).not.toHaveBeenCalled();
     expect(h.term.refresh).toHaveBeenCalledOnce();
 });
 it('a force request survives a bootstrap gate and an ordinary observer fit', () => {
@@ -195,12 +200,12 @@ it('a force request survives a bootstrap gate and an ordinary observer fit', () 
     h.tab._bootstrapGate = Promise.resolve();
     h.manager._queuePanelFit(h.tab, { forceResize: true });
     h.frames.shift()();
-    expect(h.ws.sendResize).not.toHaveBeenCalled();
+    expect(h.term.refresh).not.toHaveBeenCalled();
     expect(h.tab._pendingForceResize).toBe(true);
     h.tab._bootstrapGate = null;
     h.manager._queuePanelFit(h.tab);
     h.frames.shift()();
-    expect(h.ws.sendResize).toHaveBeenCalledOnce();
+    expect(h.ws.sendResize).not.toHaveBeenCalled();
     expect(h.term.refresh).toHaveBeenCalledOnce();
 });
 it('zero-delta reconnect refreshes both renderers before releasing live delivery', async () => {

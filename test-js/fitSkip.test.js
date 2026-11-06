@@ -115,6 +115,30 @@ describe('fitActiveTerminal skips same-geometry fits', () => {
         expect(c.sendResizeToBackend).toHaveBeenCalledTimes(2);
     });
 
+    it('a forced fit on a sized socket repaints locally without a resize', () => {
+        const t = tab(80, 24, { cols: 80, rows: 24 });
+        t.ws = { id: 'sock-1' };
+        t._sizedWs = t.ws;
+        const c = ctx(t);
+        c._refreshTerminalScreen = vi.fn();
+        c.fitActiveTerminal({ forceResize: true });
+        expect(c._refreshTerminalScreen).toHaveBeenCalledWith(t);
+        // An equal-size resize is not free: the server turns it into an
+        // explicit SIGWINCH and a TUI host redraws its whole document.
+        // Every tab activation forces a fit, so it must stay silent here.
+        expect(c.sendResizeToBackend).not.toHaveBeenCalled();
+    });
+
+    it('a forced fit on a fresh socket still tells the backend', () => {
+        const t = tab(80, 24, { cols: 80, rows: 24 });
+        t.ws = { id: 'sock-1' };
+        const c = ctx(t);
+        c._refreshTerminalScreen = vi.fn();
+        c.fitActiveTerminal({ forceResize: true });
+        expect(c.sendResizeToBackend).toHaveBeenCalledTimes(1);
+        expect(t._sizedWs).toBe(t.ws);
+    });
+
     it('a skip clears resize-cached scroll coordinates like a real fit', () => {
         const t = tab(80, 24, { cols: 80, rows: 24 });
         t.ws = { id: 'sock-1' };
