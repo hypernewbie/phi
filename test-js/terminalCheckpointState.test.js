@@ -25,20 +25,45 @@ it('phone checkpoints bound copied history without reducing the live buffer or b
     vi.unstubAllGlobals();
 });
 
+it('desktop snapshots keep a bounded screen restore, not the live buffer', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: false }));
+    const serialize = vi.fn(() => 'SCREEN');
+    const fetcher = vi.fn(async () => ({ ok: true }));
+    vi.stubGlobal('fetch', fetcher);
+    const term = { cols: 80, rows: 24, options: { scrollback: 10000 } };
+    Object.create(TabManager.prototype)._uploadCheckpoint({
+        paneId: 'p',
+        paneEpoch: 7,
+        drainedSeq: 100,
+        ws: { mode: 'hot' },
+        term,
+        serializeAddon: { serialize },
+    });
+    expect(serialize).toHaveBeenCalledWith({ scrollback: 512 });
+    expect(term.options.scrollback).toBe(10000);
+    vi.unstubAllGlobals();
+});
+
 it.each([
     ['multibyte text', '你'.repeat(800000)],
     ['mouse mode at the size boundary', 'x'.repeat(2 * 1024 * 1024)],
-])('checkpoint budget counts transmitted bytes: %s', (_name, large) => {
+    // JSON escapes each ESC as 6 bytes: a budget measured on the raw snapshot
+    // would let this through and the browser would refuse the beacon body.
+    ['escape-heavy frames', '\x1b'.repeat(20000)],
+])('every checkpoint body fits a beacon: %s', (_name, large) => {
     const manager = Object.create(TabManager.prototype);
     const fetcher = vi.fn(async () => ({ ok: true }));
     vi.stubGlobal('fetch', fetcher);
+    const rows = [];
     manager._uploadCheckpoint({
         paneId: 'p',
         paneEpoch: 7,
         drainedSeq: 100,
         serializeAddon: {
-            serialize: ({ scrollback }) =>
-                scrollback === 10000 ? large : 'SMALL',
+            serialize: ({ scrollback }) => {
+                rows.push(scrollback);
+                return scrollback === 512 ? large : 'SMALL';
+            },
         },
         ws: { mode: 'hot' },
         term: {
@@ -48,10 +73,15 @@ it.each([
             _core: { mouseStateService: { activeEncoding: 'SGR' } },
         },
     });
-    const body = JSON.parse(fetcher.mock.calls[0][1].body);
-    expect(new TextEncoder().encode(body.ansi).length).toBeLessThanOrEqual(
-        2 * 1024 * 1024,
-    );
+    const [call] = fetcher.mock.calls;
+    const body = JSON.parse(call[1].body);
+    // sendBeacon refuses a body over 64 KiB; the client caps itself below it.
+    expect(
+        new TextEncoder().encode(call[1].body).byteLength,
+    ).toBeLessThanOrEqual(48 * 1024);
+    // The snapshot shrank rows until it fit, instead of dropping the upload.
+    expect(rows[0]).toBe(512);
+    expect(rows.at(-1)).toBeLessThan(512);
     expect(body.ansi).toContain('\x1b[?1006h');
 });
 
@@ -82,3 +112,42 @@ it.each([
         expect(body.through).toBe(100);
     },
 );
+
+it('drops the upload rather than post a body over the budget', () => {
+    const manager = Object.create(TabManager.prototype);
+    const fetcher = vi.fn(async () => ({ ok: true }));
+    vi.stubGlobal('fetch', fetcher);
+    const beacon = vi.fn(() => true);
+    const original = Object.getOwnPropertyDescriptor(navigator, 'sendBeacon');
+    Object.defineProperty(navigator, 'sendBeacon', {
+        value: beacon,
+        configurable: true,
+    });
+
+    try {
+        manager._uploadCheckpoint({
+            paneId: 'p',
+            paneEpoch: 7,
+            drainedSeq: 100,
+            // Over budget even at zero scrollback rows: no upload is better
+            // than a body the browser refuses.
+            serializeAddon: { serialize: () => 'x'.repeat(64 * 1024) },
+            ws: { mode: 'hot' },
+            term: {
+                cols: 80,
+                rows: 24,
+                buffer: { active: { baseY: 10000 } },
+            },
+        });
+    } finally {
+        if (original) {
+            Object.defineProperty(navigator, 'sendBeacon', original);
+        } else {
+            delete navigator.sendBeacon;
+        }
+        vi.unstubAllGlobals();
+    }
+
+    expect(beacon).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();
+});

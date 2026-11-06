@@ -424,15 +424,12 @@ const CPU_POLL_INTERVAL_MS = 10000;
 // Configuration for performance marks and the bounded screen-checkpoint
 // pipeline: hot live stream plus cold recording fetch.
 const PERF_SLOW_MS = 16;
-// The server accepts a 2 MiB checkpoint, but sendBeacon refuses a body over
-// 64 KiB. A coarse pointer serializes at most PHONE_CHECKPOINT_ROWS, so keep
-// that lane's snapshot under the beacon cap: every upload then survives a
-// navigation instead of falling back to a fetch the browser cancels on the
-// way out.
-const COARSE_CHECKPOINT_BYTES = 48 * 1024;
-// The server bounds a checkpoint body; the coarse lane tightens this to fit a
-// beacon.
-const MAX_CHECKPOINT_BYTES = 2 * 1024 * 1024;
+// Client checkpoints ride a beacon so a navigation cannot abort them, and
+// Chromium refuses a beacon body over 64 KiB. Every lane keeps its snapshot
+// under this budget (JSON envelope, mouse-mode prefix, and text included), so
+// a hide or unload upload is never dropped and a live one never needs the
+// fetch fallback.
+const CHECKPOINT_BYTES = 48 * 1024;
 const MAX_WRITE_CHARS = 64 * 1024;
 // Arrivals this fast are a replay or a transcript repaint (pi reprinting a
 // resumed session, a large cat), not live output. Skipping frames keeps the
@@ -464,16 +461,18 @@ const REPLAY_RECOVERY_ATTEMPTS = 2;
 // A phone checkpoint is an instant screen restore, not an archive copy.
 // Older output remains in the recording and arrives through raw replay.
 const PHONE_CHECKPOINT_ROWS = 256;
+// The desktop lane carries the same intent with a little more history. The
+// live buffer keeps LIVE_SCROLLBACK_ROWS rows; the snapshot starts at the
+// visible screen plus this many and shrinks further to fit CHECKPOINT_BYTES.
+const CHECKPOINT_SCROLLBACK_ROWS = 512;
 // A bounded recording span can arrive in several positive-progress parts.
 // No client byte/hash cache participates in recovery.
 // After output stays quiet this long, the client uploads a screen
-// checkpoint so the next attach restores instantly.
+// checkpoint so the next attach restores instantly. A stream that never
+// pauses uploads nothing: re-serializing the whole scrollback on a timer
+// costs more than the snapshot is worth, and raw replay already covers a
+// mid-stream attach.
 const CHECKPOINT_QUIET_MS = 2000;
-// Sustained output never goes quiet. Without a ceiling the snapshot waits for
-// the first silence, so a reader who reloads mid-stream has nothing to
-// restore. The upload is bounded by COARSE_CHECKPOINT_BYTES, so this costs at
-// most one beacon of that size per window.
-const CHECKPOINT_MAX_WAIT_MS = 5000;
 function isTerminalFindShortcut(e) {
     return (e.type === 'keydown' &&
         !e.altKey &&
@@ -855,18 +854,12 @@ export class TabManager {
         // page counts as leaving: iOS can kill a backgrounded page without
         // ever firing pagehide, and the beacon needs to be queued first.
         if (typeof window !== 'undefined') {
-            const leaveCheckpoint = () => {
-                this.saveActiveDraft();
-                for (const tab of this.tabs.values()) {
-                    if (tab.serializeAddon && !tab.isDead) {
-                        this._uploadCheckpoint(tab, { unload: true });
-                    }
-                }
-            };
-            window.addEventListener('pagehide', leaveCheckpoint);
+            window.addEventListener('pagehide', () => this._checkpointOnLeave());
             document.addEventListener('visibilitychange', () => {
+                // A hidden page is still alive, so a refused beacon may retry
+                // over fetch; pagehide gets the beacon-only path.
                 if (document.visibilityState === 'hidden')
-                    leaveCheckpoint();
+                    this._checkpointOnLeave(false);
             });
         }
         this.directModeToggle = chrome('direct-mode-toggle');
@@ -4254,16 +4247,34 @@ export class TabManager {
         if (!tabInfo.serializeAddon || !tabInfo._ckptEnabled)
             return;
         clearTimeout(tabInfo._ckptTimer ?? undefined);
-        const now = Date.now();
-        if (!tabInfo._ckptWaitingSince)
-            tabInfo._ckptWaitingSince = now;
-        const wait = now - tabInfo._ckptWaitingSince >= CHECKPOINT_MAX_WAIT_MS
-            ? 0
-            : CHECKPOINT_QUIET_MS;
+        tabInfo._ckptTimer = null;
+        // A hidden page already left its snapshot behind in
+        // _checkpointOnLeave and must not serialize its scrollback on a timer.
+        if (document.visibilityState === 'hidden')
+            return;
         tabInfo._ckptTimer = setTimeout(() => {
             tabInfo._ckptTimer = null;
             this._uploadCheckpoint(tabInfo);
-        }, wait);
+        }, CHECKPOINT_QUIET_MS);
+    }
+    /**
+     * Leaves one last snapshot behind when the page is going away or hiding.
+     * Queued quiet-timer uploads are cancelled first: the hide beacon already
+     * covers the restore point, and a hidden page must not keep serializing
+     * its scrollback on a timer. `unloading` mirrors the trigger: pagehide
+     * has no time for a fetch, visibilitychange does.
+     */
+    _checkpointOnLeave(unloading = true) {
+        this.saveActiveDraft();
+        for (const tab of this.tabs.values()) {
+            if (tab._ckptTimer) {
+                clearTimeout(tab._ckptTimer);
+                tab._ckptTimer = null;
+            }
+            if (tab.serializeAddon && !tab.isDead) {
+                this._uploadCheckpoint(tab, { unload: unloading });
+            }
+        }
     }
     _uploadCheckpoint(tabInfo, options = {}) {
         const pty = tabInfo.ws;
@@ -4289,13 +4300,21 @@ export class TabManager {
                 ? '\x1b[?1016h'
                 : '';
         let ansi = '';
+        // The beacon carries the JSON body, where every ESC becomes a 6-byte
+        // escape, so the budget applies to the serialized envelope, not the
+        // raw snapshot.
+        const envelope = {
+            epoch: tabInfo.paneEpoch,
+            // Pixels omit an incomplete UTF-8 prefix held by the decoder.
+            // Replay those bytes on restore rather than claiming they rendered.
+            through: Math.max(0, tabInfo.drainedSeq - (pty.pendingUTF8Bytes ?? 0)),
+            cols: tabInfo.term.cols,
+            rows: tabInfo.term.rows,
+        };
         try {
             let scrollback = isCoarseViewport()
                 ? PHONE_CHECKPOINT_ROWS
-                : LIVE_SCROLLBACK_ROWS;
-            const budget = isCoarseViewport()
-                ? COARSE_CHECKPOINT_BYTES
-                : MAX_CHECKPOINT_BYTES;
+                : CHECKPOINT_SCROLLBACK_ROWS;
             for (let attempt = 0;; attempt++) {
                 const snapshot = terminalSnapshot(tabInfo.term, tabInfo.serializeAddon, { scrollback });
                 if (!snapshot && !mouseMode)
@@ -4303,16 +4322,16 @@ export class TabManager {
                 // Pending parser bytes must remain last, including after the
                 // mouse encoding that SerializeAddon does not carry.
                 ansi = mouseMode + snapshot;
-                // The server bounds UTF-8 bytes, not UTF-16 string length.
-                const bytes = new TextEncoder().encode(ansi).byteLength;
-                if (bytes <= budget)
+                const bytes = new TextEncoder().encode(JSON.stringify({ ...envelope, ansi })).byteLength;
+                if (bytes <= CHECKPOINT_BYTES)
                     break;
                 // Never post a snapshot the server cannot accept. The cold
                 // recording, not a truncated string, owns omitted history.
                 if (scrollback === 0)
                     return;
                 const lines = Math.min(scrollback, tabInfo.term.buffer?.active?.baseY ?? scrollback) + tabInfo.term.rows;
-                const target = Math.max(0, Math.floor((budget * lines) / bytes) - tabInfo.term.rows);
+                const target = Math.max(0, Math.floor((CHECKPOINT_BYTES * lines) / bytes) -
+                    tabInfo.term.rows);
                 scrollback = Math.min(scrollback - 1, target, attempt ? Math.floor(scrollback / 2) : scrollback);
             }
         }
@@ -4320,35 +4339,30 @@ export class TabManager {
             console.error('[term] serialize failed:', e);
             return;
         }
-        const payload = {
-            epoch: tabInfo.paneEpoch,
-            // Pixels omit an incomplete UTF-8 prefix held by the decoder.
-            // Replay those bytes on restore rather than claiming they rendered.
-            through: Math.max(0, tabInfo.drainedSeq - (pty.pendingUTF8Bytes ?? 0)),
-            cols: tabInfo.term.cols,
-            rows: tabInfo.term.rows,
-            ansi,
-        };
+        const payload = { ...envelope, ansi };
         // Fire-and-forget: a failed upload only means the next attach uses
         // the bounded-delta fallback instead of the snapshot. A beacon is the
         // right primitive here: the network service owns the body, so a page
         // navigation or close cannot abort it into a failed request. An
         // unload upload has no time to retry, so a refused beacon is simply
         // lost; while the page is still alive a refusal falls back to fetch.
-        tabInfo._ckptWaitingSince = 0;
         const url = `/api/terminals/${encodeURIComponent(tabInfo.paneId)}/checkpoint`;
         const json = JSON.stringify(payload);
         const beacon = () => navigator.sendBeacon?.(url, new Blob([json], { type: 'application/json' }));
-        if (options?.unload) {
+        if (options.unload) {
             beacon();
             return;
         }
         if (beacon())
             return;
+        // keepalive lets the fallback outlive a navigation or a freeze, the
+        // property the beacon would have provided. CHECKPOINT_BYTES keeps the
+        // body inside the browser's 64 KiB keepalive limit.
         fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: json,
+            keepalive: true,
         })
             .then((res) => {
             if (res.ok)

@@ -49,7 +49,7 @@ describe('xterm scrollback configuration', () => {
         // are what keep attach fast without a 1 MiB replay.
         expect(src).toContain('_onAttachHead');
         expect(src).toMatch(
-            /let scrollback = isCoarseViewport\(\)\s*\?\s*PHONE_CHECKPOINT_ROWS\s*:\s*LIVE_SCROLLBACK_ROWS/,
+            /let scrollback = isCoarseViewport\(\)\s*\?\s*PHONE_CHECKPOINT_ROWS\s*:\s*CHECKPOINT_SCROLLBACK_ROWS/,
         );
         expect(src).toMatch(
             /terminalSnapshot\(\s*tabInfo\.term,\s*tabInfo\.serializeAddon,\s*\{\s*scrollback,?\s*\}\s*,?\s*\)/,
