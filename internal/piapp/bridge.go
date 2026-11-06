@@ -967,8 +967,11 @@ func (b *Bridge) PaneSnapshot(paneID string) BridgePaneState {
 // older-or-equal publication revisions are dropped. A newer
 // generation clears the obsolete retained settlement and the stale
 // model/usage of the old process. A callback without state advances
-// the revision floor but keeps model/thinking unknown. It never calls
-// back into the Server; all live values arrive as arguments.
+// the revision floor but keeps model/thinking unknown. The session
+// identity is the one exception to arguments-only: it is read from the
+// lease, which is owned by the Server, because the runtime states it
+// on Hello and a pane launched without a forced --session-id adopts it
+// here.
 func (b *Bridge) onState(paneID, processID string, generation, pubRev uint64, running, hasState bool, model, thinkingLevel string, caps []string, usage *pibridge.ContextUsage, readiness *pibridge.Readiness, reload *pibridge.ReloadReadiness) {
 	// The runtime states its own session identity on Hello, so a pane launched
 	// without a forced --session-id learns it here. Read outside b.mu: the
