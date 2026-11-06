@@ -15170,7 +15170,7 @@ html.desktop-sidebar-hidden #left-resize-handle {
 
 .sync-section-title {
     font-family: var(--font-ui);
-    font-size: calc(11px * var(--ui-scale));
+    font-size: 0.7857rem;
     font-weight: 600;
     letter-spacing: 0.04em;
     text-transform: uppercase;
@@ -15214,7 +15214,7 @@ html.desktop-sidebar-hidden #left-resize-handle {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     font-family: var(--font-mono);
-    font-size: calc(12px * var(--ui-scale));
+    font-size: 0.8571rem;
     color: var(--text-primary);
     margin: 6px 0;
 }
@@ -15230,7 +15230,7 @@ html.desktop-sidebar-hidden #left-resize-handle {
 
 .sync-push-note {
     font-family: var(--font-ui);
-    font-size: calc(12px * var(--ui-scale));
+    font-size: 0.8571rem;
     color: var(--text-muted);
     padding: 8px 0;
 }
