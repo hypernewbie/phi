@@ -139,6 +139,10 @@ describe('Single-Tab Embedded Backend Switching', () => {
 
     afterEach(() => {
         app?.tabManager?.dispose();
+        // The launch store keeps a background refresh in flight. Left
+        // running, it resolves after the test environment is gone and
+        // dispatches on a document that no longer exists.
+        app?.piLaunchStore?.dispose();
         setEmbeddedBackend('', '');
         backendStores.clear();
     });
