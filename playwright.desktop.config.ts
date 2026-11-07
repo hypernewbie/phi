@@ -8,6 +8,7 @@ export default defineConfig({
     testMatch: [
         '**/mobile-settings-desktop.spec.ts',
         '**/terminal-ram-electron.spec.ts',
+        '**/desktop-switch-storm.spec.ts',
     ],
     testIgnore: [],
     workers: 1,
