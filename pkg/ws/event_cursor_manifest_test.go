@@ -584,7 +584,6 @@ func TestParseRetentionSegFile(t *testing.T) {
 			{"s0000000000000001.raw", 1},
 			{"s0000000000000001.rsz", 1},
 			{"s0000000000000001.ckpt", 1},
-			{"s0000000000000000.raw", 0},
 			{"s000000000000002a.raw", 42},
 			{"s000000000000002A.rsz", 42},
 			{"sffffffffffffffff.ckpt", math.MaxUint64},
@@ -605,6 +604,7 @@ func TestParseRetentionSegFile(t *testing.T) {
 	t.Run("InvalidNames", func(t *testing.T) {
 		invalidCases := []string{
 			"",
+			"s0000000000000000.raw",
 			".raw",
 			".rsz",
 			".ckpt",
