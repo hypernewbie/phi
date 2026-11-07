@@ -227,7 +227,7 @@ func parseRetentionSegFile(name string) (uint64, bool) {
 	}
 	hexPart := name[1 : 1+16]
 	gen, err := strconv.ParseUint(hexPart, 16, 64)
-	if err != nil {
+	if err != nil || gen == 0 {
 		return 0, false
 	}
 	return gen, true

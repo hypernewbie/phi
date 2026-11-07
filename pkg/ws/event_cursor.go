@@ -12,8 +12,8 @@ import (
 // certifies its end, so a stale reader can never mistake a recycled seq for
 // the byte it saw. The encoding is versioned so a format change is a hard
 // rejection, never a misread.
-const eventCursorVersion = "1"
-const maxEventCursorLen = 96
+const eventCursorVersion = "v1"
+const maxEventCursorLen = 128
 
 // EncodeEventCursor renders an (epoch, pos, ordinal) fence as one opaque
 // token. Epoch scopes a pane lifetime; pos is the byte position; ordinal
