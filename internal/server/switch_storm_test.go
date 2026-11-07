@@ -216,6 +216,9 @@ func TestSwitchStormTerminalReplayIdentity(t *testing.T) {
 	// terminal's bytes.
 	var readers sync.WaitGroup
 	client := srv.Client()
+	// go vet forbids t.Fatalf from a non-test goroutine; collect and
+	// raise from this one.
+	readErrs := make(chan error, 2)
 	replays := func() {
 		defer readers.Done()
 		for round := 0; round < 25; round++ {
@@ -228,11 +231,13 @@ func TestSwitchStormTerminalReplayIdentity(t *testing.T) {
 					continue
 				}
 				if len(body) < 4 {
-					t.Fatalf("replay %s: missing envelope", want.pane)
+					readErrs <- fmt.Errorf("replay %s: missing envelope", want.pane)
+					return
 				}
 				text := string(body)
 				if strings.Contains(text, want.absent) {
-					t.Fatalf("replay of %s carried %s's bytes", want.pane, want.absent)
+					readErrs <- fmt.Errorf("replay of %s carried %s's bytes", want.pane, want.absent)
+					return
 				}
 			}
 		}
@@ -242,6 +247,10 @@ func TestSwitchStormTerminalReplayIdentity(t *testing.T) {
 	go replays()
 
 	readers.Wait()
+	close(readErrs)
+	for err := range readErrs {
+		t.Fatal(err)
+	}
 	close(stop)
 	writers.Wait()
 
