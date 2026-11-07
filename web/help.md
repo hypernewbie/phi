@@ -38,9 +38,20 @@ The workspace picker in the header controls which project Phi is looking at.
 
 - The directory where Phi starts becomes the default workspace.
 - Use `+` next to the workspace picker to add another workspace path.
-- Use `-` to remove the selected workspace from the picker.
+- Use `…` to open **Workspaces**, which manages every workspace at once.
 - Workspace choices affect session discovery, Git worktrees, Markdown scanning, and default new-session directories.
 - Phi remembers your last selected workspace in local browser storage.
+
+### Workspaces dialog
+
+`…` opens a dialog with two sections. A row is never in both.
+
+- **Projects** lists the registered workspaces. Select rows and choose **Remove selected**. Removing a workspace only unregisters it: no files, tabs, or sessions are deleted.
+- **Rest of `<root>`** lists the folders inside a *root* folder. A root groups related projects, such as `~/code`. Roots are read from disk each time the dialog opens, so new folders appear without a rescan step.
+- Select folders and choose **Add selected** to register them as workspaces in one step. Nothing is registered until you select it, and a root folder itself is never a workspace.
+- **Add root** under **Root folders** stores a folder as a root. Removing a root keeps its projects registered.
+- The filter box narrows both sections without asking the server. While filtered, **All** becomes **Select visible**, and the counts match exactly what the buttons will add or remove.
+- Changes apply immediately and are saved to the server. If the browser is offline, one change stays queued and is sent when the connection returns; a change that may have reached the server is never sent twice.
 
 If a workspace contains Git worktrees, Phi shows them in the session/worktree area and tracks dirty states.
 
@@ -473,7 +484,7 @@ Phi's config directory is `~/.phi/` (or `%USERPROFILE%\.phi\` on Windows). Impor
 - `tabs.json` — live tab tuples (coder, session_id, cwd, title) for post-restart restore. Written atomically (temp + rename), debounced 500ms.
 - `syncboard.json` — AI Sync Board messages. Same atomic-write pattern.
 - `phi_update.json` — update-check cache (last-checked timestamp, latest known version).
-- `config.toml` — main config (workspaces, themes, presets, peers, notification settings, Kanban vault). Written atomically.
+- `config.toml` — main config (workspaces, `workspace_roots`, themes, presets, peers, notification settings, Kanban vault). Written atomically.
 - `phi.old` — previous binary after a self-update (retained 10 minutes).
 - `phi.rejected` — bad binary after a rollback (preserved, not auto-deleted).
 

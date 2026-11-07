@@ -54,7 +54,11 @@ func (m *ModelPresetsMap) UnmarshalJSON(data []byte) error {
 }
 
 type Config struct {
-	Workspaces        []string          `json:"workspaces" toml:"workspaces"`
+	Workspaces []string `json:"workspaces" toml:"workspaces"`
+	// WorkspaceRoots are parent directories the workspace manager lists as
+	// live groups. They are never expanded into Workspaces: a child becomes a
+	// workspace only when the user selects it. Missing in old configs.
+	WorkspaceRoots    []string          `json:"workspace_roots" toml:"workspace_roots"`
 	ThemeColor        string            `json:"theme_color" toml:"theme_color"`
 	ExpandedWorktrees map[string]bool   `json:"expanded_worktrees" toml:"expanded_worktrees"`
 	ActiveWorktrees   map[string]string `json:"active_worktrees" toml:"active_worktrees"`
@@ -469,6 +473,9 @@ func applyDefaults(cfg Config) Config {
 	if cfg.Workspaces == nil {
 		cfg.Workspaces = []string{}
 	}
+	if cfg.WorkspaceRoots == nil {
+		cfg.WorkspaceRoots = []string{}
+	}
 	if cfg.ThemeColor == "" {
 		cfg.ThemeColor = "purple"
 	}
@@ -709,6 +716,7 @@ func clonePtr[T any](p *T) *T {
 // distinctions are preserved; the caller applies defaults afterwards.
 func cloneConfig(cfg Config) Config {
 	cfg.Workspaces = slices.Clone(cfg.Workspaces)
+	cfg.WorkspaceRoots = slices.Clone(cfg.WorkspaceRoots)
 	cfg.ExpandedWorktrees = maps.Clone(cfg.ExpandedWorktrees)
 	cfg.ActiveWorktrees = maps.Clone(cfg.ActiveWorktrees)
 	if cfg.ModelPresets != nil {
@@ -774,6 +782,7 @@ func (s *Store) writeContentsLocked(cfg Config) error {
 	// cheap reread beats reasoning about which failures leave disk stale.
 	s.cache = nil
 	cfg.Workspaces = filterOutTestPaths(cfg.Workspaces)
+	cfg.WorkspaceRoots = filterOutTestPaths(cfg.WorkspaceRoots)
 	// The launch default is always explicit on disk; never write an empty
 	// value that readers would have to interpret.
 	if cfg.PiDefaultMode == "" {

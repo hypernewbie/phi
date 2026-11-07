@@ -2,6 +2,8 @@ import { mountDirectoryTree, } from './path-picker.js';
 import { escapeHtml, getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph, displayHostname, isCompactViewport, serverKey, getEmbeddedBackendOrigin, getEmbeddedProfileId, } from './util.js';
 import { openPiRpcChatTab } from './chat-pi/tab.js';
 import { createReviewTranscriptView } from './review-transcript.js';
+import { trapModalFocus } from './modal-focus.js';
+import { WorkspaceManager } from './workspace-manager.js';
 import { loadCoderRegistry, openCodePaneMode, visibleCoders, getCoder, hasTranscript, hasPiRpc, hasRename, hasSessions, isShell, renderLogo, RESERVED_CODER_IDS, } from './coders.js';
 export function normalizePath(p) {
     if (!p)
@@ -299,8 +301,9 @@ export class SessionsManager {
     wsSubmitPostStarted;
     wsModalComposing;
     wsModalOpener;
-    wsModalKeydownHandler;
-    wsModalFocusinHandler;
+    wsModalTrap;
+    workspaceManager;
+    configRequestId = 0;
     worktreeDirtyRequestId;
     worktreeLoadRequestId;
     worktreeRootGeneration;
@@ -352,8 +355,7 @@ export class SessionsManager {
         this.wsSubmitPostStarted = false;
         this.wsModalComposing = false;
         this.wsModalOpener = null;
-        this.wsModalKeydownHandler = null;
-        this.wsModalFocusinHandler = null;
+        this.wsModalTrap = null;
         this.worktreeDirtyRequestId = 0;
         this.worktreeLoadRequestId = 0;
         this.worktreeRootGeneration = 0;
@@ -365,6 +367,7 @@ export class SessionsManager {
         this._contextMenu = null;
         this._ctxDismissMousedown = null;
         this._ctxDismissKey = null;
+        this.workspaceManager = new WorkspaceManager(app, this);
         this.setupEventListeners();
     }
     setupEventListeners() {
@@ -539,9 +542,7 @@ export class SessionsManager {
             this.openWorkspaceModal();
         });
         this.removeWorkspaceBtn.addEventListener('click', () => {
-            if (confirm(`Remove workspace: ${this.activeWorkspace}?`)) {
-                this.removeWorkspace(this.activeWorkspace);
-            }
+            this.workspaceManager.open();
         });
         // Modal Action Bindings
         this.wsModalClose.addEventListener('click', () => this.closeWorkspaceModal());
@@ -650,7 +651,48 @@ export class SessionsManager {
         const finalWidth = Math.max(minW, Math.min(maxW, calculatedWidth));
         select.style.width = `${finalWidth}px`;
     }
-    applyConfigData(data, _options = {}) {
+    /** Resolves the sidebar's workspace list from a config payload. */
+    applyWorkspaceList(workspaces, activeCwd) {
+        // Settings → About reads this list even when no workspace select
+        // exists, and a non-string entry would throw in the labels below.
+        this.workspaces = workspaces.filter((ws) => typeof ws === 'string');
+        if (!this.workspaceSelect)
+            return;
+        this.workspaceSelect.innerHTML = '';
+        this.workspaces.forEach((ws) => {
+            const opt = document.createElement('option');
+            opt.value = ws;
+            opt.innerText = this.formatWorkspaceLabel(ws, this.workspaces);
+            opt.title = ws;
+            this.workspaceSelect.appendChild(opt);
+        });
+        let lastChosen = null;
+        try {
+            lastChosen = localStorage.getItem(serverKey('phi_last_chosen_project'));
+        }
+        catch {
+            lastChosen = this.activeWorkspace;
+        }
+        if (lastChosen && this.workspaces.includes(lastChosen)) {
+            this.activeWorkspace = lastChosen;
+        }
+        else if (!this.workspaces.includes(this.activeWorkspace)) {
+            this.activeWorkspace = activeCwd || this.workspaces[0] || '';
+        }
+        this.workspaceSelect.value = this.activeWorkspace;
+        this.updateWorkspaceSelectWidth();
+    }
+    /** True when `path` names a registered workspace (OS-agnostic compare). */
+    isWorkspaceRegistered(path) {
+        return this.isWorkspaceIn(this.workspaces, path);
+    }
+    /** Same compare against any list, so a caller can check the server's own
+     *  config instead of the list already projected from local intent. */
+    isWorkspaceIn(list, path) {
+        const wanted = normalizePath(path);
+        return list.some((ws) => normalizePath(ws) === wanted);
+    }
+    applyConfigData(data, options = {}) {
         if (!data || typeof data !== 'object')
             return;
         this.config = data;
@@ -658,36 +700,11 @@ export class SessionsManager {
             this.app.config = data;
         }
         if (Array.isArray(data.workspaces)) {
-            // Settings → About reads this list even when no workspace select
-            // exists, and a non-string entry would throw in the labels below.
-            this.workspaces = data.workspaces.filter((ws) => typeof ws === 'string');
+            this.applyWorkspaceList(data.workspaces, data.active_cwd);
         }
-        if (this.workspaceSelect && Array.isArray(data.workspaces)) {
-            this.workspaceSelect.innerHTML = '';
-            this.workspaces.forEach((ws) => {
-                const opt = document.createElement('option');
-                opt.value = ws;
-                opt.innerText = this.formatWorkspaceLabel(ws, this.workspaces);
-                opt.title = ws;
-                this.workspaceSelect.appendChild(opt);
-            });
-            let lastChosen = null;
-            try {
-                lastChosen = localStorage.getItem(serverKey('phi_last_chosen_project'));
-            }
-            catch {
-                lastChosen = this.activeWorkspace;
-            }
-            if (lastChosen && this.workspaces.includes(lastChosen)) {
-                this.activeWorkspace = lastChosen;
-            }
-            else {
-                this.activeWorkspace =
-                    data.active_cwd || this.workspaces[0] || '';
-            }
-            this.workspaceSelect.value = this.activeWorkspace;
-            this.updateWorkspaceSelectWidth();
-        }
+        this.workspaceManager?.onConfigApplied({
+            stale: options.stale === true,
+        });
         if (data.theme_color && this.app) {
             // applyAccentTheme sets data-theme-color on <html>;
             // that's what the Settings modal reads on open to
@@ -738,14 +755,30 @@ export class SessionsManager {
                 ?.dispatchEvent(new Event('phi-settings-refresh'));
         }
     }
-    async loadConfig() {
+    /** Reloads /api/config. False means this call produced no fresh config —
+     *  either the read failed or a newer request superseded it, so callers must
+     *  not read it alone as a failed write. */
+    async loadConfig({ refreshPanels = true } = {}) {
+        const scope = this.app?.scope;
+        this.configRequestId = (this.configRequestId || 0) + 1;
+        const requestId = this.configRequestId;
+        const current = () => this.app?.scope === scope &&
+            !scope?.aborted &&
+            requestId === this.configRequestId;
         try {
             await loadCoderRegistry();
-            const fetchFn = this.app?.scope && typeof this.app.scope.fetch === 'function'
-                ? (url, opts) => this.app.scope.fetch(url, opts)
+            if (!current())
+                return false;
+            const fetchFn = scope && typeof scope.fetch === 'function'
+                ? (url, opts) => scope.fetch(url, opts)
                 : fetch;
             const res = await fetchFn('/api/config');
+            if (res.ok === false) {
+                throw new Error(`HTTP ${res.status}`);
+            }
             const data = await res.json();
+            if (!current())
+                return false;
             const store = this.app?.getActiveStore?.();
             if (store) {
                 store.responses.set('/api/config', JSON.stringify(data));
@@ -754,14 +787,22 @@ export class SessionsManager {
                 ? this.applyConfigData
                 : SessionsManager.prototype.applyConfigData;
             applyConfig.call(this, data, { stale: false });
-            await this.app?.loadCustomFont?.();
-            await this.app?.loadCustomBg?.();
-            await this.loadSessions();
+            if (refreshPanels) {
+                await this.app?.loadCustomFont?.();
+                if (!current())
+                    return false;
+                await this.app?.loadCustomBg?.();
+                if (!current())
+                    return false;
+                await this.loadSessions();
+            }
+            return current();
         }
         catch (e) {
             if (e?.name === 'AbortError' || this.app?.scope?.aborted)
-                return;
+                return false;
             console.error('[config] Failed to load workspace config:', e);
+            return false;
         }
     }
     async addWorkspace(path) {
@@ -779,22 +820,6 @@ export class SessionsManager {
         this.activeWorkspace = path;
         this.updateWorkspaceSelectWidth();
         this.loadWorktrees();
-    }
-    async removeWorkspace(path) {
-        try {
-            const res = await fetch('/api/config/workspaces', {
-                method: 'DELETE',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ path }),
-            });
-            if (res.ok) {
-                await this.loadConfig();
-                this.updateWorkspaceSelectWidth();
-            }
-        }
-        catch (e) {
-            console.error('[config] Failed to remove workspace:', e);
-        }
     }
     setSessionRefreshStatus(message) {
         const status = document.getElementById('session-refresh-status');
@@ -827,6 +852,7 @@ export class SessionsManager {
         button?.removeAttribute('aria-busy');
     }
     resetSessionRootForBackendSwitch() {
+        this.workspaceManager?.resetForBackend();
         this.onSessionContextChange();
         this.worktreeLoadRequestId++;
         this.worktreeDirtyRequestId++;
@@ -2482,44 +2508,11 @@ export class SessionsManager {
                 : this.addWorkspaceBtn;
         this.wsModal.classList.remove('hidden');
         this.wsModalAddBtn.disabled = this.wsSubmitPending;
-        const onKeydown = (event) => {
-            if (event.key === 'Escape') {
-                event.preventDefault();
-                event.stopPropagation();
-                this.closeWorkspaceModal();
-                return;
-            }
-            if (event.key !== 'Tab')
-                return;
-            const focusable = Array.from(this.wsModal.querySelectorAll('button:not(:disabled):not([hidden]), input:not(:disabled), [tabindex="0"]')).filter((element) => !element.closest('.hidden'));
-            if (focusable.length === 0) {
-                event.preventDefault();
-                return;
-            }
-            const first = focusable[0];
-            const last = focusable[focusable.length - 1];
-            const activeIndex = focusable.indexOf(document.activeElement);
-            if (event.shiftKey && activeIndex <= 0) {
-                event.preventDefault();
-                last.focus({ preventScroll: true });
-            }
-            else if (!event.shiftKey &&
-                activeIndex === focusable.length - 1) {
-                event.preventDefault();
-                first.focus({ preventScroll: true });
-            }
-        };
-        const onFocusin = (event) => {
-            if (!this.wsModal.classList.contains('hidden') &&
-                event.target instanceof Node &&
-                !this.wsModal.contains(event.target)) {
-                this.wsModalInput.focus({ preventScroll: true });
-            }
-        };
-        this.wsModalKeydownHandler = onKeydown;
-        this.wsModalFocusinHandler = onFocusin;
-        document.addEventListener('keydown', onKeydown, true);
-        document.addEventListener('focusin', onFocusin, true);
+        this.wsModalTrap = trapModalFocus(this.wsModal, {
+            onEscape: () => this.closeWorkspaceModal(),
+            isOpen: () => !this.wsModal.classList.contains('hidden'),
+            initialFocus: () => this.wsModalInput,
+        });
         const dialog = this.wsDialogGeneration;
         this.wsTreeController = mountDirectoryTree(this.wsModalTree, {
             startPath: this.activeWorkspace || '~',
@@ -2546,13 +2539,9 @@ export class SessionsManager {
         this.invalidateAutocompleteSuggestions();
         this.wsTreeController?.destroy();
         this.wsTreeController = null;
-        if (this.wsModalKeydownHandler) {
-            document.removeEventListener('keydown', this.wsModalKeydownHandler, true);
-            this.wsModalKeydownHandler = null;
-        }
-        if (this.wsModalFocusinHandler) {
-            document.removeEventListener('focusin', this.wsModalFocusinHandler, true);
-            this.wsModalFocusinHandler = null;
+        if (this.wsModalTrap) {
+            this.wsModalTrap.dispose();
+            this.wsModalTrap = null;
         }
         this.wsModal.classList.add('hidden');
         const opener = this.wsModalOpener;
