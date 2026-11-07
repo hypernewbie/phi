@@ -147,13 +147,3 @@ func TestAdversarialInvalidResizeCannotPoisonAllLaterReplay(t *testing.T) {
 		})
 	}
 }
-
-// perCommitDurability pins the group to one durable commit per payload.
-// The default batches durability, so the fault-injection tests, which drive
-// a failure at a specific sync point, ask for the old granularity.
-func perCommitDurability(t *testing.T) {
-	t.Helper()
-	old := retentionFlushBytes
-	retentionFlushBytes = 0
-	t.Cleanup(func() { retentionFlushBytes = old })
-}

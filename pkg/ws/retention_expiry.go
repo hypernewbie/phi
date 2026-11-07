@@ -1,12 +1,10 @@
 package ws
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -15,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hypernewbie/phi/internal/termstate"
 	"github.com/hypernewbie/phi/pkg/obs"
 	"github.com/hypernewbie/phi/pkg/pty"
 )
@@ -143,9 +140,6 @@ func (h *Hub) sweepArchives(saved map[string]bool, now time.Time) {
 				close(c.Send)
 			}
 			ph.win, ph.Ring, ph.ckpt = nil, nil, nil
-			if ph.recording != nil {
-				_ = ph.recording.close()
-			}
 			delete(h.archives, id)
 		}
 		ph.mu.Unlock()
@@ -213,35 +207,24 @@ func (h *Hub) sweepOneGroup(v2, name string, now time.Time, stats *retentionSwee
 			return
 		}
 	}
-	// The manifest is read under the same lock that serializes close
-	// and promote, so a just-closed pane can never be judged by a
-	// stale pre-close manifest.
-	data, err := readRetentionManifest(filepath.Join(group, "MANIFEST"))
-	if err != nil {
+	// The retention group format is retired: no code writes it, and the
+	// on-disk groups this sweep still finds are leftovers from binaries
+	// that did. The group manifest is gone with the format, so the
+	// directory mtime is the expiry clock. A recent mtime only delays a
+	// later sweep; nothing reads the group either way.
+	info, err := os.Lstat(group)
+	if err != nil || !info.IsDir() {
 		return
 	}
-	manifest, err := decodeRetentionManifest(data)
-	if err != nil {
-		return
-	}
-	clock := manifest.lastUpdateNs
-	if manifest.flags&retentionFlagClosed != 0 && manifest.closedAtNs > 0 {
-		clock = manifest.closedAtNs
-	}
-	if clock <= 0 || now.UnixNano()-clock < int64(retentionPeriod) {
+	if info.ModTime().IsZero() || now.Sub(info.ModTime()) < retentionPeriod {
 		return
 	}
 
 	// Resolve the current archive owner under this lock: a cold read may
-	// have published one after the sweep snapshot. Detach and close it
-	// before deleting so no owner outlives its files.
-	for id, ph := range h.archives {
+	// have published one after the sweep snapshot. Detach it before
+	// deleting so no owner outlives its files.
+	for id := range h.archives {
 		if fmt.Sprintf("%x", sha256.Sum256([]byte(id))) == name {
-			ph.mu.Lock()
-			if ph.recording != nil {
-				_ = ph.recording.close()
-			}
-			ph.mu.Unlock()
 			delete(h.archives, id)
 			break
 		}
@@ -667,608 +650,40 @@ func (h *Hub) sweepLegacySources(root string, saved map[string]bool, now time.Ti
 		if !legacySnapshotTimesSafe(snapshot, now) || !legacySnapshotExpired(snapshot, now) {
 			continue
 		}
-		syncLegacyDirs(h.finalizeLegacyCandidate(root, snapshot, "", savedHashes, now, stats), stats)
+		syncDirs, failPath, err := retireLegacySources(snapshot, stats)
+		if err != nil && failPath != "" {
+			legacyFailure(stats, failPath, err)
+		}
+		syncLegacyDirs(syncDirs, stats)
 	}
 	if candidates > 0 {
 		log.Printf("[ws] legacy retention sweep handled %d sources in %s", candidates, time.Since(start))
 	}
 }
 
+// sweepLegacyJournal deletes an expired legacy journal. It never imports:
+// the VT-based importer is gone, and every legacy journal is older than the
+// retention period on any binary that still has one on disk, so the
+// expired branch is the only branch that can run. Unexpired sources are
+// left for a later sweep.
 func (h *Hub) sweepLegacyJournal(snapshot legacySourceSnapshot, saved map[string]bool, now time.Time, stats *retentionSweepStats) {
-	if legacySnapshotExpired(snapshot, now) {
-		if !saved[snapshot.hash] {
-			h.mu.RLock()
-			live := legacyLiveLocked(h, snapshot.hash)
-			h.mu.RUnlock()
-			if !live {
-				syncLegacyDirs(h.finalizeLegacyCandidate(snapshot.root, snapshot, "", saved, now, stats), stats)
-				return
-			}
-		}
-		// Expired but protected (saved or live): only a valid existing
-		// v2 can retire the sources, never a new conversion.
-		syncLegacyDirs(h.sweepLegacyAuthority(snapshot, stats), stats)
+	if !legacySnapshotExpired(snapshot, now) {
+		return
+	}
+	if saved[snapshot.hash] {
 		return
 	}
 	h.mu.RLock()
-	eligible := h.leaseHeld && h.recordingDirectory == snapshot.root && !legacyCurrentOwnerLocked(h, snapshot.hash)
+	live := legacyLiveLocked(h, snapshot.hash)
 	h.mu.RUnlock()
-	v2 := filepath.Join(snapshot.root, "v2")
-	if info, err := os.Lstat(v2); err != nil || !info.IsDir() {
-		if err == nil {
-			err = fmt.Errorf("v2 namespace is not a real directory")
-		}
-		legacyFailure(stats, v2, err)
+	if live {
 		return
 	}
-	destination := filepath.Join(v2, snapshot.hash)
-	if _, err := os.Lstat(destination); err == nil {
-		// An existing destination is never converted over. A live or
-		// archived owner keeps authority; only the read-only validator
-		// below can retire sources beside it.
-		syncLegacyDirs(h.sweepLegacyAuthority(snapshot, stats), stats)
-		return
-	} else if !os.IsNotExist(err) {
-		legacyFailure(stats, destination, err)
-		return
-	}
-	if !eligible {
-		return
-	}
-	staging, err := os.MkdirTemp(v2, ".import-*")
-	if err != nil {
-		legacyFailure(stats, snapshot.journal.path, err)
-		return
-	}
-	if _, err := stageLegacyImport(snapshot.journal.path, staging, snapshot.journal.info.Size(), snapshot.journal.info.ModTime()); err != nil {
-		if removeErr := os.RemoveAll(staging); removeErr != nil {
-			legacyFailure(stats, staging, removeErr)
-		}
-		legacyFailure(stats, snapshot.journal.path, err)
-		return
-	}
-	syncLegacyDirs(h.finalizeLegacyCandidate(snapshot.root, snapshot, staging, saved, now, stats), stats)
-}
-
-// errLegacyAuthorityDefer marks a silent deferral: no v2 destination, an
-// owner the validator must not disturb, or state that changed between
-// phases. A later sweep retries; nothing is reported.
-var errLegacyAuthorityDefer = errors.New("legacy authority deferred")
-
-// legacyAuthorityDep pins one committed segment dependency: the raw and
-// resize files must cover their committed lengths (a missing file is
-// allowed only for a zero committed length, mirroring openCommitFile),
-// while a checkpoint must match its committed length exactly.
-type legacyAuthorityDep struct {
-	rawInfo  os.FileInfo
-	rawSize  int64
-	rszInfo  os.FileInfo
-	rszSize  int64
-	ckptInfo os.FileInfo
-}
-
-// legacyAuthorityCkpt is a bounded copy of one committed base checkpoint
-// for lock-free parser usability checks.
-type legacyAuthorityCkpt struct {
-	start uint64
-	data  []byte
-}
-
-// legacyAuthoritySnapshot pins the existing v2 state a legacy cleanup
-// validated: ownership, manifest identity/bytes, dependency identities, and
-// bounded checkpoint copies for lock-free parser usability checks.
-type legacyAuthoritySnapshot struct {
-	hash         string
-	pane         *PaneHub
-	archive      *PaneHub
-	readLoop     *pty.PTYInstance
-	recording    *retentionGroup
-	destDir      string
-	destDirInfo  os.FileInfo
-	manifestPath string
-	manifestInfo os.FileInfo
-	manifestData []byte
-	manifest     retentionManifest
-	deps         []legacyAuthorityDep
-	ckpts        []legacyAuthorityCkpt
-	sourceHead   uint64
-	sourceTime   time.Time
-}
-
-// legacyOwnersLocked resolves the pane, archive, and read-loop owners for a
-// legacy hash. The caller holds h.mu.
-func legacyOwnersLocked(h *Hub, hash string) (pane, archive *PaneHub, readLoop *pty.PTYInstance) {
-	for id, ph := range h.panes {
-		if fmt.Sprintf("%x", sha256.Sum256([]byte(id))) == hash {
-			pane = ph
-			break
-		}
-	}
-	for id, ph := range h.archives {
-		if fmt.Sprintf("%x", sha256.Sum256([]byte(id))) == hash {
-			archive = ph
-			break
-		}
-	}
-	for id, inst := range h.paneOwners {
-		if fmt.Sprintf("%x", sha256.Sum256([]byte(id))) == hash {
-			readLoop = inst
-			break
-		}
-	}
-	return pane, archive, readLoop
-}
-
-// scanLegacySourceHead opens the retained journal read-only and returns its
-// committed output head. The caller holds no locks.
-func scanLegacySourceHead(snapshot legacySourceSnapshot) (uint64, error) {
-	if !snapshot.hasJournal {
-		return 0, fmt.Errorf("legacy source has no journal")
-	}
-	f, err := os.Open(snapshot.journal.path)
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
-	if info, err := f.Stat(); err != nil || !os.SameFile(snapshot.journal.info, info) {
-		if err == nil {
-			err = fmt.Errorf("legacy source identity changed: %s", snapshot.journal.path)
-		}
-		return 0, err
-	}
-	scan, err := scanLegacyLog(f, snapshot.journal.info.Size(), nil)
-	if err != nil {
-		return 0, err
-	}
-	return scan.head, nil
-}
-
-// captureLegacyAuthority runs phase A of the existing-authority validator
-// under h.mu (then the owner lock): it pins ownership, the destination
-// directory, exact manifest bytes, referenced dependency identities, and
-// bounded checkpoint copies. An unavailable, closed, ephemeral, or pending
-// owned recording defers silently; anything malformed fails loudly.
-func (h *Hub) captureLegacyAuthority(root, hash string, sourceHead uint64, sourceTime time.Time) (*legacyAuthoritySnapshot, error) {
-	snap := &legacyAuthoritySnapshot{hash: hash, sourceHead: sourceHead, sourceTime: sourceTime}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if !h.leaseHeld || h.recordingDirectory != root {
-		return nil, fmt.Errorf("%w: namespace lease lost", errLegacyAuthorityDefer)
-	}
-	snap.pane, snap.archive, snap.readLoop = legacyOwnersLocked(h, hash)
-	owner := snap.pane
-	if owner == nil {
-		owner = snap.archive
-	}
-	if owner != nil {
-		owner.mu.Lock()
-		defer owner.mu.Unlock()
-		snap.recording = owner.recording
-		switch {
-		case snap.recording == nil:
-			return nil, fmt.Errorf("%w: owned recording unavailable", errLegacyAuthorityDefer)
-		case snap.recording.isClosed():
-			return nil, fmt.Errorf("%w: owned recording closed", errLegacyAuthorityDefer)
-		case snap.recording.ephemeral:
-			return nil, fmt.Errorf("%w: owned recording ephemeral", errLegacyAuthorityDefer)
-		case snap.recording.pending != nil || owner.pendingResize != nil:
-			return nil, fmt.Errorf("%w: owned recording has a pending commit", errLegacyAuthorityDefer)
-		}
-	}
-	snap.destDir = filepath.Join(root, "v2", hash)
-	dirInfo, err := os.Lstat(snap.destDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("%w: destination absent", errLegacyAuthorityDefer)
-		}
-		return nil, err
-	}
-	if !dirInfo.IsDir() {
-		return nil, fmt.Errorf("legacy destination is not a real directory: %s", snap.destDir)
-	}
-	snap.destDirInfo = dirInfo
-	snap.manifestPath = filepath.Join(snap.destDir, "MANIFEST")
-	manifestInfo, err := os.Lstat(snap.manifestPath)
-	if err != nil {
-		return nil, err
-	}
-	if !manifestInfo.Mode().IsRegular() {
-		return nil, fmt.Errorf("retention manifest is not a regular file")
-	}
-	data, err := readRetentionManifest(snap.manifestPath)
-	if err != nil {
-		return nil, err
-	}
-	manifest, err := decodeRetentionManifest(data)
-	if err != nil {
-		return nil, err
-	}
-	after, err := os.Lstat(snap.manifestPath)
-	if err != nil {
-		return nil, err
-	}
-	if !os.SameFile(manifestInfo, after) || after.Size() != manifestInfo.Size() || !after.ModTime().Equal(manifestInfo.ModTime()) {
-		return nil, fmt.Errorf("retention manifest changed during capture")
-	}
-	snap.manifestInfo = manifestInfo
-	snap.manifestData = data
-	snap.manifest = manifest
-	for i := 1; i < len(manifest.segs); i++ {
-		prev, cur := manifest.segs[i-1], manifest.segs[i]
-		if cur.start != prev.start+prev.rawLen {
-			return nil, fmt.Errorf("retention segments are not contiguous")
-		}
-	}
-	for _, seg := range manifest.segs {
-		dep, ckpt, err := captureLegacyAuthorityDep(snap.destDir, seg, manifest.head)
-		if err != nil {
-			return nil, err
-		}
-		snap.deps = append(snap.deps, dep)
-		if ckpt != nil {
-			snap.ckpts = append(snap.ckpts, *ckpt)
-		}
-	}
-	return snap, nil
-}
-
-// openLegacyAuthorityDep pins one committed raw/resize dependency read-only.
-// A missing file is allowed only for a zero committed length, mirroring
-// openCommitFile; a present file must cover its committed length.
-func openLegacyAuthorityDep(path string, committed int64) (os.FileInfo, *os.File, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		if os.IsNotExist(err) && committed == 0 {
-			return nil, nil, nil
-		}
-		return nil, nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, nil, fmt.Errorf("retention dependency is not a regular file: %s", path)
-	}
-	if info.Size() < committed {
-		return nil, nil, fmt.Errorf("committed retention bytes are missing: %s", path)
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	if stat, err := f.Stat(); err != nil || !os.SameFile(info, stat) {
-		f.Close()
-		if err == nil {
-			err = fmt.Errorf("retention file changed during open: %s", path)
-		}
-		return nil, nil, err
-	}
-	return info, f, nil
-}
-
-// captureLegacyAuthorityDep pins one segment: committed raw prefixes stream
-// cleanly, committed resize records decode, and referenced checkpoints
-// match exact committed lengths with bounded copies.
-func captureLegacyAuthorityDep(dir string, seg retentionSegDesc, head uint64) (legacyAuthorityDep, *legacyAuthorityCkpt, error) {
-	var dep legacyAuthorityDep
-	base := filepath.Join(dir, retentionSegBase(seg.gen))
-	rawInfo, raw, err := openLegacyAuthorityDep(base+".raw", int64(seg.rawLen))
-	if err != nil {
-		return dep, nil, err
-	}
-	if raw != nil {
-		defer raw.Close()
-		dep.rawInfo, dep.rawSize = rawInfo, rawInfo.Size()
-		if _, err := io.CopyN(io.Discard, raw, int64(seg.rawLen)); err != nil {
-			return dep, nil, err
-		}
-	}
-	rszInfo, rsz, err := openLegacyAuthorityDep(base+".rsz", int64(seg.rszCount)*retentionRszRecLen)
-	if err != nil {
-		return dep, nil, err
-	}
-	if rsz != nil {
-		defer rsz.Close()
-		dep.rszInfo, dep.rszSize = rszInfo, rszInfo.Size()
-		if _, err := loadResizeCache(rsz, seg.rszCount, seg.start, head); err != nil {
-			return dep, nil, err
-		}
-	}
-	ckptPath := base + ".ckpt"
-	if seg.ckptLen == 0 {
-		if _, err := os.Lstat(ckptPath); err == nil {
-			return dep, nil, fmt.Errorf("retention checkpoint contradicts unavailable base")
-		} else if !os.IsNotExist(err) {
-			return dep, nil, err
-		}
-		return dep, nil, nil
-	}
-	ckptInfo, err := os.Lstat(ckptPath)
-	if err != nil {
-		return dep, nil, err
-	}
-	if !ckptInfo.Mode().IsRegular() || ckptInfo.Size() != int64(seg.ckptLen) {
-		return dep, nil, fmt.Errorf("retention base checkpoint size mismatch")
-	}
-	ckpt, err := os.Open(ckptPath)
-	if err != nil {
-		return dep, nil, err
-	}
-	defer ckpt.Close()
-	if stat, err := ckpt.Stat(); err != nil || !os.SameFile(ckptInfo, stat) {
-		if err == nil {
-			err = fmt.Errorf("retention checkpoint changed during open")
-		}
-		return dep, nil, err
-	}
-	data := make([]byte, seg.ckptLen)
-	if _, err := io.ReadFull(ckpt, data); err != nil {
-		return dep, nil, err
-	}
-	dep.ckptInfo = ckptInfo
-	return dep, &legacyAuthorityCkpt{start: seg.start, data: data}, nil
-}
-
-// checkLegacyAuthorityUsable runs phase B of the existing-authority
-// validator with no locks held: captured checkpoints at or below the
-// public base floor restore on disposable parsers, newest first. Fresh-
-// parser fallback needs an intact zero prefix (first-segment start zero
-// with start ordinal one; capture already proved committed output/resize
-// coverage) and a working parser constructor.
-func checkLegacyAuthorityUsable(snap *legacyAuthoritySnapshot) error {
-	m := snap.manifest
-	floor := m.segs[0].start
-	if window := m.head - min(m.head, retentionHistoryCap); window > floor {
-		floor = window
-	}
-	for i := len(snap.ckpts) - 1; i >= 0; i-- {
-		ckpt := snap.ckpts[i]
-		if ckpt.start > floor {
-			continue
-		}
-		state, err := restoreAnchor(ckpt.data)
-		if err != nil {
-			continue
-		}
-		parser, err := termstate.New(context.Background(), 80, 24)
-		if err != nil {
-			return err
-		}
-		restoreErr := parser.Restore(state)
-		closeErr := parser.Close()
-		if restoreErr == nil && closeErr == nil {
-			return nil
-		}
-	}
-	if m.segs[0].start == 0 && m.segs[0].startOrdinal == 1 {
-		probe, err := termstate.New(context.Background(), 80, 24)
-		if err != nil {
-			return err
-		}
-		if err := probe.Close(); err != nil {
-			return err
-		}
-		return nil
-	}
-	return fmt.Errorf("no usable retained base checkpoint")
-}
-
-// finalizeLegacyAuthority runs phase C of the existing-authority validator
-// under h.mu (then the owner lock): it requires the identical owners,
-// destination, manifest bytes, and dependency inodes the capture pinned,
-// then requires the committed head to cover the source head with a
-// durable time at least the source time before retiring the sources.
-// Ownership or committed-state changes defer silently; head/time
-// shortfalls, sync failures, and source-identity changes report.
-func (h *Hub) finalizeLegacyAuthority(snapshot legacySourceSnapshot, authority *legacyAuthoritySnapshot, stats *retentionSweepStats) (syncDirs []string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if !h.leaseHeld || h.recordingDirectory != snapshot.root {
-		return
-	}
-	pane, archive, readLoop := legacyOwnersLocked(h, authority.hash)
-	if pane != authority.pane || archive != authority.archive || readLoop != authority.readLoop {
-		return
-	}
-	owner := pane
-	if owner == nil {
-		owner = archive
-	}
-	if owner != nil {
-		owner.mu.Lock()
-		defer owner.mu.Unlock()
-		rec := owner.recording
-		if rec != authority.recording || rec == nil || rec.isClosed() || rec.ephemeral || rec.pending != nil || owner.pendingResize != nil {
-			return
-		}
-	} else if authority.recording != nil {
-		return
-	}
-	dirInfo, err := os.Lstat(authority.destDir)
-	if err != nil || !dirInfo.IsDir() || !os.SameFile(authority.destDirInfo, dirInfo) {
-		return
-	}
-	manifestInfo, err := os.Lstat(authority.manifestPath)
-	if err != nil || !manifestInfo.Mode().IsRegular() || !os.SameFile(authority.manifestInfo, manifestInfo) ||
-		manifestInfo.Size() != authority.manifestInfo.Size() || !manifestInfo.ModTime().Equal(authority.manifestInfo.ModTime()) {
-		return
-	}
-	manifestData, err := readRetentionManifest(authority.manifestPath)
-	if err != nil || !bytes.Equal(manifestData, authority.manifestData) {
-		return
-	}
-	for i, seg := range authority.manifest.segs {
-		dep := authority.deps[i]
-		base := filepath.Join(authority.destDir, retentionSegBase(seg.gen))
-		if !legacyAuthorityDepUnchanged(base+".raw", dep.rawInfo, dep.rawSize) {
-			return
-		}
-		if !legacyAuthorityDepUnchanged(base+".rsz", dep.rszInfo, dep.rszSize) {
-			return
-		}
-		ckptPath := base + ".ckpt"
-		if seg.ckptLen == 0 {
-			if _, err := os.Lstat(ckptPath); err == nil || !os.IsNotExist(err) {
-				return
-			}
-			continue
-		}
-		ckptInfo, err := os.Lstat(ckptPath)
-		if err != nil || !ckptInfo.Mode().IsRegular() || !os.SameFile(dep.ckptInfo, ckptInfo) ||
-			ckptInfo.Size() != int64(seg.ckptLen) || !ckptInfo.ModTime().Equal(dep.ckptInfo.ModTime()) {
-			return
-		}
-	}
-	m := authority.manifest
-	// A v2 that does not cover the source is not authoritative yet (or,
-	// for a static group, ever): preserve the sources and let a later
-	// sweep retry. This deferral is silent like every other authority
-	// deferral; only I/O, identity, and durability errors are failures.
-	if m.head < authority.sourceHead {
-		return
-	}
-	if m.lastUpdateNs < authority.sourceTime.UnixNano() {
-		return
-	}
-	// These two syncs stay under the lock: an interrupted publish left the
-	// destination visible but not durable, so they must precede the source
-	// unlinks below. Only the post-unlink barrier moves out.
-	if err := legacySyncDir(authority.destDir); err != nil {
-		legacyFailure(stats, authority.destDir, err)
-		return
-	}
-	if err := legacySyncDir(filepath.Join(snapshot.root, "v2")); err != nil {
-		legacyFailure(stats, filepath.Join(snapshot.root, "v2"), err)
-		return
-	}
-	if err := verifyLegacySnapshot(snapshot, nil, false); err != nil {
-		legacyFailure(stats, snapshot.journal.path, err)
-		return
-	}
-	dirs, path, err := retireLegacySources(snapshot, stats)
-	if err != nil {
-		legacyFailure(stats, path, err)
-	}
-	return dirs
-}
-
-// legacyAuthorityDepUnchanged requires a raw/resize dependency to keep its
-// capture identity while permitting growth beyond committed lengths.
-func legacyAuthorityDepUnchanged(path string, pinned os.FileInfo, pinnedSize int64) bool {
-	if pinned == nil {
-		_, err := os.Lstat(path)
-		return os.IsNotExist(err)
-	}
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || !os.SameFile(pinned, info) {
-		return false
-	}
-	return info.Size() >= pinnedSize
-}
-
-// sweepLegacyAuthority retires redundant legacy sources beside a valid
-// existing v2 without replacing, reopening, or flushing it: an unlocked
-// source scan, a locked capture, lock-free parser usability checks, and a
-// locked recheck with deletion.
-func (h *Hub) sweepLegacyAuthority(snapshot legacySourceSnapshot, stats *retentionSweepStats) (syncDirs []string) {
-	if !snapshot.hasJournal {
-		return
-	}
-	destination := filepath.Join(snapshot.root, "v2", snapshot.hash)
-	if info, err := os.Lstat(destination); err != nil {
-		if os.IsNotExist(err) {
-			return
-		}
-		legacyFailure(stats, destination, err)
-		return
-	} else if !info.IsDir() {
-		legacyFailure(stats, destination, fmt.Errorf("legacy destination is not a real directory: %s", destination))
-		return
-	}
-	sourceHead, err := scanLegacySourceHead(snapshot)
-	if err != nil {
-		legacyFailure(stats, snapshot.journal.path, err)
-		return
-	}
-	authority, err := h.captureLegacyAuthority(snapshot.root, snapshot.hash, sourceHead, snapshot.journal.info.ModTime())
-	if err != nil {
-		if errors.Is(err, errLegacyAuthorityDefer) {
-			return
-		}
-		legacyFailure(stats, snapshot.journal.path, err)
-		return
-	}
-	if err := checkLegacyAuthorityUsable(authority); err != nil {
-		legacyFailure(stats, snapshot.journal.path, err)
-		return
-	}
-	return h.finalizeLegacyAuthority(snapshot, authority, stats)
-}
-
-func (h *Hub) finalizeLegacyCandidate(root string, snapshot legacySourceSnapshot, staging string, saved map[string]bool, now time.Time, stats *retentionSweepStats) (syncDirs []string) {
-	if staging != "" {
-		defer func() {
-			if err := os.RemoveAll(staging); err != nil {
-				legacyFailure(stats, staging, err)
-			}
-		}()
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if !h.leaseHeld || h.recordingDirectory != root {
-		return
-	}
-	expired := legacySnapshotExpired(snapshot, now)
-	if snapshot.orphan || expired {
-		if !expired || saved[snapshot.hash] || legacyLiveLocked(h, snapshot.hash) {
-			return
-		}
-		dirs, path, err := retireLegacySources(snapshot, stats)
-		if err != nil {
-			legacyFailure(stats, path, err)
-		}
-		return dirs
-	}
-	if staging == "" || legacyCurrentOwnerLocked(h, snapshot.hash) {
-		return
-	}
-	v2 := filepath.Join(root, "v2")
-	if info, err := os.Lstat(v2); err != nil || !info.IsDir() {
-		if err == nil {
-			err = fmt.Errorf("v2 namespace is not a real directory")
-		}
-		legacyFailure(stats, v2, err)
-		return
-	}
-	destination := filepath.Join(v2, snapshot.hash)
-	if _, err := os.Lstat(destination); err == nil {
-		return
-	} else if !os.IsNotExist(err) {
-		legacyFailure(stats, destination, err)
-		return
-	}
-	if staging != "" {
-		if err := verifyLegacySnapshot(snapshot, nil, false); err != nil {
-			legacyFailure(stats, snapshot.journal.path, err)
-			return
-		}
-		if err := importRename(staging, destination); err != nil {
-			legacyFailure(stats, snapshot.journal.path, fmt.Errorf("publish replacement: %w", err))
-			return
-		}
-		// The publish barrier stays under the lock: the replacement must
-		// be durable before its sources are unlinked below.
-		if err := legacySyncDir(v2); err != nil {
-			legacyFailure(stats, snapshot.journal.path, fmt.Errorf("sync published replacement: %w", err))
-			return
-		}
-		if err := verifyLegacySnapshot(snapshot, nil, false); err != nil {
-			legacyFailure(stats, snapshot.journal.path, err)
-			return
-		}
-	}
-	dirs, path, err := retireLegacySources(snapshot, stats)
-	if err != nil {
-		legacyFailure(stats, path, err)
-	}
-	return dirs
+	syncDirs, failPath, err := retireLegacySources(snapshot, stats)
+	if err != nil && failPath != "" {
+		legacyFailure(stats, failPath, err)
+	}
+	syncLegacyDirs(syncDirs, stats)
 }
 
 // retireLegacySources unlinks recognized legacy files under the caller's

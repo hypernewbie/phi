@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/hypernewbie/phi/internal/termstate"
 	"github.com/hypernewbie/phi/pkg/pty"
 	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
@@ -94,7 +93,6 @@ type PaneHub struct {
 	clients      map[*Client]bool
 	mu           sync.Mutex
 	Ring         *RingBuffer
-	recording    *retentionGroup
 	recordingErr error
 
 	// win is the RAM-only retained-output authority: every admitted byte
@@ -152,10 +150,7 @@ type PaneHub struct {
 	pendingResize *ResizeMarker
 
 	// ckpt is the newest accepted client checkpoint, if any.
-	ckpt      *paneCheckpoint
-	state     *termstate.Terminal
-	stateHead uint64
-	stateErr  error
+	ckpt *paneCheckpoint
 }
 
 type Hub struct {
@@ -196,9 +191,6 @@ type Hub struct {
 	sweepStarted      bool
 	closed            bool
 	closeDone         chan struct{}
-	importFailed      map[string]importFailure
-	importScans       uint64
-	lastStats         importStats
 }
 
 func NewHub(replayBufferBytes int) *Hub {
@@ -209,7 +201,6 @@ func NewHub(replayBufferBytes int) *Hub {
 		replayBufferBytes: replayBufferBytes,
 		clock:             time.Now,
 		savedReservations: defaultSavedReservations,
-		importFailed:      make(map[string]importFailure),
 	}
 }
 
@@ -232,12 +223,6 @@ func (h *Hub) wallClock() time.Time {
 func (h *Hub) takeRawClock(j *rawJournal) {
 	if j != nil && h != nil && h.clock != nil {
 		j.now = h.clock
-	}
-}
-
-func (h *Hub) takeGroupClock(g *retentionGroup) {
-	if g != nil && h != nil && h.clock != nil {
-		g.now = h.clock
 	}
 }
 
@@ -1064,39 +1049,6 @@ func (ph *PaneHub) appendResizeLocked(cols, rows uint16) (ResizeMarker, uint64, 
 	return ph.win.appendResize(cols, rows)
 }
 
-func (ph *PaneHub) applyResizeToParserLocked(marker ResizeMarker) {
-	if ph.state == nil {
-		return
-	}
-	if err := ph.state.Resize(int(marker.Cols), int(marker.Rows)); err != nil {
-		_ = ph.state.Close()
-		ph.state = nil
-		ph.stateHead = 0
-		ph.stateErr = err
-	}
-}
-
-// snapshotBaseLocked gzip-compresses the live parser as a zero-scrollback
-// base checkpoint for a rotated-to segment. Any failure yields (nil, nil):
-// the segment commits with an unavailable base and live output continues.
-func (ph *PaneHub) snapshotBaseLocked() ([]byte, error) {
-	if ph.state == nil && ph.stateErr == nil {
-		_ = ph.prepareStateLocked()
-	}
-	if ph.state == nil {
-		return nil, nil
-	}
-	window, err := ph.state.ReadyWindow(0)
-	if err != nil {
-		return nil, nil
-	}
-	gz, err := gzipBase(window)
-	if err != nil {
-		return nil, nil
-	}
-	return gz, nil
-}
-
 // RecordResize notes a backend resize at the pane's current head seq.
 // Production resizes go through StagePaneResize; this helper exists for
 // callers that only need the marker and live geometry frame.
@@ -1467,9 +1419,6 @@ func (h *Hub) Close() error {
 				close(c.Send)
 			}
 			ph.win, ph.Ring, ph.ckpt = nil, nil, nil
-			if ph.recording != nil {
-				errs = append(errs, ph.recording.close())
-			}
 			if ph.journal != nil && !ph.journal.closed {
 				h.markPaneClosedLocked(ph, paneID, h.wallClock().UnixNano())
 				errs = append(errs, ph.journal.close())
@@ -1518,11 +1467,6 @@ func (h *Hub) closePaneLocked(paneID string) {
 			close(client.Send)
 		}
 		ph.ckpt = nil
-		if ph.state != nil {
-			_ = ph.state.Close()
-			ph.state = nil
-			ph.stateHead = 0
-		}
 		// The RAM window stays with the archive so same-process closed
 		// history remains replayable until expiry.
 		ph.closedAtUnixNano = h.wallClock().UnixNano()

@@ -44,7 +44,7 @@ jobs:
       # Run packages whose source changes under profiling, including the
       # hub's memory accounting and the server's HTTP timing tests.
       - name: Run Go Tests (profiling)
-        run: go test -tags=profiling ./internal/diagnostics/... ./internal/server/... ./internal/termstate/... ./internal/termemu/... ./pkg/obs/... ./pkg/ws/...
+        run: go test -tags=profiling ./internal/diagnostics/... ./internal/server/... ./internal/termemu/... ./pkg/obs/... ./pkg/ws/...
 
       # Only auth_observability_otel_test.go is gated on the otel tag; main.go
       # is byte-identical with and without it, since the tag swaps the pkg/obs
@@ -81,9 +81,10 @@ jobs:
       - name: Profiling Partition Guard
         run: bash scripts/check-profiling-build.sh "$(mktemp -d)/partition"
 
-      # Both binaries link the native VT engine, so cross-builds need a C
+      # phic links the native VT engine, so its cross-builds need a C
       # toolchain per target; the sha256 gate keeps the compiler supply
       # chain fixed. Host linux/amd64 is covered by the full test run above.
+      # The server is pure Go: its cross-builds below need no toolchain.
       - name: Set up Zig cross compiler
         run: |
           set -euo pipefail
@@ -97,18 +98,20 @@ jobs:
       # Compile-only evidence for the foreign targets Ubuntu can link.
       # Darwin cannot zig-cross-link (no macOS system libraries); the
       # macOS job below covers it.
-      - name: Native cross-builds (linux arm64, windows amd64)
+      - name: Native cross-builds (linux arm64, windows amd64, windows arm64 server)
         run: |
-          CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC="zig cc -target aarch64-linux-gnu" \
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
             go build -o /tmp/phi-linux-arm64 .
-          CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC="zig cc -target aarch64-linux-gnu" \
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
             go build -tags=profiling -o /tmp/phi-linux-arm64-profiling .
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+            go build -o /tmp/phi-windows-amd64.exe .
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+            go build -tags=profiling -o /tmp/phi-windows-amd64-profiling.exe .
+          CGO_ENABLED=0 GOOS=windows GOARCH=arm64 \
+            go build -o /tmp/phi-windows-arm64.exe .
           CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC="zig cc -target aarch64-linux-gnu" \
             go build -o /tmp/phic-linux-arm64 ./cmd/phic
-          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC="zig cc -target x86_64-windows-gnu" \
-            go build -o /tmp/phi-windows-amd64.exe .
-          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC="zig cc -target x86_64-windows-gnu" \
-            go build -tags=profiling -o /tmp/phi-windows-amd64-profiling.exe .
           CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC="zig cc -target x86_64-windows-gnu" \
             go build -o /tmp/phic-windows-amd64.exe ./cmd/phic
 
@@ -119,7 +122,7 @@ jobs:
           mkdir -p /tmp/phi-windows-tests
           GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC="zig cc -target x86_64-windows-gnu" \
             go test -c -o /tmp/phi-windows-tests/ \
-            ./internal/termstate/... ./internal/termemu/ ./internal/phic/... ./internal/termproof/... ./pkg/ws/wireproto/...
+            ./internal/termemu/ ./internal/phic/... ./internal/termproof/... ./pkg/ws/wireproto/...
 
   test-darwin:
     name: Darwin native builds + engine tests
@@ -147,8 +150,8 @@ jobs:
 
       - name: Engine tests (host arch, both tags)
         run: |
-          go test ./internal/termstate/... ./internal/termemu/
-          go test -tags=profiling ./internal/termstate/... ./internal/termemu/
+          go test ./internal/termemu/
+          go test -tags=profiling ./internal/termemu/
 
   test-windows:
     name: Windows native builds + engine tests
@@ -196,9 +199,9 @@ jobs:
         run: |
           $env:CGO_ENABLED = '1'
           $env:CC = 'zig cc -target x86_64-windows-gnu'
-          go test ./internal/termstate/... ./internal/termemu/
+          go test ./internal/termemu/
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          go test -tags=profiling ./internal/termstate/... ./internal/termemu/
+          go test -tags=profiling ./internal/termemu/
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   goreleaser-check:

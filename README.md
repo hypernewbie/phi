@@ -79,7 +79,7 @@ After launching, open <http://localhost:7070> in your browser. The web UI is ful
 ### Prerequisites
 
 - Go 1.26+
-- A supported C compiler: both `phi` and `phic` link a native VT engine (Windows source builds use `zig cc`)
+- A supported C compiler, only for `phic`: the console client links a native VT engine (Windows source builds use `zig cc`). The `phi` server is pure Go and needs no C toolchain.
 - Whichever agent CLIs you want to drive, on your `PATH`: `opencode`, `claude`, `agy`, `pi`
 - `git` (for the diff/log panels)
 

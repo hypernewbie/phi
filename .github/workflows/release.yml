@@ -69,7 +69,7 @@ jobs:
               arm64) cc="clang -arch arm64" ;;
               amd64) cc="clang -arch x86_64" ;;
             esac
-            CGO_ENABLED=1 GOOS=darwin GOARCH="$arch" CC="$cc" go build -trimpath \
+            CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" go build -trimpath \
               -tags=embedassets,otel -ldflags "$server_ldflags" -o staging/phi .
             CGO_ENABLED=1 GOOS=darwin GOARCH="$arch" CC="$cc" go build -trimpath \
               -ldflags "$ldflags" -o staging/phic ./cmd/phic

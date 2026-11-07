@@ -41,9 +41,9 @@ PROFILING_TEST='timing_test.go timing_nested_test.go timing_bench_test.go featur
 # check_variant LABEL WANT [GO LIST ARGS]: file/test/dep selection.
 check_variant() {
   label="$1"; want="$2"; shift 2
-  go list "$@" -f '{{.ImportPath}}{{"\n"}}{{join .GoFiles "\n"}}{{"\n"}}{{join .CgoFiles "\n"}}' . ./internal/server ./pkg/obs ./pkg/ws ./internal/termstate > "$OUT/$label-files.txt"
-  go list "$@" -f '{{.ImportPath}}{{"\n"}}{{join .TestGoFiles "\n"}}{{"\n"}}{{join .XTestGoFiles "\n"}}' . ./internal/server ./pkg/obs ./pkg/ws ./internal/termstate > "$OUT/$label-tests.txt"
-  go list "$@" -f '{{join .IgnoredGoFiles "\n"}}' . ./internal/server ./pkg/obs ./pkg/ws ./internal/termstate > "$OUT/$label-ignored.txt"
+  go list "$@" -f '{{.ImportPath}}{{"\n"}}{{join .GoFiles "\n"}}{{"\n"}}{{join .CgoFiles "\n"}}' . ./internal/server ./pkg/obs ./pkg/ws > "$OUT/$label-files.txt"
+  go list "$@" -f '{{.ImportPath}}{{"\n"}}{{join .TestGoFiles "\n"}}{{"\n"}}{{join .XTestGoFiles "\n"}}' . ./internal/server ./pkg/obs ./pkg/ws > "$OUT/$label-tests.txt"
+  go list "$@" -f '{{join .IgnoredGoFiles "\n"}}' . ./internal/server ./pkg/obs ./pkg/ws > "$OUT/$label-ignored.txt"
   # go list exits 1 when constraints exclude every file; that is the
   # expected empty selection for non-profiling variants.
   set +e

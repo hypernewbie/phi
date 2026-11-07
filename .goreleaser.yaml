@@ -7,38 +7,22 @@ before:
 
 builds:
   # Server build. Embeds the web assets so the binary is self-contained.
-  # CGO is mandatory: the server links the pinned libghostty-vt archive.
-  # Linux and Windows targets cross-compile with pinned zig cc from Ubuntu.
-  # Darwin targets cannot zig-cross-link (no macOS system libraries), so the
-  # darwin-build macOS job produces those archives; goreleaser picks them up
-  # for checksums and the release job uploads them to the draft release.
+  # Pure Go: the server links no virtual terminal and needs no C toolchain,
+  # so every target cross-compiles from any host with the plain Go
+  # toolchain. Darwin used to need a macOS runner only because the server
+  # linked CGO; it still ships from the darwin-build job for checksum
+  # symmetry with phic, which does require CGO.
   - id: phi
     main: .
     binary: phi
     env:
-      - CGO_ENABLED=1
+      - CGO_ENABLED=0
     goos:
       - linux
       - windows
     goarch:
       - amd64
       - arm64
-    ignore:
-      - goos: windows
-        goarch: arm64
-    overrides:
-      - goos: linux
-        goarch: amd64
-        env:
-          - CC=zig cc -target x86_64-linux-gnu
-      - goos: linux
-        goarch: arm64
-        env:
-          - CC=zig cc -target aarch64-linux-gnu
-      - goos: windows
-        goarch: amd64
-        env:
-          - CC=zig cc -target x86_64-windows-gnu
     flags:
       - -trimpath
       - -tags=embedassets
