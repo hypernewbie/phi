@@ -492,19 +492,45 @@ export class EmbeddedTransport {
     }
   }
 
+  /** Monotonic ordering for every routing commit — host calls and
+   *  /__phi/active claims alike. The sequence is taken when a claim
+   *  ARRIVES, never when its body finishes reading, so a slow old claim
+   *  can never overwrite a newer one: the last click wins, not the last
+   *  completion. */
+  private routingSeq = 0;
+
   getActiveProfileId(): string | null {
     return this.activeProfileId;
   }
 
+  /** Aims the headerless request router at `id`. This is a COMMIT: the
+   *  host calls it only when the page is on `id` — or about to load
+   *  id's page — never on a bare rail click. The in-page switch needs
+   *  no host commit at all: the page claims /__phi/active itself after
+   *  it has painted. */
   setActiveProfile(id: string | null): void {
+    const seq = ++this.routingSeq;
+    this.applyRouting(seq, id);
+  }
+
+  /** Applies a routing claim unless a newer claim has already arrived. */
+  private applyRouting(seq: number, id: string | null): boolean {
+    if (seq !== this.routingSeq) return false;
     if (id === null || id === '') {
       this.activeProfileId = null;
-      return;
+      return true;
     }
     const profile = this.resolveProfile(id);
-    if (profile) {
-      this.activeProfileId = profile.id;
-    }
+    if (!profile) return false;
+    this.activeProfileId = profile.id;
+    return true;
+  }
+
+  /** Drops a profile's cached compat answer so the next switch probes
+   *  the server again. A server upgraded in place is picked up on the
+   *  next switch instead of waiting out the cache TTL. */
+  forgetCompatibility(profileId: string): void {
+    this.compatCache.delete(profileId);
   }
 
   async checkCompatibility(profileId: string): Promise<boolean> {
@@ -897,6 +923,10 @@ export class EmbeddedTransport {
   // --- Internal Route Handlers ---
 
   private async handleSetActive(req: Request): Promise<Response> {
+    // Order is taken at arrival: a claim whose body trickles in late
+    // must not overwrite a click that arrived after it. An invalid claim
+    // burns its slot, so it can never apply later either.
+    const seq = ++this.routingSeq;
     let body: unknown;
     try {
       body = await req.json();
@@ -920,11 +950,8 @@ export class EmbeddedTransport {
     const { profileId } = body as { profileId?: unknown };
 
     if (profileId === null) {
-      this.activeProfileId = null;
-      return new Response(
-        JSON.stringify({ ok: true, profileId: null, origin: null }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
+      this.applyRouting(seq, null);
+      return this.activeResponse();
     }
 
     if (typeof profileId === 'string') {
@@ -935,15 +962,11 @@ export class EmbeddedTransport {
           headers: { 'Content-Type': 'application/json' },
         });
       }
-      this.activeProfileId = profile.id;
-      return new Response(
-        JSON.stringify({
-          ok: true,
-          profileId: profile.id,
-          origin: profile.origin,
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
+      // A superseded claim is a no-op: the answer reports where the
+      // router actually is, so the page never mistakes a lost race for
+      // a successful switch.
+      this.applyRouting(seq, profileId);
+      return this.activeResponse();
     }
 
     return new Response(
@@ -952,6 +975,21 @@ export class EmbeddedTransport {
         status: 400,
         headers: { 'Content-Type': 'application/json' },
       },
+    );
+  }
+
+  /** The router's actual state, for /__phi/active answers. */
+  private activeResponse(): Response {
+    const profile = this.activeProfileId
+      ? this.resolveProfile(this.activeProfileId)
+      : null;
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        profileId: profile?.id ?? null,
+        origin: profile?.origin ?? null,
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
     );
   }
 

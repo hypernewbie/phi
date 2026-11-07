@@ -24,14 +24,13 @@ import {
 // clicked last. "It thinks one server is another server" is a defect,
 // never a trade-off.
 //
-// KNOWN RACE, exposed by R-e2e-window: the main-process routing pointer
-// flips synchronously on the rail click, before the compat probe of the
-// new server answers. Inside the probe window the page still renders the
-// old server while its headerless requests are answered by the new one
-// (shown=A, routed=B). This is the desktop-level twin of the transport
-// races R-window/R-fallback/R-active in desktop/electron/test/
-// switch-race.test.ts. The test is marked failing until the transport
-// serializes routing with the probe.
+// The routing pointer follows the page, not the click: it moves only at
+// a commit — the page's own /__phi/active claim after it has painted,
+// or a boot load — and claims are arrival-ordered. R-e2e-window pins the
+// probe window (the page shows A, headerless routing answers A);
+// R-e2e-storm pins convergence (the last click's server owns every
+// surface). These are the desktop-level twins of the transport
+// contracts in desktop/electron/test/switch-race.test.ts.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const electronDir = join(here, '..', 'desktop', 'electron');
@@ -359,14 +358,28 @@ test.describe('desktop single-tab switch storm', () => {
     // KNOWN RACE — flips to green when the transport serializes routing
     // with the compat probe. See the header comment.
     test('R-e2e-window: a slow probe must not let the new server answer the old page', async () => {
-        // KNOWN RACE — expected to fail until the transport serializes
-        // routing with the compat probe; then this flips green.
-        test.fail();
         const ids = await profileIds();
 
-        // First activation of B: its compat probe is cold and walks the
-        // delaying proxy, so the window lasts ~PROBE_DELAY_MS. Sample the
-        // page's headerless routing inside it.
+        // Make the probe cold: registering B already warmed its compat
+        // cache, and a warm cache would close the window this test
+        // measures before the click even lands.
+        await app!.evaluate(
+            async (electronApi: unknown, arg: { b: string }) => {
+                const g = globalThis as unknown as {
+                    __phiMsHost: HostHandle & {
+                        embeddedTransport: {
+                            forgetCompatibility: (id: string) => void;
+                        } | null;
+                    };
+                };
+                g.__phiMsHost.embeddedTransport?.forgetCompatibility(arg.b);
+            },
+            { b: ids.b },
+        );
+
+        // First activation of B: its compat probe now walks the delaying
+        // proxy, so the window lasts ~PROBE_DELAY_MS. Sample the page's
+        // headerless routing inside it.
         const samples: string[] = await app!.evaluate(
             async (
                 electronApi: unknown,

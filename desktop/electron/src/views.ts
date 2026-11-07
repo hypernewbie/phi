@@ -90,11 +90,33 @@ export interface ProfileViewManagerOptions {
   singleTab?: boolean;
   /** The embedded origin prefix. Defaults to 'phi-app://app'. */
   embeddedOrigin?: string;
-  /** Hook fired when switching profiles in single-tab mode. Return false (or Promise<false>) if incompatible. */
+  /** Hook fired when switching profiles in single-tab mode. Return false
+   *  when the surface is legacy outright; otherwise a switch ticket. The
+   *  router must follow the page, never the click: the ticket commits
+   *  only when the page lands. */
   onSingleTabSwitch?: (
     id: string,
     origin: string,
-  ) => void | boolean | Promise<boolean>;
+  ) => SingleTabSwitchTicket | false | undefined;
+}
+
+/** The single-tab switch protocol between the host and the view
+ *  manager. A rail click opens the probe; the router moves only when the
+ *  page does. Until then headerless requests keep going to the server
+ *  the page actually shows — "one server is another server" is a
+ *  defect, never a trade-off. */
+export interface SingleTabSwitchTicket {
+  /** Aim the headerless request router at this profile. Call only when
+   *  this profile's page is about to issue requests (boot loads into the
+   *  single view). The plain in-page switch needs no commit: the page
+   *  claims /__phi/active itself after it has painted. */
+  commit(): void;
+  /** Abandon a committed boot: when the probe fails and the view falls
+   *  back to the server's own surface, the router must not stay aimed
+   *  at a server the page never showed. */
+  revert(): void;
+  /** Resolves true when the server speaks the embedded contract. */
+  compat: Promise<boolean>;
 }
 
 /** One registered (not yet necessarily materialized) profile. */
@@ -702,32 +724,44 @@ export class ProfileViewManager {
   ): void {
     if (!this.singleEntry) return;
     const view = this.singleEntry.view;
-    const switchResult = this.onSingleTabSwitch?.(id, origin);
+    const ticket = this.onSingleTabSwitch?.(id, origin);
 
-    if (switchResult === false) {
+    // The host explicitly declared the surface legacy: no embedded page,
+    // no routing commit.
+    if (ticket === false) {
       this.singleEntryMode = 'legacy';
       view.webContents.loadURL(this.buildLegacyUrl(origin));
       return;
     }
 
-    if (switchResult instanceof Promise) {
+    if (ticket) {
       if (isInitialCreate) {
         this.singleEntryMode = 'embedded';
+        // Boot: from the first byte this page requests, its requests
+        // belong to id — aim the router before the page can ask.
+        ticket.commit();
         view.webContents.loadURL(this.buildEmbeddedUrl(id, origin));
-        void switchResult.then((compat) => {
+        void ticket.compat.then((compat) => {
           if (!compat && this.activeId === id) {
             this.singleEntryMode = 'legacy';
+            // The page never embedded id; the router must not stay
+            // aimed at a server the page never showed.
+            ticket.revert();
             view.webContents.loadURL(this.buildLegacyUrl(origin));
           }
         });
       } else {
-        void switchResult.then(async (compat) => {
+        void ticket.compat.then(async (compat) => {
           if (this.activeId !== id) return;
           if (!compat) {
+            // Incompatible: the page falls back to the server's own
+            // surface and never embeds id — no commit, so the router
+            // keeps serving the server the page still shows.
             this.singleEntryMode = 'legacy';
             view.webContents.loadURL(this.buildLegacyUrl(origin));
           } else if (this.singleEntryMode === 'legacy') {
             this.singleEntryMode = 'embedded';
+            ticket.commit();
             view.webContents.loadURL(this.buildEmbeddedUrl(id, origin));
           } else {
             let switched = false;
@@ -742,8 +776,15 @@ export class ProfileViewManager {
                 switched = false;
               }
             }
-            if (!switched) {
+            if (switched) {
+              // The page commits itself: it paints id's data and claims
+              // /__phi/active, and the router follows the claim. Nothing
+              // the old page issued before that claim is misrouted —
+              // the page issues no backend fetches until its claim has
+              // landed.
+            } else {
               this.singleEntryMode = 'embedded';
+              ticket.commit();
               view.webContents.loadURL(this.buildEmbeddedUrl(id, origin));
             }
           }
@@ -752,7 +793,8 @@ export class ProfileViewManager {
       return;
     }
 
-    // Synchronous true or undefined
+    // No switch hook wired (tests, non-embedded hosts): plain in-view
+    // switch with no routing contract.
     if (isInitialCreate || this.singleEntryMode === 'legacy') {
       this.singleEntryMode = 'embedded';
       view.webContents.loadURL(this.buildEmbeddedUrl(id, origin));

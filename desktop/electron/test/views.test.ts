@@ -18,7 +18,10 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow, WebContentsView } from 'electron';
-import { ProfileViewManager } from '../src/views.js';
+import {
+  type SingleTabSwitchTicket,
+  ProfileViewManager,
+} from '../src/views.js';
 import { WAKE_PAGE_SCRIPT } from '../src/injected.js';
 import type { ZoomAction } from '../src/zoom.js';
 
@@ -179,7 +182,7 @@ function makeManager(opts?: {
   onSingleTabSwitch?: (
     id: string,
     origin: string,
-  ) => void | boolean | Promise<boolean>;
+  ) => SingleTabSwitchTicket | false | undefined;
 }): ManagerHarness & {
   zoomActions: ZoomAction[];
   fullscreenToggles: boolean[];
@@ -786,7 +789,11 @@ describe('ProfileViewManager singleTab mode', () => {
     });
     const { manager, views } = makeManager({
       singleTab: true,
-      onSingleTabSwitch: () => compatPromise,
+      onSingleTabSwitch: () => ({
+        commit() {},
+        revert() {},
+        compat: compatPromise,
+      }),
     });
     manager.addProfile('p1', 'http://127.0.0.1:7070/');
     manager.setActive('p1');

@@ -4454,7 +4454,10 @@ export class DesktopHost {
         singleTab: this.controller?.getLowMemoryMode() ?? false,
         embeddedOrigin: EMBEDDED_ORIGIN,
         onSingleTabSwitch: (id, origin) => {
-          transport.setActiveProfile(id);
+          // The router follows the page, never the click: no commit
+          // here. The page claims /__phi/active when it has painted; a
+          // boot load commits through the ticket below. The origin→view
+          // map is bookkeeping, not routing, so it stays synchronous.
           const v = this.profileViews?.getView(id);
           if (v) {
             for (const [k, existing] of this.viewByOrigin.entries()) {
@@ -4464,7 +4467,11 @@ export class DesktopHost {
             }
             this.viewByOrigin.set(origin, v);
           }
-          return transport.checkCompatibility(id);
+          return {
+            commit: () => transport.setActiveProfile(id),
+            revert: () => transport.setActiveProfile(null),
+            compat: transport.checkCompatibility(id),
+          };
         },
       });
       // Sync every persisted profile into the view manager so setActive

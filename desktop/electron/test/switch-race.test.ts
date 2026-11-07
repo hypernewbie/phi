@@ -8,6 +8,11 @@
 // the request router aimed at a server the page never switched to.
 // "It thinks one server is another server" is a defect, never a
 // trade-off.
+//
+// The routing pointer follows the page, not the click: it moves only at
+// a commit — the page's own /__phi/active claim after it has painted,
+// or a boot load — and claims are arrival-ordered, so the last click
+// wins, never the last completion.
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -36,7 +41,10 @@ function buildHarness(): Harness {
     ['prof-a', { id: 'prof-a', origin: ORIGIN_A }],
     ['prof-b', { id: 'prof-b', origin: ORIGIN_B }],
   ]);
-  const gates = new Map<string, { answer?: { api?: string }; release: () => void }>();
+  const gates = new Map<
+    string,
+    { answer?: { api?: string }; release: () => void }
+  >();
   /** Responses handed to the next ungated upstream row. */
   const queued: Response[] = [];
 
@@ -48,16 +56,20 @@ function buildHarness(): Harness {
         gate.release = () => resolve();
       });
       return new Response(
-        JSON.stringify({ api: gate.answer?.api ?? '1', version: '9.9.9' }),
+        JSON.stringify({
+          api: gate.answer?.api ?? '1',
+          terminal_protocol: gate.answer?.api === undefined ? '3' : '9',
+          version: '9.9.9',
+        }),
         { status: 200, headers: { 'content-type': 'application/json' } },
       );
     }
     const next = queued.shift();
     if (next) return next;
-    return new Response(JSON.stringify({ api: '1', version: '9.9.9' }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    });
+    return new Response(
+      JSON.stringify({ api: '1', terminal_protocol: '3', version: '9.9.9' }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    );
   });
 
   const transport = new EmbeddedTransport({
@@ -74,7 +86,10 @@ function buildHarness(): Harness {
       queued.push(response);
     },
     gate(url: string) {
-      const entry = { answer: undefined as { api?: string } | undefined, release: () => {} };
+      const entry = {
+        answer: undefined as { api?: string } | undefined,
+        release: () => {},
+      };
       gates.set(url, entry);
       return {
         release(init?: { api?: string }) {
@@ -91,28 +106,6 @@ function headerless(url: string): Request {
   return new Request(`phi-app://app${url}`);
 }
 
-/**
- * Vitest 5 has no `it.failing`, so the known-race marker is explicit:
- * the test PASSES only while its body fails with an assertion — i.e.
- * while the race exists — and fails with `RACE FIXED` as soon as the
- * body holds, so nobody can miss that the marker must be flipped to a
- * hard `it`.
- */
-function knownRace(name: string, body: () => Promise<void>): void {
-  it(`${name} [KNOWN RACE — fails until fixed]`, async () => {
-    try {
-      await body();
-    } catch (err) {
-      const name = (err as { name?: string } | null)?.name;
-      if (name === 'AssertionError') return; // the race is still with us
-      throw err; // a broken test is never mistaken for the race
-    }
-    throw new Error(
-      `RACE FIXED: "${name}" now holds — flip it to a hard it()`,
-    );
-  });
-}
-
 describe('single-tab switch race contracts', () => {
   let harness: Harness;
 
@@ -125,17 +118,15 @@ describe('single-tab switch race contracts', () => {
     vi.restoreAllMocks();
   });
 
-  knownRace(
-    'R-window: until the page switches, headerless requests keep going to the server the page shows',
-    async () => {
+  it('R-window: until the page switches, headerless requests keep going to the server the page shows', async () => {
     const { transport } = harness;
     // The page is on A and has been for a while.
     transport.setActiveProfile('prof-a');
 
-    // The user clicks B. Today the rail click flips the router
-    // immediately, while B's compatibility probe is still in flight and
-    // the page still shows A. Hold the probe open to widen that window.
-    transport.setActiveProfile('prof-b');
+    // The user clicks B. The click opens the compatibility probe and
+    // nothing else: the router follows the page, so until the page
+    // lands on B there is no commit to make. Hold the probe open to
+    // prove the window routes to A throughout.
     const probe = harness.gate(`${ORIGIN_B}/api/version`);
     const checking = transport.checkCompatibility('prof-b');
 
@@ -144,9 +135,11 @@ describe('single-tab switch race contracts', () => {
     await transport.handleRequest(headerless('/api/peers/status'));
 
     // Those bytes must come from A, the server the page actually shows.
-    expect(harness.upstream.mock.calls.some(([url]) =>
-      String(url).startsWith(`${ORIGIN_A}/`),
-    )).toBe(true);
+    expect(
+      harness.upstream.mock.calls.some(([url]) =>
+        String(url).startsWith(`${ORIGIN_A}/`),
+      ),
+    ).toBe(true);
     expect(
       harness.upstream.mock.calls.some(([url]) =>
         String(url).startsWith(`${ORIGIN_B}/api/peers`),
@@ -155,38 +148,34 @@ describe('single-tab switch race contracts', () => {
 
     probe.release();
     expect(await checking).toBe(true);
-    },
-  );
+  });
 
-  knownRace(
-    'R-fallback: a probe that fails must not leave the router aimed at the incompatible server',
-    async () => {
+  it('R-fallback: a probe that fails must not leave the router aimed at the incompatible server', async () => {
     const { transport } = harness;
     transport.setActiveProfile('prof-a');
 
     // The user clicks a server that speaks an incompatible API: the
     // shell falls back to that server's own page, and the embedded
-    // router has no business pointing at it.
-    transport.setActiveProfile('prof-b');
+    // router has no business pointing at it. The click is the probe
+    // alone; a failed probe commits nothing.
     const probe = harness.gate(`${ORIGIN_B}/api/version`);
     const checking = transport.checkCompatibility('prof-b');
     probe.release({ api: '999' });
     expect(await checking).toBe(false);
 
     // The page never switched to B. Headerless requests must not reach
-    // it — not during the probe, and not after the fallback.
+    // it — not during the probe, and not after the fallback — and the
+    // pointer still says A, the server the page actually shows.
     await transport.handleRequest(headerless('/api/peers/status'));
     expect(
       harness.upstream.mock.calls.some(([url]) =>
         String(url).startsWith(`${ORIGIN_B}/api/peers`),
       ),
     ).toBe(false);
-    },
-  );
+    expect(transport.getActiveProfileId()).toBe('prof-a');
+  });
 
-  knownRace(
-    'R-active: when two /__phi/active POSTs interleave, the later click wins',
-    async () => {
+  it('R-active: when two /__phi/active POSTs interleave, the later click wins', async () => {
     const { transport } = harness;
     transport.setActiveProfile('prof-a');
 
@@ -220,7 +209,7 @@ describe('single-tab switch race contracts', () => {
       }),
     );
 
-    expect((await (await second).json())).toMatchObject({
+    expect(await (await second).json()).toMatchObject({
       ok: true,
       profileId: 'prof-b',
     });
@@ -228,8 +217,7 @@ describe('single-tab switch race contracts', () => {
     await first;
 
     expect(transport.getActiveProfileId()).toBe('prof-b');
-    },
-  );
+  });
 
   it('pin: a request answered by one profile is never re-aimed by a later flip', async () => {
     const { transport } = harness;
