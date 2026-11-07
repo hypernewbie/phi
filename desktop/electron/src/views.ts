@@ -162,7 +162,7 @@ export class ProfileViewManager {
   private readonly onSingleTabSwitch?: (
     id: string,
     origin: string,
-  ) => void | boolean | Promise<boolean>;
+  ) => SingleTabSwitchTicket | false | undefined;
   private singleEntry: ViewEntry | null = null;
   private singleEntryMode: 'embedded' | 'legacy' | null = null;
 

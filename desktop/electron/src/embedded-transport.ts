@@ -565,7 +565,7 @@ export class EmbeddedTransport {
       };
       const cookie = this.getCookieHeader(profile.id);
       if (cookie) {
-        headers['Cookie'] = cookie;
+        headers.Cookie = cookie;
       }
 
       const res = await this.fetchImpl(versionUrl.toString(), {
@@ -819,7 +819,7 @@ export class EmbeddedTransport {
             delete headers[k];
           }
         }
-        headers['Origin'] = new URL(matchedProfile.origin).origin;
+        headers.Origin = new URL(matchedProfile.origin).origin;
 
         const jarCookie = this.getCookieHeader(matchedProfile.id);
         if (jarCookie) {
@@ -848,7 +848,7 @@ export class EmbeddedTransport {
               .map(([k, v]) => `${k}=${v}`)
               .join('; ');
           } else {
-            headers['Cookie'] = jarCookie;
+            headers.Cookie = jarCookie;
           }
         }
 
@@ -1037,7 +1037,7 @@ export class EmbeddedTransport {
       };
       const cookie = this.getCookieHeader(profile.id);
       if (cookie) {
-        headers['Cookie'] = cookie;
+        headers.Cookie = cookie;
       }
 
       const res = await this.fetchImpl(versionUrl.toString(), {
