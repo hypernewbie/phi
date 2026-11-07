@@ -5,8 +5,6 @@ package phic
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -55,19 +53,15 @@ func TestReviewRelayRecoversPrefixAndGapAndStopsOnIdleCancel(t *testing.T) {
 					return
 				}
 			}
-		} else if req.URL.Path == "/api/terminals/p/recording" {
+		} else if req.URL.Path == "/api/terminals/p/replay" {
 			requests.Add(1)
 			from, _ := strconv.ParseUint(req.URL.Query().Get("from"), 10, 64)
-			through, _ := strconv.ParseUint(req.URL.Query().Get("through"), 10, 64)
-			if through-from > 2<<20 {
-				t.Errorf("unbounded range: %d", through-from)
+			// The server caps every page, so the wire stays bounded even
+			// when the client asks for the whole window.
+			if served := min(uint64(len(source)), from+recordingPageBytes) - from; served > recordingPageBytes {
+				t.Errorf("unbounded page: %d", served)
 			}
-			hdr, _ := json.Marshal(wireproto.RecordingHeader{Epoch: 7, Start: from, End: through, Resizes: [][3]uint64{{from, 80, 24}}})
-			var size [4]byte
-			binary.BigEndian.PutUint32(size[:], uint32(len(hdr)))
-			_, _ = w.Write(size[:])
-			_, _ = w.Write(hdr)
-			_, _ = w.Write(source[from:through])
+			serveNativeReplay(w, req, source, [][3]uint64{{from, 80, 24}})
 		} else {
 			http.NotFound(w, req)
 		}
@@ -105,6 +99,6 @@ func TestReviewRelayRecoversPrefixAndGapAndStopsOnIdleCancel(t *testing.T) {
 		}
 	}
 	if requests.Load() == 0 {
-		t.Error("recording was never requested")
+		t.Error("replay was never requested")
 	}
 }

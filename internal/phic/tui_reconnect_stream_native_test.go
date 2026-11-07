@@ -86,7 +86,7 @@ func TestNativeReplayGridIsRestoredToPanelEvenWhenDesiredSizeDidNotChange(t *tes
 		t.Fatal(err)
 	}
 	defer p.emu.Close()
-	if err := p.feedRecording(wireproto.RecordingHeader{Resizes: [][3]uint64{{0, 40, 8}}}, nil, termemu.SourceReplay); err != nil {
+	if err := p.feedRecording(wireproto.ReplayHeader{Resizes: [][3]uint64{{0, 40, 8}}}, nil, termemu.SourceReplay); err != nil {
 		t.Fatal(err)
 	}
 	if err := p.handleInput(paneInput{Kind: paneInputResize, Cols: 20, Rows: 4}); err != nil {

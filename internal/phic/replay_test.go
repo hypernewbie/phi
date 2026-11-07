@@ -12,6 +12,11 @@ import (
 )
 
 func serveNativeReplay(w http.ResponseWriter, r *http.Request, data []byte, markers [][3]uint64) {
+	serveNativeReplayEpoch(w, r, 7, data, markers)
+}
+
+// serveNativeReplayEpoch serves one replay page for the given epoch.
+func serveNativeReplayEpoch(w http.ResponseWriter, r *http.Request, epoch uint64, data []byte, markers [][3]uint64) {
 	q := r.URL.Query()
 	from, _ := strconv.ParseUint(q.Get("from"), 10, 64)
 	through, _ := strconv.ParseUint(q.Get("through"), 10, 64)
@@ -24,7 +29,7 @@ func serveNativeReplay(w http.ResponseWriter, r *http.Request, data []byte, mark
 	target, _ := parseReplayPosition(q.Get("through_event_cursor"))
 	if q.Get("through") == "latest" {
 		through = uint64(len(data))
-		target = replayPosition{7, through, uint64(len(markers))}
+		target = replayPosition{epoch, through, uint64(len(markers))}
 	}
 	if from > through || through > uint64(len(data)) || before.ordinal > target.ordinal || target.ordinal > uint64(len(markers)) {
 		http.Error(w, "bad fixture range", http.StatusBadRequest)
@@ -41,7 +46,7 @@ func serveNativeReplay(w http.ResponseWriter, r *http.Request, data []byte, mark
 		sizes = append(sizes, markers[ordinal])
 		ordinal++
 	}
-	h := wireproto.ReplayHeader{Epoch: 7, Start: from, End: end, Through: through, ThroughCursor: target.String(), EventCursor: (replayPosition{7, end, ordinal}).String(), Resizes: sizes, InitCols: cols, InitRows: rows}
+	h := wireproto.ReplayHeader{Epoch: epoch, Start: from, End: end, Through: through, ThroughCursor: target.String(), EventCursor: (replayPosition{epoch, end, ordinal}).String(), Resizes: sizes, InitCols: cols, InitRows: rows}
 	writeReplayFixture(w, h, data[from:end])
 }
 func writeReplayFixture(w http.ResponseWriter, h wireproto.ReplayHeader, data []byte) {

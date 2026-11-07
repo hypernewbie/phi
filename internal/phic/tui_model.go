@@ -321,6 +321,11 @@ func newTUIModel(version string, cfg config, store *desktopStore, servers []*ser
 	if cfg.NewPane || cfg.Coder != "" {
 		m.directExit = true
 	}
+	// The sessions panel takes the same focus the Ctrl-] s shortcut
+	// selects, so the command line and the keyboard agree.
+	if cfg.Sessions {
+		m.focus = focusSessions
+	}
 	// An explicit CLI directory is the captured launch target and outranks
 	// remembered UI intent for this run.
 	if cfg.Dir != "" && cfg.Dir != "." {

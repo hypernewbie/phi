@@ -50,6 +50,8 @@ func parseFlags(args []string) (config, error) {
 	fs.BoolVar(&c.Help, "help", false, "show usage")
 	fs.BoolVar(&c.Version, "version", false, "show version")
 	fs.BoolVar(&c.Diff, "diff", false, "show diff in the native pager and exit")
+	fs.BoolVar(&c.Sessions, "sessions", false, "open the console with the sessions panel focused")
+	fs.BoolVar(&c.Sessions, "s", false, "open the console with the sessions panel focused")
 	fs.BoolVar(&c.Worktrees, "worktrees", false, "select a worktree before opening a pane")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -88,6 +90,9 @@ type config struct {
 	Version        bool
 	Diff           bool
 	Worktrees      bool
+	// Sessions opens the console with the sessions panel focused, the
+	// same view the Ctrl-] s shortcut selects.
+	Sessions bool
 }
 
 func printUsage(w *os.File) {
@@ -100,6 +105,7 @@ Options:
   --coder NAME    backend name (e.g. pi, opencode, bash)
   --new           create a fresh pane rather than reattaching (requires --coder)
   --diff          open the console with the diff panel visible
+  --sessions, -s  open the console with the sessions panel focused
   --worktrees     choose a worktree before startup
   --help          show this message
   --version       show version
@@ -174,7 +180,7 @@ func (c *client) Close() error {
 }
 
 func (c *client) Run(ctx context.Context) error {
-	sessions := false
+	sessions := c.cfg.Sessions
 	// Normal startup is a client surface, not an implicit localhost probe.
 	// Explicit CLI operations retain their direct-attachment semantics.
 	if len(c.servers) == 0 {

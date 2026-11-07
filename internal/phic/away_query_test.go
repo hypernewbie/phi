@@ -2,11 +2,8 @@ package phic
 
 import (
 	"context"
-	"encoding/binary"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -40,17 +37,7 @@ func TestReturningDeliversQueriesIssuedWhileAwayButNotSeenQueries(t *testing.T) 
 						}
 					}
 				} else {
-					from, _ := strconv.ParseUint(r.URL.Query().Get("from"), 10, 64)
-					through, _ := strconv.ParseUint(r.URL.Query().Get("through"), 10, 64)
-					if through > uint64(len(source)) {
-						through = uint64(len(source))
-					}
-					hdr, _ := json.Marshal(wireproto.RecordingHeader{Epoch: 7, Start: from, End: through})
-					var size [4]byte
-					binary.BigEndian.PutUint32(size[:], uint32(len(hdr)))
-					_, _ = w.Write(size[:])
-					_, _ = w.Write(hdr)
-					_, _ = w.Write(source[from:through])
+					serveNativeReplay(w, r, source, nil)
 				}
 			}))
 			defer srv.Close()
@@ -58,7 +45,7 @@ func TestReturningDeliversQueriesIssuedWhileAwayButNotSeenQueries(t *testing.T) 
 			defer cancel()
 			output := &shortTerminal{}
 			relay := NewRelay(output, mustAPI(t, srv.URL))
-			relay.previous = &recordingCursor{epoch: 7, through: uint64(len(tc.old))}
+			relay.previous = &recordingCursor{epoch: 7, through: uint64(len(tc.old)), cursor: (replayPosition{7, uint64(len(tc.old)), 0}).String()}
 			if _, err := relay.Connect(ctx, "p"); err != nil {
 				t.Fatal(err)
 			}

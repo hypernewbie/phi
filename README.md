@@ -106,6 +106,8 @@ go build -o phic ./cmd/phic
 
 `phic` reads the desktop client's saved servers. Backend output stays raw; Ctrl-] opens inline server, session, diff, worktree, and help views. The next release that includes the client also installs the `phic` npm command on macOS/Linux.
 
+`phic -s` starts with the sessions panel focused, the same view as `Ctrl-] s`. The client reads retained output from the server's bounded `/replay` pages, so it resumes a pane at the exact byte and event cursor it left, and it never asks the server for a rendered screen.
+
 In `phic`, `Ctrl-] PgUp` loads one older terminal history book. `Ctrl-] End` returns to live output. Wheel scrolling does not load older books.
 
 ### Frontend development (disk assets)

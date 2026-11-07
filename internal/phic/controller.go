@@ -46,7 +46,9 @@ func (c *client) attachSelected(ctx context.Context, sel SelectResult) error {
 			if state.frontiers == nil {
 				state.frontiers = make(map[string]recordingCursor)
 			}
-			state.frontiers[current.PaneID] = recordingCursor{epoch: relay.epoch, through: relay.written}
+			// The cursor certifies the frontier, so the next attach can
+			// resume exactly there and fence its page request.
+			state.frontiers[current.PaneID] = recordingCursor{epoch: relay.epoch, through: relay.written, cursor: relay.cursorString()}
 		}
 		if err := c.tty.PrepareMenu(); err != nil {
 			return err

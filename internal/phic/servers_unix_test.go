@@ -8,7 +8,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,7 +15,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -113,18 +111,8 @@ func TestCLIDesktopProfilesColoredServerSwitchOriginIsolationAndRememberedPane(t
 						}
 					}
 				}
-			case "/api/terminals/same/recording":
-				from, _ := strconv.ParseUint(r.URL.Query().Get("from"), 10, 64)
-				through, _ := strconv.ParseUint(r.URL.Query().Get("through"), 10, 64)
-				if through > uint64(len(source)) {
-					through = uint64(len(source))
-				}
-				hdr, _ := json.Marshal(wireproto.RecordingHeader{Epoch: 7, Start: from, End: through})
-				var size [4]byte
-				binary.BigEndian.PutUint32(size[:], uint32(len(hdr)))
-				_, _ = w.Write(size[:])
-				_, _ = w.Write(hdr)
-				_, _ = w.Write(source[from:through])
+			case "/api/terminals/same/replay":
+				serveNativeReplay(w, r, source, nil)
 			default:
 				http.NotFound(w, r)
 			}

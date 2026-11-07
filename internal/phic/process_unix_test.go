@@ -8,7 +8,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,7 +16,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"syscall"
 	"testing"
@@ -168,18 +166,8 @@ func TestCLIAuthenticatedFreshPaneRawReplayAndDetach(t *testing.T) {
 							}
 						}
 					}
-				case "/api/terminals/p/recording":
-					from, _ := strconv.ParseUint(r.URL.Query().Get("from"), 10, 64)
-					through, _ := strconv.ParseUint(r.URL.Query().Get("through"), 10, 64)
-					if through > uint64(len(source)) {
-						through = uint64(len(source))
-					}
-					hdr, _ := json.Marshal(wireproto.RecordingHeader{Epoch: epoch, Start: from, End: through, Resizes: [][3]uint64{{0, 91, 29}}})
-					var size [4]byte
-					binary.BigEndian.PutUint32(size[:], uint32(len(hdr)))
-					_, _ = w.Write(size[:])
-					_, _ = w.Write(hdr)
-					_, _ = w.Write(source[from:through])
+				case "/api/terminals/p/replay":
+					serveNativeReplayEpoch(w, r, epoch, source, [][3]uint64{{0, 91, 29}})
 				default:
 					http.NotFound(w, r)
 				}

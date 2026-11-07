@@ -18,10 +18,12 @@ import (
 var errProtocol = errors.New("phic: invalid terminal protocol")
 
 // recordingCursor is attachment metadata, not a client recording. It marks
-// output already presented before a menu or a switch to another pane.
+// output already presented before a menu or a switch to another pane. The
+// cursor certifies that position, so the next attach can resume there.
 type recordingCursor struct {
 	epoch   uint64
 	through uint64
+	cursor  string
 }
 
 type wireAttach struct {
@@ -38,20 +40,27 @@ type relayTerminal interface {
 // Relay retains only an output frontier, not a client recording. One reader
 // delivers output; one input worker writes the socket. Closing wakes both.
 type Relay struct {
-	tty       relayTerminal
-	api       *apiClient
-	mu        sync.Mutex
-	conn      *websocket.Conn
-	header    wireAttach
-	written   uint64
-	epoch     uint64
-	fresh     bool
-	repaint   *repaintFilter
-	viewInput []byte
-	keys      *inputParser
-	previous  *recordingCursor
-	pane      string
-	cancel    context.CancelFunc
+	tty     relayTerminal
+	api     *apiClient
+	mu      sync.Mutex
+	conn    *websocket.Conn
+	header  wireAttach
+	written uint64
+	// ordinal counts the geometry changes that took effect at or before
+	// the written frontier. It certifies the frontier as an event cursor.
+	ordinal uint64
+	// headCursor certifies the head of the attach frame; it fences every
+	// page request that ends at that head.
+	headCursor string
+	epoch      uint64
+	head       uint64
+	fresh      bool
+	repaint    *repaintFilter
+	viewInput  []byte
+	keys       *inputParser
+	previous   *recordingCursor
+	pane       string
+	cancel     context.CancelFunc
 }
 
 func NewRelay(tty relayTerminal, api *apiClient) *Relay { return &Relay{tty: tty, api: api} }
@@ -113,6 +122,8 @@ func (r *Relay) Connect(ctx context.Context, pane string) (wireAttach, error) {
 	r.header = head
 	r.pane = pane
 	r.mu.Unlock()
+	r.head = head.Header.GetHead()
+	r.headCursor = head.Header.GetEventCursor()
 	return head, nil
 }
 
@@ -189,6 +200,11 @@ func (r *Relay) Run(ctx context.Context) error {
 		return errors.New("phic: terminal has no usable geometry")
 	}
 	r.epoch = r.header.Header.GetEpoch()
+	r.head = r.header.Header.GetHead()
+	r.headCursor = r.header.Header.GetEventCursor()
+	if floor, ferr := parseReplayPosition(r.header.Header.GetFloorEventCursor()); ferr == nil && floor.epoch == r.epoch {
+		r.ordinal = floor.ordinal
+	}
 	// New processes need their startup replies. A reused pane is a display
 	// rebuild: suppress old queries, not native keys or new live queries.
 	if r.fresh {
@@ -197,25 +213,33 @@ func (r *Relay) Run(ctx context.Context) error {
 		r.repaint = &repaintFilter{}
 	}
 	err = r.sendResize(cols, rows)
-	seen := r.header.Header.GetHead()
+	seen := r.head
+	// The remembered frontier fences the historical span. A frontier
+	// without a cursor cannot certify its end, so the whole retained
+	// window replays as history instead.
+	seenFence := r.headCursor
 	if r.previous != nil {
 		if r.previous.epoch != r.epoch {
 			seen = 0
+			seenFence = r.headCursor
 		} else {
 			seen = r.previous.through
-			if seen > r.header.Header.GetHead() {
+			seenFence = r.previous.cursor
+			if seenFence == "" {
+				seen = r.head
+				seenFence = r.headCursor
+			}
+			if seen > r.head {
 				err = fmt.Errorf("%w: remembered frontier exceeds head", errProtocol)
 			}
 		}
 	}
 	if r.fresh {
-		seen = r.header.Header.GetHead()
-	}
-	if err == nil && seen < r.header.Header.GetOldest() {
-		err = r.checkpointJump(ctx, r.pane)
+		seen = r.head
+		seenFence = r.headCursor
 	}
 	if err == nil {
-		err = r.recoverOutput(ctx, r.pane, seen, !r.fresh)
+		err = r.recoverOutput(ctx, r.pane, seen, seenFence, !r.fresh)
 	}
 	if !r.fresh {
 		close(ready)
@@ -230,7 +254,7 @@ func (r *Relay) Run(ctx context.Context) error {
 	// Bytes emitted while the view was open have never reached this native
 	// terminal. Process them as live, with input enabled for new query replies.
 	if err == nil {
-		err = r.recoverOutput(ctx, r.pane, r.header.Header.GetHead(), false)
+		err = r.recoverOutput(ctx, r.pane, r.head, r.headCursor, false)
 	}
 	if err == nil {
 		err = r.live(ctx, r.pane)
@@ -322,6 +346,24 @@ func (r *Relay) live(ctx context.Context, pane string) error {
 				return &ExitError{Code: code}
 			}
 			return nil
+		case *wspb.TerminalServerFrame_Geometry:
+			// A committed backend resize. It carries the event cursor that
+			// certifies the geometry change, so the written frontier stays
+			// certified for the next page request.
+			geom := payload.Geometry
+			pos, perr := parseReplayPosition(geom.GetEventCursor())
+			if perr != nil || pos.epoch != r.epoch || pos.seq != geom.GetAtSeq() ||
+				geom.GetCols() == 0 || geom.GetCols() > 65535 || geom.GetRows() == 0 || geom.GetRows() > 65535 {
+				return errProtocol
+			}
+			if pos.seq > r.written {
+				if err := r.recover(ctx, pane, pos.seq); err != nil {
+					return err
+				}
+			}
+			if pos.seq <= r.written && pos.ordinal > r.ordinal {
+				r.ordinal = pos.ordinal
+			}
 		case *wspb.TerminalServerFrame_Pong: // keepalive
 		case *wspb.TerminalServerFrame_DropNotice:
 			// Drain retained output before reporting the backend status.
@@ -356,14 +398,12 @@ func (r *Relay) reconnect(ctx context.Context, pane string) error {
 		if head.Header.GetEpoch() != r.epoch {
 			return errors.New("phic: recording epoch changed; detach rather than merge different terminal states")
 		}
-		if r.written < head.Header.GetOldest() {
-			if err := r.checkpointJump(ctx, pane); err != nil {
-				return err
-			}
-		} else if r.written > head.Header.GetHead() {
+		if r.written > head.Header.GetHead() {
 			return errors.New("phic: written frontier is outside retained recording")
 		}
-		if err := r.recover(ctx, pane, head.Header.GetHead()); err != nil {
+		r.head = head.Header.GetHead()
+		r.headCursor = head.Header.GetEventCursor()
+		if err := r.recover(ctx, pane, r.head); err != nil {
 			return err
 		}
 		cols, rows, err := r.tty.Size()

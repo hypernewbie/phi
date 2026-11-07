@@ -3,8 +3,6 @@ package phic
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -57,20 +55,11 @@ func TestReconnectRecoversMissedBytesWithoutDuplicatesAndDrainsExit(t *testing.T
 					}
 				} else {
 					from, _ := strconv.ParseUint(r.URL.Query().Get("from"), 10, 64)
-					through, _ := strconv.ParseUint(r.URL.Query().Get("through"), 10, 64)
 					if from == uint64(len(prefix)+len(first)) && !unavailable.Swap(true) {
 						http.Error(w, "retry later", 503)
 						return
 					}
-					if through > uint64(len(source)) {
-						through = uint64(len(source))
-					}
-					h, _ := json.Marshal(wireproto.RecordingHeader{Epoch: 7, Start: from, End: through})
-					var size [4]byte
-					binary.BigEndian.PutUint32(size[:], uint32(len(h)))
-					_, _ = w.Write(size[:])
-					_, _ = w.Write(h)
-					_, _ = w.Write(source[from:through])
+					serveNativeReplay(w, r, source, nil)
 				}
 			}))
 			defer srv.Close()

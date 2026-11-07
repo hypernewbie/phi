@@ -110,7 +110,7 @@ func TestTabRefreshAndFocusReassertSameWidgetGeometry(t *testing.T) {
 func TestReplayGeometryCannotSuppressPanelResize(t *testing.T) {
 	m, p, _ := geometryModel(t)
 	cols, rows := m.terminalSize()
-	if err := p.feedRecording(wireproto.RecordingHeader{Epoch: 7, Resizes: [][3]uint64{{0, 140, 35}}}, nil, termemu.SourceReplay); err != nil {
+	if err := p.feedRecording(wireproto.ReplayHeader{Epoch: 7, Resizes: [][3]uint64{{0, 140, 35}}}, nil, termemu.SourceReplay); err != nil {
 		t.Fatal(err)
 	}
 	if p.cols != cols || p.rows != rows || p.emuCols != 140 || p.emuRows != 35 {

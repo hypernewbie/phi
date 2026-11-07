@@ -34,7 +34,7 @@ func serveReviewRecording(w http.ResponseWriter, r *http.Request, b []byte, resi
 			sizes = append(sizes, s)
 		}
 	}
-	hdr, _ := json.Marshal(wireproto.RecordingHeader{Epoch: 7, Start: from, End: end, Resizes: sizes})
+	hdr, _ := json.Marshal(wireproto.ReplayHeader{Epoch: 7, Start: from, End: end, Resizes: sizes})
 	var size [4]byte
 	binary.BigEndian.PutUint32(size[:], uint32(len(hdr)))
 	_, _ = w.Write(size[:])

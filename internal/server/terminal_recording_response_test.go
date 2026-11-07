@@ -106,7 +106,7 @@ func TestRecordingEndpointDefaultHTTPTransportInflatesWithoutChangingFrontiers(t
 		t.Fatal("HTTP transport did not negotiate native decompression")
 	}
 	n := binary.BigEndian.Uint32(body[:4])
-	var header ws.RecordingHeaderJSON
+	var header ws.ReplayHeaderJSON
 	if err := json.Unmarshal(body[4:4+n], &header); err != nil {
 		t.Fatal(err)
 	}

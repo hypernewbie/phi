@@ -691,9 +691,9 @@ func (ph *PaneHub) positionLocked() PanePosition {
 	return PanePosition{Epoch: ph.epoch, Oldest: ph.win.floor(), Head: ph.win.head}
 }
 
-// RecordingHeaderJSON is the header of the /recording HTTP response; raw
-// bytes follow it in the body.
-type RecordingHeaderJSON = wireproto.RecordingHeader
+// ReplayHeaderJSON is the header of the /replay HTTP response; raw bytes
+// follow it in the body.
+type ReplayHeaderJSON = wireproto.ReplayHeader
 
 // AttachHot registers a protobuf client and enqueues its attach frame.
 // Registration and the head capture happen under the pane lock, so the

@@ -5,7 +5,6 @@ package phic
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,7 +13,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -88,15 +86,8 @@ func TestCLIBareStartupShowsServersBeforeAuthAndCanConnectWithoutProfiles(t *tes
 							}
 						}
 					}
-				case "/api/terminals/startup/recording":
-					from, _ := strconv.ParseUint(r.URL.Query().Get("from"), 10, 64)
-					end, _ := strconv.ParseUint(r.URL.Query().Get("through"), 10, 64)
-					hdr, _ := json.Marshal(wireproto.RecordingHeader{Epoch: 7, Start: from, End: end})
-					var size [4]byte
-					binary.BigEndian.PutUint32(size[:], uint32(len(hdr)))
-					w.Write(size[:])
-					w.Write(hdr)
-					w.Write(data[from:end])
+				case "/api/terminals/startup/replay":
+					serveNativeReplay(w, r, data, nil)
 				default:
 					http.NotFound(w, r)
 				}

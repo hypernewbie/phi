@@ -2,8 +2,6 @@ package phic
 
 import (
 	"context"
-	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -12,30 +10,27 @@ import (
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
-func TestInvalidRecordingNeverAdvancesWrittenFrontier(t *testing.T) {
+func TestInvalidReplayNeverAdvancesWrittenFrontier(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		h    wireproto.RecordingHeader
+		h    wireproto.ReplayHeader
 		body string
 	}{
-		{"clamped unavailable prefix", wireproto.RecordingHeader{Epoch: 7, Start: 1, End: 3}, "bc"},
-		{"wrong epoch", wireproto.RecordingHeader{Epoch: 8, Start: 0, End: 3}, "abc"},
-		{"wrong byte count", wireproto.RecordingHeader{Epoch: 7, Start: 0, End: 3}, "ab"},
-		{"invalid resize", wireproto.RecordingHeader{Epoch: 7, Start: 0, End: 3, Resizes: [][3]uint64{{0, 0, 24}}}, "abc"},
+		{"clamped unavailable prefix", wireproto.ReplayHeader{Epoch: 7, Start: 1, End: 3, Through: 3, ThroughCursor: "v1.7.3.0", EventCursor: "v1.7.3.0", InitCols: 80, InitRows: 24}, "bc"},
+		{"wrong epoch", wireproto.ReplayHeader{Epoch: 8, Start: 0, End: 3, Through: 3, ThroughCursor: "v1.7.3.0", EventCursor: "v1.7.3.0", InitCols: 80, InitRows: 24}, "abc"},
+		{"wrong byte count", wireproto.ReplayHeader{Epoch: 7, Start: 0, End: 3, Through: 3, ThroughCursor: "v1.7.3.0", EventCursor: "v1.7.3.0", InitCols: 80, InitRows: 24}, "ab"},
+		{"invalid resize", wireproto.ReplayHeader{Epoch: 7, Start: 0, End: 3, Through: 3, ThroughCursor: "v1.7.3.0", EventCursor: "v1.7.3.0", InitCols: 80, InitRows: 24, Resizes: [][3]uint64{{0, 0, 24}}}, "abc"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				h, _ := json.Marshal(tc.h)
-				var size [4]byte
-				binary.BigEndian.PutUint32(size[:], uint32(len(h)))
-				_, _ = w.Write(size[:])
-				_, _ = w.Write(h)
-				_, _ = w.Write([]byte(tc.body))
+				writeReplayFixture(w, tc.h, []byte(tc.body))
 			}))
 			defer srv.Close()
 			output := &shortTerminal{}
 			relay := NewRelay(output, mustAPI(t, srv.URL))
 			relay.epoch = 7
+			relay.head = 3
+			relay.headCursor = "v1.7.3.0"
 			if err := relay.recover(t.Context(), "p", 3); !errors.Is(err, errInvalidRecording) {
 				t.Fatalf("invalid range accepted: %v", err)
 			}
@@ -56,19 +51,16 @@ func TestRepaintReusedPaneSuppressesQueriesAndAcceptsChangedGeometry(t *testing.
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				h, _ := json.Marshal(wireproto.RecordingHeader{Epoch: 7, Start: 0, End: uint64(len(tc.body)), Resizes: [][3]uint64{{0, tc.cols, 24}}})
-				var size [4]byte
-				binary.BigEndian.PutUint32(size[:], uint32(len(h)))
-				_, _ = w.Write(size[:])
-				_, _ = w.Write(h)
-				_, _ = w.Write([]byte(tc.body))
+				serveNativeReplay(w, r, []byte(tc.body), [][3]uint64{{0, tc.cols, 24}})
 			}))
 			defer srv.Close()
 			output := &shortTerminal{}
 			relay := NewRelay(output, mustAPI(t, srv.URL))
 			relay.epoch = 7
+			relay.head = uint64(len(tc.body))
+			relay.headCursor = (replayPosition{7, uint64(len(tc.body)), 0}).String()
 			relay.repaint = &repaintFilter{}
-			if err := relay.recoverOutput(context.Background(), "p", uint64(len(tc.body)), true); err != nil {
+			if err := relay.recoverOutput(context.Background(), "p", uint64(len(tc.body)), relay.headCursor, true); err != nil {
 				t.Fatal(err)
 			}
 			if relay.written != uint64(len(tc.body)) || string(output.Bytes()) != "screen" {

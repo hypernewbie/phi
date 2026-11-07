@@ -1082,7 +1082,7 @@ func (p *paneActor) replaySource(fence string) termemu.Source {
 }
 
 func (p *paneActor) admitReplay(h wireproto.ReplayHeader, b []byte, source termemu.Source) error {
-	if err := p.feedRecording(wireproto.RecordingHeader{Start: h.Start, End: h.End, Resizes: h.Resizes}, b, source); err != nil {
+	if err := p.feedRecording(h, b, source); err != nil {
 		return err
 	}
 	pos, err := parseReplayPosition(h.EventCursor)
@@ -1097,7 +1097,7 @@ func (p *paneActor) admitReplay(h wireproto.ReplayHeader, b []byte, source terme
 	p.completeRefresh()
 	return nil
 }
-func (p *paneActor) feedRecording(h wireproto.RecordingHeader, b []byte, source termemu.Source) error {
+func (p *paneActor) feedRecording(h wireproto.ReplayHeader, b []byte, source termemu.Source) error {
 	at := h.Start
 	for _, r := range h.Resizes {
 		offset := max(h.Start, r[0])

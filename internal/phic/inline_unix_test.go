@@ -5,7 +5,6 @@ package phic
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -64,7 +62,7 @@ func TestCLIInlineViewsReplayOutputAndSwitchPaneWithoutInputLoss(t *testing.T) {
 			fmt.Fprint(w, "server diff source")
 		default:
 			pane := "p"
-			if r.URL.Path == "/ws/pane/other" || r.URL.Path == "/api/terminals/other/recording" {
+			if r.URL.Path == "/ws/pane/other" || r.URL.Path == "/api/terminals/other/replay" {
 				pane = "other"
 			}
 			if r.URL.Path == "/ws/pane/"+pane {
@@ -94,20 +92,10 @@ func TestCLIInlineViewsReplayOutputAndSwitchPaneWithoutInputLoss(t *testing.T) {
 						}
 					}
 				}
-			} else if r.URL.Path == "/api/terminals/"+pane+"/recording" {
+			} else if r.URL.Path == "/api/terminals/"+pane+"/replay" {
 				mu.Lock()
 				defer mu.Unlock()
-				from, _ := strconv.ParseUint(r.URL.Query().Get("from"), 10, 64)
-				through, _ := strconv.ParseUint(r.URL.Query().Get("through"), 10, 64)
-				if through > uint64(len(source[pane])) {
-					through = uint64(len(source[pane]))
-				}
-				hdr, _ := json.Marshal(wireproto.RecordingHeader{Epoch: 7, Start: from, End: through, Resizes: [][3]uint64{{0, 120, 36}}})
-				var size [4]byte
-				binary.BigEndian.PutUint32(size[:], uint32(len(hdr)))
-				_, _ = w.Write(size[:])
-				_, _ = w.Write(hdr)
-				_, _ = w.Write(source[pane][from:through])
+				serveNativeReplay(w, r, source[pane], [][3]uint64{{0, 120, 36}})
 			} else {
 				http.NotFound(w, r)
 			}
