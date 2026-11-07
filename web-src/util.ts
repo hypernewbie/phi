@@ -55,6 +55,13 @@ export function getEmbeddedBackendOrigin(): string {
     return embeddedBackendOrigin;
 }
 
+/** True when a rejected fetch was cancelled rather than failed. An abort
+ *  is never a server answer: callers that render caught errors must not
+ *  show an internal abort reason as if the server had failed. */
+export function isAbortError(error: unknown): boolean {
+    return (error as { name?: string } | null)?.name === 'AbortError';
+}
+
 export function wsUrl(path: string): string {
     const base =
         embeddedBackendOrigin ||

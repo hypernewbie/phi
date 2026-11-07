@@ -41,6 +41,12 @@ export function getEmbeddedProfileId() {
 export function getEmbeddedBackendOrigin() {
     return embeddedBackendOrigin;
 }
+/** True when a rejected fetch was cancelled rather than failed. An abort
+ *  is never a server answer: callers that render caught errors must not
+ *  show an internal abort reason as if the server had failed. */
+export function isAbortError(error) {
+    return error?.name === 'AbortError';
+}
 export function wsUrl(path) {
     const base = embeddedBackendOrigin ||
         (typeof window !== 'undefined' && window.location?.origin

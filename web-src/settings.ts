@@ -2,6 +2,7 @@ import {
     displayHostname,
     readLowPowerLocal,
     writeLowPowerLocal,
+    isAbortError,
 } from './util.js';
 import {
     setAccessPassword,
@@ -877,6 +878,9 @@ export function openSettingsModal(
                 { type: 'success' },
             );
         } catch (err) {
+            // An interrupted upload is not a failed upload: the winning
+            // switch owns this surface.
+            if (isAbortError(err)) return;
             app.showToast(
                 `Font upload failed: ${err instanceof Error ? err.message : String(err)}`,
                 { type: 'error' },
@@ -932,6 +936,9 @@ export function openSettingsModal(
                 type: 'success',
             });
         } catch (err) {
+            // An interrupted upload is not a failed upload: the winning
+            // switch owns this surface.
+            if (isAbortError(err)) return;
             app.showToast(
                 `Background upload failed: ${err instanceof Error ? err.message : String(err)}`,
                 { type: 'error' },
@@ -1455,6 +1462,9 @@ export function openSettingsModal(
             confirmRemoveBtn.classList.add('hidden');
             app.showToast('Password updated', { type: 'success' });
         } catch (err) {
+            // An aborted scope is not a server answer: never read as a
+            // rejected password when the attempt was merely interrupted.
+            if (isAbortError(err)) return;
             app.showToast(
                 err instanceof Error
                     ? err.message
@@ -1483,6 +1493,9 @@ export function openSettingsModal(
             confirmRemoveBtn.classList.add('hidden');
             app.showToast('Password removed', { type: 'success' });
         } catch (err) {
+            // An aborted scope is not a server answer: never read as a
+            // rejected password when the attempt was merely interrupted.
+            if (isAbortError(err)) return;
             app.showToast(
                 err instanceof Error
                     ? err.message
@@ -1806,6 +1819,9 @@ function _buildMobileAppearance(
         button.textContent = label;
         button.addEventListener('click', () => {
             void Promise.resolve(run()).catch((error) => {
+                // An interrupted action is not a failed action: the
+                // winning switch owns this surface.
+                if (isAbortError(error)) return;
                 status.textContent =
                     error instanceof Error
                         ? error.message

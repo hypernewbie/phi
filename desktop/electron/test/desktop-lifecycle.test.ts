@@ -3377,7 +3377,9 @@ describe('DesktopHost TBAR attribution', () => {
     // at the clicked profile — the reading describes that server.
     t.clickB();
     await flush();
-    t.setAnswers([{ cpu: 30, activity: false, workspace: null, profile: null }]);
+    t.setAnswers([
+      { cpu: 30, activity: false, workspace: null, profile: null },
+    ]);
     t.host.pollCpu();
     await flush();
     expect(t.host.observedCpu.get(t.b.id)).toBe(30);
@@ -3392,7 +3394,9 @@ describe('DesktopHost TBAR attribution', () => {
     await flush();
     t.releaseSwitch();
     await flush();
-    t.setAnswers([{ cpu: 30, activity: false, workspace: null, profile: t.b.id }]);
+    t.setAnswers([
+      { cpu: 30, activity: false, workspace: null, profile: t.b.id },
+    ]);
     t.host.pollCpu();
     await flush();
     expect(t.host.observedCpu.get(t.b.id)).toBe(30);
@@ -3407,7 +3411,9 @@ describe('DesktopHost TBAR attribution', () => {
     await flush();
     // Minimized: no header to drive, the reading is kept.
     t.win.minimized = true;
-    t.setAnswers([{ cpu: 40, activity: false, workspace: null, profile: t.b.id }]);
+    t.setAnswers([
+      { cpu: 40, activity: false, workspace: null, profile: t.b.id },
+    ]);
     t.host.pollCpu();
     await flush();
     expect(

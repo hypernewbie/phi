@@ -3,7 +3,7 @@ import { PTYWebSocket } from './ws.js';
 import { modelRequestJson } from './model-request.js';
 import { terminalSnapshot, resetTerminalState } from './terminal-state.js';
 import { normalizePath } from './sessions.js';
-import { projectWorktreeLabel, formatWorkspaceLabel, cpuLevel, worktreeGlyph, getTerminalActivityState, formatTerminalActivityTitle, buildSelfHud, formatHudLine, formatHudCpu, formatDurationMin, escapeHtml, isMacPlatform, tabShortcutDigit, isCoarseViewport, isCompactViewport, prefersInputBarFocus, terminalPreferredFontSize, responsiveTerminalFontSize, TERMINAL_TARGET_COLUMNS, openExternalLink, installTerminalLinkProvider, serverKey, getEmbeddedProfileId, getEmbeddedBackendOrigin, } from './util.js';
+import { projectWorktreeLabel, formatWorkspaceLabel, cpuLevel, worktreeGlyph, getTerminalActivityState, formatTerminalActivityTitle, buildSelfHud, formatHudLine, formatHudCpu, formatDurationMin, escapeHtml, isMacPlatform, tabShortcutDigit, isCoarseViewport, isCompactViewport, prefersInputBarFocus, terminalPreferredFontSize, responsiveTerminalFontSize, TERMINAL_TARGET_COLUMNS, openExternalLink, installTerminalLinkProvider, serverKey, getEmbeddedProfileId, getEmbeddedBackendOrigin, isAbortError, } from './util.js';
 import { SNAPSHOT_SCROLLBACK_ROWS } from './backend-store.js';
 import { ThinkingPresetStore, thinkingPresetTokens, THINKING_PRESET_LEVELS, } from './thinking-presets.js';
 import { AttachmentStore, } from './attachment-store.js';
@@ -643,10 +643,6 @@ export function detectTerminalBufferState(term) {
         }
     }
     return { hasSpinner: false, hasPrompt, promptLine };
-}
-/** True when a rejected fetch was cancelled rather than failed. */
-function isAbortError(error) {
-    return error?.name === 'AbortError';
 }
 /** xterm's public typings stop above the parser/viewport internals this
  *  module reads. `internals()` is the single cast that reaches them. */

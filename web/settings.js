@@ -1,4 +1,4 @@
-import { displayHostname, readLowPowerLocal, writeLowPowerLocal, } from './util.js';
+import { displayHostname, readLowPowerLocal, writeLowPowerLocal, isAbortError, } from './util.js';
 import { setAccessPassword, clearAccessPassword, bootstrapAccessAuth, } from './auth.js';
 import { tryNative } from './desktop.js';
 import { currentAppearanceProfile, readProfileOverride, writeProfileOverride, appearanceOwner, captureAppearanceScope, legacyAppearanceKey, } from './mobile-appearance.js';
@@ -620,6 +620,10 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             app.showToast(`Loaded ${file.name}. Pick "Custom: ${file.name}" in the font dropdowns.`, { type: 'success' });
         }
         catch (err) {
+            // An interrupted upload is not a failed upload: the winning
+            // switch owns this surface.
+            if (isAbortError(err))
+                return;
             app.showToast(`Font upload failed: ${err instanceof Error ? err.message : String(err)}`, { type: 'error' });
         }
     });
@@ -670,6 +674,10 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             });
         }
         catch (err) {
+            // An interrupted upload is not a failed upload: the winning
+            // switch owns this surface.
+            if (isAbortError(err))
+                return;
             app.showToast(`Background upload failed: ${err instanceof Error ? err.message : String(err)}`, { type: 'error' });
         }
     });
@@ -1112,6 +1120,10 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             app.showToast('Password updated', { type: 'success' });
         }
         catch (err) {
+            // An aborted scope is not a server answer: never read as a
+            // rejected password when the attempt was merely interrupted.
+            if (isAbortError(err))
+                return;
             app.showToast(err instanceof Error
                 ? err.message
                 : 'Unable to save access password', { type: 'error' });
@@ -1138,6 +1150,10 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             app.showToast('Password removed', { type: 'success' });
         }
         catch (err) {
+            // An aborted scope is not a server answer: never read as a
+            // rejected password when the attempt was merely interrupted.
+            if (isAbortError(err))
+                return;
             app.showToast(err instanceof Error
                 ? err.message
                 : 'Unable to clear access password', { type: 'error' });
@@ -1419,6 +1435,10 @@ function _buildMobileAppearance(app, group, context, uiFontOptions, termFontOpti
         button.textContent = label;
         button.addEventListener('click', () => {
             void Promise.resolve(run()).catch((error) => {
+                // An interrupted action is not a failed action: the
+                // winning switch owns this surface.
+                if (isAbortError(error))
+                    return;
                 status.textContent =
                     error instanceof Error
                         ? error.message

@@ -14,6 +14,7 @@ import {
     serverKey,
     getEmbeddedBackendOrigin,
     getEmbeddedProfileId,
+    isAbortError,
 } from './util.js';
 import { openPiRpcChatTab } from './chat-pi/tab.js';
 import { createReviewTranscriptView } from './review-transcript.js';
@@ -2577,6 +2578,9 @@ export class SessionsManager {
                 setTimeout(() => this.fetchOpenCodeServiceStatus(), 1200);
             }
         } catch (e) {
+            // An aborted scope is not a server answer: the winning switch
+            // owns this surface and renders nothing for the dead one.
+            if (isAbortError(e) || this.app?.scope?.aborted) return;
             this.app.showToast((e as Error).message, { type: 'error' });
         }
     }
@@ -2658,6 +2662,9 @@ export class SessionsManager {
                 setTimeout(() => this.fetchOpenCodeServiceStatus(), 1200);
             }
         } catch (e) {
+            // An aborted scope is not a server answer: the winning switch
+            // owns this surface and renders nothing for the dead one.
+            if (isAbortError(e) || this.app?.scope?.aborted) return;
             this.app.showToast((e as Error).message, { type: 'error' });
         }
     }
@@ -3065,6 +3072,9 @@ export class SessionsManager {
                 finish(newName);
                 void this.loadSessions();
             } catch (e) {
+                // An interrupted rename is not a failed rename: never
+                // alert an internal abort reason over the user's input.
+                if (isAbortError(e) || this.app?.scope?.aborted) return;
                 alert(`Failed to rename: ${(e as Error).message}`);
                 finish(currentTitle);
                 void this.loadSessions();
@@ -3537,6 +3547,10 @@ export class SessionsManager {
                     view.transcript.scrollTop = view.transcript.scrollHeight;
                 }, 150);
             } catch (e) {
+                // An interrupted load is not a failed load: the winning
+                // switch owns this surface and renders nothing for the
+                // dead one.
+                if (isAbortError(e) || this.app?.scope?.aborted) return;
                 view.contentBody.innerHTML = `
                     <div class="review-error">
                         <h3>Error loading transcript</h3>

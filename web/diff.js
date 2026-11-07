@@ -1,6 +1,6 @@
 /* Φ phi — Git Diff & Git Log Controller */
 import { PTYWebSocket } from './ws.js';
-import { getLastFolderName, worktreeGlyph, isCoarseViewport, isDiffDrawerViewport, terminalPreferredFontSize, responsiveTerminalFontSize, DIFF_TERMINAL_TARGET_COLUMNS, openExternalLink, installTerminalLinkProvider, getEmbeddedBackendOrigin, getEmbeddedProfileId, serverKey, } from './util.js';
+import { getLastFolderName, worktreeGlyph, isCoarseViewport, isDiffDrawerViewport, terminalPreferredFontSize, responsiveTerminalFontSize, DIFF_TERMINAL_TARGET_COLUMNS, openExternalLink, installTerminalLinkProvider, getEmbeddedBackendOrigin, getEmbeddedProfileId, serverKey, isAbortError, } from './util.js';
 import { buildVSCodeURI, buildVSCodeRemoteURI, normalizeHostname, isVSCodeLaunchUnsupported, } from './vscode.js';
 function isGitStatusFileEntry(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -2798,6 +2798,10 @@ export class DiffController {
         }
         catch (e) {
             console.error('Add command failed:', e);
+            // An aborted scope is not a server answer: the winning switch
+            // owns this surface and renders nothing for the dead one.
+            if (isAbortError(e) || this.app?.scope?.aborted)
+                return;
             this.app.showToast(e.message, {
                 type: 'error',
                 title: 'Commands',
@@ -2870,6 +2874,10 @@ export class DiffController {
         }
         catch (e) {
             console.error('Delete command failed:', e);
+            // An aborted scope is not a server answer: the winning switch
+            // owns this surface and renders nothing for the dead one.
+            if (isAbortError(e) || this.app?.scope?.aborted)
+                return;
             alert(`Delete command failed: ${e.message}`);
         }
     }
@@ -2901,6 +2909,9 @@ export class DiffController {
                 await this.executeHiddenBatch(cmd, targetWts.map((wt) => wt.path), `Dirty Worktrees (${targetWts.length})`);
             }
             catch (e) {
+                // An aborted scope is not a server answer.
+                if (isAbortError(e) || this.app?.scope?.aborted)
+                    return;
                 this.app.showToast(`Failed to scan dirty worktrees: ${e.message}`, { type: 'error', title: 'Batch Command' });
             }
             return;
@@ -2916,6 +2927,9 @@ export class DiffController {
                 await this.executeHiddenBatch(cmd, targetWts, `All Worktrees (${targetWts.length})`);
             }
             catch (e) {
+                // An aborted scope is not a server answer.
+                if (isAbortError(e) || this.app?.scope?.aborted)
+                    return;
                 this.app.showToast(`Failed to scan worktrees: ${e.message}`, {
                     type: 'error',
                     title: 'Batch Command',
@@ -3010,6 +3024,9 @@ export class DiffController {
                 }
             }
             catch (e) {
+                // An aborted scope is not a server answer.
+                if (isAbortError(e) || this.app?.scope?.aborted)
+                    return;
                 this.app.showToast(e.message, {
                     type: 'error',
                     title: 'Launch Shell',
@@ -3075,6 +3092,12 @@ export class DiffController {
             }
         }
         catch (err) {
+            // An aborted scope is not a server answer: the batch died with
+            // its scope, so the winning switch owns this surface and the
+            // worktree rows keep their in-flight state rather than
+            // recording an internal abort reason as an execution error.
+            if (isAbortError(err) || this.app?.scope?.aborted)
+                return;
             if (this.activeBatchResults) {
                 this.activeBatchResults.worktrees.forEach((w) => {
                     if (w.status === 'running') {
@@ -3929,6 +3952,10 @@ export class DiffController {
                 showCacheNotice();
                 return;
             }
+            // An aborted scope is not a server answer: the winning
+            // switch owns this modal and renders nothing for the dead one.
+            if (isAbortError(error))
+                return;
             const errDiv = document.createElement('div');
             errDiv.style.padding = '20px';
             errDiv.style.color = 'var(--red)';

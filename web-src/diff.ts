@@ -15,6 +15,7 @@ import {
     getEmbeddedBackendOrigin,
     getEmbeddedProfileId,
     serverKey,
+    isAbortError,
 } from './util.js';
 import {
     buildVSCodeURI,
@@ -3429,6 +3430,9 @@ export class DiffController {
             });
         } catch (e) {
             console.error('Add command failed:', e);
+            // An aborted scope is not a server answer: the winning switch
+            // owns this surface and renders nothing for the dead one.
+            if (isAbortError(e) || this.app?.scope?.aborted) return;
             this.app.showToast((e as Error).message, {
                 type: 'error',
                 title: 'Commands',
@@ -3509,6 +3513,9 @@ export class DiffController {
             this.renderCmdPanel();
         } catch (e) {
             console.error('Delete command failed:', e);
+            // An aborted scope is not a server answer: the winning switch
+            // owns this surface and renders nothing for the dead one.
+            if (isAbortError(e) || this.app?.scope?.aborted) return;
             alert(`Delete command failed: ${(e as Error).message}`);
         }
     }
@@ -3555,6 +3562,8 @@ export class DiffController {
                     `Dirty Worktrees (${targetWts.length})`,
                 );
             } catch (e: any) {
+                // An aborted scope is not a server answer.
+                if (isAbortError(e) || this.app?.scope?.aborted) return;
                 this.app.showToast(
                     `Failed to scan dirty worktrees: ${e.message}`,
                     { type: 'error', title: 'Batch Command' },
@@ -3580,6 +3589,8 @@ export class DiffController {
                     `All Worktrees (${targetWts.length})`,
                 );
             } catch (e: any) {
+                // An aborted scope is not a server answer.
+                if (isAbortError(e) || this.app?.scope?.aborted) return;
                 this.app.showToast(`Failed to scan worktrees: ${e.message}`, {
                     type: 'error',
                     title: 'Batch Command',
@@ -3699,6 +3710,8 @@ export class DiffController {
                     this.app.sessionsManager.loadSessions();
                 }
             } catch (e) {
+                // An aborted scope is not a server answer.
+                if (isAbortError(e) || this.app?.scope?.aborted) return;
                 this.app.showToast((e as Error).message, {
                     type: 'error',
                     title: 'Launch Shell',
@@ -3784,6 +3797,11 @@ export class DiffController {
                 );
             }
         } catch (err: any) {
+            // An aborted scope is not a server answer: the batch died with
+            // its scope, so the winning switch owns this surface and the
+            // worktree rows keep their in-flight state rather than
+            // recording an internal abort reason as an execution error.
+            if (isAbortError(err) || this.app?.scope?.aborted) return;
             if (this.activeBatchResults) {
                 this.activeBatchResults.worktrees.forEach((w: any) => {
                     if (w.status === 'running') {
@@ -4924,6 +4942,9 @@ export class DiffController {
                 showCacheNotice();
                 return;
             }
+            // An aborted scope is not a server answer: the winning
+            // switch owns this modal and renders nothing for the dead one.
+            if (isAbortError(error)) return;
             const errDiv = document.createElement('div');
             errDiv.style.padding = '20px';
             errDiv.style.color = 'var(--red)';

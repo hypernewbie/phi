@@ -1984,8 +1984,7 @@ export class DesktopHost {
             typeof result.profile === 'string' && result.profile !== ''
               ? result.profile
               : null;
-          if (reportedProfile !== null && reportedProfile !== profileId)
-            return;
+          if (reportedProfile !== null && reportedProfile !== profileId) return;
           const cpu =
             typeof rawCpu === 'number' && Number.isFinite(rawCpu)
               ? Math.min(100, Math.max(0, rawCpu))

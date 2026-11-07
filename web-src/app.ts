@@ -30,6 +30,7 @@ import {
     getEmbeddedBackendOrigin,
     commitEmbeddedProfile,
     getEmbeddedActiveProfile,
+    isAbortError,
 } from './util.js';
 import { BackendScope } from './backend-scope.js';
 import {
@@ -68,11 +69,6 @@ import {
 } from './theme.js';
 import type { PhiConfig, ToastOptions } from './types.js';
 export { ACCENT_COLORS };
-
-/** True when a rejected fetch was cancelled rather than failed. */
-function isAbortError(error: unknown): boolean {
-    return (error as { name?: string } | null)?.name === 'AbortError';
-}
 
 function byId<T extends HTMLElement>(id: string): T | null {
     return document.getElementById(id) as T | null;

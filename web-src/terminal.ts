@@ -36,6 +36,7 @@ import {
     serverKey,
     getEmbeddedProfileId,
     getEmbeddedBackendOrigin,
+    isAbortError,
 } from './util.js';
 import { SNAPSHOT_SCROLLBACK_ROWS } from './backend-store.js';
 import {
@@ -1124,11 +1125,6 @@ interface PiRecallSnapshot {
           }
         | null
         | undefined;
-}
-
-/** True when a rejected fetch was cancelled rather than failed. */
-function isAbortError(error: unknown): boolean {
-    return (error as { name?: string } | null)?.name === 'AbortError';
 }
 
 /** Creation-time view overrides: a restored tab paints a cached screen

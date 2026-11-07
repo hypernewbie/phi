@@ -5,7 +5,7 @@ import { DiffController } from './diff.js';
 import { MarkdownManager } from './markdown.js';
 import { FileTreeManager } from './filetree.js';
 import { KanbanManager } from './kanban.js';
-import { escapeHtml, buildPhiFaviconSvg, isCoarseViewport, isCompactViewport, isSidebarDrawerViewport, isDiffDrawerViewport, visibleViewportHeight, COMPACT_VIEWPORT_QUERY, SIDEBAR_PANEL_CAP, DIFF_PANEL_CAP, clampPanelWidth, openExternalLink, resolveLowPowerEnabled, writeLowPowerLocal, serverKey, setEmbeddedBackend, getEmbeddedProfileId, getEmbeddedBackendOrigin, commitEmbeddedProfile, getEmbeddedActiveProfile, } from './util.js';
+import { escapeHtml, buildPhiFaviconSvg, isCoarseViewport, isCompactViewport, isSidebarDrawerViewport, isDiffDrawerViewport, visibleViewportHeight, COMPACT_VIEWPORT_QUERY, SIDEBAR_PANEL_CAP, DIFF_PANEL_CAP, clampPanelWidth, openExternalLink, resolveLowPowerEnabled, writeLowPowerLocal, serverKey, setEmbeddedBackend, getEmbeddedProfileId, getEmbeddedBackendOrigin, commitEmbeddedProfile, getEmbeddedActiveProfile, isAbortError, } from './util.js';
 import { BackendScope } from './backend-scope.js';
 import { MobileAppearanceStore, EMPTY_MOBILE, captureAppearanceScope, appearanceRequestContext, appearanceOwner, currentAppearanceProfile, effectiveAppearance, applyAppearanceFonts, legacyAppearanceKey, readDesktopAppearance, } from './mobile-appearance.js';
 import { BackendStore, backendStores } from './backend-store.js';
@@ -19,10 +19,6 @@ import { markDesktopView } from './desktop.js';
 import { formatPickedDir, mountDirectoryTree, } from './path-picker.js';
 import { ACCENT_COLORS, applyThemeTokens, } from './theme.js';
 export { ACCENT_COLORS };
-/** True when a rejected fetch was cancelled rather than failed. */
-function isAbortError(error) {
-    return error?.name === 'AbortError';
-}
 function byId(id) {
     return document.getElementById(id);
 }

@@ -13,7 +13,7 @@
 import { pbkdf2Async } from './vendor/noble-hashes/pbkdf2.js';
 import { hmac } from './vendor/noble-hashes/hmac.js';
 import { sha256 } from './vendor/noble-hashes/sha2.js';
-import { serverKey } from './util.js';
+import { isAbortError, serverKey } from './util.js';
 import type { PhiAccessAuthBridge } from './types.js';
 
 /** The protocols this client can speak. */
@@ -162,11 +162,6 @@ function liveContextFor(
     // own fetch is the live one (a plain browser tab has no context
     // object, and that is a perfectly live configuration).
     return activeAuthContext ?? fallback ?? undefined;
-}
-
-/** True when a rejected request was cancelled rather than failed. */
-function isAbortError(error: unknown): boolean {
-    return (error as { name?: string } | null)?.name === 'AbortError';
 }
 
 function bearerKey(context?: AuthContext | null): string {

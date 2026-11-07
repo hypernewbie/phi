@@ -1,5 +1,5 @@
 import { mountDirectoryTree, } from './path-picker.js';
-import { escapeHtml, getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph, displayHostname, isCompactViewport, serverKey, getEmbeddedBackendOrigin, getEmbeddedProfileId, } from './util.js';
+import { escapeHtml, getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph, displayHostname, isCompactViewport, serverKey, getEmbeddedBackendOrigin, getEmbeddedProfileId, isAbortError, } from './util.js';
 import { openPiRpcChatTab } from './chat-pi/tab.js';
 import { createReviewTranscriptView } from './review-transcript.js';
 import { loadCoderRegistry, openCodePaneMode, visibleCoders, getCoder, hasTranscript, hasPiRpc, hasRename, hasSessions, isShell, renderLogo, RESERVED_CODER_IDS, } from './coders.js';
@@ -2031,6 +2031,10 @@ export class SessionsManager {
             }
         }
         catch (e) {
+            // An aborted scope is not a server answer: the winning switch
+            // owns this surface and renders nothing for the dead one.
+            if (isAbortError(e) || this.app?.scope?.aborted)
+                return;
             this.app.showToast(e.message, { type: 'error' });
         }
     }
@@ -2093,6 +2097,10 @@ export class SessionsManager {
             }
         }
         catch (e) {
+            // An aborted scope is not a server answer: the winning switch
+            // owns this surface and renders nothing for the dead one.
+            if (isAbortError(e) || this.app?.scope?.aborted)
+                return;
             this.app.showToast(e.message, { type: 'error' });
         }
     }
@@ -2446,6 +2454,10 @@ export class SessionsManager {
                 void this.loadSessions();
             }
             catch (e) {
+                // An interrupted rename is not a failed rename: never
+                // alert an internal abort reason over the user's input.
+                if (isAbortError(e) || this.app?.scope?.aborted)
+                    return;
                 alert(`Failed to rename: ${e.message}`);
                 finish(currentTitle);
                 void this.loadSessions();
@@ -2849,6 +2861,11 @@ export class SessionsManager {
                 }, 150);
             }
             catch (e) {
+                // An interrupted load is not a failed load: the winning
+                // switch owns this surface and renders nothing for the
+                // dead one.
+                if (isAbortError(e) || this.app?.scope?.aborted)
+                    return;
                 view.contentBody.innerHTML = `
                     <div class="review-error">
                         <h3>Error loading transcript</h3>
