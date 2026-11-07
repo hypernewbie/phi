@@ -2441,8 +2441,15 @@ export class DesktopHost {
     if (generation !== this.sessionGeneration) return;
     const canonical = toCanonicalAuthOrigin(origin) ?? origin;
     // A v2 session persists only its bearer; a stale v1 verifier must not
-    // overwrite the selected v2 entry.
-    if (accessAuth.getSelectedProtocol(canonical) === 'v2') return;
+    // overwrite the selected v2 entry. But when the v2 bearer cannot be
+    // durably stored (Linux basic_text), the v1 verifier is the only
+    // credential that survives to the next launch — fall through so the
+    // proven password always leaves a durable trace.
+    if (
+      accessAuth.getSelectedProtocol(canonical) === 'v2' &&
+      this.secureV2StorageAvailable()
+    )
+      return;
     const cred =
       accessAuth.getLastCredential(canonical) ??
       accessAuth.getLastCredential(origin);
@@ -2571,7 +2578,13 @@ export class DesktopHost {
     if (generation !== this.sessionGeneration) return;
     const canonical = toCanonicalAuthOrigin(origin) ?? origin;
     const token = accessAuth.getToken(canonical);
-    if (!token) return;
+    if (!token) {
+      // A v1 unlock has no bearer: the PBKDF2 verifier IS the credential,
+      // and it must be durable before body-install retries — a transient
+      // body failure must not lose the password the user just proved.
+      this.persistVerifierAfterUnlock(origin, accessAuth, generation);
+      return;
+    }
     // A successful native unlock authorized this token: body install may
     // use it now.
     this.bodyTokens.set(canonical, token);

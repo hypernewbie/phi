@@ -502,6 +502,95 @@ describe('DesktopHost fake-Electron lifecycle', () => {
       expect(restarted.getOrRecoverCredential(`${origin}/`)).toEqual(saved);
     });
 
+    it('persists a v1 unlock at native-auth OK even when the body install fails', async () => {
+      // FUNDAMENTAL CONTRACT: a password the user proved once must survive
+      // to the next launch. The body install can fail for reasons that
+      // have nothing to do with the password (a slow load, a navigation
+      // race); when it does, the host takes the coalesced retry chain and
+      // never reaches the body-OK persist call. The native-auth-OK persist
+      // is the one that must hold.
+      vi.spyOn(safeStorage, 'isEncryptionAvailable').mockReturnValue(true);
+      const auth = new AccessAuth(async (input) => {
+        const url = input.toString();
+        if (url.endsWith('/api/auth/status')) {
+          return new Response(
+            JSON.stringify({
+              enabled: true,
+              authenticated: false,
+              version: 'v1',
+              algorithm: credential.algorithm,
+              iterations: credential.iterations,
+              salt: credential.salt.toString('base64url'),
+              challenge: 'synthetic-challenge',
+            }),
+          );
+        }
+        if (url.endsWith('/api/auth/login')) {
+          return new Response(null, {
+            headers: {
+              'set-cookie': 'phi_access_session=synthetic; Path=/; HttpOnly',
+            },
+          });
+        }
+        return new Response('{}');
+      });
+      expect((await auth.tryUnlock(origin, 'synthetic-password')).kind).toBe(
+        'ok',
+      );
+      // The host's native-auth-OK persist (the call the unlock handler
+      // makes before authenticateBodyView). No body install has happened.
+      cache.persistTokenAfterUnlock(origin, auth, 0);
+      const saved = cache.getOrRecoverCredential(origin);
+      expect(saved).not.toBeNull();
+      expect(saved?.verifier.length).toBe(32);
+
+      // And it survives a restart.
+      const restarted = new DesktopHost() as unknown as typeof cache;
+      expect(restarted.getOrRecoverCredential(origin)).toEqual(saved);
+    });
+
+    it('falls back to the v1 verifier when v2 is selected but v2 cannot be stored', async () => {
+      // FUNDAMENTAL CONTRACT: a proven password always leaves a durable
+      // trace. When the session selected v2 but the platform's storage
+      // backend cannot hold a bearer (Linux basic_text), the v2 entry is
+      // dropped at save — and the v1 verifier must take its place, or
+      // every launch prompts again.
+      vi.spyOn(safeStorage, 'isEncryptionAvailable').mockReturnValue(true);
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+      const prevBackend = safeStorage.backend;
+      Object.defineProperty(process, 'platform', { value: 'linux' });
+      try {
+        safeStorage.backend = 'basic_text';
+        const auth = new AccessAuth(async () => new Response('{}'));
+        const asAny = auth as unknown as {
+          selectedProtocols: Map<string, string>;
+          lastVerifier: Map<string, Buffer>;
+          lastCredential: Map<string, unknown>;
+        };
+        asAny.selectedProtocols.set(origin, 'v2');
+        asAny.lastVerifier.set(origin, Buffer.alloc(32, 7));
+        asAny.lastCredential.delete(origin);
+        globalThis.fetch = vi.fn<typeof fetch>().mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              enabled: true,
+              algorithm: 'pbkdf2-sha256',
+              iterations: credential.iterations,
+              salt: credential.salt.toString('base64url'),
+            }),
+          ),
+        );
+        cache.persistVerifierAfterUnlock(origin, auth, 0);
+        await new Promise((r) => setTimeout(r, 20));
+        const saved = cache.getOrRecoverCredential(origin);
+        expect(saved).not.toBeNull();
+        expect(saved?.version).toBe('v1');
+      } finally {
+        safeStorage.backend = prevBackend;
+        if (platform) Object.defineProperty(process, 'platform', platform);
+      }
+    });
+
     it.each([
       'ok',
       'offline',
