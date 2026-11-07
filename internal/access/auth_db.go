@@ -11,10 +11,8 @@ import (
 	"log"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strings"
 
@@ -177,40 +175,6 @@ func openAccessDB(path string, create bool) (*accessDB, error) {
 		return fail(err)
 	}
 	return &accessDB{db: db, path: path, commit: func(tx *sql.Tx) error { return tx.Commit() }}, nil
-}
-
-func secureAccessDBFile(path string, _ os.FileInfo) error {
-	if runtime.GOOS != "windows" {
-		if err := os.Chmod(path, 0o600); err != nil {
-			return err
-		}
-		info, err := os.Lstat(path)
-		if err != nil {
-			return err
-		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
-			return os.ErrPermission
-		}
-		return nil
-	}
-	const pathEnv = "PHI_AUTH_DB_ACL_PATH"
-	const script = `$ErrorActionPreference = 'Stop'; $p = $env:PHI_AUTH_DB_ACL_PATH; $acl = Get-Acl -LiteralPath $p; $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $owner = ([Security.Principal.NTAccount]$acl.Owner).Translate([Security.Principal.SecurityIdentifier]).Value; if ($owner -ne $sid) { exit 2 }; foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) { if ($rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and $rule.IdentityReference.Value -notin @($sid, 'S-1-5-18', 'S-1-5-32-544')) { exit 3 } }; Write-Output 'PHI_AUTH_DB_ACL_OK'`
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
-	cmd.Env = os.Environ()
-	for i := 0; i < len(cmd.Env); {
-		name, _, _ := strings.Cut(cmd.Env[i], "=")
-		if strings.EqualFold(name, pathEnv) {
-			cmd.Env = append(cmd.Env[:i], cmd.Env[i+1:]...)
-			continue
-		}
-		i++
-	}
-	cmd.Env = append(cmd.Env, pathEnv+"="+path)
-	output, err := cmd.CombinedOutput()
-	if err != nil || strings.TrimSpace(string(output)) != "PHI_AUTH_DB_ACL_OK" {
-		return errors.New("auth database ACL is not restricted to its owner")
-	}
-	return nil
 }
 
 func (s *accessDB) close() error {

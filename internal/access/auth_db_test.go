@@ -1577,6 +1577,48 @@ func TestAccessDBRejectsSymlinkAndNonRegularPaths(t *testing.T) {
 	})
 }
 
+func TestAccessDBFileACLVerificationAndHealing(t *testing.T) {
+	withTempConfig(t)
+	root := t.TempDir()
+	dir := filepath.Join(root, "dir.db")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyAccessDBFileACL(dir); err == nil {
+		t.Fatal("verifyAccessDBFileACL accepted a directory")
+	}
+
+	dbPath := filepath.Join(root, "auth.db")
+	store, err := openAccessDB(dbPath, true)
+	if err != nil {
+		t.Fatalf("openAccessDB create: %v", err)
+	}
+	if err := store.close(); err != nil {
+		t.Fatalf("close auth DB: %v", err)
+	}
+	if err := verifyAccessDBFileACL(dbPath); err != nil {
+		t.Fatalf("verifyAccessDBFileACL after create: %v", err)
+	}
+
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(dbPath, 0o644); err != nil {
+			t.Fatalf("Chmod 0644: %v", err)
+		}
+		if err := verifyAccessDBFileACL(dbPath); err == nil {
+			t.Fatal("verifyAccessDBFileACL accepted 0644 permissions")
+		}
+	}
+
+	reopened, err := openAccessDB(dbPath, false)
+	if err != nil {
+		t.Fatalf("openAccessDB reopen healed: %v", err)
+	}
+	defer reopened.close()
+	if err := verifyAccessDBFileACL(dbPath); err != nil {
+		t.Fatalf("verifyAccessDBFileACL after reopen: %v", err)
+	}
+}
+
 func accessDBTestState() (accessV2ActiveState, [16]byte, error) {
 	var migrationID [16]byte
 	for i := range migrationID {
