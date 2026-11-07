@@ -23,6 +23,7 @@ import {
     isCancelledSessionListRead,
     isCancelledWorktreeRead,
 } from './_session-requests.js';
+import { unexpectedDiagnostics } from './_diagnostics.js';
 
 const SHORT_TITLE = 'Short';
 const LONG_TITLE =
@@ -151,6 +152,8 @@ type BrowserRequestRecord = {
     classification?: 'known-worktree-state-completion';
 };
 
+// The unexpected-entry classifier lives in ./_diagnostics.ts so its
+// teardown-abort rule is unit-tested (test-js/e2eDiagnostics.test.js).
 type Diagnostic = {
     phase: string;
     kind: string;
@@ -1222,32 +1225,6 @@ async function classifyExpectedDiagnostics(
     }
 }
 
-function unexpectedDiagnostics(diagnostics: Diagnostics[]): Diagnostic[] {
-    const knownIds = new Set(
-        diagnostics.flatMap((item) =>
-            item.pinRequests
-                .filter(
-                    (request) =>
-                        request.classification === 'known-pin-completion',
-                )
-                .map((request) => request.requestId),
-        ),
-    );
-    return diagnostics.flatMap((item) =>
-        item.entries.filter(
-            (entry) =>
-                !entry.classification &&
-                !(
-                    entry.kind === 'request-failed' &&
-                    entry.message === 'net::ERR_ABORTED' &&
-                    entry.requestId !== undefined &&
-                    entry.requestId !== null &&
-                    knownIds.has(entry.requestId)
-                ),
-        ),
-    );
-}
-
 async function assertCompletedCurrentGitInfoRead(
     page: Page,
     diagnostics: Diagnostics,
@@ -1758,6 +1735,10 @@ async function withFixture(
             cleanupErrors.push(error);
         }
     }
+    // A teardown-phase ERR_ABORTED is expected: closing a context aborts
+    // every in-flight request (the pane replay attach included) by
+    // design. unexpectedDiagnostics knows this; an abort in any LIVE
+    // phase is still a signal.
     const teardownDiagnostics = unexpectedDiagnostics(diagnostics);
     if (teardownDiagnostics.length > 0) {
         cleanupErrors.push(
@@ -1817,13 +1798,29 @@ async function withFixture(
             ),
         );
     }
-    if (runFailed && cleanupErrors.length > 0) {
-        throw new AggregateError(
-            [runError, ...cleanupErrors],
-            'test failed and fixture cleanup reported errors',
-        );
+
+    // The test body's failure IS the report. Cleanup problems after a
+    // failed body are attached as artifacts, never wrapped around the
+    // real failure: the old AggregateError here REPLACED the failing
+    // assertion in CI output with "fixture cleanup reported errors".
+    if (runFailed) {
+        if (cleanupErrors.length > 0) {
+            try {
+                const cleanupPath = testInfo.outputPath('cleanup-errors.txt');
+                writeFileSync(
+                    cleanupPath,
+                    cleanupErrors.map((error) => String(error)).join('\n'),
+                );
+                await testInfo.attach('cleanup-errors.txt', {
+                    path: cleanupPath,
+                    contentType: 'text/plain',
+                });
+            } catch {
+                /* attaching cleanup noise must never mask the failure */
+            }
+        }
+        throw runError;
     }
-    if (runFailed) throw runError;
     if (cleanupErrors.length > 0) {
         throw new AggregateError(cleanupErrors, 'fixture cleanup failed');
     }

@@ -197,6 +197,97 @@ const screenText = (
         { id: pane, tailLines },
     );
 
+// One viewer's liveness state, for stall diagnosis and recovery. The
+// reconnect overlay is CREATED on pane death (not shown/hidden), so its
+// presence in the term container IS the dead-pane signal; its message
+// carries the auto-reconnect attempt counter or the exhaustion notice.
+type ViewerStall = {
+    text: string;
+    pending: boolean;
+    overlay: string | null;
+};
+
+const viewerStall = (page: Page, pane: string): Promise<ViewerStall> =>
+    page.evaluate((id) => {
+        const w = window as unknown as ReplayWindow;
+        const term = w.replayTerms.find(
+            (t) => t.element?.closest('.term-container')?.id === `term-${id}`,
+        );
+        const container = term?.element?.closest('.term-container') ?? null;
+        if (!term || !container)
+            return { text: '', pending: true, overlay: null };
+        const buf = term.buffer.active;
+        const lines: string[] = [];
+        for (let i = Math.max(0, buf.length - 100); i < buf.length; i++)
+            lines.push(buf.getLine(i)?.translateToString(true) ?? '');
+        const msg = container.querySelector(
+            '.reconnect-overlay .reconnect-msg',
+        );
+        return {
+            text: lines.join('\n'),
+            pending: w.replayPending !== 0,
+            overlay: msg ? (msg.textContent ?? '') : null,
+        };
+    }, pane);
+
+/** A marker gate that survives live-socket churn.
+ *
+ * The server closes an overflowed v3 viewer FOR reconnect, and the
+ * client auto-redials with full-jitter backoff. Under CI load, ten
+ * unstable attempts can exhaust the policy and park the pane on the
+ * manual-retry overlay — a dead pane with no operator, which once let
+ * this gate time out with the screen frozen at the previous phase.
+ *
+ * Recovery is exactly what an operator does: one page reload. It is
+ * semantically safe ONLY before the split-VT phases (they pin state in
+ * the live page that a reload would destroy), it fires at most once,
+ * and it logs loudly: this line appearing in a healthy run means a new
+ * flake to measure, not noise. */
+async function awaitMarkerWithStallRecovery(
+    page: Page,
+    pane: string,
+    marker: string,
+    timeoutMs: number,
+): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    let lastText: string | null = null;
+    let unchanged = 0;
+    let recovered = false;
+    while (Date.now() < deadline) {
+        const state = await viewerStall(page, pane);
+        if (!state.pending && state.text.includes(marker)) return;
+        if (
+            !state.pending &&
+            state.overlay !== null &&
+            state.text !== '' &&
+            state.text === lastText
+        ) {
+            unchanged++;
+            if (unchanged >= 6 && !recovered) {
+                recovered = true;
+                console.error(
+                    `[e2e] pane ${pane} stalled behind the reconnect overlay "${state.overlay}"; reloading the page once`,
+                );
+                await page.reload();
+                unchanged = 0;
+                lastText = null;
+                await new Promise((r) => setTimeout(r, 1000));
+                continue;
+            }
+        } else {
+            unchanged = 0;
+        }
+        lastText = state.text;
+        await new Promise((r) => setTimeout(r, 1000));
+    }
+    const state = await viewerStall(page, pane);
+    throw new Error(
+        `${marker} not on screen within ${timeoutMs}ms; ` +
+            `pending=${state.pending} overlay=${JSON.stringify(state.overlay)}; ` +
+            `screen tail: ${JSON.stringify(state.text.slice(-400))}`,
+    );
+}
+
 // FNV-1a over every line's text plus every cell's colors and flags.
 // The Node reference below repeats this logic over headless xterm; keep
 // the two in sync or the differential fails loudly.
@@ -522,9 +613,7 @@ test('retained raw replay preserves split VT and UTF-8 after rollover', async ({
         // Phase 2: past 32 MiB, ending in prefix-dependent modes.
         writeFileSync(join(phi.dir, 'home', 'go-phase2'), 'go\n');
         await waitFlag(phi.dir, 'done-phase2', 240_000);
-        await expect
-            .poll(() => screenText(pageA, pane), { timeout: 120_000 })
-            .toContain('END_MARK');
+        await awaitMarkerWithStallRecovery(pageA, pane, 'END_MARK', 120_000);
 
         // Viewer B is a fresh browser: everything arrives via replay.
         const ctxB = await browser.newContext({
@@ -535,9 +624,12 @@ test('retained raw replay preserves split VT and UTF-8 after rollover', async ({
             await installTermTracker(pageB);
             const seenB = watchViewer(pageB, pane);
             await pageB.goto(phi.url);
-            await expect
-                .poll(() => screenText(pageB, pane), { timeout: 240_000 })
-                .toContain('END_MARK');
+            await awaitMarkerWithStallRecovery(
+                pageB,
+                pane,
+                'END_MARK',
+                240_000,
+            );
             const statesMatch = async () => {
                 const a = await screenState(pageA, pane);
                 const b = await screenState(pageB, pane);
