@@ -160,6 +160,8 @@ declare global {
         __phiEmbed?: {
             switchTo(id: string, origin?: string): Promise<boolean>;
             forget(id: string): void;
+            /** The profile whose data this page currently paints. */
+            current(): string;
         };
     }
 }

@@ -360,6 +360,23 @@ export const WAKE_PAGE_SCRIPT = `(() => {
 })()`;
 
 /**
+ * Reads the profile whose data the page currently paints, via
+ * __phiEmbed.current(). Returns null when the page has no embed API (a
+ * legacy surface) or has painted nothing yet — the caller then falls
+ * back to the origin-to-view map, which is exact for dedicated views.
+ */
+export const ACTIVE_PROFILE_SCRIPT = `(() => {
+  try {
+    const current = window.__phiEmbed && window.__phiEmbed.current;
+    if (typeof current === 'function') {
+      const id = current();
+      return typeof id === 'string' && id ? id : null;
+    }
+  } catch {}
+  return null;
+})()`;
+
+/**
  * Dispatches __phiEmbed.switchTo(profileId, origin) into an embedded page.
  * Returns the result (or false if the page does not expose __phiEmbed).
  */

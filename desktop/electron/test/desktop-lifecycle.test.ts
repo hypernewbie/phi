@@ -669,6 +669,10 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     host.profileViews!.addProfile(profile.id, profile.origin);
     ctrl.setActive(profile.id);
     const view = host.viewByOrigin.get(profile.origin)!;
+    // Every read hangs until the test releases it: an identity
+    // observation first asks the page whose data it paints (the
+    // attribution gate), then reads the identity DOM, and a hung read
+    // must never queue the poll scripts behind it.
     let finish: (value: unknown) => void = () => {};
     const execute = vi
       .spyOn(view.webContents, 'executeJavaScript')
@@ -683,7 +687,10 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     try {
       const identity = host.observeProfileIdentity(view, profile.origin);
       await flush();
+      // Call 0 is the attribution gate probe; the identity DOM read
+      // waits behind it.
       expect(execute).toHaveBeenCalledTimes(1);
+      expect(execute.mock.calls[0][0]).toContain('__phiEmbed.current');
       await vi.advanceTimersByTimeAsync(1000);
       expect(await identity).toBeNull();
 
@@ -697,8 +704,13 @@ describe('DesktopHost fake-Electron lifecycle', () => {
       // holds the page's read slot; otherwise they fire the moment it clears.
       await flush();
       expect(execute).toHaveBeenCalledTimes(1);
-      finish({ hostname: 'ALPHA', accent: '#123456' });
+      // The probe answers with the page's painted profile. The
+      // observeProfileIdentity call already returned null on its timeout
+      // (its identity DOM read was dropped while the probe held the
+      // slot), so no follow-on read starts; the slot simply frees.
+      finish(profile.id);
       await flush();
+      expect(execute).toHaveBeenCalledTimes(1);
 
       host.pollFileAction();
       host.pollFileAction();
@@ -713,11 +725,22 @@ describe('DesktopHost fake-Electron lifecycle', () => {
       // waits for it to settle, so an unreported identity never starves the
       // poll.
       expect(execute.mock.calls[2][0]).toContain('cpu:');
-      finish({ cpu: 62, activity: true, workspace: '/alpha/code' });
+      finish({
+        cpu: 62,
+        activity: true,
+        workspace: '/alpha/code',
+        profile: profile.id,
+      });
       await flush();
       expect(host.observedCpu.get(profile.id)).toBe(62);
+      // Identity was never cached, so the poll's catch-up fires after the
+      // CPU read settles: the gate probe first, then the identity DOM.
       expect(execute).toHaveBeenCalledTimes(4);
-      expect(execute.mock.calls[3][0]).toContain('hostname-display');
+      expect(execute.mock.calls[3][0]).toContain('__phiEmbed.current');
+      finish(profile.id);
+      await flush();
+      expect(execute).toHaveBeenCalledTimes(5);
+      expect(execute.mock.calls[4][0]).toContain('hostname-display');
       finish({ hostname: 'ALPHA', accent: '#123456' });
       await flush();
       expect(host.observedIdentity.get(profile.id)?.accent).toBe('#123456');
@@ -743,24 +766,36 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     expect(host.observedIdentity.has(profile.id)).toBe(false);
     const execute = vi
       .spyOn(view.webContents, 'executeJavaScript')
-      .mockImplementation((code?: string) =>
-        Promise.resolve(
-          String(code).includes('cpu:')
-            ? { cpu: null, activity: false, workspace: null }
-            : { hostname: 'ALPHA', accent: '#123456' },
-        ),
-      );
+      .mockImplementation((code?: string) => {
+        const script = String(code);
+        if (script.includes('cpu:'))
+          return Promise.resolve({
+            cpu: null,
+            activity: false,
+            workspace: null,
+            profile: profile.id,
+          });
+        // The attribution gate probe: the page reports its own profile.
+        if (script.includes('__phiEmbed.current'))
+          return Promise.resolve(profile.id);
+        return Promise.resolve({ hostname: 'ALPHA', accent: '#123456' });
+      });
 
     host.pollCpu();
     await flush();
+    await flush();
+    await flush();
     expect(String(execute.mock.calls[0][0])).toContain('cpu:');
-    expect(String(execute.mock.calls[1][0])).toContain('hostname-display');
+    // The identity catch-up asks the gate probe before the identity DOM.
+    expect(String(execute.mock.calls[1][0])).toContain('__phiEmbed.current');
+    expect(String(execute.mock.calls[2][0])).toContain('hostname-display');
     expect(host.observedIdentity.get(profile.id)?.accent).toBe('#123456');
 
     // Observed once: the cadence returns to the CPU poll alone.
     host.pollCpu();
     await flush();
-    expect(String(execute.mock.calls[2][0])).toContain('cpu:');
+    await flush();
+    expect(String(execute.mock.calls[3][0])).toContain('cpu:');
     expect(
       execute.mock.calls.filter((call) =>
         String(call[0]).includes('hostname-display'),
@@ -781,19 +816,31 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     const view = host.viewByOrigin.get(profile.origin)!;
     let cpu = 10;
     vi.spyOn(view.webContents, 'executeJavaScript').mockImplementation(
-      (code?: string) =>
-        Promise.resolve(
-          String(code).includes('cpu:')
-            ? { cpu: cpu++, activity: false, workspace: null }
-            : { hostname: '', accent: '' },
-        ),
+      (code?: string) => {
+        const script = String(code);
+        if (script.includes('cpu:'))
+          return Promise.resolve({
+            cpu: cpu++,
+            activity: false,
+            workspace: null,
+            profile: profile.id,
+          });
+        // The gate probe: the page knows its own profile even while the
+        // identity DOM (hostname/accent) reports nothing.
+        if (script.includes('__phiEmbed.current'))
+          return Promise.resolve(profile.id);
+        return Promise.resolve({ hostname: '', accent: '' });
+      },
     );
 
     host.pollCpu();
     await flush();
+    await flush();
+    await flush();
     expect(host.observedCpu.get(profile.id)).toBe(10);
 
     host.pollCpu();
+    await flush();
     await flush();
     // The identity read never lands (empty page), but it must not hold the
     // page's read slot: the CPU reading still advances every tick.
@@ -3144,5 +3191,237 @@ describe('attachNavGuard', () => {
     expect(loaded).toEqual([]);
     await contents.loadURL('https://phi.example/index.html');
     expect(loaded).toEqual(['https://phi.example/index.html']);
+  });
+});
+
+// FUNDAMENTAL CONTRACT — DO NOT CHANGE.
+//
+// The taskbar bar, the header CPU tier and the rail intensity describe
+// exactly one server: the one the retained page shows. In low-memory
+// (single-tab) mode the origin-to-view map moves at the click while the
+// page keeps rendering the old server until it has painted the new one —
+// a reading taken in that window belongs to the OLD server, and handing
+// it to the new server's taskbar/rail/header is a defect, never a
+// trade-off. Attribution follows the page: the page reports the profile
+// it has painted, and a reading whose reported profile does not match
+// the polled profile is dropped. A page that reports no profile (a
+// legacy surface, or a boot still loading) attributes through the
+// origin-to-view map, which is exact for dedicated views.
+describe('DesktopHost TBAR attribution', () => {
+  let temp = '';
+  let originalFetch: typeof fetch;
+
+  beforeEach(() => {
+    fake.reset();
+    primary.installListener.mockClear();
+    temp = mkdtempSync(path.join(os.tmpdir(), 'phi-desktop-tbar-'));
+    fake.setUserData(temp);
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    globalThis.fetch = originalFetch;
+    rmSync(temp, { recursive: true, force: true });
+    delete process.env.PHI_DESKTOP_LOW_MEMORY;
+  });
+
+  interface PollAnswer {
+    cpu: number | null;
+    activity: boolean;
+    workspace: string | null;
+    /** The profile id the page reports as painted; null = no identity. */
+    profile: string | null;
+  }
+
+  /** Builds a single-tab host with profiles A and B, the retained view
+   *  showing A, and a controllable page: the switch to B is held open so
+   *  tests observe the window between the click and the paint. The fetch
+   *  mock is installed before start so the transport binds it (the
+   *  compatibility probe must succeed for the in-page switch path). */
+  async function switchWindow() {
+    process.env.PHI_DESKTOP_LOW_MEMORY = '1';
+    globalThis.fetch = (async (url: string | URL) => {
+      const href = url.toString();
+      if (href.endsWith('/api/version')) {
+        return new Response(
+          JSON.stringify({ api: '1', terminal_protocol: '3' }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (href.endsWith('/healthz')) {
+        return new Response('{}', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      throw new Error(`unexpected fetch ${href}`);
+    }) as unknown as typeof fetch;
+    const host = new DesktopHost();
+    await host.start(primary);
+    const win = fake.FakeBrowserWindow.instances[0];
+    win.webContents.emit('did-finish-load');
+    await flush();
+    const ctrl = host.controller!;
+    const a = ctrl.add('http://alpha.example.test:7070/');
+    const b = ctrl.add('http://beta.example.test:7071/');
+    host.profileViews!.addProfile(a.id, a.origin);
+    host.profileViews!.addProfile(b.id, b.origin);
+    ctrl.setActive(a.id);
+    await flush();
+    const view = host.viewByOrigin.get(a.origin)!;
+    expect(view).toBeTruthy();
+
+    // The page under the test's control: the in-page switchTo is held so
+    // the paint never happens until the test releases it, and each poll
+    // read is answered from `answers` — whatever the (still old) page
+    // would truthfully report.
+    let answers: PollAnswer[] = [];
+    let releaseSwitch: () => void = () => {};
+    const held = new Promise<boolean>((resolve) => {
+      releaseSwitch = () => resolve(true);
+    });
+    const execute = vi
+      .spyOn(view.webContents, 'executeJavaScript')
+      .mockImplementation((code?: string) => {
+        const script = String(code);
+        if (script.includes('__phiEmbed.switchTo')) return held;
+        if (script.includes('cpu:')) {
+          const answer = answers.shift();
+          return Promise.resolve(
+            answer ?? {
+              cpu: null,
+              activity: false,
+              workspace: null,
+              profile: null,
+            },
+          );
+        }
+        // The attribution gate probe reports the same profile the page's
+        // polls report; the identity DOM read follows only when the gate
+        // opens.
+        if (script.includes('__phiEmbed.current'))
+          return Promise.resolve(answers[0]?.profile ?? null);
+        return Promise.resolve({ hostname: 'ALPHA', accent: '#123456' });
+      });
+    const progress = vi.spyOn(win, 'setProgressBar');
+    return {
+      host,
+      ctrl,
+      win,
+      view,
+      execute,
+      progress,
+      a,
+      b,
+      setAnswers(next: PollAnswer[]): void {
+        answers = next;
+      },
+      clickB(): void {
+        ctrl.setActive(b.id);
+      },
+      releaseSwitch,
+    };
+  }
+
+  it('never hands the old page reading to the clicked profile during the switch window', async () => {
+    const t = await switchWindow();
+    // The page has painted A and says so.
+    t.setAnswers([
+      { cpu: 81, activity: false, workspace: null, profile: t.a.id },
+    ]);
+    t.host.pollCpu();
+    await flush();
+    expect(t.host.observedCpu.get(t.a.id)).toBe(81);
+
+    // The user clicks B. The map moves at the click; the page keeps
+    // showing A until it paints — and keeps reporting A.
+    t.clickB();
+    await flush();
+    expect(t.host.viewByOrigin.get(t.b.origin)).toBeTruthy();
+    expect(
+      t.execute.mock.calls.some((c) =>
+        String(c[0]).includes('__phiEmbed.switchTo'),
+      ),
+    ).toBe(true);
+
+    // A poll tick inside the window reads the OLD page (81%, A's
+    // reading). It must not become B's reading: no map entry, no
+    // taskbar bar for B.
+    t.progress.mockClear();
+    t.setAnswers([
+      { cpu: 81, activity: false, workspace: null, profile: t.a.id },
+    ]);
+    t.host.pollCpu();
+    await flush();
+    expect(t.host.observedCpu.has(t.b.id)).toBe(false);
+    expect(t.progress).not.toHaveBeenCalledWith(expect.any(Number));
+
+    // The page paints B and reports it; the next tick attributes to B
+    // and the taskbar bar describes B.
+    t.releaseSwitch();
+    await flush();
+    t.setAnswers([
+      { cpu: 62, activity: true, workspace: null, profile: t.b.id },
+    ]);
+    t.host.pollCpu();
+    await flush();
+    expect(t.host.observedCpu.get(t.b.id)).toBe(62);
+    expect(t.progress).toHaveBeenCalledWith(0.62);
+  });
+
+  it('attributes through the origin map when the page reports no profile', async () => {
+    const t = await switchWindow();
+    // A legacy surface has no embed API and reports nothing. The map
+    // is the only identity signal, and in single-entry mode it points
+    // at the clicked profile — the reading describes that server.
+    t.clickB();
+    await flush();
+    t.setAnswers([{ cpu: 30, activity: false, workspace: null, profile: null }]);
+    t.host.pollCpu();
+    await flush();
+    expect(t.host.observedCpu.get(t.b.id)).toBe(30);
+  });
+
+  it('the taskbar bar shows every reading it is given — the gate at 50% hides real load', async () => {
+    const t = await switchWindow();
+    // The page has painted B; a 30% reading is real load and the bar
+    // must describe it. The old ">50% or nothing" rule left the bar
+    // absent for most servers, which reads as a broken bar.
+    t.clickB();
+    await flush();
+    t.releaseSwitch();
+    await flush();
+    t.setAnswers([{ cpu: 30, activity: false, workspace: null, profile: t.b.id }]);
+    t.host.pollCpu();
+    await flush();
+    expect(t.host.observedCpu.get(t.b.id)).toBe(30);
+    expect(t.progress).toHaveBeenCalledWith(0.3);
+  });
+
+  it('restoring the window re-polls immediately instead of waiting out the tick', async () => {
+    const t = await switchWindow();
+    t.clickB();
+    await flush();
+    t.releaseSwitch();
+    await flush();
+    // Minimized: no header to drive, the reading is kept.
+    t.win.minimized = true;
+    t.setAnswers([{ cpu: 40, activity: false, workspace: null, profile: t.b.id }]);
+    t.host.pollCpu();
+    await flush();
+    expect(
+      t.execute.mock.calls.filter((c) => String(c[0]).includes('cpu:')).length,
+    ).toBe(0);
+
+    // Restore: the bar must refresh on the restore event, not on the
+    // next 10s tick.
+    t.win.minimized = false;
+    t.win.emit('restore');
+    await flush();
+    expect(
+      t.execute.mock.calls.filter((c) => String(c[0]).includes('cpu:')).length,
+    ).toBeGreaterThan(0);
+    expect(t.host.observedCpu.get(t.b.id)).toBe(40);
   });
 });

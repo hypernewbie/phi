@@ -28,6 +28,8 @@ import {
     setEmbeddedBackend,
     getEmbeddedProfileId,
     getEmbeddedBackendOrigin,
+    commitEmbeddedProfile,
+    getEmbeddedActiveProfile,
 } from './util.js';
 import { BackendScope } from './backend-scope.js';
 import {
@@ -275,6 +277,9 @@ export class App {
             const origin = params.get('origin');
             if (profileId) {
                 setEmbeddedBackend(profileId, origin || '');
+                // Boot: the host aimed the router here before the first
+                // byte, so this page IS this profile from the start.
+                commitEmbeddedProfile(profileId);
             }
         }
         this.scope =
@@ -291,6 +296,11 @@ export class App {
             window.__phiEmbed = {
                 switchTo: (id, origin = '') => this.switchToBackend(id, origin),
                 forget: (id) => this.forgetBackend(id),
+                // The profile whose data this page paints. The desktop
+                // host reads it before attributing any reading to a
+                // profile, so the taskbar and rail describe the shown
+                // server even while a switch is still in flight.
+                current: () => getEmbeddedActiveProfile(),
             };
         }
 
@@ -1141,6 +1151,11 @@ export class App {
         try {
             this.sessionsManager?.resetSessionRootForBackendSwitch?.();
             this.paintBackendFromStore(nextStore);
+            // The new server's data is on screen: commit the painted
+            // profile so the desktop host attributes readings taken from
+            // this moment to this server. The /__phi/active POST below
+            // moves the router; this marker moves attribution.
+            commitEmbeddedProfile(profileId);
             // The right panel survives an in-page switch as persistent DOM;
             // reset its backend-scoped surfaces (stream socket, commit list,
             // markdown/files/cmds lists) from the new store's cache. No

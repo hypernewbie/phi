@@ -1602,10 +1602,13 @@ describe('src/desktop.ts (per-server CPU observation: rail intensity + taskbar p
     expect(desktopSource).toContain('const REMOTE_CPU_SCRIPT = `(() => {');
   });
 
-  it('gates the taskbar progress: cpu above 50 -> cpu/100, at or below 50 -> clear (-1), clamped defensively', () => {
+  it('the taskbar bar describes every reading: bar = cpu/100, clamped defensively, cleared without a reading', () => {
     expect(desktopSource).toMatch(/Math\.min\(100, Math\.max\(0, raw\w*\)/);
+    // The old ">50% or nothing" gate left the bar absent for most real
+    // loads, which reads as a broken bar: a reading the host holds is
+    // the server's load, and the bar must describe it at any level.
     expect(desktopSource).toContain(
-      'setProgressBar(next !== null && next > 50 ? next / 100 : -1)',
+      'setProgressBar(next !== null ? next / 100 : -1)',
     );
     expect(desktopSource).toContain('setProgressBar(-1)');
   });

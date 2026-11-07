@@ -124,6 +124,7 @@ import {
   bodyAuthLoginScript,
   bodyAuthTokenScript,
   WAKE_PAGE_SCRIPT,
+  ACTIVE_PROFILE_SCRIPT,
   lowPowerApplyScript,
   switchToScript,
 } from './injected.js';
@@ -408,6 +409,13 @@ const REMOTE_PROFILE_POLL_SCRIPT = `(() => ({
   cpu: ${REMOTE_CPU_SCRIPT},
   activity: ${REMOTE_ACTIVITY_SCRIPT},
   workspace: ${READ_WORKSPACE_SCRIPT},
+  // The profile whose data this page paints. A reading belongs to the
+  // polled profile only when the page itself reports that profile: in
+  // single-entry mode the origin-to-view map points at the clicked
+  // profile before the page has switched, and without this field the
+  // old server's CPU would ride the click into the new server's
+  // taskbar bar, header tier and rail entry.
+  profile: ${ACTIVE_PROFILE_SCRIPT},
 }))()`;
 
 /** Fixed page-observation expression: a guarded click on
@@ -1840,6 +1848,29 @@ export class DesktopHost {
       const timeoutPromise = new Promise<null>((resolve) =>
         setTimeout(() => resolve(null), 1000),
       );
+      const profile =
+        origin === EMBEDDED_ORIGIN
+          ? (ctrl
+              .state()
+              .profiles.find((p) => p.id === ctrl.state().activeId) ?? null)
+          : (ctrl.state().profiles.find((p) => p.origin === origin) ?? null);
+      if (!profile) return null;
+      // The identity DOM belongs to the page's painted server: in the
+      // single-entry switch window (click landed, page still shows the
+      // old server) a read here would cache the old server's hostname
+      // and accent under this profile. Ask the page whose data it
+      // paints first; a page with no identity (legacy surface, boot)
+      // reads through, exact for dedicated views.
+      const reported = await Promise.race([
+        this.executeRendererRead(view.webContents, ACTIVE_PROFILE_SCRIPT),
+        timeoutPromise,
+      ]);
+      if (
+        typeof reported === 'string' &&
+        reported !== '' &&
+        reported !== profile.id
+      )
+        return null;
       const observed = (await Promise.race([
         this.executeRendererRead(view.webContents, REMOTE_IDENTITY_SCRIPT),
         timeoutPromise,
@@ -1848,13 +1879,6 @@ export class DesktopHost {
         accent?: unknown;
       } | null;
       if (!observed || generation !== this.sessionGeneration) return null;
-      const profile =
-        origin === EMBEDDED_ORIGIN
-          ? (ctrl
-              .state()
-              .profiles.find((p) => p.id === ctrl.state().activeId) ?? null)
-          : (ctrl.state().profiles.find((p) => p.origin === origin) ?? null);
-      if (!profile) return null;
       const identity = {
         hostname:
           typeof observed.hostname === 'string' ? observed.hostname : '',
@@ -1936,6 +1960,7 @@ export class DesktopHost {
         cpu?: unknown;
         activity?: unknown;
         workspace?: unknown;
+        profile?: unknown;
       }>(view.webContents, REMOTE_PROFILE_POLL_SCRIPT)
         .then((result) => {
           if (
@@ -1947,6 +1972,20 @@ export class DesktopHost {
           const rawCpu = result.cpu;
           const rawActivity = result.activity;
           const rawWorkspace = result.workspace;
+          // Attribution follows the page, never the click: a reading is
+          // this profile's only when the page the read came from reports
+          // this profile. An embedded page reports its painted profile
+          // (committed after the switch paint); a legacy surface or a
+          // boot still loading reports nothing and attributes through
+          // the origin-to-view map. Without this gate, a poll tick that
+          // lands in the single-entry switch window attributes the old
+          // server's readings to the newly selected profile.
+          const reportedProfile =
+            typeof result.profile === 'string' && result.profile !== ''
+              ? result.profile
+              : null;
+          if (reportedProfile !== null && reportedProfile !== profileId)
+            return;
           const cpu =
             typeof rawCpu === 'number' && Number.isFinite(rawCpu)
               ? Math.min(100, Math.max(0, rawCpu))
@@ -1970,7 +2009,7 @@ export class DesktopHost {
             win.setProgressBar(-1);
             return;
           }
-          win.setProgressBar(next !== null && next > 50 ? next / 100 : -1);
+          win.setProgressBar(next !== null ? next / 100 : -1);
           const workspace =
             typeof rawWorkspace === 'string' && rawWorkspace !== ''
               ? rawWorkspace
@@ -3657,6 +3696,11 @@ export class DesktopHost {
     });
     win.on('restore', () => {
       this.hooks?.trigger('restore');
+      // A hidden or minimized window skips the poll to keep its last
+      // reading; on restore the reading is stale, so sample immediately
+      // instead of letting the taskbar bar and header tier describe the
+      // pre-minimize server for up to one full 10s tick.
+      this.pollCpu();
     });
     win.on('enter-full-screen', () => {
       this.notifyFullscreen(true);

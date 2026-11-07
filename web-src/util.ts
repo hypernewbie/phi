@@ -8,6 +8,23 @@
 let embeddedProfileId = '';
 let embeddedBackendOrigin = '';
 
+/** The profile whose data the DOM currently paints. Boot seeds it from
+ *  the URL (the host aimed the router here before the first byte), and
+ *  an in-page switch commits it only after the new server's paint, so
+ *  the desktop host can attribute a page reading to exactly the server
+ *  the page shows — never to the server a click asked for. */
+let embeddedActiveProfile = '';
+
+export function commitEmbeddedProfile(
+    profileId: string | null | undefined,
+): void {
+    embeddedActiveProfile = (profileId || '').trim();
+}
+
+export function getEmbeddedActiveProfile(): string {
+    return embeddedActiveProfile;
+}
+
 if (typeof window !== 'undefined' && window.location?.search) {
     try {
         const params = new URLSearchParams(window.location.search);
