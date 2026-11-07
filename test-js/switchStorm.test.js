@@ -32,7 +32,10 @@ const ORIGIN = 'phi-app://app';
 const SERVERS = {
     [ALPHA]: {
         marker: 'alpha',
-        version: { version: '10.0.0-alpha', started_at: '2026-11-07T00:00:00Z' },
+        version: {
+            version: '10.0.0-alpha',
+            started_at: '2026-11-07T00:00:00Z',
+        },
         coders: [{ id: 'alpha-coder', name: 'Alpha Coder' }],
         config: {
             workspaces: ['/srv/alpha/ws-one', '/srv/alpha/ws-two'],
@@ -61,7 +64,7 @@ const SERVERS = {
     },
 };
 
-function payloadFor(profileId, pathname, search) {
+function payloadFor(profileId, pathname, _search) {
     const server = SERVERS[profileId];
     switch (pathname) {
         case '/api/version':
@@ -86,7 +89,6 @@ function payloadFor(profileId, pathname, search) {
             if (pathname.startsWith('/api/sessions')) return server.sessions;
             return {};
     }
-    void search;
 }
 
 /**
@@ -128,7 +130,9 @@ function installTwoServerFetch() {
         calls.push({ url: pathname + parsed.search, profileId: server });
 
         const gate = gates.get(gateKey(server, pathname));
-        if (gate) gate.promise = gate.promise || new Promise((r) => (gate.release = r));
+        if (gate)
+            gate.promise =
+                gate.promise || new Promise((r) => (gate.release = r));
         if (gate?.promise) await gate.promise;
 
         await wait(delays.get(delayKey(server, pathname)) || 0);
@@ -161,7 +165,11 @@ function setupVendorStubs() {
     if (!HTMLElement.prototype.scrollIntoView) {
         HTMLElement.prototype.scrollIntoView = () => {};
     }
-    vi.stubGlobal('FitAddon', { FitAddon: class { fit() {} } });
+    vi.stubGlobal('FitAddon', {
+        FitAddon: class {
+            fit() {}
+        },
+    });
     vi.stubGlobal('SearchAddon', { SearchAddon: class {} });
     vi.stubGlobal('Unicode11Addon', { Unicode11: class {} });
     vi.stubGlobal('WebglAddon', { WebglAddon: class {} });
@@ -333,8 +341,9 @@ describe('single-tab switch storm (FUNDAMENTAL CONTRACT)', () => {
         for (const value of options) {
             expect(value.startsWith('/srv/beta/')).toBe(true);
         }
-        expect(app.sessionsManager.activeWorkspace.startsWith('/srv/beta/'))
-            .toBe(true);
+        expect(
+            app.sessionsManager.activeWorkspace.startsWith('/srv/beta/'),
+        ).toBe(true);
         expect(
             (app.sessionsManager.activeCWD || '').startsWith('/srv/beta/'),
         ).toBe(true);
@@ -352,7 +361,9 @@ describe('single-tab switch storm (FUNDAMENTAL CONTRACT)', () => {
             const store = backendStores.get(profileId);
             for (const [url, body] of store.responses) {
                 if (url === '/api/version') {
-                    expect(JSON.parse(body).version).toBe(server.version.version);
+                    expect(JSON.parse(body).version).toBe(
+                        server.version.version,
+                    );
                 }
                 if (url === '/api/config') {
                     for (const ws of JSON.parse(body).workspaces) {
@@ -463,7 +474,9 @@ describe('headerless requests during a switch (FUNDAMENTAL CONTRACT)', () => {
         // (user refresh or an automatic refresh): headerless, so it is
         // answered by A. When the flip lands, those bytes must be
         // dead: the sidebar is B's, whole.
-        const postGate = net.gate('control', '/__phi/active');
+        // Register (not hold) the /__phi/active gate: the pointer must
+        // stay on alpha until it is released below.
+        net.gate('control', '/__phi/active');
         const switching = window.__phiEmbed.switchTo(BETA, ORIGIN);
 
         // The pointer is still on alpha while the POST waits: this
@@ -492,15 +505,21 @@ describe('BackendStore under a switch storm (FUNDAMENTAL CONTRACT)', () => {
         const renders = [];
 
         // First load: slow, and its scope dies mid-flight.
-        const dyingScope = { aborted: false, fetchText: async () => {
-            await new Promise((resolve) => setTimeout(resolve, 20));
-            return JSON.stringify({ generation: 'old' });
-        } };
+        const dyingScope = {
+            aborted: false,
+            fetchText: async () => {
+                await new Promise((resolve) => setTimeout(resolve, 20));
+                return JSON.stringify({ generation: 'old' });
+            },
+        };
         // Second load: fast, live, answers the newer body.
-        const liveScope = { aborted: false, fetchText: async () => {
-            await new Promise((resolve) => setTimeout(resolve, 2));
-            return JSON.stringify({ generation: 'new' });
-        } };
+        const liveScope = {
+            aborted: false,
+            fetchText: async () => {
+                await new Promise((resolve) => setTimeout(resolve, 2));
+                return JSON.stringify({ generation: 'new' });
+            },
+        };
 
         const first = store.load('/api/state', dyingScope, (data) => {
             renders.push(['first', data.generation]);
