@@ -134,6 +134,41 @@ function credentialKey(context?: AuthContext | null): string {
     return context?.credentialKey || serverKey(CREDENTIAL_KEY);
 }
 
+/**
+ * Points the module at the credential namespace of the backend the page
+ * shows now. The desktop's single-tab page switches servers in place and
+ * replaces its scope on every switch, so the module has to follow: a
+ * prompt that opened before the switch would otherwise post its password
+ * through the dead scope and fail with an internal abort reason instead
+ * of an answer from the server.
+ */
+export function setAuthContext(context?: AuthContext | null): void {
+    activateAuthContext(context);
+}
+
+/**
+ * The live context of a credential namespace: the context the page uses
+ * now, `undefined` when the page uses its own fetch (a plain browser
+ * tab), or `null` when the page has left that namespace entirely and
+ * another server is showing. The namespace is what a prompt owns; the
+ * scope behind it is replaced on every switch.
+ */
+function liveContextFor(
+    ownerKey: string,
+    fallback?: AuthContext | null,
+): AuthContext | null | undefined {
+    if (activeAuthKey !== ownerKey) return null;
+    // `null` means the namespace is gone; `undefined` means the module's
+    // own fetch is the live one (a plain browser tab has no context
+    // object, and that is a perfectly live configuration).
+    return activeAuthContext ?? fallback ?? undefined;
+}
+
+/** True when a rejected request was cancelled rather than failed. */
+function isAbortError(error: unknown): boolean {
+    return (error as { name?: string } | null)?.name === 'AbortError';
+}
+
 function bearerKey(context?: AuthContext | null): string {
     if (!context?.credentialKey) return serverKey(LEGACY_BEARER_KEY);
     const key = context.credentialKey;
@@ -1479,6 +1514,9 @@ function showUnlockPrompt(
     protocol: Protocol,
 ): Promise<{ enabled: boolean }> {
     const state = stateFor(context);
+    // The credential namespace this prompt owns. The scope behind it is
+    // replaced on every server switch; the namespace is not.
+    const ownerKey = credentialKey(context);
     return new Promise((resolve) => {
         let settled = false;
         const finish = (value: { enabled: boolean }) => {
@@ -1536,6 +1574,17 @@ function showUnlockPrompt(
             event.preventDefault();
             error.textContent = '';
             submit.disabled = true;
+            // The prompt owns a credential namespace, not a scope. The
+            // desktop replaces its scope on every server switch, so the
+            // namespace's live context is resolved here, when the password
+            // is sent. A namespace the page has left has no server to talk
+            // to: the prompt closes instead of posting the password
+            // somewhere the user is no longer looking at.
+            const live = liveContextFor(ownerKey, context);
+            if (live === null) {
+                finish({ enabled: false });
+                return;
+            }
             // The pure-JS derivation runs for a minute or more on phones:
             // WebKit disables the JIT for plain-HTTP origins, so 600k PBKDF2
             // iterations run at interpreter speed. Tick the label so the
@@ -1560,7 +1609,7 @@ function showUnlockPrompt(
             });
             try {
                 if (protocol === 'v2') {
-                    const bundle = await v2Login(input.value, context);
+                    const bundle = await v2Login(input.value, live);
                     if (epoch !== state.epoch) return;
                     if (bundle === HOST_SESSION_TOKEN) {
                         state.hostSession = true;
@@ -1573,12 +1622,12 @@ function showUnlockPrompt(
                         finish({ enabled: true });
                         return;
                     }
-                    adoptToken(bundle.token, bundle, context);
+                    adoptToken(bundle.token, bundle, live);
                     input.value = '';
                     finish({ enabled: true });
                     return;
                 }
-                const status = await getStatus(context);
+                const status = await getStatus(live);
                 if (epoch !== state.epoch) return;
                 if (!status.enabled) {
                     finish({ enabled: false });
@@ -1587,11 +1636,7 @@ function showUnlockPrompt(
                 if (!hasV1Metadata(status)) throw invalidStatusError();
                 const verifier = await deriveVerifier(input.value, status.raw);
                 if (epoch !== state.epoch) return;
-                const challenge = await freshStatus(
-                    status.raw,
-                    started,
-                    context,
-                );
+                const challenge = await freshStatus(status.raw, started, live);
                 if (epoch !== state.epoch) return;
                 if (!challenge) {
                     // The derivation outlived the challenge and the refresh
@@ -1601,7 +1646,7 @@ function showUnlockPrompt(
                     input.select();
                     return;
                 }
-                const verdict = await login(challenge, verifier, context);
+                const verdict = await login(challenge, verifier, live);
                 if (epoch !== state.epoch) return;
                 if (verdict === 'rate-limited') {
                     // Rate limited, not a wrong password: the server refuses
@@ -1623,7 +1668,7 @@ function showUnlockPrompt(
                     input.select();
                     return;
                 }
-                storeCredential(status.raw, verifier, context);
+                storeCredential(status.raw, verifier, live);
                 if (hostAuthenticatedMode()) {
                     // The proxy owns the v1 cookie; the page only tracks that
                     // the host now has an authenticated session.
@@ -1634,8 +1679,15 @@ function showUnlockPrompt(
                 finish({ enabled: true });
             } catch (err) {
                 if (epoch !== state.epoch) return;
-                error.textContent =
-                    err instanceof Error ? err.message : 'Unable to unlock Phi';
+                // An aborted attempt is not an answer from the server: the
+                // scope behind it was replaced, or the deadline passed. The
+                // internal reason is not the user's business, and blaming
+                // the password sends them into a retry that cannot work.
+                error.textContent = isAbortError(err)
+                    ? 'Sign-in was interrupted. Try again.'
+                    : err instanceof Error
+                      ? err.message
+                      : 'Unable to unlock Phi';
                 input.select();
             } finally {
                 cancelAnimationFrame(ticker);
@@ -1646,7 +1698,7 @@ function showUnlockPrompt(
 
         overlay.appendChild(dialog);
         document.body.appendChild(overlay);
-        pendingOverlay = { finish, ownerKey: credentialKey(context) };
+        pendingOverlay = { finish, ownerKey };
         requestAnimationFrame(() => input.focus());
     });
 }

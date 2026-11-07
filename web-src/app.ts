@@ -47,7 +47,11 @@ import { PiLaunchStore } from './pi-launch.js';
 import { NotificationManager } from './notifications.js';
 import { SyncManager } from './sync.js';
 import { initQuotaButton } from './quota.js';
-import { bootstrapAccessAuth, type AuthContext } from './auth.js';
+import {
+    bootstrapAccessAuth,
+    setAuthContext,
+    type AuthContext,
+} from './auth.js';
 import { openSettingsModal, broadcastConfigSync } from './settings.js';
 import { markDesktopView } from './desktop.js';
 import {
@@ -2279,6 +2283,11 @@ export class App {
         this.mobileAppearanceStore?.dispose();
         this.scope ||= captureAppearanceScope();
         this.authContext = appearanceRequestContext(this.scope);
+        // The auth module must follow the scope. The desktop replaces it on
+        // every server switch, and a sign-in prompt that opened before the
+        // switch would post its password through the dead scope and fail
+        // with an internal reason instead of an answer from the server.
+        setAuthContext(this.authContext);
         this.desktopAppearance = null;
         const store = new MobileAppearanceStore(this.scope);
         this.mobileAppearanceStore = store;
@@ -4001,10 +4010,11 @@ window.addEventListener('DOMContentLoaded', async () => {
         const title = document.createElement('h1');
         title.textContent = 'Unable to open Phi';
         const detail = document.createElement('p');
-        detail.textContent =
-            err instanceof Error
-                ? err.message
-                : 'Access protection could not start';
+        detail.textContent = isAbortError(err)
+            ? 'Access protection was interrupted. Reload to try again.'
+            : err instanceof Error
+              ? err.message
+              : 'Access protection could not start';
         dialog.append(title, detail);
         overlay.appendChild(dialog);
         document.body.appendChild(overlay);
