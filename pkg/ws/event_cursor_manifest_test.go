@@ -609,15 +609,15 @@ func TestParseRetentionSegFile(t *testing.T) {
 			".rsz",
 			".ckpt",
 			"s.raw",
-			"s000000000000001.raw",            // 15 hex digits
-			"s00000000000000001.raw",           // 17 hex digits
-			"x0000000000000001.raw",           // wrong prefix
-			"s000000000000000g.raw",           // invalid hex character
-			"s0000000000000001.txt",           // wrong suffix
-			"s0000000000000001.raw.tmp",       // trailing extension
-			"s0000000000000001",               // missing suffix
-			"s-00000000000001.raw",            // dash character
-			"s 00000000000001.raw",            // space character
+			"s000000000000001.raw",      // 15 hex digits
+			"s00000000000000001.raw",    // 17 hex digits
+			"x0000000000000001.raw",     // wrong prefix
+			"s000000000000000g.raw",     // invalid hex character
+			"s0000000000000001.txt",     // wrong suffix
+			"s0000000000000001.raw.tmp", // trailing extension
+			"s0000000000000001",         // missing suffix
+			"s-00000000000001.raw",      // dash character
+			"s 00000000000001.raw",      // space character
 		}
 
 		for _, name := range invalidCases {

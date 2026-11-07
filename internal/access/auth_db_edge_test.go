@@ -12,10 +12,10 @@ import (
 
 func TestAccessDBFileURIEdgeCases(t *testing.T) {
 	testCases := []struct {
-		name       string
-		path       string
-		wantURI    string
-		wantPath   string
+		name     string
+		path     string
+		wantURI  string
+		wantPath string
 	}{
 		{
 			name:     "Windows drive uppercase backslash",
