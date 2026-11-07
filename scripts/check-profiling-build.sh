@@ -34,9 +34,9 @@ lack() {
   fi
 }
 
-PROFILING_GO='timing.go feature.go memory_stats.go memory_stats_profiling.go diagnostics_profiling.go counters.go'
+PROFILING_GO='timing.go feature.go memory_stats.go diagnostics_profiling.go counters.go'
 DISABLED_GO='profiling_disabled.go diagnostics_disabled.go counters_disabled.go'
-PROFILING_TEST='timing_test.go timing_nested_test.go timing_bench_test.go feature_profiling_test.go memory_stats_test.go memory_stats_profiling_test.go api_timing_test.go counters_test.go'
+PROFILING_TEST='timing_test.go timing_nested_test.go timing_bench_test.go feature_profiling_test.go memory_stats_test.go api_timing_test.go counters_test.go'
 
 # check_variant LABEL WANT [GO LIST ARGS]: file/test/dep selection.
 check_variant() {
