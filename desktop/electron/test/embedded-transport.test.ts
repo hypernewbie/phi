@@ -1,7 +1,8 @@
 // @vitest-environment node
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   EMBEDDED_HOST,
@@ -12,6 +13,7 @@ import {
   type EmbeddedProfile,
   EmbeddedTransport,
   registerEmbeddedScheme,
+  REQUIRED_TERMINAL_PROTOCOL,
   SOCKET_TOKEN_HEADER,
 } from '../src/embedded-transport.js';
 import type { AuthAttempt, V2Bundle } from '../src/access-auth.js';
@@ -1157,10 +1159,17 @@ describe('embedded-transport', () => {
   describe('/__phi/compat probe', () => {
     it('returns compatible: true when /api/version returns api: "1"', async () => {
       mockFetch.mockResolvedValueOnce(
-        new Response(JSON.stringify({ api: '1', version: '0.25.0' }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        }),
+        new Response(
+          JSON.stringify({
+            api: '1',
+            version: '0.25.0',
+            terminal_protocol: '3',
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        ),
       );
 
       const res = await transport.handleRequest(
@@ -1550,13 +1559,20 @@ describe('embedded-transport', () => {
   });
 
   describe('checkCompatibility', () => {
-    it('returns true when /api/version returns 200 with api: "1"', async () => {
+    it('returns true when /api/version returns 200 with the current api and terminal protocol', async () => {
       transport.setCookie('prof1', 'phi_session', 'secret123');
       mockFetch.mockResolvedValueOnce(
-        new Response(JSON.stringify({ version: '0.24.0', api: '1' }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        }),
+        new Response(
+          JSON.stringify({
+            version: '0.24.0',
+            api: '1',
+            terminal_protocol: '3',
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        ),
       );
 
       const compatible = await transport.checkCompatibility('prof1');
@@ -1576,12 +1592,13 @@ describe('embedded-transport', () => {
       );
     });
 
-    it('returns true when /api/version has no api marker (a server from before the marker)', async () => {
-      // The marker only exists on servers built after the embedded
-      // transport. An older server still serves the same web app, so the
-      // embedded page works against it. Falling back to the server's own
-      // page costs a FULL page load on every switch, which made a fleet
-      // of servers crawl.
+    it('returns false when /api/version has no api marker (a server from before the marker)', async () => {
+      // A pre-marker server also predates the raw-replay terminal
+      // protocol: the embedded page refuses to attach ANY terminal to it,
+      // so embedded mode would render a bricked shell. Its own bundled
+      // web app speaks its protocol and works, so the probe routes it
+      // there (the fallback costs a page load, but only for servers that
+      // genuinely need it).
       mockFetch.mockResolvedValueOnce(
         new Response(JSON.stringify({ version: '0.23.0' }), {
           status: 200,
@@ -1590,7 +1607,38 @@ describe('embedded-transport', () => {
       );
 
       const compatible = await transport.checkCompatibility('prof1');
-      expect(compatible).toBe(true);
+      expect(compatible).toBe(false);
+    });
+
+    it('returns false when the api marker matches but the terminal protocol is absent (the 2026-11 hammond incident)', async () => {
+      // A stale server can still report api "1": the raw-replay protocol
+      // landed AFTER the api marker, and a rebuild that fails silently
+      // (e.g. CGO off) leaves the old binary serving. The embedded page
+      // hard-refuses such a server — every terminal dead behind a
+      // loader — so the probe must send it to its own page instead.
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ api: '1', version: 'dev' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      const compatible = await transport.checkCompatibility('prof1');
+      expect(compatible).toBe(false);
+    });
+
+    it('returns false when the server advertises a different terminal protocol', async () => {
+      // A FUTURE server speaks a protocol this cached page cannot; the
+      // server's own bundled page is the only one that can drive it.
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ api: '1', terminal_protocol: '2' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      const compatible = await transport.checkCompatibility('prof1');
+      expect(compatible).toBe(false);
     });
 
     it('returns false when /api/version returns 200 with different api version', async () => {
@@ -1645,7 +1693,7 @@ describe('embedded-transport', () => {
   describe('capability probe cache', () => {
     it('reuses a fresh answer instead of re-probing the server', async () => {
       mockFetch.mockResolvedValue(
-        new Response(JSON.stringify({ api: '1' }), {
+        new Response(JSON.stringify({ api: '1', terminal_protocol: '3' }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         }),
@@ -1662,7 +1710,7 @@ describe('embedded-transport', () => {
     it('persists a positive answer and reuses it in a new session', async () => {
       const compatPath = path.join(tempDir, 'api-compat.json');
       mockFetch.mockResolvedValue(
-        new Response(JSON.stringify({ api: '1' }), {
+        new Response(JSON.stringify({ api: '1', terminal_protocol: '3' }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         }),
@@ -1692,7 +1740,7 @@ describe('embedded-transport', () => {
 
     it('probes each profile separately', async () => {
       mockFetch.mockResolvedValue(
-        new Response(JSON.stringify({ api: '1' }), {
+        new Response(JSON.stringify({ api: '1', terminal_protocol: '3' }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         }),
@@ -1816,6 +1864,47 @@ describe('embedded-transport', () => {
       expect(
         transport.getCookieForOrigin('http://unknown.example.com'),
       ).toBeNull();
+    });
+  });
+
+  // The 2026-11 hammond incident: the raw-replay protocol landed without
+  // the desktop probe following, so a stale server passed the api marker
+  // and rendered a bricked embedded shell. The protocol version now lives
+  // in three places that must never drift: the server's advertisement, the
+  // desktop probe's requirement, and the web page's attach gate. This test
+  // reads all three sources and fails the build when any pair disagrees —
+  // including a future bump (say to '4') that updates one but not the rest.
+  describe('terminal protocol contract', () => {
+    const repoRoot = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '../../..',
+    );
+    const read = (rel: string): string =>
+      readFileSync(path.join(repoRoot, rel), 'utf8');
+
+    it('server, probe, and page gate agree on the protocol version', () => {
+      const server = read('internal/server/api_handlers.go').match(
+        /terminalProtocolVersion = "([^"]+)"/,
+      )?.[1];
+      const gate = [
+        ...read('web-src/terminal.ts').matchAll(
+          /terminal_protocol (!==|===) '([^']+)'/g,
+        ),
+      ].map((m) => m[2]);
+
+      expect(
+        server,
+        'internal/server/api_handlers.go: terminalProtocolVersion',
+      ).toBeDefined();
+      expect(
+        gate.length,
+        'web-src/terminal.ts: _serverProtocolBlocked / onServerVersion',
+      ).toBeGreaterThan(0);
+      expect(
+        new Set([REQUIRED_TERMINAL_PROTOCOL, server, ...gate]).size,
+        'the server advertisement, the desktop probe requirement, and the ' +
+          'page attach gate must all name the same terminal protocol version',
+      ).toBe(1);
     });
   });
 });

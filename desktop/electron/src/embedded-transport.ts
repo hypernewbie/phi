@@ -44,6 +44,15 @@ const COMPAT_CACHE_TTL_MS = 10 * 60 * 1000;
 /** How long a negative capability answer is reused (short: the server may
  *  be upgraded to the current API at any time). */
 const COMPAT_NEGATIVE_TTL_MS = 60 * 1000;
+/** The terminal protocol the embedded page speaks. The page refuses to
+ *  attach terminals to a server that advertises anything else — or that
+ *  predates the marker entirely — so the capability probe must agree: a
+ *  mismatched server gets its own bundled web app, which speaks its
+ *  protocol. Kept in lockstep with internal/server/api_handlers.go
+ *  (terminalProtocolVersion) and web-src/terminal.ts
+ *  (_serverProtocolBlocked); a contract test fails the build when they
+ *  drift apart. */
+export const REQUIRED_TERMINAL_PROTOCOL = '3';
 /** The access-auth session cookie the phi server issues. */
 const ACCESS_SESSION_COOKIE = 'phi_access_session';
 /** v2 credentials. They belong to the host auth owner alone: the pathless jar
@@ -547,18 +556,28 @@ export class EmbeddedTransport {
       // If res.ok (200), check the api marker.
       if (res.ok) {
         try {
-          const data = (await res.json()) as { api?: unknown };
-          // A server that does not advertise the marker PREDATES it: the
-          // embedded page is the same web app the server itself serves, so
-          // it works against that server. Only a server that advertises a
-          // DIFFERENT api version is incompatible.
-          //
-          // Treating "no marker" as incompatible was expensive: the
-          // fallback loads the server's own page, and in single-tab mode
-          // that is a FULL page load on every switch. With a handful of
-          // servers that is fine; with ten it made every switch crawl.
-          if (typeof data?.api !== 'string') return true;
-          return data.api === '1';
+          const data = (await res.json()) as {
+            api?: unknown;
+            terminal_protocol?: unknown;
+          };
+          // A server without the api marker predates the embedded
+          // transport entirely; one with a different api version diverged
+          // from the page's HTTP contract. Either way the page cannot be
+          // the authority on what that server serves: only its own bundled
+          // web app can be, so both fall back to it.
+          if (typeof data?.api !== 'string') return false;
+          if (data.api !== '1') return false;
+          // The raw-replay terminal protocol is a second, harder contract:
+          // the embedded page refuses to attach ANY terminal to a server
+          // whose terminal_protocol differs — including one from before
+          // the marker existed. Keeping embedded mode for such a server
+          // renders a shell whose every terminal is bricked (the 2026-11
+          // hammond incident: a stale server passed the api marker and
+          // showed dead terminals until it was rebuilt). The probe must
+          // match the page's requirement exactly, or route the server to
+          // its own page.
+          if (typeof data.terminal_protocol !== 'string') return false;
+          return data.terminal_protocol === REQUIRED_TERMINAL_PROTOCOL;
         } catch {
           // A body we cannot read is not evidence of incompatibility.
           return true;
