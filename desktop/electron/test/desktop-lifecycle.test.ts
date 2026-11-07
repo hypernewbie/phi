@@ -442,6 +442,11 @@ describe('DesktopHost fake-Electron lifecycle', () => {
         auth: AccessAuth,
         generation: number,
       ): void;
+      persistTokenAfterUnlock(
+        origin: string,
+        auth: AccessAuth,
+        generation: number,
+      ): void;
     };
 
     beforeEach(() => {
@@ -557,10 +562,13 @@ describe('DesktopHost fake-Electron lifecycle', () => {
       // every launch prompts again.
       vi.spyOn(safeStorage, 'isEncryptionAvailable').mockReturnValue(true);
       const platform = Object.getOwnPropertyDescriptor(process, 'platform');
-      const prevBackend = safeStorage.backend;
+      const fakeStorage = fake.safeStorage as {
+        backend: string;
+      };
+      const prevBackend = fakeStorage.backend;
       Object.defineProperty(process, 'platform', { value: 'linux' });
       try {
-        safeStorage.backend = 'basic_text';
+        fakeStorage.backend = 'basic_text';
         const auth = new AccessAuth(async () => new Response('{}'));
         const asAny = auth as unknown as {
           selectedProtocols: Map<string, string>;
@@ -586,7 +594,7 @@ describe('DesktopHost fake-Electron lifecycle', () => {
         expect(saved).not.toBeNull();
         expect(saved?.version).toBe('v1');
       } finally {
-        safeStorage.backend = prevBackend;
+        fakeStorage.backend = prevBackend;
         if (platform) Object.defineProperty(process, 'platform', platform);
       }
     });
