@@ -48,6 +48,7 @@ const HOST_A = 'ident-alpha-a41c';
 const HOST_B = 'ident-beta-b72d';
 const HOST_A_LABEL = HOST_A.toUpperCase();
 const HOST_B_LABEL = HOST_B.toUpperCase();
+const AUTH_PASSWORD = 'identity-switch-password-42';
 /** How long server B's compat probe is held open, in ms — the width of
  *  the single-entry switch window (page shows A, click says B). */
 const PROBE_DELAY_MS = 2_000;
@@ -136,6 +137,18 @@ interface HostHandle {
         getView: (id: string) => {
             webContents: {
                 executeJavaScript: (code: string) => Promise<unknown>;
+                reload?: () => void;
+                session?: {
+                    clearStorageData: (options: {
+                        origin: string;
+                        storages: string[];
+                    }) => Promise<void>;
+                    cookies: {
+                        get: (filter: {
+                            url: string;
+                        }) => Promise<Array<{ name: string }>>;
+                    };
+                };
             };
         } | null;
         getActive: () => string | null;
@@ -223,6 +236,51 @@ async function sampleAttribution(
         },
         { a: aId, b: bId },
     );
+}
+
+async function lockV2Server(url: string, password: string): Promise<void> {
+    const response = await fetch(`${url}/api/auth/v2/password`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Phi-Auth': 'v2',
+        },
+        body: JSON.stringify({ password }),
+    });
+    const text = await response.text();
+    expect(response.status, text).toBe(200);
+    const body = JSON.parse(text) as { enabled?: boolean };
+    expect(body.enabled).toBe(true);
+}
+
+async function desktopShellPage(
+    app: Awaited<ReturnType<typeof _electron.launch>>,
+) {
+    const page = app
+        .context()
+        .pages()
+        .find((candidate) =>
+            candidate.url().includes('/desktop/electron/web/index.html'),
+        );
+    if (!page) throw new Error('desktop shell page did not appear');
+    await expect(page.locator('#desktop-auth-modal')).toBeAttached();
+    return page;
+}
+
+async function protectedConfigStatus(
+    app: Awaited<ReturnType<typeof _electron.launch>>,
+): Promise<number> {
+    return app.evaluate(async (electronApi: unknown) => {
+        const g = globalThis as unknown as { __phiMsHost: HostHandle };
+        const active = g.__phiMsHost.profileViews?.getActive();
+        const view = active
+            ? g.__phiMsHost.profileViews?.getView(active)
+            : null;
+        if (!view) return 0;
+        return (await view.webContents.executeJavaScript(
+            `fetch('/api/config', { cache: 'no-store' }).then(r => r.status).catch(() => 0)`,
+        )) as number;
+    });
 }
 
 async function forgetCompatibility(
@@ -453,6 +511,129 @@ test.describe('desktop identity attribution', () => {
         // The switch to B never rewrote A's record.
         const settled = await sampleAttribution(app!, aId, bId);
         expect(settled.aHost).toBe(HOST_A_LABEL);
+    });
+
+    test('R-e2e-auth: one successful unlock survives server switches without another prompt', async () => {
+        await activateProfile(app!, aId);
+        await expect
+            .poll(
+                async () => {
+                    const s = await sampleAttribution(app!, aId, bId);
+                    return s.pageHost === HOST_A_LABEL && s.embed === aId;
+                },
+                { timeout: 30_000, intervals: [1_000] },
+            )
+            .toBe(true);
+        const shell = await desktopShellPage(app!);
+        const modal = shell.locator('#desktop-auth-modal');
+        await shell.evaluate(() => {
+            const w = window as unknown as {
+                phiAuthPromptCount: number;
+                phiAuthPromptObserver: MutationObserver;
+            };
+            const target = document.getElementById('desktop-auth-modal');
+            if (!target) throw new Error('auth modal missing');
+            w.phiAuthPromptCount = 0;
+            w.phiAuthPromptObserver = new MutationObserver(() => {
+                if (!target.hidden) w.phiAuthPromptCount++;
+            });
+            w.phiAuthPromptObserver.observe(target, {
+                attributes: true,
+                attributeFilter: ['hidden'],
+            });
+        });
+
+        // Lock the already-loaded A server, then reload its single view to
+        // force a real 401 through the host-owned auth path.
+        await lockV2Server(phiA!.url, AUTH_PASSWORD);
+        await app!.evaluate(async (electronApi: unknown, id: string) => {
+            const g = globalThis as unknown as { __phiMsHost: HostHandle };
+            const view = g.__phiMsHost.profileViews?.getView(id);
+            if (!view?.webContents.reload)
+                throw new Error('view cannot reload');
+            view.webContents.reload();
+        }, aId);
+        await expect(modal).toBeVisible({ timeout: 30_000 });
+        await shell.locator('#desktop-auth-input').fill(AUTH_PASSWORD);
+        await shell.locator('#desktop-auth-submit').click();
+        await expect(modal).toBeHidden({ timeout: 30_000 });
+        await expect
+            .poll(() => protectedConfigStatus(app!), { timeout: 30_000 })
+            .toBe(200);
+        const promptCount = () =>
+            shell.evaluate(
+                () =>
+                    (window as unknown as { phiAuthPromptCount: number })
+                        .phiAuthPromptCount,
+            );
+        await expect.poll(promptCount).toBe(1);
+
+        // Remove A's session cookies before switching. The return to A
+        // must re-authenticate from the desktop's saved credential, not
+        // accidentally pass because a BrowserView cookie survived.
+        const remainingAuthCookies = await app!.evaluate(
+            async (
+                electronApi: unknown,
+                args: { id: string; origin: string },
+            ) => {
+                const g = globalThis as unknown as { __phiMsHost: HostHandle };
+                const view = g.__phiMsHost.profileViews?.getView(args.id);
+                const session = view?.webContents.session;
+                if (!session)
+                    throw new Error('embedded session is unavailable');
+                await session.clearStorageData({
+                    origin: args.origin,
+                    storages: ['cookies'],
+                });
+                const cookies = await session.cookies.get({ url: args.origin });
+                return cookies.filter(
+                    (cookie) => cookie.name === 'phi_access_session',
+                ).length;
+            },
+            { id: aId, origin: new URL(phiA!.url).origin },
+        );
+        expect(remainingAuthCookies).toBe(0);
+
+        // B is unauthenticated. Switch away and back to A: the credential
+        // proved once must be reused silently, not prompt again or surface
+        // an aborted scope's internal "Owner changed" reason.
+        await activateProfile(app!, bId);
+        await expect
+            .poll(
+                async () => {
+                    const s = await sampleAttribution(app!, aId, bId);
+                    return s.pageHost === HOST_B_LABEL && s.embed === bId;
+                },
+                { timeout: 30_000, intervals: [1_000] },
+            )
+            .toBe(true);
+        await expect
+            .poll(() => protectedConfigStatus(app!), { timeout: 15_000 })
+            .toBe(200);
+        await expect(modal).toBeHidden();
+        await expect.poll(promptCount).toBe(1);
+
+        await activateProfile(app!, aId);
+        await expect
+            .poll(
+                async () => {
+                    const s = await sampleAttribution(app!, aId, bId);
+                    return s.pageHost === HOST_A_LABEL && s.embed === aId;
+                },
+                { timeout: 30_000, intervals: [1_000] },
+            )
+            .toBe(true);
+        await expect
+            .poll(() => protectedConfigStatus(app!), { timeout: 15_000 })
+            .toBe(200);
+        await expect(modal).toBeHidden();
+        await expect.poll(promptCount).toBe(1);
+        await shell.evaluate(() => {
+            const w = window as unknown as {
+                phiAuthPromptObserver: MutationObserver;
+            };
+            w.phiAuthPromptObserver.disconnect();
+        });
     });
 
     test('R-e2e-storm: rapid A/B clicks never cross attribution, and the map ends exact', async () => {
