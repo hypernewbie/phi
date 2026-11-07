@@ -52,17 +52,20 @@ type Options struct {
 // process-scoped and single-use: PTY/system services retain process lifetimes.
 // Do not copy a Server or mutate its dependencies while serving requests.
 type Server struct {
-	options                            Options
-	runStarted                         atomic.Bool
-	handlerOnce                        sync.Once
-	handler                            http.Handler
-	mux                                *http.ServeMux
-	accessManager                      *access.Manager
-	attachmentStore                    *attachments.AttachmentStore
-	attachmentAPI                      *attachments.API
-	bridge                             *piapp.Bridge
-	pty                                *pty.Manager
-	coders                             *coders.Manager
+	options         Options
+	runStarted      atomic.Bool
+	handlerOnce     sync.Once
+	handler         http.Handler
+	mux             *http.ServeMux
+	accessManager   *access.Manager
+	attachmentStore *attachments.AttachmentStore
+	attachmentAPI   *attachments.API
+	bridge          *piapp.Bridge
+	pty             *pty.Manager
+	coders          *coders.Manager
+	// Guards the ensureCoderManager fallback: two concurrent /api/coders
+	// rows (one per switching desktop) must never race the lazy init.
+	ensureCodersOnce                   sync.Once
 	hub                                *ws.Hub
 	pi                                 *piapp.API
 	git                                *gitapi.API

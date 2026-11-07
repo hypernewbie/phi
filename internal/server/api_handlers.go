@@ -329,10 +329,16 @@ func (app *Server) handleGetSessions(w http.ResponseWriter, r *http.Request) {
 // without going through main() still have a usable registry. Production
 // always sets Coders in main.go; this fallback only fires in
 // tests that drive a single handler.
+//
+// Guarded: the single-tab desktop fires concurrent /api/coders rows on
+// every switch, and an unsynchronized lazy init raced the assignment
+// (caught by TestSwitchStormConcurrentEndpointMix under -race).
 func (app *Server) ensureCoderManager() {
-	if app.coders == nil {
-		app.coders = coders.NewManager()
-	}
+	app.ensureCodersOnce.Do(func() {
+		if app.coders == nil {
+			app.coders = coders.NewManager()
+		}
+	})
 }
 
 type SpawnRequest struct {
