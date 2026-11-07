@@ -2589,6 +2589,12 @@ export class DesktopHost {
     // use it now.
     this.bodyTokens.set(canonical, token);
     this.persistBundle(canonical, accessAuth.getBundle(canonical));
+    if (!this.secureV2StorageAvailable()) {
+      // The bearer cannot be written durably here (Linux basic_text);
+      // the v1 verifier is the only credential that survives a restart,
+      // so it takes the store entry the refused v2 save left behind.
+      this.persistVerifierAfterUnlock(origin, accessAuth, generation);
+    }
   }
 
   /** Writes one origin's rotating bundle to the encrypted store, or drops the
@@ -5834,6 +5840,10 @@ export class DesktopHost {
             pending.origin,
             password,
             pending.abort.signal,
+            // A Linux basic_text store cannot hold a v2 bearer; ask the
+            // v2 unlock to also derive the v1 verifier so the proven
+            // password still leaves a durable trace.
+            { v1Fallback: !this.secureV2StorageAvailable() },
           );
         } finally {
           this.embeddedTransport?.endAuth(pending.origin);

@@ -1321,6 +1321,58 @@ describe('AccessAuth v2 selection', () => {
     expect(seen.some((c) => c.path === '/api/auth/login')).toBe(false);
   });
 
+  it('a v2 unlock with v1Fallback also caches the v1 verifier; without it, nothing is cached', async () => {
+    // FUNDAMENTAL CONTRACT: a proven password always leaves a durable
+    // trace. A host whose secure storage cannot hold a v2 bearer (Linux
+    // basic_text) asks for the v1 verifier; the derivation is best-effort
+    // and must never disturb the v2 session it shadows.
+    const fallbackStatus = {
+      ...v1Status,
+      iterations: 100_000,
+    };
+    const serve = (paths: string[]): typeof fetch =>
+      (async (url: URL) => {
+        const path = url.pathname;
+        if (!paths.includes(path)) throw new Error(`unexpected ${path}`);
+        if (path === '/api/auth/status') return json(fallbackStatus);
+        if (path === '/api/auth/v2/login') return bundleResponse('jwt-a');
+        if (path === '/api/config') return json({ hostname: 'V2' });
+        throw new Error(`unexpected ${path}`);
+      }) as unknown as typeof fetch;
+
+    const withFallback = new AccessAuth(
+      serve(['/api/auth/status', '/api/auth/v2/login', '/api/config']),
+    );
+    expect(
+      (
+        await withFallback.tryUnlock(origin, 'test-pass-1234', undefined, {
+          v1Fallback: true,
+        })
+      ).kind,
+    ).toBe('ok');
+    expect(withFallback.getSelectedProtocol(origin)).toBe('v2');
+    const cached = withFallback.getLastCredential(origin);
+    expect(cached).not.toBeNull();
+    expect(cached?.verifier.length).toBe(32);
+    expect(cached?.iterations).toBe(100_000);
+    // The verifier must match a fresh derivation of the same password.
+    const fresh = await deriveVerifier(
+      'test-pass-1234',
+      cached!.salt,
+      cached!.iterations,
+    );
+    expect(cached!.verifier.equals(fresh)).toBe(true);
+
+    const withoutFallback = new AccessAuth(
+      serve(['/api/auth/status', '/api/auth/v2/login', '/api/config']),
+    );
+    expect(
+      (await withoutFallback.tryUnlock(origin, 'test-pass-1234')).kind,
+    ).toBe('ok');
+    expect(withoutFallback.getLastCredential(origin)).toBeNull();
+    expect(withoutFallback.getLastVerifier(origin)).toBeNull();
+  });
+
   it.each(['v1', 'v2'])(
     'does not resend an unconfirmed %s login through loopback fallback',
     async (protocol) => {

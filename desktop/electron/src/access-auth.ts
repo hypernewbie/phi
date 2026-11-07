@@ -120,6 +120,13 @@ export type AuthDiscovery =
     }
   | { kind: 'unavailable'; message: string };
 
+/** `tryUnlock` options. `v1Fallback` asks a v2 unlock to ALSO derive and
+ *  cache the v1 verifier (one extra status round trip + one KDF), for
+ *  hosts whose secure storage cannot hold a v2 bearer and must persist
+ *  the verifier instead. */
+export interface UnlockOptions {
+  readonly v1Fallback?: boolean;
+}
 /** A persisted access credential: the verifier plus the server's
  *  trust settings captured at unlock time. Used by the host to
  *  re-authenticate on next launch (the verifier replaces the typed
@@ -793,6 +800,7 @@ export class AccessAuth {
     origin: string,
     password: string,
     signal?: AbortSignal,
+    options?: UnlockOptions,
   ): Promise<UnlockResult> {
     const canonical = toCanonicalAuthOrigin(origin);
     if (!canonical) {
@@ -855,7 +863,7 @@ export class AccessAuth {
       // Fix the selection before the network round trip: a failed v2 login
       // must not fall back to a v1 cookie or verifier on the next poll.
       this.selectedProtocols.set(canonical, 'v2');
-      return this.completeV2Unlock(canonical, password, signal);
+      return this.completeV2Unlock(canonical, password, signal, options);
     }
 
     if (
@@ -900,6 +908,7 @@ export class AccessAuth {
     canonical: string,
     password: string,
     signal?: AbortSignal,
+    options?: UnlockOptions,
   ): Promise<UnlockResult> {
     const attempt = (this.attemptTokens.get(canonical) ?? 0) + 1;
     this.attemptTokens.set(canonical, attempt);
@@ -927,6 +936,13 @@ export class AccessAuth {
       return { kind: 'unavailable', message: 'v2 login returned bad bundle' };
     }
     this.selectedProtocols.set(canonical, 'v2');
+    // The password is proven: seed the host's durable fallback now, while
+    // the password is still in scope, so every downstream outcome (config
+    // accepted, config rejected, transient failure) leaves the same
+    // durable trace. No-op unless the host opted in.
+    if (options?.v1Fallback) {
+      await this.cacheV1Fallback(canonical, password, signal);
+    }
     // Installing advances the handshake fence, which is what retires an older
     // in-flight attempt. This attempt must keep owning the credential it just
     // installed, so it adopts the new fence value before the follow-up fetch.
@@ -948,6 +964,41 @@ export class AccessAuth {
     // 5xx/timeout after a successful login: keep the token so the next poll
     // can recover, exactly like the v1 cookie path.
     return { kind: 'ok', config: null };
+  }
+
+  /** Best-effort v1 verifier cache for hosts whose secure storage cannot
+   *  hold a v2 bearer (Linux `basic_text`). The v2 bundle stays the live
+   * credential; this only seeds the host's persistence layer, which writes
+   * the verifier — never the bearer — through such a backend. A failure
+   * here never fails the unlock: the bundle is already installed and
+   * authoritative, and the worst case is a password prompt next launch. */
+  private async cacheV1Fallback(
+    canonical: string,
+    password: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    try {
+      const discovery = await this.discoverStatus(canonical, signal);
+      if (discovery.kind !== 'enabled') return;
+      const status = validateStatus(discovery.raw);
+      if (status?.kind !== 'trusted') return;
+      const verifier = await deriveVerifier(
+        password,
+        status.status.salt,
+        status.status.iterations,
+      );
+      const cached = Buffer.alloc(verifier.length);
+      cached.set(verifier);
+      verifier.fill(0);
+      this.lastVerifier.set(canonical, cached);
+      this.lastCredential.set(canonical, {
+        verifier: Buffer.from(cached),
+        salt: Buffer.from(status.status.salt),
+        iterations: status.status.iterations,
+      });
+    } catch {
+      /* best effort: the v2 bundle remains the credential */
+    }
   }
 
   private async postV2Login(

@@ -776,13 +776,12 @@ export class ProfileViewManager {
                 switched = false;
               }
             }
-            if (switched) {
-              // The page commits itself: it paints id's data and claims
-              // /__phi/active, and the router follows the claim. Nothing
-              // the old page issued before that claim is misrouted —
-              // the page issues no backend fetches until its claim has
-              // landed.
-            } else {
+            // switched === true needs no commit: the page commits
+            // itself — it paints id's data and claims /__phi/active, and
+            // the router follows the claim. Nothing the old page issued
+            // before that claim is misrouted; the page issues no backend
+            // fetches until its claim has landed.
+            if (!switched) {
               this.singleEntryMode = 'embedded';
               ticket.commit();
               view.webContents.loadURL(this.buildEmbeddedUrl(id, origin));

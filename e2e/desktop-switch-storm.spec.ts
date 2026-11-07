@@ -381,10 +381,7 @@ test.describe('desktop single-tab switch storm', () => {
         // proxy, so the window lasts ~PROBE_DELAY_MS. Sample the page's
         // headerless routing inside it.
         const samples: string[] = await app!.evaluate(
-            async (
-                electronApi: unknown,
-                arg: { b: string; needle: string },
-            ) => {
+            async (electronApi: unknown, arg: { b: string }) => {
                 const g = globalThis as unknown as { __phiMsHost: HostHandle };
                 g.__phiMsHost.controller.setActive(arg.b);
                 const views = g.__phiMsHost.profileViews;
@@ -407,10 +404,9 @@ test.describe('desktop single-tab switch storm', () => {
                     out.push(String(await read));
                     await new Promise((r) => setTimeout(r, 90));
                 }
-                void arg.needle;
                 return out;
             },
-            { b: ids.b, needle: HOST_B },
+            { b: ids.b },
         );
 
         // Every sample taken while B's probe was still in flight must be

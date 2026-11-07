@@ -72,27 +72,26 @@ func TestSwitchStormConcurrentEndpointMix(t *testing.T) {
 		defer wg.Done()
 		client := srv.Client()
 		for i := 0; i < rounds; i++ {
-			for _, path := range []string{"/api/sessions?coder=pi"} { // TEMP-SESSIONS-ONLY
-				resp, err := client.Get(srv.URL + path)
-				if err != nil {
-					errs <- fmt.Errorf("%s GET %s: %w", profile, path, err)
-					continue
-				}
-				if resp.StatusCode != http.StatusOK {
-					snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
-					errs <- fmt.Errorf("%s GET %s: status %d body=%s", profile, path, resp.StatusCode, snippet)
-					resp.Body.Close()
-					continue
-				}
-				var body any
-				if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-					errs <- fmt.Errorf("%s GET %s: body: %w", profile, path, err)
-				}
-				resp.Body.Close()
+			const sessionsPath = "/api/sessions?coder=pi"
+			resp, err := client.Get(srv.URL + sessionsPath)
+			if err != nil {
+				errs <- fmt.Errorf("%s GET %s: %w", profile, sessionsPath, err)
+				continue
 			}
+			if resp.StatusCode != http.StatusOK {
+				snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
+				errs <- fmt.Errorf("%s GET %s: status %d body=%s", profile, sessionsPath, resp.StatusCode, snippet)
+				resp.Body.Close()
+				continue
+			}
+			var body any
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				errs <- fmt.Errorf("%s GET %s: body: %w", profile, sessionsPath, err)
+			}
+			resp.Body.Close()
 			// A settings write landing between the reads.
 			peers := fmt.Sprintf(`[{"name":"%s-peer-%d","url":""}]`, profile, i)
-			resp, err := client.Post(
+			resp, err = client.Post(
 				srv.URL+"/api/config/peers",
 				"application/json",
 				strings.NewReader(peers),

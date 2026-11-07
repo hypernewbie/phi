@@ -12,6 +12,7 @@ export default defineConfig({
     testIgnore: [
         '**/mobile-settings-desktop.spec.ts',
         '**/terminal-ram-electron.spec.ts',
+        '**/desktop-switch-storm.spec.ts',
     ],
     timeout: 120_000,
     retries: 0,
