@@ -4,6 +4,21 @@ All notable changes to phi are documented here. Newest versions first.
 
 ## Unreleased
 
+## v0.38.1 — 2026-11-06
+
+### Changed
+- **The server no longer emulates a terminal** (`d58494df`). The daemon kept a screen snapshot for every pane, so it linked a native terminal engine, needed CGO to build, and shipped a virtual terminal inside the server. It now records the raw PTY byte stream with ordered resize markers and serves it through the bounded `/replay` endpoint: the server computes nothing about what those bytes look like, and the client terminal decodes them. The daemon builds as pure Go, the release archives no longer need a C compiler or the zig cross toolchain, and a Windows ARM64 build is new. The retired `/state` and `/recording` endpoints keep answering 426, the server-side journal import is gone rather than restored, and the server stays bounded: the RAM replay window, the replay page cap, the journal expiry, and every client send keep their explicit byte limits.
+- **The native console replays through the bounded replay endpoint** (`7341a8b2`). `phic` asked the retired endpoints for a rendered screen, so a pane whose history was served as raw bytes could not be recovered. The relay follows `/replay` pages now: it carries the epoch, the byte position, and the geometry ordinal together in one event cursor, fences every request with the cursor it was certified with, adopts a certified expired floor instead of guessing at the span it can no longer have, and recovers a gap past the attach head from a head the server captured itself. The remembered frontier of a pane keeps its cursor, so the next attach resumes at the exact certified byte and grid. Every recovered page stays inside the server's byte cap, and the client keeps its own bound on what it asks for.
+- **`phic -s` opens the console with the sessions panel focused** (`7341a8b2`). The flag selects the same view as the `Ctrl-] s` shortcut, and it does not shadow `--server`.
+
+### Fixed
+- **The event cursor keeps its version prefix** (`c9809705`). The server wrote cursors as `1.7.42.3` instead of `v1.7.42.3`, and every client checks the prefix: the web page refused the attach head as a malformed frame and the native console rejected the fences it sent, so a pane opened as a dead tab. The version is `v1` again, the length bound is back to 128 bytes, and a test pins the cursor shape against the web client and the native client so the server cannot drift from them again.
+- **The desktop shell falls back to its own app when the backend is too old** (`4ec3f8a7`). The capability probe accepted a server that did not advertise the terminal protocol, so the shell loaded its cached embedded page against a server that refuses the attach, and every terminal stayed dead. A missing or mismatched protocol sends the shell back to the bundled web app, which speaks the protocol its own server does, and a contract test pins the protocol version across the server advertisement, the probe, and the web attach gate.
+- **The auth database keeps owner-only permissions on Windows** (`65b3b6a7`). The ACL of `auth.db` was inspected through a PowerShell call, so a host without that helper never got an owner-only descriptor and the file kept whatever permissions it inherited. The descriptor is now built and applied with the native Windows API, inherited parent entries are stripped, ownership is normalised to the current user so an elevated and a standard session do not lock each other out, and a file that is not a regular file is refused. The Unix path keeps `0600` and now verifies the mode it set.
+
+### Internal
+- **The terminal policy is written down** (`b9c5202d`). `AGENTS.md` states the two rules the server now keeps at the same time: terminal data is never sent unbounded, and no terminal is emulated on the server. An agent asked to break either one denies the request.
+
 ## v0.38.0 — 2026-11-06
 
 ### Added
