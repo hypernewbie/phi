@@ -50,15 +50,9 @@ describe('all-tab wake and shared scheduler', () => {
         const healthy = { ...tab, paneId: 'p3', isDead: false };
         manager.tabs.set('p2', background).set('p3', healthy);
         manager._reviveActiveTabIfDead();
-        const timer = tab.autoReconnectTimer;
-        expect(tab.reconnectAttempts).toBe(1);
-        expect(background.reconnectAttempts).toBe(1);
-        manager._reviveActiveTabIfDead();
-        manager.activateTabViewport(tab, { scrollToBottom: false });
-        expect(tab.autoReconnectTimer).toBe(timer);
-        expect(tab.reconnectAttempts).toBe(1);
-        expect(manager.reconnectTab).not.toHaveBeenCalled();
-        vi.advanceTimersByTime(1000);
+        expect(tab.reconnectAttempts).toBe(0);
+        expect(background.reconnectAttempts).toBe(0);
+        expect(tab.autoReconnectTimer).toBeFalsy();
         expect(manager.reconnectTab.mock.calls).toEqual([
             [tab, { auto: true }],
             [background, { auto: true }],
@@ -232,7 +226,7 @@ describe('grace, jitter, budget, and manual intent', () => {
         manager.activateTabViewport(tab, { scrollToBottom: false });
         expect(tab.reconnectAttempts).toBe(10);
         manager._reviveActiveTabIfDead();
-        expect(tab.reconnectAttempts).toBe(1);
+        expect(tab.reconnectAttempts).toBe(0);
     });
     it('keeps the scheduled attempt number in the overlay', () => {
         const { manager, tab } = harness({ reconnectAttempts: 2 });

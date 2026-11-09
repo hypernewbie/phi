@@ -58,8 +58,6 @@ it.each(['browser', 'desktop'])(
         expect(banner.textContent).toContain('2 tabs disconnected');
         manager._reviveActiveTabIfDead();
         expect(banner.classList.contains('hidden')).toBe(true);
-        expect(manager.reconnectTab).not.toHaveBeenCalled();
-        vi.advanceTimersByTime(1000);
         expect(manager.reconnectTab.mock.calls).toEqual([
             [first, { auto: true }],
             [second, { auto: true }],
@@ -79,7 +77,7 @@ it('a background-pane close delivered while visible schedules recovery without a
 });
 it('off exposes pending panes immediately; the skipped timer clears pending status', () => {
     const pane = tab('p1');
-    manager._reviveActiveTabIfDead();
+    manager.maybeAutoReconnect(pane);
     manager.app.config.auto_reconnect = 'off';
     manager.updateDisconnectBanner();
     expect(banner.classList.contains('hidden')).toBe(false);

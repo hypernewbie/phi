@@ -12449,10 +12449,25 @@ export class TabManager {
         // Every PTY writer passes here, including direct terminal typing.
         this._resetPiRecall({ flush: true });
         if (!tabInfo?.ws || tabInfo.isDead) {
-            this.app.showToast('Tab is disconnected — input not sent', {
-                type: 'error',
-            });
-            if (tabInfo) this._showReconnectOverlay(tabInfo);
+            const reconnecting =
+                Boolean(tabInfo?.isDead) &&
+                Boolean(
+                    tabInfo.reconnectInFlight ||
+                        tabInfo.autoReconnectPending ||
+                        tabInfo.autoReconnectTimer,
+                ) &&
+                this.app?.config?.auto_reconnect === 'visible';
+            if (!reconnecting) {
+                this.app.showToast('Tab is disconnected — input not sent', {
+                    type: 'error',
+                });
+                if (tabInfo) this._showReconnectOverlay(tabInfo);
+            } else if (
+                tabInfo?.termContainer &&
+                !tabInfo.termContainer.querySelector('.reconnect-overlay')
+            ) {
+                this._showReconnectOverlay(tabInfo);
+            }
             return false;
         }
 
@@ -17578,24 +17593,65 @@ export class TabManager {
         );
     }
 
-    // Wake hints start a fresh series only when the pane has no recovery work.
+    // Wake hints redial dead tabs immediately without backoff delay.
     _reviveActiveTabIfDead() {
         if (
             this.app?.config?.auto_reconnect !== 'visible' ||
-            document.visibilityState !== 'visible'
+            (typeof document !== 'undefined' &&
+                document.visibilityState !== 'visible')
         )
             return;
+        const candidates: TabInfo[] = [];
         for (const tabInfo of this.tabs.values()) {
+            if (tabInfo._protocolBlocked) continue;
             if (
                 !this._canReconnectTab(tabInfo) ||
                 !tabInfo.isDead ||
-                tabInfo.autoReconnectTimer ||
-                tabInfo.autoReconnectPending ||
                 tabInfo.reconnectInFlight
             )
                 continue;
+            if (tabInfo.autoReconnectTimer) {
+                clearTimeout(tabInfo.autoReconnectTimer);
+                tabInfo.autoReconnectTimer = null;
+            }
+            tabInfo.autoReconnectPending = false;
             tabInfo.reconnectAttempts = 0;
-            this.maybeAutoReconnect(tabInfo);
+            candidates.push(tabInfo);
+        }
+        if (candidates.length === 0) {
+            this.updateDisconnectBanner();
+            return;
+        }
+
+        const redial = () => {
+            for (const tabInfo of candidates) {
+                if (
+                    this.tabs.get(tabInfo.paneId) === tabInfo &&
+                    !tabInfo._protocolBlocked &&
+                    this._canReconnectTab(tabInfo) &&
+                    tabInfo.isDead &&
+                    !tabInfo.reconnectInFlight &&
+                    this.app?.config?.auto_reconnect === 'visible' &&
+                    (typeof document === 'undefined' ||
+                        document.visibilityState === 'visible')
+                ) {
+                    this.reconnectTab(tabInfo, { auto: true });
+                } else {
+                    if (tabInfo.isDead && !tabInfo.finalizing)
+                        this._showReconnectOverlay(tabInfo);
+                }
+            }
+            this.updateDisconnectBanner();
+        };
+
+        let refresh: any;
+        try {
+            refresh = window.phiAccessAuth?.refreshAccessIfDue?.();
+        } catch (_e) {}
+        if (refresh && typeof refresh.then === 'function') {
+            void refresh.catch(() => {}).then(redial);
+        } else {
+            redial();
         }
         this.updateDisconnectBanner();
     }

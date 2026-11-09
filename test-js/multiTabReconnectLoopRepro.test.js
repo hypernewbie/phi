@@ -63,19 +63,15 @@ afterEach(() => {
     vi.unstubAllGlobals();
 });
 
-it('wake preserves a pending retry and never multiplies its timer', () => {
+it('wake preempts a pending retry and redials immediately without backoff', () => {
     const { manager, tab } = harness();
     manager.maybeAutoReconnect(tab);
-    const timer = tab.autoReconnectTimer;
+    expect(tab.autoReconnectTimer).not.toBeNull();
     manager._reviveActiveTabIfDead();
-    manager._reviveActiveTabIfDead();
-    expect(tab.autoReconnectTimer).toBe(timer);
-    expect(tab.reconnectAttempts).toBe(4);
-    expect(vi.getTimerCount()).toBe(1);
-    vi.advanceTimersByTime(1000);
-    expect(tab.reconnectInFlight).toBe(true);
+    expect(tab.autoReconnectTimer).toBeNull();
     expect(tab.autoReconnectPending).toBe(false);
-    expect(vi.getTimerCount()).toBe(1); // current CONNECTING watchdog
+    expect(tab.reconnectAttempts).toBe(0);
+    expect(tab.reconnectInFlight).toBe(true);
 });
 it('only a current live attachment resets its budget at five continuous seconds', () => {
     const { manager, tab } = harness();
@@ -234,13 +230,13 @@ it('ten constructor failures exhaust the series; a real Retry starts a fresh ser
     );
     manager._reviveActiveTabIfDead();
     vi.advanceTimersByTime(10000);
-    expect(attempts).toHaveBeenCalledTimes(10);
+    expect(attempts).toHaveBeenCalledTimes(11);
     expect(tab.reconnectAttempts).toBe(10);
     expect(tab.autoReconnectPending).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
     tab.termContainer.querySelector('.reconnect-btn').click();
     expect(tab.reconnectAttempts).toBe(1);
-    expect(attempts).toHaveBeenCalledTimes(11);
+    expect(attempts).toHaveBeenCalledTimes(12);
     expect(tab.autoReconnectPending).toBe(true);
 });
 it('saved watchdog/data/control callbacks cannot mutate a successor', () => {
