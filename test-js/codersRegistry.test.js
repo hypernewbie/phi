@@ -17,6 +17,7 @@ import {
     opencodeRecipe,
     piRecipe,
     claudeRecipe,
+    agyRecipe,
     presetsFor,
     recipeFor,
     renderLogo,
@@ -54,7 +55,7 @@ describe('coder registry — built-in seed', () => {
         expect(hasRename('claude')).toBe(true);
         expect(hasRename('opencode')).toBe(false);
 
-        expect(modelSwitchDisabled('agy')).toBe(true);
+        expect(modelSwitchDisabled('agy')).toBe(false);
         expect(modelSwitchDisabled('opencode')).toBe(false);
     });
 
@@ -439,6 +440,9 @@ describe('executeRecipe', () => {
             '/model {model}\r',
             '\r',
         ]);
+        expect(agyRecipe().steps.map((s) => s.send)).toEqual([
+            '/model {model}\r',
+        ]);
     });
 
     it('recipeFor returns undefined for built-ins (terminal.js owns their sequences) and unknown coders', () => {
@@ -461,7 +465,7 @@ describe('executeRecipe', () => {
         expect(hasModelSwitch('opencode')).toBe(true);
         expect(hasModelSwitch('pi')).toBe(true);
         expect(hasModelSwitch('claude')).toBe(true);
-        expect(hasModelSwitch('agy')).toBe(false);
+        expect(hasModelSwitch('agy')).toBe(true);
         expect(hasModelSwitch('bash')).toBe(false);
         expect(hasModelSwitch('pwsh')).toBe(false);
         expect(hasModelSwitch('custom-agent')).toBe(false);

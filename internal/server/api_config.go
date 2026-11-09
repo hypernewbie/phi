@@ -15,6 +15,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/hypernewbie/phi/internal/agent"
 	"github.com/hypernewbie/phi/internal/config"
 )
 
@@ -139,6 +140,26 @@ func (app *Server) handleModelPresets(w http.ResponseWriter, r *http.Request) {
 	}
 	if coder == "" {
 		coder = "pi"
+	}
+
+	if coder == "agy" {
+		if r.Method == http.MethodPost {
+			canonical, err := agent.NormalizeSlug(model)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			model = canonical
+			if oldModel != "" {
+				if oldNorm, err := agent.NormalizeSlug(oldModel); err == nil {
+					oldModel = oldNorm
+				}
+			}
+		} else if r.Method == http.MethodDelete {
+			if canonical, err := agent.NormalizeSlug(model); err == nil {
+				model = canonical
+			}
+		}
 	}
 
 	cfg := app.loadConfig()

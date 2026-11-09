@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/BurntSushi/toml"
+	"github.com/hypernewbie/phi/internal/agent"
 	"github.com/hypernewbie/phi/pkg/system"
 )
 
@@ -546,15 +547,29 @@ func NormalizeOpenCodeIdleStopMinutes(mins int) int {
 	return mins
 }
 
+var legacyAgyDefaults = []string{
+	"gemini-3.5-flash",
+	"gemini-3.1-pro",
+	"gemini-1.5-pro",
+	"gemini-1.5-flash",
+}
+
 func ensureModelPresetDefaults(m ModelPresetsMap) ModelPresetsMap {
 	if m == nil {
 		m = make(ModelPresetsMap)
 	}
+	// Legacy migration: if an existing configuration still contains the exact
+	// legacy 4-element slice, upgrade it to the verified agy catalog so
+	// installs get the current model slugs without overwriting customized lists.
+	if slices.Equal(m["agy"], legacyAgyDefaults) {
+		m["agy"] = agent.Slugs()
+	}
+
 	// Pi's model list comes from the live RPC, so no preset default is set
 	// here — shipping a stale hardcoded list (as we did previously) made the
-	// Pi-RPC picker open to a group of synthesized ghost rows. Opencode,
-	// Claude, and Agy have fixed coders and keep their (also-stale) defaults
-	// for now; clean those up separately if they bite.
+	// Pi-RPC picker open to a group of synthesized ghost rows. Opencode and
+	// Claude have fixed coders and keep their defaults. Agy uses the verified
+	// catalog from internal/agent.
 	defaults := map[string][]string{
 		"opencode": {
 			"opencode/big-pickle",
@@ -565,12 +580,7 @@ func ensureModelPresetDefaults(m ModelPresetsMap) ModelPresetsMap {
 			"sonnet",
 			"haiku",
 		},
-		"agy": {
-			"gemini-3.5-flash",
-			"gemini-3.1-pro",
-			"gemini-1.5-pro",
-			"gemini-1.5-flash",
-		},
+		"agy": agent.Slugs(),
 	}
 
 	for coder, defaultList := range defaults {

@@ -139,7 +139,7 @@ export function seedBuiltins(): void {
                 rename: true,
                 pi_rpc: false,
             },
-            model_switch_disabled: true,
+            model_switch_disabled: false,
         },
         pi: {
             id: 'pi',
@@ -413,7 +413,11 @@ export function modelSwitchDisabled(id: string): boolean {
 // executor reads from.
 export function hasModelSwitch(id: string): boolean {
     return (
-        id === 'opencode' || id === 'pi' || id === 'claude' || id === 'codex'
+        id === 'opencode' ||
+        id === 'pi' ||
+        id === 'claude' ||
+        id === 'codex' ||
+        id === 'agy'
     );
 }
 
@@ -666,6 +670,12 @@ export function piRecipe(): Recipe {
 export function claudeRecipe(): Recipe {
     return {
         steps: [{ send: '/model {model}\r' }, { send: '\r', delay_ms: 500 }],
+    };
+}
+
+export function agyRecipe(): Recipe {
+    return {
+        steps: [{ send: '/model {model}\r' }],
     };
 }
 

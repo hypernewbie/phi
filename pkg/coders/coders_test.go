@@ -88,6 +88,13 @@ func TestAgyCompactReplacesHelp(t *testing.T) {
 	if help {
 		t.Error("agy should not offer /help; /compact needs the row slot")
 	}
+	if agy.ModelSwitchDisabled {
+		t.Error("agy ModelSwitchDisabled should be false")
+	}
+	desc := agy.Descriptor()
+	if desc.ModelSwitchDisabled {
+		t.Error("agy Descriptor().ModelSwitchDisabled should be false")
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────

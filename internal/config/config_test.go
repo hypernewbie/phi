@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/BurntSushi/toml"
+	"github.com/hypernewbie/phi/internal/agent"
 )
 
 func TestConfigConcurrentAccess(t *testing.T) {
@@ -637,11 +638,28 @@ func TestModelPresetDefaultsMerge(t *testing.T) {
 	if !reflect.DeepEqual(merged["claude"], []string{"fable", "opus", "sonnet", "haiku"}) {
 		t.Errorf("claude defaults = %v", merged["claude"])
 	}
-	if !reflect.DeepEqual(merged["agy"], []string{"gemini-3.5-flash", "gemini-3.1-pro", "gemini-1.5-pro", "gemini-1.5-flash"}) {
-		t.Errorf("agy defaults = %v", merged["agy"])
+	if !reflect.DeepEqual(merged["agy"], agent.Slugs()) {
+		t.Errorf("agy defaults = %v, want %v", merged["agy"], agent.Slugs())
 	}
 	// An explicit empty list is a user choice, not a missing default.
 	if got := ensureModelPresetDefaults(ModelPresetsMap{"claude": {}}); len(got["claude"]) != 0 {
 		t.Errorf("explicit empty claude list must stay empty, got %v", got["claude"])
+	}
+	if got := ensureModelPresetDefaults(ModelPresetsMap{"agy": {}}); len(got["agy"]) != 0 {
+		t.Errorf("explicit empty agy list must stay empty, got %v", got["agy"])
+	}
+
+	// Legacy 4-element agy presets slice upgrades cleanly to current verified catalog
+	legacyAgy := ModelPresetsMap{"agy": {"gemini-3.5-flash", "gemini-3.1-pro", "gemini-1.5-pro", "gemini-1.5-flash"}}
+	upgraded := ensureModelPresetDefaults(legacyAgy)
+	if !reflect.DeepEqual(upgraded["agy"], agent.Slugs()) {
+		t.Errorf("legacy agy defaults upgrade = %v, want %v", upgraded["agy"], agent.Slugs())
+	}
+
+	// Custom user presets for agy are preserved
+	customAgy := ModelPresetsMap{"agy": {"custom-gemini-preview", "gemini-4-argon-high"}}
+	kept := ensureModelPresetDefaults(customAgy)
+	if !reflect.DeepEqual(kept["agy"], []string{"custom-gemini-preview", "gemini-4-argon-high"}) {
+		t.Errorf("custom agy presets overwritten: %v", kept["agy"])
 	}
 }

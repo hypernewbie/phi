@@ -150,10 +150,7 @@ func DefaultRegistry() map[string]Coder {
 			InputMode:             "staged",
 			Logo:                  "vendor/logos/agy.png",
 			Capabilities:          Capabilities{List: true, Rename: true},
-			// Models dropup is hidden for agy today (R10): it has a
-			// configured model preset list, but live model switching
-			// is not exposed in the UI.
-			ModelSwitchDisabled: true,
+			ModelSwitchDisabled:   false,
 			Presets: []Preset{
 				{Name: "/resume", Value: "/resume\r"},
 				{Name: "/model", Value: "/model\r"},

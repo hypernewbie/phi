@@ -194,6 +194,63 @@ func TestHandleModelPresets_AddEditAndDelete(t *testing.T) {
 	}
 }
 
+func TestHandleModelPresets_AgyCatalogValidationAndNormalization(t *testing.T) {
+	withTempConfig(t)
+
+	// 1. Alias normalization: adding "gemini-4-argon" normalizes to "gemini-4-argon-medium"
+	body := strings.NewReader(`{"coder":"agy","model":"gemini-4-argon"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/config/models", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	testServer.handleModelPresets(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST status: want 200, got %d - %s", w.Code, w.Body.String())
+	}
+
+	cfg := testServer.loadConfig()
+	if !containsString(cfg.ModelPresets["agy"], "gemini-4-argon-medium") {
+		t.Errorf("normalized model not found in agy presets: %v", cfg.ModelPresets["agy"])
+	}
+	if containsString(cfg.ModelPresets["agy"], "gemini-4-argon") {
+		t.Error("raw unnormalized alias should not be saved in agy presets")
+	}
+
+	// 2. Reject Claude Haiku
+	body = strings.NewReader(`{"coder":"agy","model":"claude-5.5-haiku"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/config/models", body)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	testServer.handleModelPresets(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("POST claude haiku status: want 400, got %d", w.Code)
+	}
+
+	// 3. Reject unknown model
+	body = strings.NewReader(`{"coder":"agy","model":"completely-unknown-model"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/config/models", body)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	testServer.handleModelPresets(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("POST unknown model status: want 400, got %d", w.Code)
+	}
+
+	// 4. Delete via alias "gemini-4-argon" removes "gemini-4-argon-medium"
+	body = strings.NewReader(`{"coder":"agy","model":"gemini-4-argon"}`)
+	req = httptest.NewRequest(http.MethodDelete, "/api/config/models", body)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	testServer.handleModelPresets(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DELETE status: want 200, got %d - %s", w.Code, w.Body.String())
+	}
+
+	cfg = testServer.loadConfig()
+	if containsString(cfg.ModelPresets["agy"], "gemini-4-argon-medium") {
+		t.Error("model should have been removed after delete via alias")
+	}
+}
+
 func containsString(list []string, target string) bool {
 	for _, item := range list {
 		if item == target {

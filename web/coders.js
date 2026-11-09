@@ -97,7 +97,7 @@ export function seedBuiltins() {
                 rename: true,
                 pi_rpc: false,
             },
-            model_switch_disabled: true,
+            model_switch_disabled: false,
         },
         pi: {
             id: 'pi',
@@ -342,7 +342,11 @@ export function modelSwitchDisabled(id) {
 // also return true — the function reads from the same registry the
 // executor reads from.
 export function hasModelSwitch(id) {
-    return (id === 'opencode' || id === 'pi' || id === 'claude' || id === 'codex');
+    return (id === 'opencode' ||
+        id === 'pi' ||
+        id === 'claude' ||
+        id === 'codex' ||
+        id === 'agy');
 }
 // logoFor returns the favicon URL for a coder ID — the legacy
 // `<img src=...>` style favicon used by tab strips and the
@@ -554,6 +558,11 @@ export function piRecipe() {
 export function claudeRecipe() {
     return {
         steps: [{ send: '/model {model}\r' }, { send: '\r', delay_ms: 500 }],
+    };
+}
+export function agyRecipe() {
+    return {
+        steps: [{ send: '/model {model}\r' }],
     };
 }
 export function recipeFor(id) {
