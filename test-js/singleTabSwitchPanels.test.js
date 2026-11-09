@@ -477,10 +477,7 @@ describe('single-tab switch: right panel surfaces', () => {
                 app.markdownManager,
                 'paintFromStore',
             );
-            const cmdPanelSpy = vi.spyOn(
-                app.diffController,
-                'renderCmdPanel',
-            );
+            const cmdPanelSpy = vi.spyOn(app.diffController, 'renderCmdPanel');
 
             app.diffController.onBackendSwitch();
 

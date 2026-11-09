@@ -32,7 +32,9 @@ describe('Antigravity (agy) model support', () => {
             expect(hasSessions('agy')).toBe(true);
             expect(hms('agy')).toBe(true);
             expect(msd('agy')).toBe(false);
-            expect(formatAttachment('agy', '/project/main.go')).toBe('@/project/main.go');
+            expect(formatAttachment('agy', '/project/main.go')).toBe(
+                '@/project/main.go',
+            );
         }
     });
 

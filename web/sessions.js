@@ -1338,7 +1338,8 @@ export class SessionsManager {
         this.sessionList.innerHTML = '';
         if (!worktrees || worktrees.length === 0) {
             const previousCwd = this.activeCWD;
-            this.activeCWD = targetCwd || workspace || this.activeWorkspace || '';
+            this.activeCWD =
+                targetCwd || workspace || this.activeWorkspace || '';
             this.sessionList.innerHTML =
                 '<div style="padding: 16px; color: var(--text-muted); font-size: 13px; text-align: center;">No worktrees found</div>';
             if (syncDiff && this.activeCWD !== previousCwd) {
