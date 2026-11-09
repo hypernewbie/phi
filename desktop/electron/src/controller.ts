@@ -89,6 +89,10 @@ export interface ProfileMeta {
   name: string;
   /** Normalized origin URL: scheme://host[:port]/ (endpoint.Parse output form). */
   origin: string;
+  /** Observed accent color (--accent) if known. */
+  accent?: string;
+  /** Observed theme color if known. */
+  themeColor?: string;
 }
 
 /** The controller's immutable snapshot (`state()` returns a deep copy). */
@@ -236,6 +240,10 @@ interface InternalProfile {
   origin: string;
   /** ISO-8601 last-used stamp, or null when never used. */
   lastUsed: string | null;
+  /** Observed accent color (--accent) if known. */
+  accent?: string;
+  /** Observed theme color if known. */
+  themeColor?: string;
 }
 
 /** validHostname: plain hostname, IPv4 literal, or IPv6 literal (zone stripped). */
@@ -427,6 +435,7 @@ interface LoadedStore {
   petZoomPercent: number;
   contentZoomPercent: number;
   petIdleDwellSeconds: number;
+  customProfileNames: string[];
 }
 
 function isPetIdleDwellSeconds(value: unknown): value is number {
@@ -515,6 +524,7 @@ function readStore(
       petZoomPercent: PET_ZOOM_DEFAULT_PERCENT,
       contentZoomPercent: CONTENT_ZOOM_DEFAULT_PERCENT,
       petIdleDwellSeconds: PET_IDLE_DWELL_DEFAULT_SECONDS,
+      customProfileNames: [],
     };
   }
   let parsed: unknown;
@@ -536,6 +546,7 @@ function readStore(
         petZoomPercent: PET_ZOOM_DEFAULT_PERCENT,
         contentZoomPercent: CONTENT_ZOOM_DEFAULT_PERCENT,
         petIdleDwellSeconds: PET_IDLE_DWELL_DEFAULT_SECONDS,
+        customProfileNames: [],
       };
     }
     log(
@@ -553,6 +564,7 @@ function readStore(
     contentZoomPercent?: unknown;
     petIdleDwellSeconds?: unknown;
     petScaleTick?: unknown;
+    customProfileNames?: unknown;
   } | null;
   if (obj === null || typeof obj !== 'object' || !Array.isArray(obj.profiles)) {
     if (isBackup) {
@@ -570,6 +582,7 @@ function readStore(
         petZoomPercent: PET_ZOOM_DEFAULT_PERCENT,
         contentZoomPercent: CONTENT_ZOOM_DEFAULT_PERCENT,
         petIdleDwellSeconds: PET_IDLE_DWELL_DEFAULT_SECONDS,
+        customProfileNames: [],
       };
     }
     log(
@@ -602,6 +615,14 @@ function readStore(
   const petIdleDwellSeconds = isPetIdleDwellSeconds(obj.petIdleDwellSeconds)
     ? obj.petIdleDwellSeconds
     : PET_IDLE_DWELL_DEFAULT_SECONDS;
+  const customProfileNames = new Set<string>();
+  if (Array.isArray(obj.customProfileNames)) {
+    for (const item of obj.customProfileNames) {
+      if (typeof item === 'string' && item !== '') {
+        customProfileNames.add(item);
+      }
+    }
+  }
   const profiles: InternalProfile[] = [];
   const seen = new Set<string>();
   for (const entry of obj.profiles) {
@@ -610,6 +631,9 @@ function readStore(
       name?: unknown;
       origin?: unknown;
       lastUsed?: unknown;
+      accent?: unknown;
+      themeColor?: unknown;
+      customName?: unknown;
     };
     if (
       p === null ||
@@ -627,12 +651,43 @@ function readStore(
       continue;
     }
     seen.add(p.id);
+    const accent =
+      typeof p.accent === 'string' && p.accent.trim() !== ''
+        ? p.accent.trim()
+        : undefined;
+    const themeColor =
+      typeof p.themeColor === 'string' && p.themeColor.trim() !== ''
+        ? p.themeColor.trim()
+        : undefined;
+    const isExplicitCustom =
+      typeof p.customName === 'boolean' ? p.customName : undefined;
+    if (isExplicitCustom) {
+      customProfileNames.add(p.id);
+    } else if (!Object.hasOwn(obj, 'customProfileNames')) {
+      const parsedHost = (() => {
+        try {
+          return parseEndpoint(p.origin).host;
+        } catch {
+          return '';
+        }
+      })();
+      if (
+        typeof p.name === 'string' &&
+        p.name !== '' &&
+        p.name !== p.origin &&
+        p.name !== parsedHost
+      ) {
+        customProfileNames.add(p.id);
+      }
+    }
     profiles.push({
       id: p.id,
       name: typeof p.name === 'string' && p.name !== '' ? p.name : p.origin,
       origin: p.origin,
       lastUsed:
         typeof p.lastUsed === 'string' && p.lastUsed !== '' ? p.lastUsed : null,
+      ...(accent ? { accent } : {}),
+      ...(themeColor ? { themeColor } : {}),
     });
   }
   if (isBackup) {
@@ -648,6 +703,7 @@ function readStore(
     petZoomPercent,
     contentZoomPercent,
     petIdleDwellSeconds,
+    customProfileNames: Array.from(customProfileNames),
   };
 }
 
@@ -696,6 +752,8 @@ function saveStore(
             name: p.name,
             origin: p.origin,
             ...(p.lastUsed === null ? {} : { lastUsed: p.lastUsed }),
+            ...(p.accent ? { accent: p.accent } : {}),
+            ...(p.themeColor ? { themeColor: p.themeColor } : {}),
           })),
           closeToTray,
           syncAlerts,
@@ -754,7 +812,13 @@ function mostRecentlyUsed(profiles: InternalProfile[]): string {
 }
 
 function toMeta(p: InternalProfile): ProfileMeta {
-  return { id: p.id, name: p.name, origin: p.origin };
+  return {
+    id: p.id,
+    name: p.name,
+    origin: p.origin,
+    ...(p.accent ? { accent: p.accent } : {}),
+    ...(p.themeColor ? { themeColor: p.themeColor } : {}),
+  };
 }
 
 /**
@@ -783,6 +847,7 @@ export class Controller {
   private petZoomPercent = PET_ZOOM_DEFAULT_PERCENT;
   private contentZoomPercent = CONTENT_ZOOM_DEFAULT_PERCENT;
   private petIdleDwellSeconds = PET_IDLE_DWELL_DEFAULT_SECONDS;
+  private customProfileNames = new Set<string>();
   private listeners = new Set<ControllerListener>();
 
   constructor(opts: ControllerOptions) {
@@ -797,6 +862,7 @@ export class Controller {
     this.petZoomPercent = store.petZoomPercent;
     this.contentZoomPercent = store.contentZoomPercent;
     this.petIdleDwellSeconds = store.petIdleDwellSeconds;
+    this.customProfileNames = new Set(store.customProfileNames);
     for (const p of store.profiles) {
       this.profiles.push(p);
       this.byID.set(p.id, p);
@@ -842,11 +908,27 @@ export class Controller {
     this.petZoomPercent = store.petZoomPercent;
     this.contentZoomPercent = store.contentZoomPercent;
     this.petIdleDwellSeconds = store.petIdleDwellSeconds;
+    this.customProfileNames = new Set(store.customProfileNames);
     if (this.activeId !== '' && !this.byID.has(this.activeId)) {
       this.activeId = mostRecentlyUsed(this.profiles);
       this.emit({ kind: 'active-changed', id: this.activeId });
     }
     if (changed) this.emit({ kind: 'profiles-changed' });
+  }
+
+  private save(): void {
+    saveStore(
+      this.persistPath,
+      this.profiles,
+      this.closeToTray,
+      this.syncAlerts,
+      this.lowMemoryMode,
+      this.lowPowerMode,
+      this.petEnabled,
+      this.petZoomPercent,
+      this.contentZoomPercent,
+      this.petIdleDwellSeconds,
+    );
   }
 
   /**
@@ -875,19 +957,9 @@ export class Controller {
     this.byID.set(id, profile);
     this.health.set(id, 'unknown');
     this.unread.set(id, 0);
+    this.customProfileNames.delete(id);
     try {
-      saveStore(
-        this.persistPath,
-        this.profiles,
-        this.closeToTray,
-        this.syncAlerts,
-        this.lowMemoryMode,
-        this.lowPowerMode,
-        this.petEnabled,
-        this.petZoomPercent,
-        this.contentZoomPercent,
-        this.petIdleDwellSeconds,
-      );
+      this.save();
     } catch (err) {
       this.profiles.pop();
       this.byID.delete(id);
@@ -914,28 +986,20 @@ export class Controller {
     const wasActive = this.activeId === id;
     const removedHealth = this.health.get(id) ?? null;
     const removedUnread = this.unread.get(id) ?? null;
+    const wasCustom = this.customProfileNames.has(id);
     this.profiles.splice(idx, 1);
     this.byID.delete(id);
     this.health.delete(id);
     this.unread.delete(id);
+    this.customProfileNames.delete(id);
     try {
-      saveStore(
-        this.persistPath,
-        this.profiles,
-        this.closeToTray,
-        this.syncAlerts,
-        this.lowMemoryMode,
-        this.lowPowerMode,
-        this.petEnabled,
-        this.petZoomPercent,
-        this.contentZoomPercent,
-        this.petIdleDwellSeconds,
-      );
+      this.save();
     } catch (err) {
       this.profiles.splice(idx, 0, removed);
       this.byID.set(id, removed);
       if (removedHealth !== null) this.health.set(id, removedHealth);
       if (removedUnread !== null) this.unread.set(id, removedUnread);
+      if (wasCustom) this.customProfileNames.add(id);
       throw err;
     }
     if (wasActive) {
@@ -957,18 +1021,8 @@ export class Controller {
       throw new UnknownProfileError(`controller: unknown profile "${id}"`);
     validateName(name);
     p.name = name;
-    saveStore(
-      this.persistPath,
-      this.profiles,
-      this.closeToTray,
-      this.syncAlerts,
-      this.lowMemoryMode,
-      this.lowPowerMode,
-      this.petEnabled,
-      this.petZoomPercent,
-      this.contentZoomPercent,
-      this.petIdleDwellSeconds,
-    );
+    this.customProfileNames.add(id);
+    this.save();
     this.emit({ kind: 'profiles-changed' });
   }
 
@@ -1002,18 +1056,7 @@ export class Controller {
         : this.profiles.findIndex((p) => p.id === beforeId);
     this.profiles.splice(insertAt, 0, moved);
     try {
-      saveStore(
-        this.persistPath,
-        this.profiles,
-        this.closeToTray,
-        this.syncAlerts,
-        this.lowMemoryMode,
-        this.lowPowerMode,
-        this.petEnabled,
-        this.petZoomPercent,
-        this.contentZoomPercent,
-        this.petIdleDwellSeconds,
-      );
+      this.save();
     } catch (err) {
       this.profiles.splice(insertAt, 1);
       this.profiles.splice(from, 0, moved);
@@ -1029,18 +1072,7 @@ export class Controller {
     if (!p)
       throw new UnknownProfileError(`controller: unknown profile "${id}"`);
     p.lastUsed = new Date().toISOString();
-    saveStore(
-      this.persistPath,
-      this.profiles,
-      this.closeToTray,
-      this.syncAlerts,
-      this.lowMemoryMode,
-      this.lowPowerMode,
-      this.petEnabled,
-      this.petZoomPercent,
-      this.contentZoomPercent,
-      this.petIdleDwellSeconds,
-    );
+    this.save();
     this.emit({ kind: 'profiles-changed' });
   }
 
@@ -1057,23 +1089,95 @@ export class Controller {
       throw new UnknownProfileError(`controller: unknown profile "${id}"`);
     p.lastUsed = new Date().toISOString();
     try {
-      saveStore(
-        this.persistPath,
-        this.profiles,
-        this.closeToTray,
-        this.syncAlerts,
-        this.lowMemoryMode,
-        this.lowPowerMode,
-        this.petEnabled,
-        this.petZoomPercent,
-        this.contentZoomPercent,
-        this.petIdleDwellSeconds,
-      );
+      this.save();
     } catch (err) {
       this.log(`controller: record last-used: ${String(err)}`);
     }
     this.activeId = id;
     this.emit({ kind: 'active-changed', id });
+  }
+
+  /**
+   * Updates observed server status (hostname -> profile.name, accent, themeColor).
+   * Only writes to disk when values actually change (no write churn).
+   * User-set custom names (via rename) are preserved and never overwritten.
+   * Returns true if persisted changes occurred, false if no-op.
+   */
+  updateServerStatus(
+    id: string,
+    status: {
+      hostname?: string;
+      accent?: string;
+      themeColor?: string;
+    },
+  ): boolean {
+    this.refreshSharedStore();
+    const p = this.byID.get(id);
+    if (!p) {
+      throw new UnknownProfileError(`controller: unknown profile "${id}"`);
+    }
+
+    const rawHostname =
+      typeof status.hostname === 'string' ? status.hostname.trim() : '';
+    const rawAccent =
+      typeof status.accent === 'string' ? status.accent.trim() : '';
+    const rawTheme =
+      typeof status.themeColor === 'string' ? status.themeColor.trim() : '';
+
+    let changed = false;
+
+    const parsedHost = (() => {
+      try {
+        return parseEndpoint(p.origin).host;
+      } catch {
+        return '';
+      }
+    })();
+    // Only update name with observed hostname if not explicitly custom-named by the user.
+    const isCustom =
+      this.customProfileNames.has(p.id) ||
+      (p.name !== parsedHost && p.name !== rawHostname && p.name !== p.origin);
+    if (!isCustom && rawHostname !== '' && rawHostname !== p.name) {
+      try {
+        validateName(rawHostname);
+        p.name = rawHostname;
+        changed = true;
+      } catch (err) {
+        this.log(
+          `controller: skipping invalid observed hostname "${rawHostname}": ${String(err)}`,
+        );
+      }
+    }
+
+    if (rawAccent !== '' && rawAccent !== (p.accent ?? '')) {
+      p.accent = rawAccent;
+      changed = true;
+    }
+
+    if (rawTheme !== '' && rawTheme !== (p.themeColor ?? '')) {
+      p.themeColor = rawTheme;
+      changed = true;
+    }
+
+    if (!changed) {
+      return false;
+    }
+
+    this.save();
+    this.emit({ kind: 'profiles-changed' });
+    return true;
+  }
+
+  /** Alias for updateServerStatus. */
+  updateObserved(
+    id: string,
+    observed: {
+      hostname?: string;
+      accent?: string;
+      themeColor?: string;
+    },
+  ): boolean {
+    return this.updateServerStatus(id, observed);
   }
 
   /**
@@ -1108,18 +1212,7 @@ export class Controller {
     this.refreshSharedStore();
     if (value === this.closeToTray) return;
     this.closeToTray = value;
-    saveStore(
-      this.persistPath,
-      this.profiles,
-      this.closeToTray,
-      this.syncAlerts,
-      this.lowMemoryMode,
-      this.lowPowerMode,
-      this.petEnabled,
-      this.petZoomPercent,
-      this.contentZoomPercent,
-      this.petIdleDwellSeconds,
-    );
+    this.save();
     this.emit({ kind: 'close-to-tray-changed' });
   }
 
@@ -1142,18 +1235,7 @@ export class Controller {
     this.refreshSharedStore();
     if (value === this.syncAlerts) return;
     this.syncAlerts = value;
-    saveStore(
-      this.persistPath,
-      this.profiles,
-      this.closeToTray,
-      this.syncAlerts,
-      this.lowMemoryMode,
-      this.lowPowerMode,
-      this.petEnabled,
-      this.petZoomPercent,
-      this.contentZoomPercent,
-      this.petIdleDwellSeconds,
-    );
+    this.save();
     this.emit({ kind: 'sync-alerts-changed' });
   }
 
@@ -1165,18 +1247,7 @@ export class Controller {
     this.refreshSharedStore();
     if (value === this.lowMemoryMode) return;
     this.lowMemoryMode = value;
-    saveStore(
-      this.persistPath,
-      this.profiles,
-      this.closeToTray,
-      this.syncAlerts,
-      this.lowMemoryMode,
-      this.lowPowerMode,
-      this.petEnabled,
-      this.petZoomPercent,
-      this.contentZoomPercent,
-      this.petIdleDwellSeconds,
-    );
+    this.save();
     this.emit({ kind: 'low-memory-changed' });
   }
 
@@ -1194,18 +1265,7 @@ export class Controller {
     this.refreshSharedStore();
     if (value === this.lowPowerMode) return;
     this.lowPowerMode = value;
-    saveStore(
-      this.persistPath,
-      this.profiles,
-      this.closeToTray,
-      this.syncAlerts,
-      this.lowMemoryMode,
-      this.lowPowerMode,
-      this.petEnabled,
-      this.petZoomPercent,
-      this.contentZoomPercent,
-      this.petIdleDwellSeconds,
-    );
+    this.save();
     this.emit({ kind: 'low-power-changed' });
   }
 
@@ -1226,18 +1286,7 @@ export class Controller {
     this.refreshSharedStore();
     if (value === this.petEnabled) return;
     this.petEnabled = value;
-    saveStore(
-      this.persistPath,
-      this.profiles,
-      this.closeToTray,
-      this.syncAlerts,
-      this.lowMemoryMode,
-      this.lowPowerMode,
-      this.petEnabled,
-      this.petZoomPercent,
-      this.contentZoomPercent,
-      this.petIdleDwellSeconds,
-    );
+    this.save();
     this.emit({ kind: 'pet-enabled-changed' });
   }
 
@@ -1258,18 +1307,7 @@ export class Controller {
     const oldPercent = this.petZoomPercent;
     this.petZoomPercent = percent;
     try {
-      saveStore(
-        this.persistPath,
-        this.profiles,
-        this.closeToTray,
-        this.syncAlerts,
-        this.lowMemoryMode,
-        this.lowPowerMode,
-        this.petEnabled,
-        this.petZoomPercent,
-        this.contentZoomPercent,
-        this.petIdleDwellSeconds,
-      );
+      this.save();
     } catch (err) {
       this.petZoomPercent = oldPercent;
       throw err;
@@ -1295,18 +1333,7 @@ export class Controller {
     const oldPercent = this.contentZoomPercent;
     this.contentZoomPercent = percent;
     try {
-      saveStore(
-        this.persistPath,
-        this.profiles,
-        this.closeToTray,
-        this.syncAlerts,
-        this.lowMemoryMode,
-        this.lowPowerMode,
-        this.petEnabled,
-        this.petZoomPercent,
-        this.contentZoomPercent,
-        this.petIdleDwellSeconds,
-      );
+      this.save();
     } catch (err) {
       this.contentZoomPercent = oldPercent;
       throw err;
@@ -1326,18 +1353,7 @@ export class Controller {
     const oldValue = this.petIdleDwellSeconds;
     this.petIdleDwellSeconds = value;
     try {
-      saveStore(
-        this.persistPath,
-        this.profiles,
-        this.closeToTray,
-        this.syncAlerts,
-        this.lowMemoryMode,
-        this.lowPowerMode,
-        this.petEnabled,
-        this.petZoomPercent,
-        this.contentZoomPercent,
-        this.petIdleDwellSeconds,
-      );
+      this.save();
     } catch (err) {
       this.petIdleDwellSeconds = oldValue;
       throw err;

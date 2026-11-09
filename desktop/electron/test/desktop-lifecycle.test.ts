@@ -749,6 +749,43 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     }
   });
 
+  it('seeds observed server identity and colors into UI from stored profile on startup', async () => {
+    const profilesPath = path.join(temp, 'profiles.json');
+    writeFileSync(
+      profilesPath,
+      JSON.stringify({
+        profiles: [
+          {
+            id: 'stored-server',
+            name: 'CALLISTO',
+            origin: 'http://callisto.example.test:7070/',
+            accent: '#e76f51',
+            themeColor: 'rust',
+          },
+        ],
+      }),
+    );
+    const host = new DesktopHost();
+    await host.start(primary);
+    expect(host.observedIdentity.has('stored-server')).toBe(true);
+    const identity = host.observedIdentity.get('stored-server');
+    expect(identity?.hostname).toBe('CALLISTO');
+    expect(identity?.accent).toBe('#e76f51');
+    expect(identity?.themeColor).toBe('rust');
+
+    // Rail state was pushed with the seeded identity immediately on startup.
+    const sent = railSent(host);
+    const railState = sent.find((s) => s[0] === 'phi:rail-state');
+    expect(railState).toBeDefined();
+    const profileOnRail = (
+      railState![1] as {
+        profiles: Array<{ id: string; hostname: string; accent: string }>;
+      }
+    ).profiles[0];
+    expect(profileOnRail.hostname).toBe('CALLISTO');
+    expect(profileOnRail.accent).toBe('#e76f51');
+  });
+
   it('retries a skipped identity read on the poll cadence so the active chip keeps its accent', async () => {
     const host = new DesktopHost();
     await host.start(primary);

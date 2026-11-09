@@ -1116,3 +1116,127 @@ describe('Controller: configurable pet idle dwell (seconds)', () => {
     expect(events).toEqual([]);
   });
 });
+
+describe('Controller: persist observed server name and color in profiles', () => {
+  it('persists observed hostname -> profile.name, accent and themeColor across restarts', () => {
+    const c = makeController();
+    const p = c.add('http://127.0.0.1:7070');
+    expect(p.name).toBe('127.0.0.1:7070');
+    expect(p.accent).toBeUndefined();
+    expect(p.themeColor).toBeUndefined();
+
+    const events: ControllerEvent[] = [];
+    c.subscribe((event) => events.push(event));
+
+    const updated = c.updateServerStatus(p.id, {
+      hostname: 'apollo',
+      accent: '#7c6af7',
+      themeColor: 'indigo',
+    });
+    expect(updated).toBe(true);
+    expect(events).toEqual([{ kind: 'profiles-changed' }]);
+
+    const state = c.state().profiles[0];
+    expect(state.name).toBe('apollo');
+    expect(state.accent).toBe('#7c6af7');
+    expect(state.themeColor).toBe('indigo');
+
+    // A fresh Controller loading from the same profiles.json retains the observed identity.
+    const reloaded = new Controller({ persistPath: persistPath() });
+    const loadedProfile = reloaded.state().profiles[0];
+    expect(loadedProfile.name).toBe('apollo');
+    expect(loadedProfile.accent).toBe('#7c6af7');
+    expect(loadedProfile.themeColor).toBe('indigo');
+
+    const raw = JSON.parse(readFileSync(persistPath(), 'utf8'));
+    expect(raw.profiles[0].name).toBe('apollo');
+    expect(raw.profiles[0].accent).toBe('#7c6af7');
+    expect(raw.profiles[0].themeColor).toBe('indigo');
+  });
+
+  it('avoids write churn by not writing or emitting when observed values have not changed', () => {
+    const c = makeController();
+    const p = c.add('http://127.0.0.1:7070');
+    c.updateServerStatus(p.id, {
+      hostname: 'apollo',
+      accent: '#7c6af7',
+      themeColor: 'indigo',
+    });
+
+    const beforeRaw = readFileSync(persistPath(), 'utf8');
+    const events: ControllerEvent[] = [];
+    c.subscribe((event) => events.push(event));
+
+    const updated = c.updateServerStatus(p.id, {
+      hostname: 'apollo',
+      accent: '#7c6af7',
+      themeColor: 'indigo',
+    });
+    expect(updated).toBe(false);
+    expect(events).toEqual([]);
+    expect(readFileSync(persistPath(), 'utf8')).toBe(beforeRaw);
+  });
+
+  it('preserves user-set custom name when server reports hostname, but updates changed colors', () => {
+    const c = makeController();
+    const p = c.add('http://127.0.0.1:7070');
+    c.rename(p.id, 'My Custom Apollo');
+
+    const updated = c.updateServerStatus(p.id, {
+      hostname: 'remote-reported-hostname',
+      accent: '#22c55e',
+      themeColor: 'emerald',
+    });
+    expect(updated).toBe(true);
+
+    const profile = c.state().profiles[0];
+    // User-set custom name is NOT overwritten!
+    expect(profile.name).toBe('My Custom Apollo');
+    // But colors are updated.
+    expect(profile.accent).toBe('#22c55e');
+    expect(profile.themeColor).toBe('emerald');
+
+    // Survives reload across restarts.
+    const reloaded = new Controller({ persistPath: persistPath() });
+    const reloadedProfile = reloaded.state().profiles[0];
+    expect(reloadedProfile.name).toBe('My Custom Apollo');
+    expect(reloadedProfile.accent).toBe('#22c55e');
+    expect(reloadedProfile.themeColor).toBe('emerald');
+
+    // Subsequent report with same colors and new hostname does not write to disk.
+    const noop = reloaded.updateServerStatus(p.id, {
+      hostname: 'yet-another-hostname',
+      accent: '#22c55e',
+      themeColor: 'emerald',
+    });
+    expect(noop).toBe(false);
+    expect(reloaded.state().profiles[0].name).toBe('My Custom Apollo');
+  });
+
+  it('throws UnknownProfileError when updating an unknown profile', () => {
+    const c = makeController();
+    expect(() =>
+      c.updateServerStatus('nonexistent', { hostname: 'apollo' }),
+    ).toThrowError(UnknownProfileError);
+  });
+
+  it('tolerates invalid observed hostname while still applying changed colors', () => {
+    const c = makeController();
+    const p = c.add('http://127.0.0.1:7070');
+    const updated = c.updateServerStatus(p.id, {
+      hostname: 'a'.repeat(100), // exceeds MAX_NAME_RUNES
+      accent: '#ff0000',
+    });
+    expect(updated).toBe(true);
+    const profile = c.state().profiles[0];
+    expect(profile.name).toBe('127.0.0.1:7070');
+    expect(profile.accent).toBe('#ff0000');
+  });
+
+  it('exports updateObserved as an alias for updateServerStatus', () => {
+    const c = makeController();
+    const p = c.add('http://127.0.0.1:7070');
+    expect(c.updateObserved(p.id, { accent: '#3b82f6' })).toBe(true);
+    expect(c.state().profiles[0].accent).toBe('#3b82f6');
+  });
+});

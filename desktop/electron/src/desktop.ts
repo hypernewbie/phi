@@ -1893,10 +1893,30 @@ export class DesktopHost {
       if (profile.id === this.controller?.state().activeId) {
         this.hooks?.trigger('accent');
       }
+      this.controller?.updateServerStatus(profile.id, identity);
       return identity;
     } catch (err) {
       console.log(`phi-desktop: observe identity ${origin}: ${String(err)}`);
       return null;
+    }
+  }
+
+  /**
+   * Seeds in-memory observed identities from stored profiles so the UI
+   * displays known server names and colors immediately on startup across restarts.
+   */
+  seedObservedIdentityFromProfiles(): void {
+    const ctrl = this.controller;
+    if (!ctrl) return;
+    for (const p of ctrl.state().profiles) {
+      if (p.accent || p.themeColor) {
+        const existing = this.observedIdentity.get(p.id);
+        this.observedIdentity.set(p.id, {
+          hostname: existing?.hostname || p.name || '',
+          accent: existing?.accent || p.accent || '',
+          themeColor: existing?.themeColor || p.themeColor || '',
+        });
+      }
     }
   }
 
@@ -3854,6 +3874,7 @@ export class DesktopHost {
       persistPath: `${app.getPath('userData')}/profiles.json`,
       log: (msg) => console.log(`phi-desktop: controller: ${msg}`),
     });
+    this.seedObservedIdentityFromProfiles();
     this.hooks = new DesktopHooksManager((event) => this.getHookState(event));
     this.hooks.trigger('init');
     // Auto-enable low memory mode on <10GB RAM machines (default off, but massively aggro 1-tab).
@@ -4007,6 +4028,9 @@ export class DesktopHost {
       ) {
         if (event.kind === 'unread-changed') {
           this.trayHandle?.setUnread(event.id, event.n);
+        }
+        if (event.kind === 'profiles-changed') {
+          this.seedObservedIdentityFromProfiles();
         }
         // The tray menu snapshots the profile list and the close-to-tray
         // checkbox at build time; rebuild it on every store mutation and
