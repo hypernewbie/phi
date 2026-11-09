@@ -761,8 +761,15 @@ export class App {
             }
             catch { }
         }
-        if (store.activeCwd && this.sessionsManager) {
-            this.sessionsManager.activeCWD = store.activeCwd;
+        if (this.sessionsManager) {
+            const storeWorkspace = store.activeWorkspace ||
+                this.sessionsManager.activeWorkspace ||
+                '';
+            this.sessionsManager.activeWorkspace = storeWorkspace;
+            this.sessionsManager.activeCWD =
+                store.activeCwd ||
+                    storeWorkspace ||
+                    '';
         }
         const wsKey = `/api/git/worktrees?cwd=${encodeURIComponent(this.sessionsManager?.activeWorkspace || '')}`;
         const worktreesData = this.sessionsManager?.readCachedWorktrees?.(store, wsKey);

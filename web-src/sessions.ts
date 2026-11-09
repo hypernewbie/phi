@@ -887,8 +887,11 @@ export class SessionsManager {
             this.updateWorkspaceSelectWidth();
         }
 
-        if (!this.activeCWD || this.workspaces.length === 0) {
-            this.activeCWD = this.activeWorkspace;
+        if (
+            !this.activeCWD ||
+            (Array.isArray(data.workspaces) && this.workspaces?.length === 0)
+        ) {
+            this.activeCWD = this.activeWorkspace || '';
         }
 
         if (data.theme_color && this.app) {
@@ -1496,8 +1499,11 @@ export class SessionsManager {
         let startingCwd = this.activeCWD;
         let selectSavedWorktree = false;
         if (!workspace) {
+            const previousCwd = this.activeCWD;
             this.activeCWD = '';
-            void this.app?.diffController?.refreshDiff();
+            if (previousCwd) {
+                void this.app?.diffController?.refreshDiff();
+            }
             return;
         }
         const url = `/api/git/worktrees?cwd=${encodeURIComponent(workspace)}`;
@@ -1513,16 +1519,14 @@ export class SessionsManager {
             (sameOwner && this.hasSessionDraft())
         )
             return;
-        const isFirstLoad = !this.worktreeRootOwner;
         if (!sameOwner) {
             const previousCwd = this.activeCWD;
             this.worktreeRootGeneration++;
             this.onSessionContextChange();
             const workspaceChanged =
-                isFirstLoad ||
-                (this.worktreeRootOwner !== null &&
-                    (this.worktreeRootOwner.workspace !== workspace ||
-                        this.worktreeRootOwner.scope !== scope));
+                this.worktreeRootOwner !== null &&
+                (this.worktreeRootOwner.workspace !== workspace ||
+                    this.worktreeRootOwner.scope !== scope);
             this.worktreeRootOwner = { scope, coder, workspace };
             const cached = this.readCachedWorktrees(store, url);
             // Without a saved tree, retire the previous workspace before
@@ -1547,7 +1551,7 @@ export class SessionsManager {
                 this.sessionList.innerHTML =
                     '<div class="no-sessions-found">No saved worktree list yet.</div><div class="scanning-sessions">Scanning git worktrees...</div>';
             }
-            if (this.activeCWD !== previousCwd || isFirstLoad) {
+            if (this.activeCWD !== previousCwd) {
                 void this.app.diffController?.refreshDiff();
                 this.app.markdownManager?.refreshFiles({ force: false });
             }
@@ -1713,7 +1717,7 @@ export class SessionsManager {
             this.activeCWD = targetCwd || workspace || this.activeWorkspace || '';
             this.sessionList.innerHTML =
                 '<div style="padding: 16px; color: var(--text-muted); font-size: 13px; text-align: center;">No worktrees found</div>';
-            if (syncDiff && (this.activeCWD !== previousCwd || isFirstLoad)) {
+            if (syncDiff && this.activeCWD !== previousCwd) {
                 void this.app?.diffController?.refreshDiff();
             }
             return;
@@ -1739,7 +1743,7 @@ export class SessionsManager {
                 }
             }
         }
-        if (syncDiff && (this.activeCWD !== baselineCwd || isFirstLoad)) {
+        if (syncDiff && this.activeCWD !== baselineCwd) {
             void this.app?.diffController?.refreshDiff();
         }
 

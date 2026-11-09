@@ -10710,11 +10710,14 @@ export class TabManager {
                     normalizePath(this.app.sessionsManager.activeCWD || '') !==
                         normalizePath(activeTab.cwd);
                 if (
-                    (activeTab._resyncNeeded || cwdChanged) &&
+                    activeTab._resyncNeeded &&
+                    cwdChanged &&
                     this.app?.sessionsManager
                 ) {
                     activeTab._resyncNeeded = false;
                     this._syncProjectForTab(activeTab);
+                } else {
+                    activeTab._resyncNeeded = false;
                 }
             }
             this.renderPiRpcStatusBar();

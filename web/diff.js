@@ -287,6 +287,7 @@ export class DiffController {
     gitManageCancels = new Set();
     gitManageRetryTimer = null;
     gitManageRetryDelay = 1000;
+    _toggleFitTimer = null;
     // Commits selected from Sync Board can be older than the recent list.
     // Keep the explicit option only while this project and selection match.
     syncCommitTarget = null;
@@ -686,13 +687,18 @@ export class DiffController {
         catch {
             /* Storage can be unavailable; panel visibility still applies. */
         }
+        if (this._toggleFitTimer !== null) {
+            clearTimeout(this._toggleFitTimer);
+            this._toggleFitTimer = null;
+        }
         if (isOpen) {
             this.diffPanel.classList.remove('hidden');
             // mobile-open is the mobile-only opt-in that slides the
             // diff drawer in. Desktop ignores this class entirely.
             this.diffPanel.classList.add('mobile-open');
             this.headerDiffToggleBtn.classList.add('active');
-            setTimeout(() => {
+            this._toggleFitTimer = setTimeout(() => {
+                this._toggleFitTimer = null;
                 this.fitTerminal();
                 this.refreshDiff();
             }, 50);
@@ -2268,6 +2274,7 @@ export class DiffController {
      * refreshDiff after that POST.
      */
     onBackendSwitch() {
+        this.persistGitCommitDraft();
         if (this.gitManageRecord?.phase === 'queued') {
             this.gitManageRecord.phase = 'paused';
             this.gitManageRecord.status = gitManagePausedStatus(this.gitManageRecord.action);
@@ -2287,7 +2294,29 @@ export class DiffController {
         this.gitManageRequestKey = '';
         this.gitManageBusy = false;
         this.gitManageStatus = 'No cached Git information';
+        this.gitCommitDraftKey = '';
+        this.gitCommitDraftStatus = '';
+        if (this.gitCommitMessageInput) {
+            this.gitCommitMessageInput.value = '';
+        }
         this.renderGitManagement();
+        this.gitFiles = [];
+        this.gitFilesKey = '';
+        this.gitFilesEpoch++;
+        this.gitFilesRequestKey = '';
+        this.gitFilesRowKey = '';
+        this.gitFilesPending.clear();
+        this.gitFilesStatus = '';
+        this.gitFilesTruncated = false;
+        this.gitFileList?.replaceChildren();
+        this.renderGitFiles();
+        this.activeDiffHostname = '';
+        this.activeGitHead = '';
+        this.activeGitBranch = '';
+        if (this._toggleFitTimer !== null) {
+            clearTimeout(this._toggleFitTimer);
+            this._toggleFitTimer = null;
+        }
         // Invalidate any old diff fetch before it can paint into this
         // shared panel after the backend changes.
         this._diffStreamToken = (this._diffStreamToken || 0) + 1;
@@ -2309,31 +2338,30 @@ export class DiffController {
             this.currentWs = null;
         }
         this._resetCommitSelect();
-        // Reset even while the panel is hidden: opening it immediately
-        // after the switch must not flash the previous backend's DOM.
+        // Reset all sub-panel surfaces unconditionally so switching tabs
+        // later never exposes stale DOM from the previous backend.
+        if (this.term) {
+            this.term.clear();
+            this.term.write('\x1b[90mBackend switched — refreshing…\x1b[0m\r\n');
+        }
+        this.app.fileTreeManager?.resetForBackendSwitch?.();
+        this._switchMarkdownCachePainted =
+            this.app.markdownManager?.paintFromStore?.() === true;
+        this.renderCmdPanel();
         if (this.activeTab === 'markdown') {
             this._setPanel('markdown');
-            this._switchMarkdownCachePainted =
-                this.app.markdownManager?.paintFromStore?.() === true;
         }
         else if (this.activeTab === 'cmd') {
             this._setPanel('cmd');
-            this.renderCmdPanel();
         }
         else if (this.activeTab === 'files') {
             this._setPanel('files');
-            this.app.fileTreeManager?.resetForBackendSwitch?.();
         }
         else if (this.activeTab === 'sync') {
-            // Cached paint already rendered the store's messages; the
-            // sync poller refreshes behind the switch.
+            this._setPanel('sync');
         }
         else {
             this._setPanel('git');
-            if (this.term) {
-                this.term.clear();
-                this.term.write('\x1b[90mBackend switched — refreshing…\x1b[0m\r\n');
-            }
         }
     }
     /** The commit list belongs to the old backend's repo; keep only the

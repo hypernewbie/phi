@@ -688,6 +688,10 @@ export class SessionsManager {
             this.workspaceSelect.value = this.activeWorkspace;
             this.updateWorkspaceSelectWidth();
         }
+        if (!this.activeCWD ||
+            (Array.isArray(data.workspaces) && this.workspaces?.length === 0)) {
+            this.activeCWD = this.activeWorkspace || '';
+        }
         if (data.theme_color && this.app) {
             // applyAccentTheme sets data-theme-color on <html>;
             // that's what the Settings modal reads on open to
@@ -832,6 +836,13 @@ export class SessionsManager {
         this.worktreeDirtyRequestId++;
         this.worktreeRootGeneration++;
         this.worktreeRootOwner = null;
+        this.activeCWD = '';
+        this.activeWorkspace = '';
+        this.workspaces = [];
+        this.workspaceSelect?.replaceChildren();
+        if (this.workspaceSelect) {
+            this.workspaceSelect.value = '';
+        }
         this.sessionList.replaceChildren();
     }
     invalidateFeatureCache(profileId) {
@@ -1170,6 +1181,14 @@ export class SessionsManager {
         const store = this.app?.getActiveStore?.();
         let startingCwd = this.activeCWD;
         let selectSavedWorktree = false;
+        if (!workspace) {
+            const previousCwd = this.activeCWD;
+            this.activeCWD = '';
+            if (previousCwd) {
+                void this.app?.diffController?.refreshDiff();
+            }
+            return;
+        }
         const url = `/api/git/worktrees?cwd=${encodeURIComponent(workspace)}`;
         const identity = sessionCacheIdentity(scope, url);
         const epoch = sessionCacheEpoch(identity?.namespace);
@@ -1184,7 +1203,7 @@ export class SessionsManager {
             const previousCwd = this.activeCWD;
             this.worktreeRootGeneration++;
             this.onSessionContextChange();
-            const workspaceChanged = this.worktreeRootOwner &&
+            const workspaceChanged = this.worktreeRootOwner !== null &&
                 (this.worktreeRootOwner.workspace !== workspace ||
                     this.worktreeRootOwner.scope !== scope);
             this.worktreeRootOwner = { scope, coder, workspace };
@@ -1201,6 +1220,7 @@ export class SessionsManager {
                 this.renderWorktreesList(cached, workspace, targetCwd, {
                     loadSessions: false,
                     startingCwd,
+                    syncDiff: false,
                 });
                 startingCwd = this.activeCWD;
                 sameOwner = true;
@@ -1278,6 +1298,7 @@ export class SessionsManager {
                 loadSessions: true,
                 startingCwd,
                 snapshot,
+                syncDiff: false,
             });
             if (this.activeCWD !== previousCwd) {
                 void this.app.diffController?.refreshDiff();
@@ -1299,12 +1320,13 @@ export class SessionsManager {
             this.sessionList.appendChild(note);
         }
     }
-    renderWorktreesList(worktrees, workspace, targetCwd = null, { loadSessions = true, startingCwd, snapshot, } = {}) {
+    renderWorktreesList(worktrees, workspace, targetCwd = null, { loadSessions = true, startingCwd, snapshot, syncDiff = true, } = {}) {
         if (this.worktreeRootOwner?.scope === this.app?.scope &&
             this.worktreeRootOwner?.coder === this.activeCoder &&
             this.worktreeRootOwner?.workspace === workspace &&
             this.hasSessionDraft())
             return;
+        const isFirstLoad = !this.worktreeRootOwner;
         this.worktreeRootGeneration++;
         this.worktreeDirtyRequestId++;
         this.onSessionContextChange();
@@ -1315,8 +1337,13 @@ export class SessionsManager {
         };
         this.sessionList.innerHTML = '';
         if (!worktrees || worktrees.length === 0) {
+            const previousCwd = this.activeCWD;
+            this.activeCWD = targetCwd || workspace || this.activeWorkspace || '';
             this.sessionList.innerHTML =
                 '<div style="padding: 16px; color: var(--text-muted); font-size: 13px; text-align: center;">No worktrees found</div>';
+            if (syncDiff && this.activeCWD !== previousCwd) {
+                void this.app?.diffController?.refreshDiff();
+            }
             return;
         }
         const baselineCwd = startingCwd !== undefined ? startingCwd : this.activeCWD;
@@ -1336,6 +1363,9 @@ export class SessionsManager {
                     }
                 }
             }
+        }
+        if (syncDiff && this.activeCWD !== baselineCwd) {
+            void this.app?.diffController?.refreshDiff();
         }
         try {
             localStorage.setItem(serverKey('phi_last_chosen_project'), workspace);

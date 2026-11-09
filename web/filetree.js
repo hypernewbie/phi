@@ -93,6 +93,7 @@ export class FileTreeManager {
     resetForBackendSwitch() {
         // Invalidate any response from the backend we just left.
         this.refreshRequestId++;
+        this.expanded.clear();
         this.treeEl.innerHTML = '<div class="md-list-loading">Loading...</div>';
         this._renderToolbar(this.app.sessionsManager?.activeCWD || '');
     }
@@ -134,7 +135,10 @@ export class FileTreeManager {
     }
     async _fetchDir(rel) {
         const cwd = this.app.sessionsManager.activeCWD || '';
-        const res = await fetch(`/api/fs/list?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(rel)}`);
+        const fetchFn = this.app?.scope && typeof this.app.scope.fetch === 'function'
+            ? (url, opts) => this.app.scope.fetch(url, opts)
+            : fetch;
+        const res = await fetchFn(`/api/fs/list?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(rel)}`);
         if (!res.ok)
             throw new Error(await res.text());
         return await res.json();

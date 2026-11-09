@@ -1911,6 +1911,7 @@ export class TabManager {
                     if (t.pi_bridge != null) {
                         this._seedHttpPiBridge(tab, t.pi_bridge);
                     }
+                    const wasDetached = Boolean(tab._detachedCache);
                     if (live &&
                         (tab._detachedCache || !tab.ws) &&
                         tab.coder !== 'review' &&
@@ -1918,6 +1919,12 @@ export class TabManager {
                         tab.coder !== 'pi-rpc') {
                         tab._detachedCache = false;
                         this._connectTabSocket(tab);
+                    }
+                    else if (live && tab._detachedCache) {
+                        tab._detachedCache = false;
+                    }
+                    if (live && wasDetached) {
+                        tab._resyncNeeded = true;
                     }
                 }
                 else {
@@ -8736,6 +8743,19 @@ export class TabManager {
                     autoReconnect: true,
                     force: userInitiated,
                 });
+                const cwdChanged = Boolean(activeTab.cwd) &&
+                    Boolean(this.app?.sessionsManager) &&
+                    normalizePath(this.app.sessionsManager.activeCWD || '') !==
+                        normalizePath(activeTab.cwd);
+                if (activeTab._resyncNeeded &&
+                    cwdChanged &&
+                    this.app?.sessionsManager) {
+                    activeTab._resyncNeeded = false;
+                    this._syncProjectForTab(activeTab);
+                }
+                else {
+                    activeTab._resyncNeeded = false;
+                }
             }
             this.renderPiRpcStatusBar();
             return;
@@ -8870,6 +8890,7 @@ export class TabManager {
     // Update sidebar state for an explicit tab selection. Returns true for
     // independent views whose viewport activation is handled by switchTab.
     _syncProjectForTab(newTab) {
+        newTab._resyncNeeded = false;
         // pi-rpc is a chat tab opened via the eye icon — it must NOT hijack
         // the left Pi tab's activeCoder or trigger a worktree reload.
         const prevCoder = this.app.sessionsManager.activeCoder;
@@ -8917,6 +8938,11 @@ export class TabManager {
             }
             else if (coderChanged) {
                 this.app.sessionsManager.activeCWD = newTab.cwd;
+            }
+            else if (cwdChanged) {
+                this.app.sessionsManager.activeCWD = newTab.cwd;
+                this.app.sessionsManager.highlightActiveWorktree?.(newTab.cwd);
+                this.app.diffController?.refreshDiff?.();
             }
             return false;
         }
