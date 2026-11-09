@@ -34,6 +34,12 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 app.name = 'phi-client';
 
+// Prevent global Vulkan overlay layers (e.g., MangoHud configured with NVML
+// dGPU telemetry) from attaching to Chromium's GPU child process and holding
+// the discrete GPU awake on hybrid laptops.
+delete process.env.MANGOHUD;
+process.env.DISABLE_MANGOHUD = '1';
+
 /**
  * Migrates legacy userData settings (profiles.json, access-credentials.bin)
  * from previous directory names (phi-desktop-electron, Phi) if the current
