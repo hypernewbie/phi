@@ -4,6 +4,18 @@ All notable changes to phi are documented here. Newest versions first.
 
 ## Unreleased
 
+## v0.38.2 — 2026-11-09
+
+### Added
+- **/model support for the Antigravity backend** (`20d638e1`, `8b2d071b`). The agent backend supports model switching across the 13 verified Antigravity model slugs, including first-party Gemini 4 Argon (`gemini-4-argon-high`, `gemini-4-argon-medium`, `gemini-4-argon-low`), Gemini 3.8 Flash (`gemini-3.8-flash-high`, `gemini-3.8-flash-medium`, `gemini-3.8-flash-low`), and third-party Claude Opus 5.5 (`claude-opus-5-5-high`, `claude-opus-5-5-medium`, `claude-opus-5-5-low`), Claude Sonnet 5.5 (`claude-sonnet-5-5-high`, `claude-sonnet-5-5-medium`, `claude-sonnet-5-5-low`), and GPT-OSS 120B (`gpt-oss-120b-medium`).
+- **Server names and colors persist across desktop restarts** (`01613103`). The desktop profile store records observed hostnames and colors into `profiles.json` upon discovery, preventing new windows from starting in an unknown state. Custom user renames are preserved and protected from being overwritten by auto-discovered hostnames.
+
+### Fixed
+- **Dead tabs reconnect immediately on focus and wake without input toast spam** (`29cf4f03`). Focus and wake events cancel any active backoff delay timers to redial disconnected tabs immediately, matching manual Reconnect behavior. Terminal input during in-flight or pending reconnection suppresses repeated "Tab is disconnected — input not sent" toast notifications while preserving the reconnect overlay.
+- **Low-memory mode resets diff and filetree panels on backend switch** (`01bdd680`, `cfe03040`, `4dd1fad1`). In single-tab low-memory desktop mode, switching between backend servers resets diff controllers, filetree managers, and active working directories, preventing diffs or file listings from previous machines from remaining rendered.
+- **Desktop backend routing and password persistence across rapid switches** (`b09ee297`, `0c8478af`, `ca8d0f2f`, `d79ac5d2`). The internal routing pointer follows the page rather than premature navigation clicks, title bar attributes the live server accurately, and proven credentials persist before body re-installation.
+
+
 ## v0.38.1 — 2026-11-06
 
 ### Changed
