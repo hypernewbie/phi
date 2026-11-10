@@ -109,6 +109,16 @@ function watchViewer(page: Page, pane: string) {
     });
     page.on('response', (res) => {
         const url = res.url();
+        // A 64 KiB ring buffer rolls over every ~2ms during the 30 MiB
+        // burst; a mid-burst reconnect legitimately races that floor and
+        // receives a certified 409 window update. Uncertified 409s
+        // (wrong epoch or future fence) and all other >=400s still fail.
+        if (
+            res.status() === 409 &&
+            url.includes('/replay?') &&
+            res.headers()['x-phi-replay-window']
+        )
+            return;
         if (
             res.status() >= 400 &&
             (url.includes('/ws/') ||
@@ -235,8 +245,9 @@ const viewerStall = (page: Page, pane: string): Promise<ViewerStall> =>
  * The server closes an overflowed v3 viewer FOR reconnect, and the
  * client auto-redials with full-jitter backoff. Under CI load, ten
  * unstable attempts can exhaust the policy and park the pane on the
- * manual-retry overlay — a dead pane with no operator, which once let
- * this gate time out with the screen frozen at the previous phase.
+ * manual-retry overlay, or two rapid mid-burst 409 rollover conflicts
+ * on the 64 KiB test buffer can enter live-only limited recovery after
+ * the producer has already emitted the marker.
  *
  * Recovery is exactly what an operator does: one page reload. It is
  * semantically safe ONLY before the split-VT phases (they pin state in
@@ -256,17 +267,12 @@ async function awaitMarkerWithStallRecovery(
     while (Date.now() < deadline) {
         const state = await viewerStall(page, pane);
         if (!state.pending && state.text.includes(marker)) return;
-        if (
-            !state.pending &&
-            state.overlay !== null &&
-            state.text !== '' &&
-            state.text === lastText
-        ) {
+        if (!state.pending && state.text !== '' && state.text === lastText) {
             unchanged++;
             if (unchanged >= 6 && !recovered) {
                 recovered = true;
                 console.error(
-                    `[e2e] pane ${pane} stalled behind the reconnect overlay "${state.overlay}"; reloading the page once`,
+                    `[e2e] pane ${pane} stalled waiting for ${marker} (overlay=${JSON.stringify(state.overlay)}); reloading the page once`,
                 );
                 await page.reload();
                 unchanged = 0;
@@ -555,8 +561,6 @@ test('retained raw replay preserves split VT and UTF-8 after rollover', async ({
     request,
     browser,
 }) => {
-    // TODO: flakey test - 32MiB burst through xterm.js exceeds timeout on constrained CI runners
-    test.skip(true, 'TODO: flakey test');
     test.setTimeout(480_000);
     const phi = await startPhi({
         // Keep this ordering/decoder regression small enough to complete
@@ -670,7 +674,7 @@ test('retained raw replay preserves split VT and UTF-8 after rollover', async ({
             await expect
                 .poll(() => screenText(pageB, pane), { timeout: 240_000 })
                 .toContain('SPLIT_SGR_OK');
-            let splitScreen = await screenText(pageB, pane);
+            const splitScreen = await screenText(pageB, pane);
             expect(splitScreen).not.toContain('5;0;0m');
             expect(splitScreen).not.toContain('�');
             // Same straddle for a split glyph: the replayed lead
