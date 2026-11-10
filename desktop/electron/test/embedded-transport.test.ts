@@ -547,6 +547,45 @@ describe('embedded-transport', () => {
       expect(validQueryRes.status).toBe(200);
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
+
+    it('preserves client Authorization header on /api/proxy and forwards it to upstream', async () => {
+      await transport.handleRequest(
+        new Request('phi-app://app/__phi/active', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ profileId: 'prof1' }),
+        }),
+      );
+
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify([{ id: 1, title: 'Project 1' }]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      const targetUrl = 'http://vikunja.local:3456/api/v1/projects';
+      const proxyReq = new Request(
+        `phi-app://app/api/proxy?url=${encodeURIComponent(targetUrl)}`,
+        {
+          headers: {
+            Authorization: 'Bearer vikunja-jwt-token-xyz',
+          },
+        },
+      );
+
+      const res = await transport.handleRequest(proxyReq);
+      expect(res.status).toBe(200);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const [calledUrl, calledOpts] = mockFetch.mock.calls[0];
+      expect(calledUrl).toBe(
+        `http://127.0.0.1:8080/api/proxy?url=${encodeURIComponent(targetUrl)}`,
+      );
+      expect(calledOpts.headers.get('Authorization')).toBe(
+        'Bearer vikunja-jwt-token-xyz',
+      );
+    });
   });
 
   // Section 6's request/response table: the shell page holds no credential, so
@@ -1051,6 +1090,83 @@ describe('embedded-transport', () => {
       });
       expect(res.status).toBe(500);
       expect(await res.text()).toBe('{"error":"authentication failed"}');
+    });
+
+    it('does not replace client Authorization with host bearer on /api/proxy even when host holds token', async () => {
+      auth.getToken.mockReturnValue('phi-host-bearer-token');
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify([{ id: 1 }]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      const targetUrl = 'http://vikunja.remote:3456/api/v1/projects';
+      const res = await send(
+        `/api/proxy?url=${encodeURIComponent(targetUrl)}`,
+        {
+          headers: {
+            Authorization: 'Bearer vikunja-token-abc',
+          },
+        },
+      );
+      expect(res.status).toBe(200);
+
+      const { init } = upstreamCall();
+      expect(init.headers.get('Authorization')).toBe(
+        'Bearer vikunja-token-abc',
+      );
+    });
+
+    it('returns upstream 401 on /api/proxy without refreshing host token or masking body', async () => {
+      auth.getToken.mockReturnValue('phi-host-bearer-token');
+      const vikunjaErr = JSON.stringify({
+        message: 'Session expired. Please reconnect.',
+      });
+      mockFetch.mockResolvedValueOnce(
+        new Response(vikunjaErr, {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      const targetUrl = 'http://vikunja.remote:3456/api/v1/projects';
+      const res = await send(
+        `/api/proxy?url=${encodeURIComponent(targetUrl)}`,
+        {
+          headers: {
+            Authorization: 'Bearer stale-vikunja-token',
+          },
+        },
+      );
+
+      expect(res.status).toBe(401);
+      expect(await res.text()).toBe(vikunjaErr);
+      expect(auth.refreshAccess).not.toHaveBeenCalled();
+    });
+
+    it('does not inject host bearer on /api/proxy login requests without client authorization', async () => {
+      auth.getToken.mockReturnValue('phi-host-bearer-token');
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ token: 'new-vik-token' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      const targetUrl = 'http://vikunja.remote:3456/api/v1/login';
+      const res = await send(
+        `/api/proxy?url=${encodeURIComponent(targetUrl)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: 'u', password: 'p' }),
+        },
+      );
+      expect(res.status).toBe(200);
+
+      const { init } = upstreamCall();
+      expect(init.headers.get('Authorization')).toBeNull();
     });
   });
 
