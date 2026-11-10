@@ -180,31 +180,31 @@ if (!singleInstance.primary) {
   // Losing side: classify this launch's positional args and quit;
   // app.quit() happens inside acquire().
   singleInstance.acquire(bootArgs.positional);
+} else {
+  // The bundle sets LSMultipleInstancesProhibited, so macOS never starts a
+  // second process for this app. A phi:// link opened while the app runs
+  // arrives here instead of as a second launch. Register before the app
+  // is ready: macOS sends the link as soon as it launches the app.
+  app.on('open-url', (event, url) => {
+    event.preventDefault();
+    const parsed = parseDeepLink(url);
+    if (parsed.ok) {
+      host.handleLaunch([{ kind: 'deep-link', value: url }]);
+    }
+  });
+
+  // Renderer-encountered phi:// strings come back to the main process on
+  // 'phi:deeplink'; they are parsed and dispatched to every window on the
+  // same channel.
+  ipcMain.on(DEEPLINK_CHANNEL, (_event, raw: unknown) => {
+    if (typeof raw !== 'string') return;
+    const parsed = parseDeepLink(raw);
+    if (parsed.ok) {
+      host.handleLaunch([{ kind: 'deep-link', value: raw }]);
+    }
+  });
+
+  app.whenReady().then(() => {
+    void host.start(singleInstance);
+  });
 }
-
-// The bundle sets LSMultipleInstancesProhibited, so macOS never starts a
-// second process for this app. A phi:// link opened while the app runs
-// arrives here instead of as a second launch. Register before the app
-// is ready: macOS sends the link as soon as it launches the app.
-app.on('open-url', (event, url) => {
-  event.preventDefault();
-  const parsed = parseDeepLink(url);
-  if (parsed.ok) {
-    host.handleLaunch([{ kind: 'deep-link', value: url }]);
-  }
-});
-
-// Renderer-encountered phi:// strings come back to the main process on
-// 'phi:deeplink'; they are parsed and dispatched to every window on the
-// same channel.
-ipcMain.on(DEEPLINK_CHANNEL, (_event, raw: unknown) => {
-  if (typeof raw !== 'string') return;
-  const parsed = parseDeepLink(raw);
-  if (parsed.ok) {
-    host.handleLaunch([{ kind: 'deep-link', value: raw }]);
-  }
-});
-
-app.whenReady().then(() => {
-  void host.start(singleInstance);
-});

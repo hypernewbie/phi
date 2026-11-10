@@ -532,7 +532,9 @@ function isUnsupportedDirSync(err: unknown): boolean {
 export const realCredentialStoreFs: CredentialStoreFs = {
   writeNew: (file, data) => writeFileSync(file, data, { mode: 0o600 }),
   syncFile: (file) => {
-    const fd = openSync(file, 'r');
+    // Open with write access so fsync succeeds across platforms (Windows
+    // FlushFileBuffers fails on handles opened with read-only access).
+    const fd = openSync(file, 'r+');
     try {
       fsyncSync(fd);
     } finally {
