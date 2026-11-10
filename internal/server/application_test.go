@@ -1534,6 +1534,41 @@ func TestHandleProxy_MissingUrl(t *testing.T) {
 	}
 }
 
+func TestHandleProxy_PassesThroughAuthMiddlewareWithExternalAuthorization(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	if err := setTestAccessRecord(auth, testAccessHash()); err != nil {
+		t.Fatal(err)
+	}
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer external-upstream-jwt" {
+			t.Errorf("Expected external Authorization header, got %q", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"projects":[]}`))
+	}))
+	defer upstream.Close()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/proxy", handleProxy)
+	protected := testServer.accessManager.Middleware(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/proxy?url="+url.QueryEscape(upstream.URL), nil)
+	req.Header.Set("Authorization", "Bearer external-upstream-jwt")
+	rec := httptest.NewRecorder()
+
+	protected.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `{"projects":[]}`) {
+		t.Fatalf("Unexpected body: %s", rec.Body.String())
+	}
+}
+
 func TestEncodeDecodeConfigData(t *testing.T) {
 	type DummyData struct {
 		Name string `json:"name"`
