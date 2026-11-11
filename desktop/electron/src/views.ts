@@ -117,6 +117,8 @@ export interface SingleTabSwitchTicket {
   revert(): void;
   /** Resolves true when the server speaks the embedded contract. */
   compat: Promise<boolean>;
+  /** Optional callback fired when an in-page switch successfully finishes. */
+  onSwitched?(): void;
 }
 
 /** One registered (not yet necessarily materialized) profile. */
@@ -781,7 +783,11 @@ export class ProfileViewManager {
             // the router follows the claim. Nothing the old page issued
             // before that claim is misrouted; the page issues no backend
             // fetches until its claim has landed.
-            if (!switched) {
+            if (switched) {
+              if (this.activeId === id) {
+                ticket.onSwitched?.();
+              }
+            } else {
               this.singleEntryMode = 'embedded';
               ticket.commit();
               view.webContents.loadURL(this.buildEmbeddedUrl(id, origin));

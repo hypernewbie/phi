@@ -363,9 +363,10 @@ export class App {
             document.documentElement.dataset.sync = 'stale';
         }
         try {
-            const savedTheme =
-                localStorage.getItem(serverKey('phi_theme_color')) ||
-                localStorage.getItem('phi_theme_color');
+            const savedTheme = getEmbeddedProfileId()
+                ? localStorage.getItem(serverKey('phi_theme_color'))
+                : localStorage.getItem(serverKey('phi_theme_color')) ||
+                  localStorage.getItem('phi_theme_color');
             if (savedTheme) {
                 this.applyAccentTheme(savedTheme);
             }
@@ -382,9 +383,8 @@ export class App {
             await Promise.all([
                 this.loadVersion(scope),
                 this.fetchCoderPresets(scope),
+                this.sessionsManager.loadConfig(),
             ]);
-            if (scope?.aborted) return;
-            await this.sessionsManager.loadConfig();
             if (scope?.aborted) return;
             await this.tabManager.restoreTabsState(scope);
             if (scope?.aborted) return;
@@ -1153,6 +1153,23 @@ export class App {
         try {
             this.sessionsManager?.resetSessionRootForBackendSwitch?.();
             this.paintBackendFromStore(nextStore);
+            const savedTheme = localStorage.getItem(
+                serverKey('phi_theme_color'),
+            );
+            if (savedTheme) {
+                this.applyAccentTheme(savedTheme);
+            } else if (!nextStore?.responses?.has('/api/config')) {
+                const root = document.documentElement;
+                root.style.removeProperty('--accent');
+                root.style.removeProperty('--accent-glow');
+                root.style.removeProperty('--accent-dim');
+                root.style.removeProperty('--accent-bright');
+                root.removeAttribute('data-theme-color');
+                const hostEl = document.getElementById('hostname-display');
+                if (hostEl) {
+                    hostEl.textContent = '';
+                }
+            }
             // The new server's data is on screen: commit the painted
             // profile so the desktop host attributes readings taken from
             // this moment to this server. The /__phi/active POST below
@@ -2166,6 +2183,7 @@ export class App {
 
         // Dynamically update SVG favicon to match the selected theme.
         this.updateFavicon(theme.accent, theme.accentDim);
+        this.tabManager?.updateDocumentTitle?.();
     }
 
     // Browser chrome's live-output state is intentionally separate from the

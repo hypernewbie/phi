@@ -2063,7 +2063,8 @@ export class DesktopHost {
     generation: number,
   ): void {
     if (
-      this.observedIdentity.has(profile.id) ||
+      (this.observedIdentity.has(profile.id) &&
+        (this.observedIdentity.get(profile.id)?.accent || '') !== '') ||
       !this.isCurrentWindowSession(win, generation) ||
       view.webContents.isDestroyed()
     )
@@ -3280,9 +3281,9 @@ export class DesktopHost {
     const info: ActiveServer = {
       id: active.id,
       origin: active.origin,
-      accent: identity?.accent ?? '',
+      accent: identity?.accent || active.accent || '',
       hostname: identity?.hostname || active.name || '',
-      themeColor: identity?.themeColor || '',
+      themeColor: identity?.themeColor || active.themeColor || '',
     };
     // The window icon follows the active server's accent (same Φ
     // silhouette, accent glyph color); unobserved servers keep the white
@@ -4559,6 +4560,19 @@ export class DesktopHost {
             commit: () => transport.setActiveProfile(id),
             revert: () => transport.setActiveProfile(null),
             compat: transport.checkCompatibility(id),
+            onSwitched: () => {
+              if (this.controller?.state().activeId !== id) return;
+              const view = this.profileViews?.getView(id);
+              if (!view) return;
+              void this.observeProfileIdentity(view, origin).then(
+                (identity) => {
+                  if (this.controller?.state().activeId !== id) return;
+                  this.pushRailState();
+                  this.refreshWindowTitle();
+                  this.pushActiveServer();
+                },
+              );
+            },
           };
         },
       });

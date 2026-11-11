@@ -3467,4 +3467,209 @@ describe('DesktopHost TBAR attribution', () => {
     ).toBeGreaterThan(0);
     expect(t.host.observedCpu.get(t.b.id)).toBe(40);
   });
+
+  it('rapid server switching in single-tab mode updates rail accent to the active server color without retaining old accent', async () => {
+    process.env.PHI_DESKTOP_LOW_MEMORY = '1';
+    globalThis.fetch = (async (url: string | URL) => {
+      const href = url.toString();
+      if (href.endsWith('/api/version')) {
+        return new Response(
+          JSON.stringify({ api: '1', terminal_protocol: '3' }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response('{}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+    const host = new DesktopHost();
+    await host.start(primary);
+    const win = fake.FakeBrowserWindow.instances[0];
+    win.webContents.emit('did-finish-load');
+    await flush();
+
+    const ctrl = host.controller!;
+    const pA = ctrl.add('http://alpha.example.test:7070/');
+    const pB = ctrl.add('http://beta.example.test:7071/');
+    const pC = ctrl.add('http://charlie.example.test:7072/');
+    host.profileViews!.addProfile(pA.id, pA.origin);
+    host.profileViews!.addProfile(pB.id, pB.origin);
+    host.profileViews!.addProfile(pC.id, pC.origin);
+
+    // Initial server A has been observed with green accent
+    ctrl.updateServerStatus(pA.id, {
+      hostname: 'ALPHA',
+      accent: '#10b981',
+      themeColor: 'green',
+    });
+    ctrl.setActive(pA.id);
+    await flush();
+
+    const view = host.viewByOrigin.get(pA.origin)!;
+    expect(view).toBeTruthy();
+
+    let pageActiveProfile = pA.id;
+    let pageAccent = '#10b981';
+    let pageTheme = 'green';
+    let pageHostname = 'ALPHA';
+
+    vi.spyOn(view.webContents, 'executeJavaScript').mockImplementation(
+      (code?: string) => {
+        const script = String(code);
+        if (script.includes('__phiEmbed.switchTo')) {
+          if (script.includes(pC.id)) {
+            pageActiveProfile = pC.id;
+            pageHostname = 'CHARLIE';
+            pageAccent = '#2952ff';
+            pageTheme = 'arc';
+          } else if (script.includes(pB.id)) {
+            pageActiveProfile = pB.id;
+            pageHostname = 'BETA';
+            pageAccent = '#f97316';
+            pageTheme = 'orange';
+          }
+          return Promise.resolve(true);
+        }
+        if (script.includes('__phiEmbed.current')) {
+          return Promise.resolve(pageActiveProfile);
+        }
+        if (script.includes('hostname-display')) {
+          return Promise.resolve({
+            hostname: pageHostname,
+            accent: pageAccent,
+            themeColor: pageTheme,
+          });
+        }
+        return Promise.resolve(null);
+      },
+    );
+
+    // Rapidly switch from A -> B -> C
+    ctrl.setActive(pB.id);
+    ctrl.setActive(pC.id);
+    await flush();
+    await flush();
+    await flush();
+
+    // After in-page switch to C settles, the rail must reflect C's active accent (#2952ff),
+    // NOT retain A's old accent (#10b981) or empty
+    const sent = railSent(host);
+    const lastRailState = sent
+      .filter((s) => s[0] === 'phi:rail-state')
+      .pop()?.[1] as {
+      activeId: string;
+      profiles: Array<{ id: string; accent: string }>;
+    };
+    expect(lastRailState.activeId).toBe(pC.id);
+    const activeProfile = lastRailState.profiles.find((p) => p.id === pC.id);
+    expect(activeProfile?.accent).toBe('#2952ff');
+  });
+
+  it('server named zephyrus preserves its reported theme/arc color and is not overwritten by old or fallback accent in single-tab mode', async () => {
+    process.env.PHI_DESKTOP_LOW_MEMORY = '1';
+    globalThis.fetch = (async (url: string | URL) => {
+      const href = url.toString();
+      if (href.endsWith('/api/version')) {
+        return new Response(
+          JSON.stringify({ api: '1', terminal_protocol: '3' }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response('{}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+    const host = new DesktopHost();
+    await host.start(primary);
+    const win = fake.FakeBrowserWindow.instances[0];
+    win.webContents.emit('did-finish-load');
+    await flush();
+
+    const ctrl = host.controller!;
+    // Alpha is active with green accent (#10b981)
+    const pA = ctrl.add('http://alpha.example.test:7070/');
+    ctrl.updateServerStatus(pA.id, {
+      hostname: 'ALPHA',
+      accent: '#10b981',
+      themeColor: 'green',
+    });
+    host.profileViews!.addProfile(pA.id, pA.origin);
+    ctrl.setActive(pA.id);
+    await flush();
+
+    // Zephyrus is a newly added server that will report theme 'arc' (#2952ff)
+    const pZephyrus = ctrl.add('http://zephyrus.example.test:7070/');
+    host.profileViews!.addProfile(pZephyrus.id, pZephyrus.origin);
+
+    const view = host.viewByOrigin.get(pA.origin)!;
+    expect(view).toBeTruthy();
+
+    let pageActiveProfile = pA.id;
+    let pageAccent = '#10b981'; // Green from Alpha initially
+    let pageTheme = 'green';
+    let pageHostname = 'ALPHA';
+
+    let releaseSwitch: () => void = () => {};
+    const held = new Promise<boolean>((resolve) => {
+      releaseSwitch = () => resolve(true);
+    });
+
+    vi.spyOn(view.webContents, 'executeJavaScript').mockImplementation(
+      (code?: string) => {
+        const script = String(code);
+        if (script.includes('__phiEmbed.switchTo')) {
+          return held;
+        }
+        if (script.includes('__phiEmbed.current')) {
+          return Promise.resolve(pageActiveProfile);
+        }
+        if (script.includes('hostname-display')) {
+          return Promise.resolve({
+            hostname: pageHostname,
+            accent: pageAccent,
+            themeColor: pageTheme,
+          });
+        }
+        return Promise.resolve(null);
+      },
+    );
+
+    // Switch to zephyrus
+    ctrl.setActive(pZephyrus.id);
+    await flush();
+
+    // While switch is still in flight (page still showing Alpha), identity probe must not attribute Alpha's green to Zephyrus
+    const inFlightIdentity = await host.observeProfileIdentity(
+      view,
+      pZephyrus.origin,
+    );
+    expect(inFlightIdentity).toBeNull();
+    expect(host.observedIdentity.get(pZephyrus.id)).toBeUndefined();
+
+    // Now release in-page switch and paint zephyrus with theme arc (#2952ff)
+    pageActiveProfile = pZephyrus.id;
+    pageHostname = 'ZEPHYRUS';
+    pageAccent = '#2952ff';
+    pageTheme = 'arc';
+    releaseSwitch();
+    await flush();
+    await flush();
+    await flush();
+
+    // Zephyrus on rail must have accent '#2952ff' (arc), NOT Alpha's green '#10b981'
+    const sent = railSent(host);
+    const lastRailState = sent
+      .filter((s) => s[0] === 'phi:rail-state')
+      .pop()?.[1] as {
+      activeId: string;
+      profiles: Array<{ id: string; accent: string; hostname: string }>;
+    };
+    expect(lastRailState.activeId).toBe(pZephyrus.id);
+    const zephyrusOnRail = lastRailState.profiles.find(
+      (p) => p.id === pZephyrus.id,
+    );
+    expect(zephyrusOnRail?.accent).toBe('#2952ff');
+  });
 });

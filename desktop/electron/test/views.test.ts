@@ -769,6 +769,30 @@ describe('ProfileViewManager singleTab mode', () => {
     expect(switchScripts[0]).toContain('"p2"');
   });
 
+  it('invokes ticket.onSwitched when in-page switch succeeds', async () => {
+    let switchedCalled = false;
+    const { manager, views } = makeManager({
+      singleTab: true,
+      onSingleTabSwitch: () => ({
+        commit() {},
+        revert() {},
+        compat: Promise.resolve(true),
+        onSwitched() {
+          switchedCalled = true;
+        },
+      }),
+    });
+    manager.addProfile('p1', 'http://127.0.0.1:7070/');
+    manager.addProfile('p2', 'http://127.0.0.1:8080/');
+
+    manager.setActive('p1');
+    views[0].executeJavaScript = vi.fn(() => Promise.resolve(true));
+    manager.setActive('p2');
+
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(switchedCalled).toBe(true);
+  });
+
   it('falls back to legacy loadURL when onSingleTabSwitch returns false', () => {
     const { manager, views } = makeManager({
       singleTab: true,

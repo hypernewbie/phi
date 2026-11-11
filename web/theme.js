@@ -1,5 +1,5 @@
 /* Φ phi — Accent Theme & Prepaint Utilities */
-import { serverKey } from './util.js';
+import { getEmbeddedProfileId, serverKey } from './util.js';
 import { captureAppearanceScope, currentAppearanceProfile, readAppearanceCache, readDesktopAppearance, readInheritanceCache, effectiveAppearance, EMPTY_MOBILE, applyAppearanceFonts, } from './mobile-appearance.js';
 export const ACCENT_COLORS = {
     purple: {
@@ -227,8 +227,9 @@ export function runPrepaint() {
         const scopedKey = urlProfile
             ? `phi_theme_color:${urlProfile}`
             : serverKey('phi_theme_color');
+        const isEmbedded = Boolean(urlProfile || getEmbeddedProfileId());
         const colorKey = localStorage.getItem(scopedKey) ||
-            localStorage.getItem('phi_theme_color') ||
+            (!isEmbedded ? localStorage.getItem('phi_theme_color') : null) ||
             'purple';
         const theme = applyThemeTokens(colorKey);
         applyPrepaintFavicon(theme.accent, theme.accentDim);
