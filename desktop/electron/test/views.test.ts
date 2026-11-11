@@ -786,7 +786,7 @@ describe('ProfileViewManager singleTab mode', () => {
     manager.addProfile('p2', 'http://127.0.0.1:8080/');
 
     manager.setActive('p1');
-    views[0].executeJavaScript = vi.fn(() => Promise.resolve(true));
+    views[0].executeJavaScriptResult = true;
     manager.setActive('p2');
 
     for (let i = 0; i < 5; i++) await Promise.resolve();

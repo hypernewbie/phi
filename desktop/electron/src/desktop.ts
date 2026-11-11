@@ -4564,14 +4564,12 @@ export class DesktopHost {
               if (this.controller?.state().activeId !== id) return;
               const view = this.profileViews?.getView(id);
               if (!view) return;
-              void this.observeProfileIdentity(view, origin).then(
-                (identity) => {
-                  if (this.controller?.state().activeId !== id) return;
-                  this.pushRailState();
-                  this.refreshWindowTitle();
-                  this.pushActiveServer();
-                },
-              );
+              void this.observeProfileIdentity(view, origin).then(() => {
+                if (this.controller?.state().activeId !== id) return;
+                this.pushRailState();
+                this.refreshWindowTitle();
+                this.pushActiveServer();
+              });
             },
           };
         },
