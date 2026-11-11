@@ -2517,7 +2517,7 @@ func accessClientIP(remoteAddr string) string {
 
 func (m *Manager) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if accessAuthPublicPath(r.URL.Path) || isSyncBoardPath(r.URL.Path) || isProxyPath(r.URL.Path) {
+		if accessAuthPublicPath(r.URL.Path) || isSyncBoardPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -2563,15 +2563,6 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 // this instance syncs to.
 func isSyncBoardPath(path string) bool {
 	return path == "/api/sync/messages" || strings.HasPrefix(path, "/api/sync/messages/")
-}
-
-// isProxyPath marks /api/proxy as exempt from server-side bearer auth.
-//
-// /api/proxy forwards requests directly to third-party services (e.g. Vikunja).
-// The incoming Authorization header belongs to the upstream service (e.g. Vikunja JWT)
-// and cannot be verified against the phi access database.
-func isProxyPath(path string) bool {
-	return path == "/api/proxy"
 }
 
 // accessAuthPublicPath lists the exact exemptions: v1 status/login and the five

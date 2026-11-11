@@ -4042,41 +4042,6 @@ func TestAccessExemptionLists(t *testing.T) {
 			t.Errorf("%s is wrongly treated as a sync board path", path)
 		}
 	}
-	if !isProxyPath("/api/proxy") {
-		t.Errorf("/api/proxy is not marked as a proxy path")
-	}
-	for _, path := range []string{"/api/proxy/more", "/api/proxy-other", "/proxy"} {
-		if isProxyPath(path) {
-			t.Errorf("%s is wrongly treated as a proxy path", path)
-		}
-	}
-}
-
-func TestAccessProxyEndpointPassesThroughMiddlewareWithExternalAuthorization(t *testing.T) {
-	withTempConfig(t)
-	useTestAccessAuth(t)
-	testAccessEnableV2(t, testAccessPassword)
-
-	called := false
-	handler := Default.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		if r.Header.Get("Authorization") != "Bearer vikunja-external-jwt-token" {
-			t.Errorf("Authorization header not preserved: %s", r.Header.Get("Authorization"))
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	request := httptest.NewRequest(http.MethodGet, "/api/proxy?url=http%3A%2F%2Fvikunja.local%2Fapi%2Fv1%2Fprojects", nil)
-	request.Header.Set("Authorization", "Bearer vikunja-external-jwt-token")
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, request)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("/api/proxy was rejected by middleware: status = %d, want 200", rec.Code)
-	}
-	if !called {
-		t.Fatal("proxy handler was not called")
-	}
 }
 
 // TestAccessAssetCookieReach pins the exact reach of the asset cookie: the two
