@@ -10,6 +10,10 @@ Stateless key/value REST API exposed by a Phi server, used as a shared
 coordination board between machines/agents on the same tailnet or LAN.
 Every write is an upsert (no need to check existence first).
 
+The **coordinator** stores board messages. The **Phi server serving the viewing UI**
+resolves file previews in that UI's active workspace. These can be different servers.
+Posting to a remote coordinator does not require copying preview files to it or using SSH.
+
 ## Coordinator Address Resolution
 
 Resolve the coordinator URL using the first available source:
@@ -97,7 +101,7 @@ curl -s -X POST "$PHI_COORDINATOR/api/sync/messages" -H "Content-Type: applicati
 - `machine` *(string)*: Short name of the machine that did the work (for example, `JUPITER`). Renders as `Unknown machine` when absent. This is a sender-provided display label, not verified identity.
 - `title` *(string)*: Card title displayed in bold.
 - `description` / `desc` *(string)*: Optional text or markdown explanation. Use `description` for a standalone explanation. `text` is a fallback alias only after another rich-payload field (such as `title`) has made the object an action card; `{"text":"..."}` alone is shown as raw JSON.
-- `preview` / `image` / `file` *(string)*: Workspace-relative path to a file or image on the Phi server (e.g. `screenshots/login_mockup.png`). If the file exists in the workspace on the Phi server, renders a clickable **Preview [filename]** button and inline thumbnail. If the file does not exist on the host machine (or if an agent passes client-local absolute paths like `C:\...`), no preview is shown to avoid broken UI. Never pass host-specific local absolute paths.
+- `preview` / `image` / `file` *(string)*: Path relative to the active pane's workspace on **the Phi server serving the viewing UI** (e.g. `screenshots/login_mockup.png`), not the coordinator. The UI requests the file from its own server. If the file exists there, the card shows a clickable **Preview [filename]** button and an inline image thumbnail. Otherwise, no preview is shown. A file need not exist on the coordinator unless that coordinator also serves the viewing UI. Use workspace-relative paths, not host-specific absolute paths.
 - `url` / `link` *(string)*: External or local web URL (`http://` or `https://`). Renders a styled clickable chip opening the link in a new browser tab.
 - `diff` *(boolean, string, or object)*: A Git diff action. Use `{"commit":"<git-hash>"}` to show an **Open Pretty Diff · [hash]** button. A hash string is shorthand. Hashes must contain 4–64 hexadecimal characters. `true` opens the current diff panel; `"modal"` or `{"modal":true}` opens its pretty viewer. `{"files":["a.ts","b.ts"]}` labels the chip **Review Diff (N files)**. Commit actions use the currently selected Phi project. They never execute terminal input or open automatically.
 - `checklist` *(array of strings or objects)*: Read-only task list shown as disabled checkboxes. An object accepts `label`, `text`, or `name`, plus `done` or `checked`. Use it to report progress; it cannot collect input.
@@ -149,7 +153,8 @@ Existing preview, link, and diff cards retain their behavior.
 
 ## Notes
 
-- The coordinator address is whatever your phi server binds to. On a default
+- The coordinator address identifies the Phi server hosting the board API,
+  not necessarily the server serving the viewing UI. On a default
   install phi binds to loopback + LAN (RFC 1918) + Tailscale CGNAT
   (100.64/10); pick whichever address is reachable from the machine running
   `claude` (often a Tailscale IP for cross-machine sync).
