@@ -8732,6 +8732,16 @@ export class TabManager {
         if (this.activePaneId === paneId) {
             const activeTab = this.getActiveTab();
             if (activeTab) {
+                if (activeTab._detachedCache &&
+                    (userInitiated || !this.restoringTabs)) {
+                    activeTab._detachedCache = false;
+                    if (!activeTab.ws &&
+                        activeTab.coder !== 'review' &&
+                        activeTab.coder !== 'kanban' &&
+                        activeTab.coder !== 'pi-rpc') {
+                        this._connectTabSocket(activeTab);
+                    }
+                }
                 // Already on this tab - the user just clicked the active tab to
                 // refocus. Don't scroll the terminal to bottom (loses their
                 // scrollback position), but still run fit + reconnect so the
@@ -8743,12 +8753,10 @@ export class TabManager {
                     autoReconnect: true,
                     force: userInitiated,
                 });
-                const cwdChanged = Boolean(activeTab.cwd) &&
-                    Boolean(this.app?.sessionsManager) &&
+                const cwdChanged = Boolean(this.app?.sessionsManager) &&
                     normalizePath(this.app.sessionsManager.activeCWD || '') !==
-                        normalizePath(activeTab.cwd);
-                if (activeTab._resyncNeeded &&
-                    cwdChanged &&
+                        normalizePath(activeTab.cwd || '');
+                if ((activeTab._resyncNeeded || cwdChanged) &&
                     this.app?.sessionsManager) {
                     activeTab._resyncNeeded = false;
                     this._syncProjectForTab(activeTab);
@@ -8808,6 +8816,15 @@ export class TabManager {
         const newTab = this.getActiveTab();
         if (!newTab)
             return;
+        if (newTab._detachedCache && (userInitiated || !this.restoringTabs)) {
+            newTab._detachedCache = false;
+            if (!newTab.ws &&
+                newTab.coder !== 'review' &&
+                newTab.coder !== 'kanban' &&
+                newTab.coder !== 'pi-rpc') {
+                this._connectTabSocket(newTab);
+            }
+        }
         this._setPiRpcActionVisibility(newTab);
         this._updateAttachmentControl(newTab);
         newTab.tabEl.classList.add('active');
@@ -8925,23 +8942,45 @@ export class TabManager {
             normalizePath(this.app.sessionsManager.activeWorkspace) !==
                 normalizePath(newTab.workspace);
         const coderChanged = prevCoder !== newTab.coder;
-        const cwdChanged = newTab.cwd &&
-            normalizePath(this.app.sessionsManager.activeCWD) !==
-                normalizePath(newTab.cwd);
+        const cwdChanged = normalizePath(this.app.sessionsManager.activeCWD || '') !==
+            normalizePath(newTab.cwd || '');
         if (newTab._detachedCache) {
             if (workspaceChanged) {
                 this.app.sessionsManager.workspaceSelect.value =
                     newTab.workspace;
                 this.app.sessionsManager.activeWorkspace = newTab.workspace;
-                this.app.sessionsManager.activeCWD = newTab.cwd;
+                this.app.sessionsManager.activeCWD = newTab.cwd || '';
                 this.app.sessionsManager.updateWorkspaceSelectWidth();
+                const store = this.app?.getActiveStore?.();
+                const url = `/api/git/worktrees?cwd=${encodeURIComponent(newTab.workspace)}`;
+                const cached = this.app.sessionsManager.readCachedWorktrees?.(store, url);
+                if (cached) {
+                    this.app.sessionsManager.renderWorktreesList?.(cached, newTab.workspace, newTab.cwd || null, { loadSessions: false, syncDiff: false });
+                }
+                if (newTab.cwd) {
+                    this.app.sessionsManager.highlightActiveWorktree?.(newTab.cwd);
+                }
+                else {
+                    this.app.sessionsManager.clearActiveWorktree?.();
+                }
             }
             else if (coderChanged) {
-                this.app.sessionsManager.activeCWD = newTab.cwd;
+                this.app.sessionsManager.activeCWD = newTab.cwd || '';
+                if (newTab.cwd) {
+                    this.app.sessionsManager.highlightActiveWorktree?.(newTab.cwd);
+                }
+                else {
+                    this.app.sessionsManager.clearActiveWorktree?.();
+                }
             }
             else if (cwdChanged) {
-                this.app.sessionsManager.activeCWD = newTab.cwd;
-                this.app.sessionsManager.highlightActiveWorktree?.(newTab.cwd);
+                this.app.sessionsManager.activeCWD = newTab.cwd || '';
+                if (newTab.cwd) {
+                    this.app.sessionsManager.highlightActiveWorktree?.(newTab.cwd);
+                }
+                else {
+                    this.app.sessionsManager.clearActiveWorktree?.();
+                }
                 this.app.diffController?.refreshDiff?.();
             }
             return false;
@@ -8949,14 +8988,22 @@ export class TabManager {
         if (workspaceChanged) {
             this.app.sessionsManager.workspaceSelect.value = newTab.workspace;
             this.app.sessionsManager.activeWorkspace = newTab.workspace;
-            this.app.sessionsManager.activeCWD = newTab.cwd;
+            this.app.sessionsManager.activeCWD = newTab.cwd || '';
             this.app.sessionsManager.updateWorkspaceSelectWidth();
-            this.app.sessionsManager.loadWorktrees(newTab.cwd).then(() => {
+            this.app.sessionsManager
+                .loadWorktrees(newTab.cwd || null)
+                .then(() => {
                 if (!isCurrentProjectContext())
                     return;
                 const activeTab = this.getActiveTab();
                 if (activeTab) {
                     this.app.sessionsManager.highlightActiveSession(activeTab.sessionId);
+                }
+                if (newTab.cwd) {
+                    this.app.sessionsManager.highlightActiveWorktree?.(newTab.cwd);
+                }
+                else {
+                    this.app.sessionsManager.clearActiveWorktree?.();
                 }
                 this.app.diffController.refreshDiff();
                 if (this.app.markdownManager) {
@@ -8967,13 +9014,21 @@ export class TabManager {
         else if (coderChanged) {
             // Workspace is the same, but coder changed. Rebuild worktrees for
             // the new coder.
-            this.app.sessionsManager.activeCWD = newTab.cwd;
-            this.app.sessionsManager.loadWorktrees(newTab.cwd).then(() => {
+            this.app.sessionsManager.activeCWD = newTab.cwd || '';
+            this.app.sessionsManager
+                .loadWorktrees(newTab.cwd || null)
+                .then(() => {
                 if (!isCurrentProjectContext())
                     return;
                 const activeTab = this.getActiveTab();
                 if (activeTab) {
                     this.app.sessionsManager.highlightActiveSession(activeTab.sessionId);
+                }
+                if (newTab.cwd) {
+                    this.app.sessionsManager.highlightActiveWorktree?.(newTab.cwd);
+                }
+                else {
+                    this.app.sessionsManager.clearActiveWorktree?.();
                 }
                 this.app.diffController.refreshDiff();
                 if (this.app.markdownManager) {
@@ -8983,8 +9038,13 @@ export class TabManager {
         }
         else if (cwdChanged) {
             // Workspace and coder are the same, only CWD changed.
-            this.app.sessionsManager.activeCWD = newTab.cwd;
-            this.app.sessionsManager.highlightActiveWorktree(newTab.cwd);
+            this.app.sessionsManager.activeCWD = newTab.cwd || '';
+            if (newTab.cwd) {
+                this.app.sessionsManager.highlightActiveWorktree(newTab.cwd);
+            }
+            else {
+                this.app.sessionsManager.clearActiveWorktree?.();
+            }
             this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
             this.app.diffController.refreshDiff();
             if (this.app.markdownManager) {

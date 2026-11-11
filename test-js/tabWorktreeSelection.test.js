@@ -81,7 +81,8 @@ function mockApiFetch(routes = []) {
         const u = String(url);
         const hit = routes.find((r) => u.startsWith(r.match));
         if (hit) {
-            const data = typeof hit.data === 'function' ? hit.data(u, opts) : hit.data;
+            const data =
+                typeof hit.data === 'function' ? hit.data(u, opts) : hit.data;
             return Promise.resolve({
                 ok: true,
                 status: 200,
@@ -94,7 +95,7 @@ function mockApiFetch(routes = []) {
             ok: true,
             status: 200,
             headers: { get: () => 'application/json' },
-            json: async () => ([]),
+            json: async () => [],
             text: async () => '[]',
         });
     });
@@ -111,13 +112,25 @@ describe('worktree auto-selection on tab switch', () => {
                 data: (url) => {
                     if (url.includes('repo2')) {
                         return [
-                            { path: '/work/repo2', branch: 'main', active: true },
-                            { path: '/work/repo2-wt', branch: 'feat2', active: false },
+                            {
+                                path: '/work/repo2',
+                                branch: 'main',
+                                active: true,
+                            },
+                            {
+                                path: '/work/repo2-wt',
+                                branch: 'feat2',
+                                active: false,
+                            },
                         ];
                     }
                     return [
                         { path: '/work/repo1', branch: 'main', active: true },
-                        { path: '/work/repo1-wt', branch: 'feat1', active: false },
+                        {
+                            path: '/work/repo1-wt',
+                            branch: 'feat1',
+                            active: false,
+                        },
                     ];
                 },
             },
@@ -156,26 +169,52 @@ describe('worktree auto-selection on tab switch', () => {
         app.sessionsManager.activeCWD = '/work/repo1';
 
         // Render worktrees in DOM
-        app.sessionsManager.renderWorktreesList([
-            { path: '/work/repo1', branch: 'main', active: true },
-            { path: '/work/repo1-wt', branch: 'feat1', active: false },
-        ], '/work/repo1', '/work/repo1');
+        app.sessionsManager.renderWorktreesList(
+            [
+                { path: '/work/repo1', branch: 'main', active: true },
+                { path: '/work/repo1-wt', branch: 'feat1', active: false },
+            ],
+            '/work/repo1',
+            '/work/repo1',
+        );
 
-        const secMain = document.querySelector('.worktree-section[data-worktree-path="/work/repo1"]');
-        const secWt = document.querySelector('.worktree-section[data-worktree-path="/work/repo1-wt"]');
+        const secMain = document.querySelector(
+            '.worktree-section[data-worktree-path="/work/repo1"]',
+        );
+        const secWt = document.querySelector(
+            '.worktree-section[data-worktree-path="/work/repo1-wt"]',
+        );
         expect(secMain.classList.contains('active')).toBe(true);
         expect(secWt.classList.contains('active')).toBe(false);
 
         // Create two tabs
-        app.tabManager.createTab('t1', 's1', 'Tab 1', 'shell', '/work/repo1', '/work/repo1');
-        app.tabManager.createTab('t2', 's2', 'Tab 2', 'shell', '/work/repo1', '/work/repo1-wt');
+        app.tabManager.createTab(
+            't1',
+            's1',
+            'Tab 1',
+            'shell',
+            '/work/repo1',
+            '/work/repo1',
+        );
+        app.tabManager.createTab(
+            't2',
+            's2',
+            'Tab 2',
+            'shell',
+            '/work/repo1',
+            '/work/repo1-wt',
+        );
         await new Promise((r) => setTimeout(r, 20));
 
         app.tabManager.switchTab('t1');
         await new Promise((r) => setTimeout(r, 20));
 
-        const secMainAfter1 = document.querySelector('.worktree-section[data-worktree-path="/work/repo1"]');
-        const secWtAfter1 = document.querySelector('.worktree-section[data-worktree-path="/work/repo1-wt"]');
+        const secMainAfter1 = document.querySelector(
+            '.worktree-section[data-worktree-path="/work/repo1"]',
+        );
+        const secWtAfter1 = document.querySelector(
+            '.worktree-section[data-worktree-path="/work/repo1-wt"]',
+        );
         expect(secMainAfter1?.classList?.contains('active')).toBe(true);
         expect(secWtAfter1?.classList?.contains('active')).toBe(false);
 
@@ -183,8 +222,12 @@ describe('worktree auto-selection on tab switch', () => {
         app.tabManager.switchTab('t2', { userInitiated: true });
         await new Promise((r) => setTimeout(r, 20));
 
-        const secMainAfter2 = document.querySelector('.worktree-section[data-worktree-path="/work/repo1"]');
-        const secWtAfter2 = document.querySelector('.worktree-section[data-worktree-path="/work/repo1-wt"]');
+        const secMainAfter2 = document.querySelector(
+            '.worktree-section[data-worktree-path="/work/repo1"]',
+        );
+        const secWtAfter2 = document.querySelector(
+            '.worktree-section[data-worktree-path="/work/repo1-wt"]',
+        );
         expect(app.sessionsManager.activeCWD).toBe('/work/repo1-wt');
         expect(secWtAfter2?.classList?.contains('active')).toBe(true);
         expect(secMainAfter2?.classList?.contains('active')).toBe(false);
@@ -192,20 +235,32 @@ describe('worktree auto-selection on tab switch', () => {
 
     it('low-memory mode (detachedCache): switching tabs across different worktrees in same workspace auto-picks the worktree', async () => {
         setEmbeddedBackend('prof-lowmem', 'http://lowmem:7070');
-        window.history.replaceState(null, '', '?desktop=1&embedded=1&profile=prof-lowmem&origin=http%3A%2F%2Flowmem%3A7070');
+        window.history.replaceState(
+            null,
+            '',
+            '?desktop=1&embedded=1&profile=prof-lowmem&origin=http%3A%2F%2Flowmem%3A7070',
+        );
         app = new App();
         app.sessionsManager.workspaces = ['/work/repo1'];
         app.sessionsManager.activeWorkspace = '/work/repo1';
         app.sessionsManager.activeCWD = '/work/repo1';
 
         // Render worktrees for repo1
-        app.sessionsManager.renderWorktreesList([
-            { path: '/work/repo1', branch: 'main', active: true },
-            { path: '/work/repo1-wt', branch: 'feat1', active: false },
-        ], '/work/repo1', '/work/repo1');
+        app.sessionsManager.renderWorktreesList(
+            [
+                { path: '/work/repo1', branch: 'main', active: true },
+                { path: '/work/repo1-wt', branch: 'feat1', active: false },
+            ],
+            '/work/repo1',
+            '/work/repo1',
+        );
 
-        const secMain = document.querySelector('.worktree-section[data-worktree-path="/work/repo1"]');
-        const secWt = document.querySelector('.worktree-section[data-worktree-path="/work/repo1-wt"]');
+        const secMain = document.querySelector(
+            '.worktree-section[data-worktree-path="/work/repo1"]',
+        );
+        const secWt = document.querySelector(
+            '.worktree-section[data-worktree-path="/work/repo1-wt"]',
+        );
         expect(secMain?.classList.contains('active')).toBe(true);
 
         const tabPayload = [
@@ -245,19 +300,41 @@ describe('worktree auto-selection on tab switch', () => {
         app.sessionsManager.activeWorkspace = '/work/repo1';
         app.sessionsManager.activeCWD = '/work/repo1';
 
-        app.sessionsManager.renderWorktreesList([
-            { path: '/work/repo1', branch: 'main', active: true },
-            { path: '/work/repo1-wt', branch: 'feat1', active: false },
-        ], '/work/repo1', '/work/repo1');
+        app.sessionsManager.renderWorktreesList(
+            [
+                { path: '/work/repo1', branch: 'main', active: true },
+                { path: '/work/repo1-wt', branch: 'feat1', active: false },
+            ],
+            '/work/repo1',
+            '/work/repo1',
+        );
 
-        app.tabManager.createTab('t1', 's1', 'Tab 1', 'shell', '/work/repo1', '/work/repo1-wt');
-        app.tabManager.createTab('t2', 's2', 'Tab 2 (no wt)', 'shell', '/work/repo1', '');
+        app.tabManager.createTab(
+            't1',
+            's1',
+            'Tab 1',
+            'shell',
+            '/work/repo1',
+            '/work/repo1-wt',
+        );
+        app.tabManager.createTab(
+            't2',
+            's2',
+            'Tab 2 (no wt)',
+            'shell',
+            '/work/repo1',
+            '',
+        );
+        const tab2 = app.tabManager.tabs.get('t2');
+        tab2.cwd = '';
         await new Promise((r) => setTimeout(r, 20));
 
         app.tabManager.switchTab('t1');
         await new Promise((r) => setTimeout(r, 20));
 
-        const secWt = document.querySelector('.worktree-section[data-worktree-path="/work/repo1-wt"]');
+        const secWt = document.querySelector(
+            '.worktree-section[data-worktree-path="/work/repo1-wt"]',
+        );
         expect(secWt?.classList.contains('active')).toBe(true);
 
         // Switch to tab 2 with no cwd / no worktree
@@ -276,9 +353,30 @@ describe('worktree auto-selection on tab switch', () => {
         app.sessionsManager.activeWorkspace = '/work/repo1';
         app.sessionsManager.activeCWD = '/work/repo1';
 
-        app.tabManager.createTab('t1', 's1', 'Tab 1', 'shell', '/work/repo1', '/work/repo1');
-        app.tabManager.createTab('t2', 's2', 'Tab 2', 'shell', '/work/repo1', '/work/repo1-wt');
-        app.tabManager.createTab('t3', 's3', 'Tab 3', 'shell', '/work/repo2', '/work/repo2-wt');
+        app.tabManager.createTab(
+            't1',
+            's1',
+            'Tab 1',
+            'shell',
+            '/work/repo1',
+            '/work/repo1',
+        );
+        app.tabManager.createTab(
+            't2',
+            's2',
+            'Tab 2',
+            'shell',
+            '/work/repo1',
+            '/work/repo1-wt',
+        );
+        app.tabManager.createTab(
+            't3',
+            's3',
+            'Tab 3',
+            'shell',
+            '/work/repo2',
+            '/work/repo2-wt',
+        );
         await new Promise((r) => setTimeout(r, 20));
 
         // Rapidly switch t1 -> t2 -> t3 without waiting
@@ -290,14 +388,20 @@ describe('worktree auto-selection on tab switch', () => {
         expect(app.tabManager.activePaneId).toBe('t3');
         expect(app.sessionsManager.activeWorkspace).toBe('/work/repo2');
         expect(app.sessionsManager.activeCWD).toBe('/work/repo2-wt');
-        const secWt3 = document.querySelector('.worktree-section[data-worktree-path="/work/repo2-wt"]');
+        const secWt3 = document.querySelector(
+            '.worktree-section[data-worktree-path="/work/repo2-wt"]',
+        );
         expect(secWt3).not.toBeNull();
         expect(secWt3?.classList.contains('active')).toBe(true);
     });
 
     it('low-memory mode (detachedCache): switching tabs across different coders auto-picks the worktree for the newly active tab', async () => {
         setEmbeddedBackend('prof-lowmem', 'http://lowmem:7070');
-        window.history.replaceState(null, '', '?desktop=1&embedded=1&profile=prof-lowmem&origin=http%3A%2F%2Flowmem%3A7070');
+        window.history.replaceState(
+            null,
+            '',
+            '?desktop=1&embedded=1&profile=prof-lowmem&origin=http%3A%2F%2Flowmem%3A7070',
+        );
         app = new App();
         app.sessionsManager.workspaces = ['/work/repo1'];
         app.sessionsManager.activeWorkspace = '/work/repo1';
@@ -305,10 +409,14 @@ describe('worktree auto-selection on tab switch', () => {
         app.sessionsManager.activeCWD = '/work/repo1';
 
         // Render worktrees for repo1
-        app.sessionsManager.renderWorktreesList([
-            { path: '/work/repo1', branch: 'main', active: true },
-            { path: '/work/repo1-wt', branch: 'feat1', active: false },
-        ], '/work/repo1', '/work/repo1');
+        app.sessionsManager.renderWorktreesList(
+            [
+                { path: '/work/repo1', branch: 'main', active: true },
+                { path: '/work/repo1-wt', branch: 'feat1', active: false },
+            ],
+            '/work/repo1',
+            '/work/repo1',
+        );
 
         const tabPayload = [
             {
@@ -337,23 +445,33 @@ describe('worktree auto-selection on tab switch', () => {
 
         expect(app.sessionsManager.activeCoder).toBe('claude');
         expect(app.sessionsManager.activeCWD).toBe('/work/repo1-wt');
-        const secWt = document.querySelector('.worktree-section[data-worktree-path="/work/repo1-wt"]');
+        const secWt = document.querySelector(
+            '.worktree-section[data-worktree-path="/work/repo1-wt"]',
+        );
         expect(secWt?.classList?.contains('active')).toBe(true);
     });
 
     it('low-memory mode (detachedCache): switching tabs across different workspaces auto-picks the worktree for the newly active tab', async () => {
         setEmbeddedBackend('prof-lowmem', 'http://lowmem:7070');
-        window.history.replaceState(null, '', '?desktop=1&embedded=1&profile=prof-lowmem&origin=http%3A%2F%2Flowmem%3A7070');
+        window.history.replaceState(
+            null,
+            '',
+            '?desktop=1&embedded=1&profile=prof-lowmem&origin=http%3A%2F%2Flowmem%3A7070',
+        );
         app = new App();
         app.sessionsManager.workspaces = ['/work/repo1', '/work/repo2'];
         app.sessionsManager.activeWorkspace = '/work/repo1';
         app.sessionsManager.activeCWD = '/work/repo1';
 
         // Render worktree for repo1
-        app.sessionsManager.renderWorktreesList([
-            { path: '/work/repo1', branch: 'main', active: true },
-            { path: '/work/repo1-wt', branch: 'feat1', active: false },
-        ], '/work/repo1', '/work/repo1');
+        app.sessionsManager.renderWorktreesList(
+            [
+                { path: '/work/repo1', branch: 'main', active: true },
+                { path: '/work/repo1-wt', branch: 'feat1', active: false },
+            ],
+            '/work/repo1',
+            '/work/repo1',
+        );
 
         // Warm paint tabs in detached state
         const tabPayload = [
@@ -379,13 +497,16 @@ describe('worktree auto-selection on tab switch', () => {
 
         // Switch to tab 2
         app.tabManager.switchTab('t2', { userInitiated: true });
+        await new Promise((r) => setTimeout(r, 30));
 
         // In low-memory mode, switching to tab 2 should pick repo2 and repo2-wt
         expect(app.sessionsManager.activeWorkspace).toBe('/work/repo2');
         expect(app.sessionsManager.activeCWD).toBe('/work/repo2-wt');
 
         // And worktree for repo2-wt should be rendered / active
-        const secWt2 = document.querySelector('.worktree-section[data-worktree-path="/work/repo2-wt"]');
+        const secWt2 = document.querySelector(
+            '.worktree-section[data-worktree-path="/work/repo2-wt"]',
+        );
         expect(secWt2).not.toBeNull();
         expect(secWt2?.classList?.contains('active')).toBe(true);
     });

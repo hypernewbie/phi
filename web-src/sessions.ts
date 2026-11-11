@@ -1314,6 +1314,13 @@ export class SessionsManager {
         // coder-tab is set to pi. The keybinding itself remains global.
     }
 
+    clearActiveWorktree(): void {
+        document.querySelectorAll('.worktree-section').forEach((sec) => {
+            sec.classList.remove('active');
+            sec.classList.remove('expanded');
+        });
+    }
+
     highlightActiveWorktree(cwdPath: string): void {
         if (!cwdPath) return;
         document.querySelectorAll('.worktree-section').forEach((sec) => {

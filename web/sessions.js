@@ -1047,6 +1047,12 @@ export class SessionsManager {
         // exactly when the user is in a pi session — not just when the sidebar
         // coder-tab is set to pi. The keybinding itself remains global.
     }
+    clearActiveWorktree() {
+        document.querySelectorAll('.worktree-section').forEach((sec) => {
+            sec.classList.remove('active');
+            sec.classList.remove('expanded');
+        });
+    }
     highlightActiveWorktree(cwdPath) {
         if (!cwdPath)
             return;
