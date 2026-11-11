@@ -175,7 +175,6 @@ type AuthProxyRow =
   | 'password'
   | 'logout'
   | 'status'
-  | 'proxy'
   | 'other';
 
 /** The v2 POST routes carry the host's own credential handling. */
@@ -194,7 +193,6 @@ const CLEARED_BODY = '{"ok":true,"enabled":false}';
 const LOGOUT_OK_BODY = '{"ok":true}';
 
 function authProxyRow(pathname: string, method: string): AuthProxyRow {
-  if (pathname === '/api/proxy') return 'proxy';
   if (method === 'GET' && pathname === '/api/auth/v2/status') return 'status';
   if (method !== 'POST') return 'other';
   return V2_AUTH_POST_ROUTES[pathname] ?? 'other';
@@ -1167,7 +1165,6 @@ export class EmbeddedTransport {
       return this.handleV2CredentialRow(req, targetUrl, profile);
     }
     if (row === 'logout') return this.handleV2Logout(req, targetUrl, profile);
-    if (row === 'proxy') return this.forwardProxyRow(req, targetUrl, profile);
     return this.forwardApiRow(req, targetUrl, profile, row);
   }
 
@@ -1308,67 +1305,6 @@ export class EmbeddedTransport {
   }
 
   /**
-   * The proxy row: `/api/proxy` forwards to external/upstream services (e.g.
-   * Vikunja). The client's Authorization header belongs to the upstream
-   * target, so it must be preserved and must never be replaced by the host's
-   * bearer token. Upstream errors (such as 401 or 429) belong to the proxied
-   * service, so they must be returned directly to the client without
-   * triggering host token refresh.
-   */
-  private async forwardProxyRow(
-    req: Request,
-    targetUrl: URL,
-    profile: EmbeddedProfile,
-  ): Promise<Response> {
-    const body = await readRequestBody(req);
-    const headers = this.buildForwardHeaders(req, profile, {
-      jsonContentType: false,
-      bearer: null,
-      v2: false,
-      preserveAuthorization: true,
-    });
-
-    let upstreamRes: Response;
-    try {
-      upstreamRes = await this.fetchImpl(targetUrl.toString(), {
-        method: req.method,
-        headers,
-        body,
-        redirect: 'manual',
-      });
-    } catch {
-      return new Response(
-        JSON.stringify({
-          error: 'upstream request failed',
-        }),
-        { status: 502, headers: { 'Content-Type': 'application/json' } },
-      );
-    }
-
-    for (const sc of readSetCookieHeaders(upstreamRes)) {
-      this.applySetCookieHeader(profile.id, sc);
-    }
-
-    const clientHeaders = new Headers();
-    upstreamRes.headers.forEach((val, key) => {
-      if (key.toLowerCase() !== 'set-cookie') {
-        clientHeaders.set(key, val);
-      }
-    });
-
-    const isNoBodyStatus =
-      upstreamRes.status === 204 ||
-      upstreamRes.status === 304 ||
-      req.method === 'HEAD';
-
-    return new Response(isNoBodyStatus ? null : upstreamRes.body, {
-      status: upstreamRes.status,
-      statusText: upstreamRes.statusText,
-      headers: clientHeaders,
-    });
-  }
-
-  /**
    * The rows that are plain forwarding: the v2 status row (host-authenticated so
    * the proxied answer reflects the host's session) and every other `/api/*`
    * row. Both strip the page's credential and browser-metadata headers; only the
@@ -1482,12 +1418,7 @@ export class EmbeddedTransport {
   private buildForwardHeaders(
     req: Request,
     profile: EmbeddedProfile,
-    options: {
-      jsonContentType: boolean;
-      bearer: string | null;
-      v2: boolean;
-      preserveAuthorization?: boolean;
-    },
+    options: { jsonContentType: boolean; bearer: string | null; v2: boolean },
   ): Headers {
     const headers = new Headers();
     const stripped = new Set([
@@ -1499,14 +1430,12 @@ export class EmbeddedTransport {
       'sec-fetch-mode',
       'sec-fetch-dest',
       'cookie',
+      'authorization',
       V2_CSRF_HEADER.toLowerCase(),
       SOCKET_TOKEN_HEADER.toLowerCase(),
       'connection',
       'content-length',
     ]);
-    if (!options.preserveAuthorization) {
-      stripped.add('authorization');
-    }
     req.headers.forEach((val, key) => {
       if (!stripped.has(key.toLowerCase())) headers.set(key, val);
     });
