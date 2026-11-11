@@ -1344,7 +1344,15 @@ export class EmbeddedTransport {
     // A stale host token must not reach the page as a sign-in prompt: the host
     // is the one refresh owner, so recover here. Only an idempotent request is
     // replayed; a mutation is never replayed and the page resubmits.
-    if (upstreamRes.status === 401 && hostToken && this.auth) {
+    // A 401 marked as the upstream's own (a proxied Vikunja answer from
+    // /api/proxy) says nothing about the host token: pass it through.
+    const upstreamOwned = upstreamRes.headers.get('X-Phi-Upstream') === '1';
+    if (
+      upstreamRes.status === 401 &&
+      hostToken &&
+      this.auth &&
+      !upstreamOwned
+    ) {
       const result = await this.auth.refreshAccess(profile.origin);
       if (result.kind === 'unauthorized') {
         return tokenFreeError('unauthorized', 401);

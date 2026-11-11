@@ -1491,8 +1491,11 @@ func TestHandleProxy_Success(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Errorf("Expected method POST, got %s", r.Method)
 		}
-		if r.Header.Get("Authorization") != "Bearer test-token" {
-			t.Errorf("Expected Authorization bearer token, got %s", r.Header.Get("Authorization"))
+		if r.Header.Get("Authorization") != "Bearer upstream-token" {
+			t.Errorf("Expected upstream Authorization, got %s", r.Header.Get("Authorization"))
+		}
+		if r.Header.Get("Cookie") != "" {
+			t.Errorf("phi cookie leaked upstream: %s", r.Header.Get("Cookie"))
 		}
 		bodyBytes, _ := io.ReadAll(r.Body)
 		if string(bodyBytes) != `{"foo":"bar"}` {
@@ -1506,11 +1509,16 @@ func TestHandleProxy_Success(t *testing.T) {
 
 	reqBody := strings.NewReader(`{"foo":"bar"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/proxy?url="+url.QueryEscape(mockServer.URL), reqBody)
-	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Authorization", "Bearer phi-access-token")
+	req.Header.Set("X-Phi-Upstream-Authorization", "Bearer upstream-token")
+	req.Header.Set("Cookie", "phi_session=secret")
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
 	handleProxy(w, req)
+	if w.Header().Get("X-Phi-Upstream") != "1" {
+		t.Errorf("response not marked as upstream answer")
+	}
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("Expected status 200, got %d", w.Code)
@@ -2743,3 +2751,29 @@ func mustRead(t *testing.T, path string) []byte {
 
 // testPaneShutdownGrace is the grace test panes get before Shutdown escalates.
 // Kept short so per-test pane cleanup does not dominate the suite.
+
+// An auth-enabled server must not become an open proxy: /api/proxy stays
+// behind the access gate, and phi's bearer is not what the upstream sees.
+func TestHandleProxy_RequiresAccessAuthAndNeverForwardsPhiBearer(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	if err := setTestAccessRecord(auth, testAccessHash()); err != nil {
+		t.Fatal(err)
+	}
+	hit := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = true
+	}))
+	defer upstream.Close()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/proxy", handleProxy)
+	protected := testServer.accessManager.Middleware(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/proxy?url="+url.QueryEscape(upstream.URL), nil)
+	req.Header.Set("X-Phi-Upstream-Authorization", "Bearer vikunja")
+	rec := httptest.NewRecorder()
+	protected.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized || hit {
+		t.Fatalf("unauthenticated proxy: status %d, upstream hit %v; want 401 and no hit", rec.Code, hit)
+	}
+}

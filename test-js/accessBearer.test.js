@@ -427,6 +427,36 @@ describe('protected fetch wrapper', () => {
         expect(new Headers(seen[1][1].headers).get('Authorization')).toBe('');
     });
 
+    it('does not treat an upstream-marked 401 (proxied Vikunja) as a rejected phi token', async () => {
+        await bootstrapWithBearer('jwt-a');
+        const reload = vi.fn();
+        __test__.setReload(reload);
+        const fetchSpy = mockAuth((url) => {
+            if (url.startsWith('/api/proxy'))
+                return {
+                    ok: false,
+                    status: 401,
+                    headers: { 'X-Phi-Upstream': '1' },
+                };
+            return { ok: true };
+        });
+        installAccessFetch();
+        const res = await fetch('/api/proxy?url=http%3A%2F%2Fvikunja', {
+            headers: { 'X-Phi-Upstream-Authorization': 'Bearer v' },
+        });
+        expect(res.status).toBe(401);
+        expect(document.querySelectorAll('.access-auth-overlay')).toHaveLength(
+            0,
+        );
+        const proxyCalls = fetchSpy.mock.calls.filter(([u]) =>
+            String(u).startsWith('/api/proxy'),
+        );
+        expect(proxyCalls).toHaveLength(1);
+        expect(
+            fetchSpy.mock.calls.some(([u]) => u === '/api/auth/v2/refresh'),
+        ).toBe(false);
+    });
+
     it('clears a rejected token, coalesces one overlay, and reloads once', async () => {
         await bootstrapWithBearer('jwt-a');
         const reload = vi.fn();

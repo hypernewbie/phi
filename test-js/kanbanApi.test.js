@@ -37,7 +37,7 @@ describe('KanbanManager.apiRequest', () => {
         // proxy URL encodes the upstream URL
         expect(callUrl).toContain('/api/proxy?url=');
         expect(callOpts.method).toBe('PUT');
-        expect(callOpts.headers.Authorization).toBe('Bearer tok');
+        expect(callOpts.headers['X-Phi-Upstream-Authorization']).toBe('Bearer tok');
         expect(JSON.parse(callOpts.body)).toEqual({ title: 'hi' });
     });
 
@@ -99,12 +99,12 @@ describe('KanbanManager.apiRequest', () => {
         expect(await c.apiPut('/tasks/42', {})).toBeNull();
     });
 
-    it('omits Authorization when no token is in sessionStorage', async () => {
+    it('omits upstream Authorization when no token is in sessionStorage', async () => {
         const c = ctxWithSession({ token: null });
         mockFetch(() => ({ ok: true, json: {} }));
         await c.apiGet('/x');
         const headers = fetch.mock.calls[0][1].headers;
-        expect(headers.Authorization).toBeUndefined();
+        expect(headers['X-Phi-Upstream-Authorization']).toBeUndefined();
     });
 });
 

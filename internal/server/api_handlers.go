@@ -830,6 +830,11 @@ func (app *Server) handleGetSessionTranscript(w http.ResponseWriter, r *http.Req
 	_ = json.NewEncoder(w).Encode(messages)
 }
 
+const (
+	proxyUpstreamAuthHeader = "X-Phi-Upstream-Authorization"
+	proxyUpstreamMarkHeader = "X-Phi-Upstream"
+)
+
 func handleProxy(w http.ResponseWriter, r *http.Request) {
 	target := r.URL.Query().Get("url")
 	if target == "" {
@@ -843,11 +848,21 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Copy headers from incoming request to the proxy request
+	// Copy headers from incoming request to the proxy request. Authorization
+	// and Cookie are phi's own credentials (the access gate consumed them);
+	// they never leave for a third party. The upstream's credential travels
+	// in X-Phi-Upstream-Authorization and becomes its Authorization here.
 	for k, vv := range r.Header {
+		switch http.CanonicalHeaderKey(k) {
+		case "Authorization", "Cookie", proxyUpstreamAuthHeader:
+			continue
+		}
 		for _, v := range vv {
 			req.Header.Add(k, v)
 		}
+	}
+	if up := r.Header.Get(proxyUpstreamAuthHeader); up != "" {
+		req.Header.Set("Authorization", up)
 	}
 
 	client := &http.Client{
@@ -867,6 +882,9 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 			w.Header().Add(k, v)
 		}
 	}
+	// Mark the answer as the upstream's own, so a 401 from Vikunja is never
+	// mistaken for phi's access gate rejecting the session.
+	w.Header().Set(proxyUpstreamMarkHeader, "1")
 	w.WriteHeader(resp.StatusCode)
 
 	// Copy response body to client response

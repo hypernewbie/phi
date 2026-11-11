@@ -44,8 +44,12 @@ export function mockFetch(handler) {
                 ok: val.ok !== false,
                 status: val.status ?? 200,
                 headers: {
-                    get: (k) =>
-                        k && k.toLowerCase() === 'content-type' ? ctype : null,
+                    get: (k) => {
+                        if (!k) return null;
+                        const extra = val.headers?.[k] ?? val.headers?.[k.toLowerCase()];
+                        if (extra !== undefined) return extra;
+                        return k.toLowerCase() === 'content-type' ? ctype : null;
+                    },
                 },
                 json: async () =>
                     val.json !== undefined

@@ -3070,7 +3070,10 @@ export class KanbanManager {
             'Content-Type': 'application/json',
         };
         if (token && token !== 'null' && token !== 'undefined') {
-            headers.Authorization = `Bearer ${token}`;
+            // phi's own Authorization belongs to phi's access gate; the
+            // Vikunja token rides in a separate header that /api/proxy
+            // turns into the upstream's Authorization.
+            headers['X-Phi-Upstream-Authorization'] = `Bearer ${token}`;
         }
         const res = await fetch(proxyUrl, {
             method,

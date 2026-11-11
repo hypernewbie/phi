@@ -1397,6 +1397,7 @@ export function installAccessFetch() {
             const answer = await baseFetch(input, init);
             if (
                 answer.status === 401 &&
+                !answer.headers.get('X-Phi-Upstream') &&
                 url &&
                 url.protocol === location.protocol &&
                 url.host === location.host &&
@@ -1416,7 +1417,13 @@ export function installAccessFetch() {
         headers.set('Authorization', `Bearer ${token}`);
         const requestInit = init ? { ...init, headers } : { headers };
         const response = await baseFetch(input, requestInit);
-        if (response.status !== 401 || state.accessToken !== token)
+        // A 401 marked as the upstream's own (a proxied Vikunja answer) is
+        // not phi rejecting this token: refreshing would be wrong.
+        if (
+            response.status !== 401 ||
+            response.headers.get('X-Phi-Upstream') ||
+            state.accessToken !== token
+        )
             return response;
         let outcome: string;
         try {

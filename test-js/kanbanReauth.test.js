@@ -39,7 +39,7 @@ function manager() {
 function expiringToken({ freshToken = 'fresh-token' } = {}) {
     const calls = [];
     mockFetch((url, opts) => {
-        const auth = opts?.headers?.Authorization || '';
+        const auth = opts?.headers?.['X-Phi-Upstream-Authorization'] || '';
         calls.push({ url: String(url), auth });
         if (auth !== `Bearer ${freshToken}`)
             return { ok: false, status: 401, text: 'expired' };

@@ -1052,6 +1052,33 @@ describe('embedded-transport', () => {
       expect(res.status).toBe(500);
       expect(await res.text()).toBe('{"error":"authentication failed"}');
     });
+    it('passes an upstream-marked 401 through without refreshing the host token', async () => {
+      auth.getToken.mockReturnValue('phi-host-bearer-token');
+      const body = JSON.stringify({ message: 'invalid token' });
+      mockFetch.mockResolvedValueOnce(
+        new Response(body, {
+          status: 401,
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Phi-Upstream': '1',
+          },
+        }),
+      );
+      const res = await send(
+        `/api/proxy?url=${encodeURIComponent('http://vikunja.remote/api/v1/projects')}`,
+        { headers: { 'X-Phi-Upstream-Authorization': 'Bearer vik' } },
+      );
+      expect(res.status).toBe(401);
+      expect(await res.text()).toBe(body);
+      expect(auth.refreshAccess).not.toHaveBeenCalled();
+      const { init } = upstreamCall();
+      expect(init.headers.get('Authorization')).toBe(
+        'Bearer phi-host-bearer-token',
+      );
+      expect(init.headers.get('X-Phi-Upstream-Authorization')).toBe(
+        'Bearer vik',
+      );
+    });
   });
 
   describe('cookie jar handling', () => {
