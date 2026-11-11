@@ -37,7 +37,9 @@ describe('KanbanManager.apiRequest', () => {
         // proxy URL encodes the upstream URL
         expect(callUrl).toContain('/api/proxy?url=');
         expect(callOpts.method).toBe('PUT');
-        expect(callOpts.headers['X-Phi-Upstream-Authorization']).toBe('Bearer tok');
+        expect(callOpts.headers['X-Phi-Upstream-Authorization']).toBe(
+            'Bearer tok',
+        );
         expect(JSON.parse(callOpts.body)).toEqual({ title: 'hi' });
     });
 
