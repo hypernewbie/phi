@@ -4,6 +4,15 @@ All notable changes to phi are documented here. Newest versions first.
 
 ## Unreleased
 
+## v0.38.3 — 2026-11-10
+
+### Fixed
+- **Vikunja proxy upstream credentials and reauth loop** (`48aa9e21`). The `/api/proxy` endpoint protects against credential collision between Phi's own server access authentication and upstream target services like Vikunja by transmitting upstream tokens in `X-Phi-Upstream-Authorization` and tagging upstream responses with `X-Phi-Upstream: 1`. Upstream 401s no longer trigger spurious Phi session invalidations, login spam, or reconnect overlays.
+- **Desktop single instance gating and Windows credential store fsync** (`37ca9645`). Secondary app launches are gated behind primary instance checks so secondary instances quit cleanly and delegate deep links to the primary process without running parallel main loops or spawning extra dock/taskbar icons.
+- **Single-tab desktop server switch color retention and theme attribution** (`e858c7b8`). Rapid switching in single-tab low-memory mode now fires `onSwitched` upon settlement so the desktop shell reliably records live server identity and colors. Unconfigured or cold servers no longer fall back to unscoped theme colors in local storage, preventing previous server colors from leaking into new servers or polluting `profiles.json`.
+- **Worktree auto-selection on tab switch in low-memory mode** (`524d15e1`, `c8e6806b`). Switching tabs in single-tab low-memory mode properly synchronizes worktree lists and highlights the active tab's worktree when tabs are restored from detached cache, clears highlights when switching to tabs without a worktree, and avoids redundant diff refreshes during active tab refocus.
+
+
 ## v0.38.2 — 2026-11-09
 
 ### Added
