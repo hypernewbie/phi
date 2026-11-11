@@ -8756,8 +8756,10 @@ export class TabManager {
                 const cwdChanged = Boolean(this.app?.sessionsManager) &&
                     normalizePath(this.app.sessionsManager.activeCWD || '') !==
                         normalizePath(activeTab.cwd || '');
-                if ((activeTab._resyncNeeded || cwdChanged) &&
-                    this.app?.sessionsManager) {
+                // Only resync when the sidebar really disagrees with the tab's
+                // cwd; _resyncNeeded alone caused redundant refreshDiff
+                // (see cfe03040).
+                if (cwdChanged && this.app?.sessionsManager) {
                     activeTab._resyncNeeded = false;
                     this._syncProjectForTab(activeTab);
                 }
