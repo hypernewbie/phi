@@ -786,6 +786,72 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     expect(profileOnRail.accent).toBe('#e76f51');
   });
 
+  it('catches up live server identity on poll even when seeded from disk at startup', async () => {
+    const profilesPath = path.join(temp, 'profiles.json');
+    writeFileSync(
+      profilesPath,
+      JSON.stringify({
+        profiles: [
+          {
+            id: 'hammond-7070',
+            name: 'JUPITER',
+            origin: 'http://hammond.example.test:7070/',
+            accent: '#06b6d4',
+            themeColor: 'cyan',
+          },
+        ],
+      }),
+    );
+    const host = new DesktopHost();
+    await host.start(primary);
+    const win = fake.FakeBrowserWindow.instances[0];
+    win.webContents.emit('did-finish-load');
+    await flush();
+
+    expect(host.observedIdentity.get('hammond-7070')?.hostname).toBe('JUPITER');
+    expect(host.liveObservedIdentity.has('hammond-7070')).toBe(false);
+
+    const view = host.viewByOrigin.get('http://hammond.example.test:7070/')!;
+    const execute = vi
+      .spyOn(view.webContents, 'executeJavaScript')
+      .mockImplementation((code?: string) => {
+        const script = String(code);
+        if (script.includes('cpu:'))
+          return Promise.resolve({
+            cpu: 12,
+            activity: false,
+            workspace: null,
+            profile: 'hammond-7070',
+          });
+        if (script.includes('__phiEmbed.current'))
+          return Promise.resolve('hammond-7070');
+        return Promise.resolve({
+          hostname: 'HAMMOND',
+          accent: '#06b6d4',
+          themeColor: 'cyan',
+        });
+      });
+
+    host.pollCpu();
+    await flush();
+    await flush();
+    await flush();
+
+    expect(host.liveObservedIdentity.has('hammond-7070')).toBe(true);
+    expect(host.observedIdentity.get('hammond-7070')?.hostname).toBe('HAMMOND');
+    expect(host.controller?.state().profiles[0].name).toBe('HAMMOND');
+
+    // Subsequent polls do not re-run identity catch-up once live-observed.
+    host.pollCpu();
+    await flush();
+    await flush();
+    expect(
+      execute.mock.calls.filter((call) =>
+        String(call[0]).includes('hostname-display'),
+      ),
+    ).toHaveLength(1);
+  });
+
   it('retries a skipped identity read on the poll cadence so the active chip keeps its accent', async () => {
     const host = new DesktopHost();
     await host.start(primary);

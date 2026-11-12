@@ -883,6 +883,23 @@ export class App {
         phaseStart = globalThis.performance?.now?.();
         try {
             this.sessionsManager?.resetSessionRootForBackendSwitch?.();
+            const hasCachedConfig = Boolean(nextStore?.responses?.has('/api/config'));
+            let hasCachedTheme = false;
+            try {
+                hasCachedTheme = Boolean(localStorage.getItem(`phi_theme_color:${profileId}`));
+            }
+            catch {
+                // Ignore storage errors
+            }
+            if (!hasCachedConfig &&
+                !hasCachedTheme &&
+                typeof document !== 'undefined') {
+                delete document.documentElement.dataset.themeColor;
+                document.documentElement.style.removeProperty('--accent');
+                document.documentElement.style.removeProperty('--accent-glow');
+                document.documentElement.style.removeProperty('--accent-dim');
+                document.documentElement.style.removeProperty('--accent-bright');
+            }
             this.paintBackendFromStore(nextStore);
             const savedTheme = localStorage.getItem(serverKey('phi_theme_color'));
             if (savedTheme) {

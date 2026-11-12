@@ -351,24 +351,34 @@ interface AuthRequired {
   generation: number;
 }
 
+export interface RemoteIdentity {
+  hostname: string;
+  accent: string;
+  themeColor?: string;
+}
+
 /** Fixed page-observation expression for remote Phi pages (never interpolated). */
 const REMOTE_IDENTITY_SCRIPT = `(() => {
   const host = document.getElementById('hostname-display');
+  const hostname = host ? (host.textContent || '').trim() : '';
   const root = getComputedStyle(document.documentElement);
   return {
-    hostname: host ? (host.textContent || '').trim() : '',
-    accent: root.getPropertyValue('--accent').trim(),
-    themeColor: document.documentElement.dataset.themeColor || '',
+    hostname,
+    accent: hostname ? root.getPropertyValue('--accent').trim() : '',
+    themeColor: hostname ? (document.documentElement.dataset.themeColor || '') : '',
   };
 })()`;
 
 const READ_REMOTE_CONFIG_SCRIPT = `(async () => {
+  const currentProfile = (window.__phiEmbed && typeof window.__phiEmbed.current === 'function')
+    ? (window.__phiEmbed.current() || '')
+    : '';
   try {
     const res = await fetch('/api/config', { cache: 'no-store' });
     if (res.ok) {
       const data = await res.json();
       if (data && typeof data === 'object' && Array.isArray(data.workspaces)) {
-        return data;
+        return { ...data, __phiProfile: currentProfile };
       }
     }
   } catch {}
@@ -384,6 +394,7 @@ const READ_REMOTE_CONFIG_SCRIPT = `(async () => {
     workspaces,
     active_cwd: wsSelect.value || workspaces[0] || '',
     theme_color: theme,
+    __phiProfile: currentProfile,
   };
 })()`;
 
@@ -759,10 +770,8 @@ export class DesktopHost {
   /** In-memory per-profile observed remote document title (never persisted). */
   observedTitle = new Map<string, string>();
   /** In-memory per-profile remote identity (never persisted). */
-  observedIdentity = new Map<
-    string,
-    { hostname: string; accent: string; themeColor?: string }
-  >();
+  observedIdentity = new Map<string, RemoteIdentity>();
+  liveObservedIdentity = new Set<string>();
   /** Retained per-origin view lookup for the CPU poll (never persisted). */
   viewByOrigin = new Map<string, WebContentsView>();
   /** In-memory per-profile CPU percent from the remote page (never persisted). */
@@ -899,6 +908,7 @@ export class DesktopHost {
       this.lastHeaderState = null;
       this.observedTitle.clear();
       this.observedIdentity.clear();
+      this.liveObservedIdentity.clear();
       this.observedCpu.clear();
       this.observedActivity.clear();
       this.firedSyncKeys.clear();
@@ -1892,6 +1902,7 @@ export class DesktopHost {
       };
       if (identity.hostname === '' && identity.accent === '') return null;
       this.observedIdentity.set(profile.id, identity);
+      this.liveObservedIdentity.add(profile.id);
       if (profile.id === this.controller?.state().activeId) {
         this.hooks?.trigger('accent');
       }
@@ -1911,10 +1922,15 @@ export class DesktopHost {
     const ctrl = this.controller;
     if (!ctrl) return;
     for (const p of ctrl.state().profiles) {
-      if (p.accent || p.themeColor) {
-        const existing = this.observedIdentity.get(p.id);
+      const existing = this.observedIdentity.get(p.id);
+      if (p.accent || p.themeColor || existing) {
+        const preferLive = this.liveObservedIdentity.has(p.id);
         this.observedIdentity.set(p.id, {
-          hostname: existing?.hostname || p.name || '',
+          hostname:
+            (preferLive ? existing?.hostname : '') ||
+            p.name ||
+            existing?.hostname ||
+            '',
           accent: existing?.accent || p.accent || '',
           themeColor: existing?.themeColor || p.themeColor || '',
         });
@@ -2045,7 +2061,7 @@ export class DesktopHost {
       // cadence, but only after the poll read above released the page's single
       // read slot: a page that never reports an identity would otherwise
       // starve the CPU/activity reading forever.
-      if (!this.observedIdentity.has(profileId)) {
+      if (!this.liveObservedIdentity.has(profileId)) {
         void polled.then(() =>
           this.catchUpIdentity(view, profile, win, generation),
         );
@@ -2063,8 +2079,7 @@ export class DesktopHost {
     generation: number,
   ): void {
     if (
-      (this.observedIdentity.has(profile.id) &&
-        (this.observedIdentity.get(profile.id)?.accent || '') !== '') ||
+      this.liveObservedIdentity.has(profile.id) ||
       !this.isCurrentWindowSession(win, generation) ||
       view.webContents.isDestroyed()
     )
@@ -4543,6 +4558,7 @@ export class DesktopHost {
         singleTab: this.controller?.getLowMemoryMode() ?? false,
         embeddedOrigin: EMBEDDED_ORIGIN,
         onSingleTabSwitch: (id, origin) => {
+          this.liveObservedIdentity.delete(id);
           // The router follows the page, never the click: no commit
           // here. The page claims /__phi/active when it has painted; a
           // boot load commits through the ticket below. The origin→view
@@ -4966,6 +4982,7 @@ export class DesktopHost {
       if (activeId !== '') this.profileViews?.setActive(activeId);
       else this.profileViews?.setActive(null);
       this.observedIdentity.delete(id);
+      this.liveObservedIdentity.delete(id);
       this.observedCpu.delete(id);
       this.firedSyncKeys.delete(id);
       if (origin !== '') {
@@ -4996,10 +5013,15 @@ export class DesktopHost {
     ipcMain.on('phi:reload-profile', (event, id: unknown) => {
       if (!isCurrentSessionSender(event)) return;
       const targetId = typeof id === 'string' && id !== '' ? id : undefined;
+      if (targetId) this.liveObservedIdentity.delete(targetId);
+      else if (this.controller) {
+        this.liveObservedIdentity.delete(this.controller.state().activeId);
+      }
       this.profileViews?.reloadActive(targetId);
     });
     ipcMain.on('phi:reload-all-servers', (event) => {
       if (!isCurrentSessionSender(event)) return;
+      this.liveObservedIdentity.clear();
       this.profileViews?.reloadAll();
     });
     // Window-control IPC: only the main view page may drive the window;
@@ -5495,7 +5517,31 @@ export class DesktopHost {
         // A config response for the outgoing server must never repaint the
         // header after the rail has switched to another profile.
         if (ctrl.state().activeId !== capture.profileId) return null;
+        const syncConfigIdentity = (
+          cfg: Record<string, unknown> | null | undefined,
+        ) => {
+          if (!cfg || typeof cfg !== 'object') return;
+          const rawHost =
+            typeof cfg.hostname === 'string' ? cfg.hostname.trim() : '';
+          if (!rawHost) return;
+          const rawTheme =
+            typeof cfg.theme_color === 'string' ? cfg.theme_color.trim() : '';
+          const existing = this.observedIdentity.get(capture.profileId);
+          this.observedIdentity.set(capture.profileId, {
+            hostname: rawHost,
+            accent: existing?.accent || '',
+            themeColor: rawTheme || existing?.themeColor || '',
+          });
+          this.liveObservedIdentity.add(capture.profileId);
+          ctrl.updateServerStatus(capture.profileId, {
+            hostname: rawHost,
+            ...(rawTheme ? { themeColor: rawTheme } : {}),
+          });
+        };
         if (result.kind === 'ok') {
+          syncConfigIdentity(
+            result.config as unknown as Record<string, unknown>,
+          );
           // A successful config request proves the bearer; a restored
           // token that was still unvalidated may now reach the body once.
           if (auth.getSelectedProtocol(origin) === 'v2') {
@@ -5565,6 +5611,9 @@ export class DesktopHost {
                 unlock?.kind === 'ok' &&
                 unlock.config
               ) {
+                syncConfigIdentity(
+                  unlock.config as unknown as Record<string, unknown>,
+                );
                 this.storedCredentials.set(origin, {
                   version: recovered.version,
                   algorithm: recovered.algorithm,
@@ -5602,13 +5651,20 @@ export class DesktopHost {
               workspaces?: string[];
               active_cwd?: string;
               theme_color?: string;
+              __phiProfile?: string;
             } | null;
             if (
               isCurrentCapture() &&
               remoteConfig &&
+              (!remoteConfig.__phiProfile ||
+                remoteConfig.__phiProfile === capture.profileId) &&
               Array.isArray(remoteConfig.workspaces) &&
               remoteConfig.workspaces.length > 0
             ) {
+              const { __phiProfile: _ignored, ...cleanConfig } = remoteConfig;
+              syncConfigIdentity(
+                cleanConfig as unknown as Record<string, unknown>,
+              );
               if (
                 pendingUnlock &&
                 (pendingUnlock.origin === origin ||
@@ -5624,7 +5680,7 @@ export class DesktopHost {
                 sendBodyObscuring(false);
                 sendAuthResolved(resolvedInfo);
               }
-              return remoteConfig;
+              return cleanConfig;
             }
           } catch {
             /* body view not ready; proceed to auth flow */

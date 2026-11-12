@@ -1239,4 +1239,64 @@ describe('Controller: persist observed server name and color in profiles', () =>
     expect(c.updateObserved(p.id, { accent: '#3b82f6' })).toBe(true);
     expect(c.state().profiles[0].accent).toBe('#3b82f6');
   });
+
+  it('updates observed server name across reloads when not explicitly custom-named', () => {
+    const c1 = makeController();
+    const p = c1.add('http://127.0.0.1:7070');
+    expect(c1.updateServerStatus(p.id, { hostname: 'JUPITER' })).toBe(true);
+    expect(c1.state().profiles[0].name).toBe('JUPITER');
+
+    const c2 = new Controller({ persistPath: persistPath() });
+    expect(c2.state().profiles[0].name).toBe('JUPITER');
+
+    expect(c2.updateServerStatus(p.id, { hostname: 'HAMMOND' })).toBe(true);
+    expect(c2.state().profiles[0].name).toBe('HAMMOND');
+  });
+
+  it('preserves explicit custom rename across reloads when server reports a new hostname', () => {
+    const c1 = makeController();
+    const p = c1.add('http://127.0.0.1:7070');
+    c1.rename(p.id, 'My Custom Name');
+    expect(c1.state().profiles[0].name).toBe('My Custom Name');
+
+    const c2 = new Controller({ persistPath: persistPath() });
+    expect(c2.state().profiles[0].name).toBe('My Custom Name');
+
+    c2.updateServerStatus(p.id, { hostname: 'HAMMOND' });
+    expect(c2.state().profiles[0].name).toBe('My Custom Name');
+  });
+
+  it('self-heals cross-profile poisoned names when reading store', () => {
+    const storePath = persistPath();
+    const poisoned = {
+      profiles: [
+        {
+          id: 'jupiter-7070',
+          name: 'JUPITER',
+          origin: 'http://jupiter:7070/',
+          accent: '#7c6af7',
+          themeColor: 'purple',
+        },
+        {
+          id: 'hammond-7070',
+          name: 'JUPITER',
+          origin: 'http://hammond:7070/',
+          accent: '#7c6af7',
+          themeColor: 'purple',
+        },
+      ],
+      closeToTray: true,
+      syncAlerts: true,
+      lowMemoryMode: false,
+    };
+    writeFileSync(storePath, JSON.stringify(poisoned, null, 2), 'utf-8');
+
+    const c = new Controller({ persistPath: storePath });
+    const profiles = c.state().profiles;
+    const hammond = profiles.find((p) => p.id === 'hammond-7070');
+    expect(hammond).toBeDefined();
+    expect(hammond?.name).toBe('hammond:7070');
+    expect(hammond?.accent).toBeUndefined();
+    expect(hammond?.themeColor).toBeUndefined();
+  });
 });

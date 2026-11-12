@@ -749,7 +749,21 @@ export class SessionsManager {
                 ? (url, opts) => this.app.scope.fetch(url, opts)
                 : fetch;
             const res = await fetchFn('/api/config');
+            if (res && res.ok === false) {
+                throw new Error(`HTTP ${res.status}`);
+            }
+            if (this.app?.scope?.aborted)
+                return;
             const data = await res.json();
+            if (this.app?.scope?.aborted)
+                return;
+            if (!data ||
+                typeof data !== 'object' ||
+                ('error' in data &&
+                    !('hostname' in data) &&
+                    !('workspaces' in data))) {
+                return;
+            }
             const store = this.app?.getActiveStore?.();
             if (store) {
                 store.responses.set('/api/config', JSON.stringify(data));
@@ -844,6 +858,15 @@ export class SessionsManager {
             this.workspaceSelect.value = '';
         }
         this.sessionList.replaceChildren();
+        if (this.app) {
+            this.app.hostname = '';
+        }
+        const hostEl = document.getElementById('hostname-display');
+        if (hostEl)
+            hostEl.textContent = '';
+        const emptyHostEl = document.getElementById('empty-state-hostname');
+        if (emptyHostEl)
+            emptyHostEl.textContent = '';
     }
     invalidateFeatureCache(profileId) {
         const namespaces = new Set(sessionNamespacesByProfile.get(profileId) ?? []);

@@ -623,6 +623,21 @@ function readStore(
       }
     }
   }
+  const customSidecarPath = `${filePath.replace(/\.bak$/, '')}.custom`;
+  if (existsSync(customSidecarPath)) {
+    try {
+      const sidecarRaw = JSON.parse(readFileSync(customSidecarPath, 'utf8'));
+      if (Array.isArray(sidecarRaw)) {
+        for (const item of sidecarRaw) {
+          if (typeof item === 'string' && item !== '') {
+            customProfileNames.add(item);
+          }
+        }
+      }
+    } catch {
+      // Ignore malformed custom-names sidecar
+    }
+  }
   const profiles: InternalProfile[] = [];
   const seen = new Set<string>();
   for (const entry of obj.profiles) {
@@ -663,22 +678,6 @@ function readStore(
       typeof p.customName === 'boolean' ? p.customName : undefined;
     if (isExplicitCustom) {
       customProfileNames.add(p.id);
-    } else if (!Object.hasOwn(obj, 'customProfileNames')) {
-      const parsedHost = (() => {
-        try {
-          return parseEndpoint(p.origin).host;
-        } catch {
-          return '';
-        }
-      })();
-      if (
-        typeof p.name === 'string' &&
-        p.name !== '' &&
-        p.name !== p.origin &&
-        p.name !== parsedHost
-      ) {
-        customProfileNames.add(p.id);
-      }
     }
     profiles.push({
       id: p.id,
@@ -689,6 +688,47 @@ function readStore(
       ...(accent ? { accent } : {}),
       ...(themeColor ? { themeColor } : {}),
     });
+  }
+  const hostOwners = new Map<string, InternalProfile>();
+  for (const p of profiles) {
+    try {
+      const host = parseEndpoint(p.origin).hostname.toLowerCase();
+      if (host) hostOwners.set(host, p);
+    } catch {
+      // Ignore malformed origin
+    }
+  }
+  for (const p of profiles) {
+    if (customProfileNames.has(p.id)) continue;
+    let ownHostname = '';
+    let ownHost = '';
+    try {
+      const parsed = parseEndpoint(p.origin);
+      ownHostname = parsed.hostname.toLowerCase();
+      ownHost = parsed.host;
+    } catch {
+      // Ignore malformed origin
+    }
+    const currentNameLower = p.name.trim().toLowerCase();
+    if (
+      ownHostname &&
+      currentNameLower !== ownHostname &&
+      currentNameLower !== ownHost.toLowerCase() &&
+      currentNameLower !== p.origin.toLowerCase()
+    ) {
+      const other = hostOwners.get(currentNameLower);
+      if (other && other.id !== p.id) {
+        p.name = ownHost || ownHostname;
+        if (
+          p.accent &&
+          p.accent === other.accent &&
+          p.themeColor === other.themeColor
+        ) {
+          delete p.accent;
+          delete p.themeColor;
+        }
+      }
+    }
   }
   if (isBackup) {
     log(`controller: recovered ${profiles.length} profile(s) from ${filePath}`);
@@ -724,6 +764,7 @@ function saveStore(
   petZoomPercent: number,
   contentZoomPercent: number,
   petIdleDwellSeconds: number,
+  customProfileNames: ReadonlySet<string> = new Set(),
 ): void {
   const dir = path.dirname(persistPath);
   mkdirSync(dir, { recursive: true });
@@ -797,6 +838,20 @@ function saveStore(
       // best-effort cleanup
     }
     throw new ControllerError('persist', `controller: rename: ${String(err)}`);
+  }
+  const customSidecarPath = `${persistPath}.custom`;
+  try {
+    if (customProfileNames.size > 0) {
+      writeFileSync(
+        customSidecarPath,
+        JSON.stringify(Array.from(customProfileNames)),
+        'utf8',
+      );
+    } else if (existsSync(customSidecarPath)) {
+      rmSync(customSidecarPath, { force: true });
+    }
+  } catch {
+    // Best-effort sidecar persistence
   }
 }
 
@@ -928,6 +983,7 @@ export class Controller {
       this.petZoomPercent,
       this.contentZoomPercent,
       this.petIdleDwellSeconds,
+      this.customProfileNames,
     );
   }
 
@@ -1117,8 +1173,6 @@ export class Controller {
       throw new UnknownProfileError(`controller: unknown profile "${id}"`);
     }
 
-    const rawHostname =
-      typeof status.hostname === 'string' ? status.hostname.trim() : '';
     const rawAccent =
       typeof status.accent === 'string' ? status.accent.trim() : '';
     const rawTheme =
@@ -1126,26 +1180,19 @@ export class Controller {
 
     let changed = false;
 
-    const parsedHost = (() => {
-      try {
-        return parseEndpoint(p.origin).host;
-      } catch {
-        return '';
-      }
-    })();
-    // Only update name with observed hostname if not explicitly custom-named by the user.
-    const isCustom =
-      this.customProfileNames.has(p.id) ||
-      (p.name !== parsedHost && p.name !== rawHostname && p.name !== p.origin);
-    if (!isCustom && rawHostname !== '' && rawHostname !== p.name) {
-      try {
-        validateName(rawHostname);
-        p.name = rawHostname;
-        changed = true;
-      } catch (err) {
-        this.log(
-          `controller: skipping invalid observed hostname "${rawHostname}": ${String(err)}`,
-        );
+    if (status.hostname && status.hostname.trim().length > 0) {
+      const nextName = status.hostname.trim();
+      const isCustom = this.customProfileNames.has(p.id);
+      if (!isCustom && p.name !== nextName) {
+        try {
+          validateName(nextName);
+          p.name = nextName;
+          changed = true;
+        } catch (err) {
+          this.log(
+            `controller: skipping invalid observed hostname "${nextName}": ${String(err)}`,
+          );
+        }
       }
     }
 
