@@ -4,14 +4,15 @@ import "github.com/google/uuid"
 
 // FreshSession gives backends that support caller-selected identities an
 // exact native resume reference from their first launch. Never use --last.
-// Codex and Agy choose their own IDs; their native resume notices are observed
-// instead, and an unavailable reference safely becomes a fresh conversation.
+// Codex and Agy report their own native resume references. Psi chooses its
+// own ID and reports it through its built-in bridge; forcing a fresh ID
+// would make it scan the session store before startup.
 func FreshSession(c Coder) (Coder, string) {
 	flag := ""
 	switch {
 	case c.ID == "claude" && c.SessionSource == "claude_files":
 		flag = "--session-id"
-	case c.ID == "pi" && c.SessionSource == "pi_files":
+	case c.ID == "pi" && c.SessionSource == "pi_files" && c.PiMode != "psi":
 		flag = "--session-id"
 	case c.ID == "opencode" && c.SessionSource == "opencode_v2":
 		flag = "--session"

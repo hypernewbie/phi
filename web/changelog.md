@@ -4,6 +4,17 @@ All notable changes to phi are documented here. Newest versions first.
 
 ## Unreleased
 
+### Changed
+- **A fresh Psi pane no longer gets a forced session ID.** Phi used to pass
+  `--session-id <uuid>` to every fresh Psi launch, which made Psi look the ID up
+  in its session store and scan every session file in the workspace before it
+  could start. A fresh Psi pane now launches as `psi` plus its configured
+  arguments only, Psi picks its own ID, and the ID Phi saves is the one Psi
+  reports on its built-in bridge, so a restart still resumes the same
+  conversation. Psi's explicit resume is unchanged and still uses
+  `--session <id>`. A pane whose bridge never connects still accepts input, but
+  Phi cannot resume it by ID until Psi reports one.
+
 ## v0.38.3 — 2026-11-10
 
 ### Fixed

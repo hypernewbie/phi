@@ -60,8 +60,9 @@ func (app *Server) spawnTerminal(ctx context.Context, c coders.Coder, req SpawnR
 	// that was opened but never used keeps an ID that cannot be resumed, and
 	// `pi --session <id>` exits with "No session found matching". Treat a
 	// missing Pi session as fresh instead of launching a dead pane; the UI
-	// restart sends the pane's ID back through this same path. Psi keeps its
-	// own behaviour because its session storage is not Pi's file store.
+	// restart sends the pane's ID back through this same path. This guard
+	// stays Pi-only: Psi writes to the same file store, but its resume
+	// behaviour is Psi's own, and this path adds no policy for it.
 	if c.ID == "pi" && c.SessionSource == "pi_files" && effectivePiMode(c) == piModePi && req.SessionID != "" {
 		cwd := req.Cwd
 		if cwd == "" {
@@ -95,9 +96,9 @@ func (app *Server) spawnTerminal(ctx context.Context, c coders.Coder, req SpawnR
 			bridge.RevokePane(opts.ID)
 		}
 	}
-	// A pane that received the bridge extension reports its own session ID on
-	// Hello, so the launch does not force one. Every other path keeps the
-	// caller-chosen ID: without the bridge nothing would report it back.
+	// A pane that reports its own session ID on Hello is not forced one: the
+	// bridge extension for native Pi, or Psi's built-in bridge. Every other
+	// path keeps the caller-chosen ID, because nothing would report it back.
 	id := req.SessionID
 	if id == "" && len(bridgeExtArgs) == 0 {
 		c, id = coders.FreshSession(c)

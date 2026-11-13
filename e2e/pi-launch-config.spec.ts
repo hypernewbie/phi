@@ -160,7 +160,10 @@ test.describe('Pi launch default', () => {
             'psi legacy dir/',
         );
         await expect.poll(() => tabTitles(page)).toContain('+ Psi');
-        expect(psiRecord.argv).toContain('--session-id');
+        // Psi picks its own fresh ID and reports it through its bridge, so
+        // the launch carries no identity flag.
+        expect(psiRecord.argv).not.toContain('--session-id');
+        expect(psiRecord.argv).not.toContain('--session');
 
         // With a Psi default the menu offers the other agent.
         const beforePi = recordsFor(server, exeName('pi')).length;
@@ -234,7 +237,8 @@ test.describe('Pi launch default', () => {
         // One entry per line, spaces inside a line preserved, no shell split.
         expect(record.argv.slice(1, 3)).toEqual(['--model', 'space value']);
         expect(record.argv.filter((arg) => arg === '--model')).toHaveLength(1);
-        expect(record.argv).toContain('--session-id');
+        expect(record.argv).not.toContain('--session-id');
+        expect(record.argv).not.toContain('--session');
         expect(record.env.PHI_E2E_AGENT_MARK).toBe('marked');
 
         // Clearing every field returns the launch to PATH psi with no extras.
@@ -257,10 +261,7 @@ test.describe('Pi launch default', () => {
         expect(cleared.executable).toBe(
             join(server.dir, 'bin', exeName('psi')),
         );
-        expect(cleared.argv.slice(1)).toEqual([
-            '--session-id',
-            expect.any(String),
-        ]);
+        expect(cleared.argv.slice(1)).toEqual([]);
         // The override is gone, so the inherited value must not leak in.
         expect(cleared.env.PHI_E2E_AGENT_MARK).toBeUndefined();
     });

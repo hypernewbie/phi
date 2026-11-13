@@ -31,15 +31,49 @@ func TestPiPsiIsPerLaunch(t *testing.T) {
 		t.Fatalf("bad Psi resume argv: %v %v", plan.Args, err)
 	}
 
-	// Psi takes the same caller-chosen --session-id as pi.
+	// Psi chooses its own fresh ID and reports it through its built-in
+	// bridge, so the launch adds no identity flag. A forced ID would make
+	// Psi scan every session file before it starts.
 	freshPsi, id := FreshSession(psi)
-	if id == "" || len(freshPsi.Args) != 2 || freshPsi.Args[0] != "--session-id" || freshPsi.Args[1] != id {
-		t.Fatalf("FreshSession should inject --session-id for Psi: id=%q args=%v", id, freshPsi.Args)
+	if id != "" || len(freshPsi.Args) != 0 {
+		t.Fatalf("FreshSession should leave Psi identity unset: id=%q args=%v", id, freshPsi.Args)
+	}
+	freshPlan, err := ResolveLaunch(freshPsi, SpawnRequest{}, LaunchOptions{})
+	if err != nil {
+		t.Fatalf("resolve fresh Psi launch: %v", err)
+	}
+	for _, arg := range freshPlan.Args {
+		if arg == "--session-id" || arg == "--session" {
+			t.Fatalf("fresh Psi launch must not add a session flag: %v", freshPlan.Args)
+		}
 	}
 
 	// Ensure PiPsi cannot be called on non-pi coder
 	if _, err := PiPsi(m.MustGet("claude")); err == nil {
 		t.Fatal("PiPsi applied to claude")
+	}
+}
+
+func TestPsiFreshSessionPreservesConfiguredArguments(t *testing.T) {
+	base := NewManager().MustGet("pi")
+	// Assert raw argv on Windows too, without PowerShell wrapping.
+	base.WindowsPowerShellWrap = new(bool)
+	base.Args = []string{"--model", "space value", "--session-id", "user-picked-id"}
+	psi, err := PiPsi(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, id := FreshSession(psi)
+	if id != "" || !reflect.DeepEqual(fresh.Args, base.Args) {
+		t.Fatalf("fresh Psi changed configured arguments: id=%q args=%q", id, fresh.Args)
+	}
+	plan, err := ResolveLaunch(fresh, SpawnRequest{ExtraArgs: []string{"--name", "request title"}}, LaunchOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--model", "space value", "--session-id", "user-picked-id", "--name", "request title"}
+	if !reflect.DeepEqual(plan.Args, want) {
+		t.Fatalf("fresh Psi argv = %q, want %q", plan.Args, want)
 	}
 }
 
