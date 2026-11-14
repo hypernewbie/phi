@@ -141,8 +141,10 @@ describe('Single-Tab Embedded Backend Switching', () => {
         app?.tabManager?.dispose();
         // The launch store keeps a background refresh in flight. Left
         // running, it resolves after the test environment is gone and
-        // dispatches on a document that no longer exists.
+        // dispatches on a document that no longer exists. The notification
+        // manager also schedules a 0ms write; destroy it before jsdom exits.
         app?.piLaunchStore?.dispose();
+        app?.notifications?.destroy();
         setEmbeddedBackend('', '');
         backendStores.clear();
     });
