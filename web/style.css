@@ -4727,12 +4727,18 @@ body.has-terminal-bg
 .ws-manager-all {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 10px;
     color: var(--text-muted);
     font-size: 0.7857rem;
     letter-spacing: 0.6px;
     text-transform: uppercase;
     cursor: pointer;
+}
+
+.ws-manager-all-row {
+    display: flex;
+    align-items: center;
+    min-height: 32px;
 }
 
 .ws-manager-all input {
@@ -4907,6 +4913,10 @@ body.has-terminal-bg
         padding: 6px 0;
     }
 
+    .ws-manager-all {
+        gap: 8px;
+    }
+
     .ws-manager-check {
         grid-row: 1 / 3;
     }
@@ -4925,7 +4935,7 @@ body.has-terminal-bg
 
 /* Touch usability depends on input mode, not the chosen appearance profile. */
 @media (pointer: coarse) {
-    .ws-manager-modal :is(.btn, .modal-close-btn, .ws-manager-row, .ws-manager-all, input[type="text"]) {
+    .ws-manager-modal :is(.btn, .modal-close-btn, .ws-manager-row, .ws-manager-all, .ws-manager-all-row, input[type="text"]) {
         min-height: 44px;
     }
 
@@ -4939,7 +4949,7 @@ body.has-terminal-bg
 }
 
 html[data-appearance-profile="mobile"]
-    :is(.ws-manager-row, .ws-manager-all) {
+    :is(.ws-manager-row, .ws-manager-all, .ws-manager-all-row) {
     min-height: 44px;
 }
 
