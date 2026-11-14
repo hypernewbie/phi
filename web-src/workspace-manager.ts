@@ -312,7 +312,11 @@ export class WorkspaceManager {
 
     private syncFromConfig(): void {
         const config = this.sessions.config as any;
-        let workspaces = Array.isArray(config?.workspaces)
+        // A payload without a workspaces list says nothing about the
+        // registered list; projecting the local copy through
+        // applyWorkspaceList would reset a transiently active workspace.
+        const hasWorkspaces = Array.isArray(config?.workspaces);
+        let workspaces = hasWorkspaces
             ? config.workspaces.filter(isString)
             : this.sessions.workspaces.slice();
         const raw = config?.workspace_roots;
@@ -334,10 +338,12 @@ export class WorkspaceManager {
             if (isRoot) roots = paths;
             else workspaces = paths;
         }
-        this.sessions.applyWorkspaceList(
-            workspaces,
-            mutation ? undefined : config?.active_cwd,
-        );
+        if (hasWorkspaces || mutation) {
+            this.sessions.applyWorkspaceList(
+                workspaces,
+                mutation ? undefined : config?.active_cwd,
+            );
+        }
         this.rootPaths = roots;
         for (const path of roots) {
             if (!this.sections.has(path)) {

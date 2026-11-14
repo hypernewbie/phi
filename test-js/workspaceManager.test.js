@@ -272,6 +272,23 @@ describe('workspace manager', () => {
         expect(sessions.config.workspace_roots).toEqual([BROWSE_ROOT]);
     });
 
+    it('keeps the active workspace when a config payload omits the list', async () => {
+        installFetch({});
+        const sessions = makeSessions({
+            workspaces: ['/code/phi'],
+            activeCwd: '/code/phi',
+        });
+        expect(sessions.activeWorkspace).toBe('/code/phi');
+
+        // An older or partial payload says nothing about the registered
+        // list, so it must not clear the transient active workspace.
+        sessions.applyConfigData({ active_cwd: '/code/phi' });
+
+        expect(sessions.activeWorkspace).toBe('/code/phi');
+        expect(sessions.activeCWD).toBe('/code/phi');
+        expect(sessions.workspaces).toEqual(['/code/phi']);
+    });
+
     it('adds selected children in one batch and moves them into Projects', async () => {
         const { calls } = installFetch({
             browse: () => browseEntries('psi', 'theta'),
