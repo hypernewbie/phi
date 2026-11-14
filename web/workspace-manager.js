@@ -577,7 +577,6 @@ export class WorkspaceManager {
                 }
                 this.applySectionControls(section, element);
             });
-            head.appendChild(allLabel);
             element.appendChild(head);
             const rootPath = document.createElement('div');
             rootPath.className = 'ws-manager-root-path';
@@ -600,6 +599,10 @@ export class WorkspaceManager {
                 note.appendChild(retry);
                 element.appendChild(note);
             }
+            const allRow = document.createElement('div');
+            allRow.className = 'ws-manager-all-row';
+            allRow.appendChild(allLabel);
+            element.appendChild(allRow);
             const list = document.createElement('div');
             list.className = 'ws-manager-list';
             if (section.rows.length === 0 && !section.error) {
