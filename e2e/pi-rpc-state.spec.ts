@@ -1284,3 +1284,38 @@ test('M3 real offline Pi UI reset clears the transcript, keeps narrow and keyboa
         }
     }
 });
+
+test('composer compatibility', async ({ page }) => {
+    test.setTimeout(120_000);
+    const fixture = await startFixture('compat-session');
+    try {
+        await page.goto(fixture.phi.url);
+        await page.evaluate(() => document.fonts.ready);
+        await expect(
+            page.locator('#coder-selector .coder-tab[data-coder="pi"]'),
+        ).toBeVisible();
+        await openPiSession(page, fixture);
+
+        const bar = page.locator('#input-bar-container');
+        const handle = page.locator('#terminal-input-resize-handle');
+        await expect(bar).not.toHaveClass(/terminal-composer/);
+        await expect(handle).toBeHidden();
+        await page.evaluate(() => {
+            document
+                .getElementById('input-bar-container')
+                ?.style.setProperty('--terminal-input-height', '140px');
+        });
+
+        const textarea = page.locator('#input-textarea');
+        await textarea.fill('one\ntwo\nthree\nfour');
+        await expect
+            .poll(async () => (await textarea.boundingBox())?.height ?? 0, {
+                timeout: 5_000,
+            })
+            .toBeGreaterThan(40);
+        const box = await textarea.boundingBox();
+        expect(box?.height ?? 0).toBeLessThan(140);
+    } finally {
+        await fixture.phi.stop();
+    }
+});

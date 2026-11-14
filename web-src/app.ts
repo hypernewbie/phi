@@ -2195,6 +2195,285 @@ export class App {
                 }
             });
         }
+
+        // Terminal composer height. The handle sits inside the composer's
+        // top edge, so it adds no layout row and never covers terminal rows.
+        const inputBar = document.getElementById('input-bar-container');
+        const inputTextArea = document.getElementById(
+            'input-textarea',
+        ) as HTMLTextAreaElement | null;
+        let inputHandle = document.getElementById(
+            'terminal-input-resize-handle',
+        ) as HTMLDivElement | null;
+        if (inputBar && inputTextArea) {
+            if (!inputHandle) {
+                inputHandle = document.createElement('div');
+                inputHandle.id = 'terminal-input-resize-handle';
+                inputHandle.setAttribute('role', 'separator');
+                inputHandle.setAttribute('aria-orientation', 'horizontal');
+                inputHandle.setAttribute('aria-label', 'Terminal input height');
+                inputHandle.tabIndex = 0;
+                inputBar.prepend(inputHandle);
+            }
+            const handle = inputHandle;
+            const textarea = inputTextArea;
+            const INPUT_HEIGHT_KEY = 'phi_terminal_input_height';
+            const INPUT_HEIGHT_STEP = 24;
+
+            const stored = this.readPanelWidthPreference(INPUT_HEIGHT_KEY);
+            if (
+                stored !== null &&
+                stored !== undefined &&
+                stored.trim() !== ''
+            ) {
+                const storedHeight = Number(stored);
+                if (Number.isFinite(storedHeight) && storedHeight > 0) {
+                    inputBar.style.setProperty(
+                        '--terminal-input-height',
+                        `${storedHeight}px`,
+                    );
+                }
+            }
+
+            const inputHeightBounds = () => {
+                const activeTab = this.tabManager?.getActiveTab?.();
+                const term = activeTab?.term;
+                const terminalElement = term?.element;
+                const parent = terminalElement?.parentElement;
+                const cellHeight = term?.dimensions?.css?.cell?.height;
+                if (
+                    !parent ||
+                    !terminalElement ||
+                    typeof cellHeight !== 'number' ||
+                    !Number.isFinite(cellHeight) ||
+                    cellHeight <= 0
+                )
+                    return null;
+                const parentStyle = getComputedStyle(parent);
+                const terminalStyle = getComputedStyle(terminalElement);
+                const textareaStyle = getComputedStyle(textarea);
+                const panelHeight = parseInt(parentStyle.height, 10);
+                const paddingTop = parseInt(terminalStyle.paddingTop, 10) || 0;
+                const paddingBottom =
+                    parseInt(terminalStyle.paddingBottom, 10) || 0;
+                const cssMinimum = parseFloat(textareaStyle.minHeight);
+                const cssMaximum = parseFloat(textareaStyle.maxHeight);
+                const current = textarea.getBoundingClientRect().height;
+                if (
+                    !Number.isFinite(panelHeight) ||
+                    !Number.isFinite(cssMinimum) ||
+                    !Number.isFinite(cssMaximum) ||
+                    !Number.isFinite(current) ||
+                    panelHeight <= 0 ||
+                    cssMinimum <= 0 ||
+                    cssMaximum <= 0 ||
+                    current <= 0
+                )
+                    return null;
+                const freeHeight =
+                    panelHeight - paddingTop - paddingBottom - 2 * cellHeight;
+                const minimum = Math.ceil(cssMinimum);
+                const maximum = Math.floor(
+                    Math.min(cssMaximum, current + freeHeight),
+                );
+                if (
+                    !Number.isFinite(minimum) ||
+                    !Number.isFinite(maximum) ||
+                    maximum < minimum
+                )
+                    return null;
+                return { minimum, maximum, current };
+            };
+
+            const refreshInputHandleAria = () => {
+                const bounds = inputHeightBounds();
+                if (!bounds) return;
+                const now = Math.round(bounds.current);
+                handle.setAttribute('aria-valuemin', String(bounds.minimum));
+                handle.setAttribute('aria-valuemax', String(bounds.maximum));
+                handle.setAttribute('aria-valuenow', String(now));
+                handle.setAttribute('aria-valuetext', `${now} pixels`);
+            };
+
+            const applyInputHeight = (height: number) => {
+                inputBar.style.setProperty(
+                    '--terminal-input-height',
+                    `${height}px`,
+                );
+                this.writePanelWidthPreference(INPUT_HEIGHT_KEY, height);
+            };
+
+            const isTerminalComposer = () =>
+                inputBar.classList.contains('terminal-composer');
+
+            handle.addEventListener('focus', refreshInputHandleAria);
+
+            handle.addEventListener('keydown', (event: KeyboardEvent) => {
+                if (activeResize || !isTerminalComposer()) return;
+                if (
+                    event.altKey ||
+                    event.ctrlKey ||
+                    event.metaKey ||
+                    event.shiftKey
+                )
+                    return;
+                if (
+                    event.key !== 'ArrowUp' &&
+                    event.key !== 'ArrowDown' &&
+                    event.key !== 'Home' &&
+                    event.key !== 'End'
+                )
+                    return;
+                const bounds = inputHeightBounds();
+                if (!bounds) return;
+                let target = bounds.current;
+                if (event.key === 'ArrowUp')
+                    target = bounds.current + INPUT_HEIGHT_STEP;
+                else if (event.key === 'ArrowDown')
+                    target = bounds.current - INPUT_HEIGHT_STEP;
+                else if (event.key === 'Home') target = bounds.minimum;
+                else target = bounds.maximum;
+                target = Math.round(
+                    Math.min(bounds.maximum, Math.max(bounds.minimum, target)),
+                );
+                event.preventDefault();
+                if (target === Math.round(bounds.current)) return;
+                this.tabManager?.startResize();
+                try {
+                    applyInputHeight(target);
+                    this.tabManager?.fitActiveTerminal();
+                    refreshInputHandleAria();
+                } finally {
+                    this.tabManager?.endResize();
+                }
+            });
+
+            handle.addEventListener(startEvt, (event: Event) => {
+                if (!acceptsStart(event) || !isTerminalComposer()) return;
+                const activeTab = this.tabManager?.getActiveTab?.();
+                if (!activeTab?.term) return;
+                const bounds = inputHeightBounds();
+                if (!bounds) return;
+                const paneId = activeTab.paneId;
+                const startY = (event as MouseEvent).clientY;
+                const startHeight = bounds.current;
+                const pointerId = hasPointer
+                    ? (event as PointerEvent).pointerId
+                    : null;
+                const previousCursor = document.body.style.cursor;
+                activeResize = true;
+                event.preventDefault();
+                handle.classList.add('dragging');
+                document.body.style.cursor = 'row-resize';
+                if (
+                    hasPointer &&
+                    handle.setPointerCapture &&
+                    pointerId != null
+                ) {
+                    try {
+                        handle.setPointerCapture(pointerId);
+                    } catch (_) {}
+                }
+                this.tabManager?.startResize();
+
+                let finished = false;
+                const finish = (finishEvent?: Event) => {
+                    if (finished) return;
+                    if (
+                        finishEvent &&
+                        pointerId != null &&
+                        'pointerId' in finishEvent &&
+                        (finishEvent as PointerEvent).pointerId !== pointerId
+                    )
+                        return;
+                    finished = true;
+                    document.removeEventListener(moveEvt, onMove);
+                    document.removeEventListener(endEvt, finish);
+                    if (hasPointer)
+                        document.removeEventListener('pointercancel', finish);
+                    handle.removeEventListener(
+                        'lostpointercapture',
+                        onLostCapture,
+                    );
+                    window.removeEventListener('blur', onBlur);
+                    document.removeEventListener(
+                        'visibilitychange',
+                        onVisibilityChange,
+                    );
+                    handle.classList.remove('dragging');
+                    document.body.style.cursor = previousCursor;
+                    if (
+                        hasPointer &&
+                        handle.releasePointerCapture &&
+                        pointerId != null
+                    ) {
+                        try {
+                            handle.releasePointerCapture(pointerId);
+                        } catch (_) {}
+                    }
+                    activeResize = false;
+                    try {
+                        this.tabManager?.fitActiveTerminal();
+                    } finally {
+                        this.tabManager?.endResize();
+                    }
+                };
+                const onLostCapture = (lostEvent: Event) => finish(lostEvent);
+                const onBlur = () => finish();
+                const onVisibilityChange = () => {
+                    if (document.hidden) finish();
+                };
+                const onMove = (moveEvent: Event) => {
+                    if (!ownsPointer(moveEvent, pointerId)) return;
+                    const currentTab = this.tabManager?.getActiveTab?.();
+                    if (!currentTab || currentTab.paneId !== paneId) {
+                        finish();
+                        return;
+                    }
+                    const currentBounds = inputHeightBounds();
+                    if (!currentBounds) {
+                        finish();
+                        return;
+                    }
+                    const proposed =
+                        startHeight +
+                        startY -
+                        (moveEvent as MouseEvent).clientY;
+                    if (!Number.isFinite(proposed)) return;
+                    const height = Math.round(
+                        Math.min(
+                            currentBounds.maximum,
+                            Math.max(currentBounds.minimum, proposed),
+                        ),
+                    );
+                    if (
+                        height ===
+                        Math.round(textarea.getBoundingClientRect().height)
+                    )
+                        return;
+                    applyInputHeight(height);
+                    this.tabManager?.fitActiveTerminal();
+                    refreshInputHandleAria();
+                };
+
+                document.addEventListener(moveEvt, onMove);
+                document.addEventListener(endEvt, finish);
+                if (hasPointer) {
+                    document.addEventListener('pointercancel', finish);
+                    handle.addEventListener(
+                        'lostpointercapture',
+                        onLostCapture,
+                    );
+                }
+                window.addEventListener('blur', onBlur);
+                document.addEventListener(
+                    'visibilitychange',
+                    onVisibilityChange,
+                );
+            });
+
+            refreshInputHandleAria();
+        }
     }
 
     applyAccentTheme(colorKey: string) {

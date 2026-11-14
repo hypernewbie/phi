@@ -2802,6 +2802,53 @@ body.has-terminal-bg
     box-shadow: 0 -10px 24px var(--accent-trace);
 }
 
+/* Terminal composer height separator. It is absolutely positioned inside
+   the composer's top padding, so it adds no layout row and never covers a
+   terminal row. */
+.input-bar-container.terminal-composer {
+    position: relative;
+}
+
+#terminal-input-resize-handle {
+    display: none;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 8px;
+    z-index: 3;
+    cursor: row-resize;
+    touch-action: none;
+}
+
+.input-bar-container.terminal-composer > #terminal-input-resize-handle {
+    display: block;
+}
+
+#terminal-input-resize-handle::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 50%;
+    width: 36px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--bg-border);
+    transform: translateX(-50%);
+    transition: background 0.15s ease;
+}
+
+#terminal-input-resize-handle:hover::after,
+#terminal-input-resize-handle.dragging::after,
+#terminal-input-resize-handle:focus-visible::after {
+    background: var(--accent);
+}
+
+#terminal-input-resize-handle:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+
 /* Drop-target state: a file is being dragged over the input bar. Glow,
    not shadow — follows AGENTS.md "glow > shadows" rule. Uses existing
    --accent tokens; no new colours introduced. */
@@ -3113,6 +3160,13 @@ body.has-terminal-bg
     transition:
         border-color 0.15s,
         box-shadow 0.15s;
+}
+
+/* Terminal composer: fixed height, internal scrolling. The min/max
+   bounds come from the base rule (38-160px desktop, 36-80px compact). */
+.input-bar-container.terminal-composer textarea {
+    height: var(--terminal-input-height, 40px);
+    overflow-y: auto;
 }
 
 .input-bar-container textarea:focus {
@@ -5983,6 +6037,10 @@ html[data-phi-config-page] .settings-modal {
         max-height: 80px !important;
         overflow-y: auto !important;
         padding: 0.4286rem 0.7143rem;
+    }
+
+    .input-bar-container.terminal-composer textarea {
+        height: var(--terminal-input-height, 36px);
     }
 
     .input-actions {

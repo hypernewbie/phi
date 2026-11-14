@@ -34,6 +34,7 @@ function geometryHarness() {
             cols: 80,
             rows: 24,
             options: { fontSize: 14 },
+            refresh: vi.fn(),
             buffer: { active: { viewportY: 0, baseY: 0, length: 24 } },
         },
         ws: { sendResize: vi.fn(() => true) },
@@ -114,6 +115,42 @@ it.each(['helper', 'direct'])(
         expect(h.tab._pendingForceResize).toBe(false);
     },
 );
+
+function entry(tab, width, height) {
+    return {
+        target: tab.termContainer,
+        contentRect: { width, height },
+    };
+}
+
+it('same-grid panel observation does not force a refresh', () => {
+    const h = geometryHarness();
+    h.observer.callback([entry(h.tab, 800, 480)]);
+    h.flush();
+    expect(h.tab.fitAddon.fit).not.toHaveBeenCalled();
+    expect(h.tab.term.refresh).not.toHaveBeenCalled();
+    expect(h.tab.ws.sendResize).not.toHaveBeenCalled();
+});
+
+it('an ordinary observer request preserves an explicit force request', () => {
+    const h = geometryHarness();
+    h.m._queueActiveRefresh();
+    h.observer.callback([entry(h.tab, 800, 480)]);
+    h.flush();
+    expect(h.tab.term.refresh).toHaveBeenCalledOnce();
+    expect(h.tab.ws.sendResize).not.toHaveBeenCalled();
+});
+
+it('a changed-grid observer entry fits, refreshes, and syncs', () => {
+    const h = geometryHarness();
+    h.desired.cols = 61;
+    h.desired.rows = 17;
+    h.observer.callback([entry(h.tab, 800, 480)]);
+    h.flush();
+    expect(h.tab.fitAddon.fit).toHaveBeenCalledOnce();
+    expect(h.tab.term.refresh).toHaveBeenCalledOnce();
+    expect(h.tab.ws.sendResize).toHaveBeenCalledExactlyOnceWith(61, 17);
+});
 
 it('actual panel dimensions reach the backend without a window resize', () => {
     const h = geometryHarness();

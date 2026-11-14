@@ -3058,6 +3058,11 @@ export class TabManager {
         const pty = tabInfo.ws;
         if (!pty || pty.mode !== 'hot')
             return;
+        // Live frames after the attach head must not overtake replay bytes.
+        // Hold for every attach, including a same-epoch reconnect: a delta
+        // still carries bytes below the live frontier. Every bootstrap path
+        // releases this hold after the replay and fit settle.
+        pty.hold?.();
         // A receipt from a replaced socket can never satisfy this attach.
         if (tabInfo._refreshRequest && tabInfo._refreshRequest.socket !== pty) {
             if (tabInfo._refreshRequest.timer)
@@ -3087,7 +3092,6 @@ export class TabManager {
         }
         if (!samePane) {
             // A different pane lifetime owns a different byte stream.
-            pty.hold?.();
             tabInfo._bootstrapGen = (tabInfo._bootstrapGen ?? 0) + 1;
         }
         if (!samePane && tabInfo._termOpened) {
@@ -4476,18 +4480,41 @@ export class TabManager {
             return;
         tabInfo._panelObserver = new ResizeObserver((entries) => {
             const rect = (entries || []).find((entry) => entry.target === tabInfo.termContainer)?.contentRect;
-            const changed = rect &&
-                (!tabInfo._panelBox ||
-                    tabInfo._panelBox.width !== rect.width ||
-                    tabInfo._panelBox.height !== rect.height);
-            if (rect)
+            const rootHeight = tabInfo.termContainer
+                ?.closest('.app-container')
+                ?.getBoundingClientRect().height;
+            const keyboardResize = rect &&
+                this._isKeyboardViewportResize(tabInfo, rect, rootHeight);
+            if (rect) {
                 tabInfo._panelBox = { width: rect.width, height: rect.height };
-            this._queuePanelFit(tabInfo, {
-                forceResize: Boolean(changed),
-                trace: 'panel',
-            });
+                tabInfo._panelRootHeight = rootHeight;
+            }
+            // A keyboard viewport change shrinks or grows the root and this
+            // panel by the same delta. The NEVER contract freezes the grid;
+            // a composer, attachment, drawer, or splitter change moves the
+            // panel alone and still takes the ordinary fit path. Ordinary
+            // observation never forces a repaint; explicit force requests
+            // keep their pending bit in _queuePanelFit.
+            if (keyboardResize)
+                return;
+            this._queuePanelFit(tabInfo, { trace: 'panel' });
         });
         tabInfo._panelObserver.observe(tabInfo.termContainer);
+    }
+    _isKeyboardViewportResize(tabInfo, rect, rootHeight) {
+        const previous = tabInfo._panelBox;
+        if (!previous ||
+            rootHeight === undefined ||
+            tabInfo._panelRootHeight === undefined ||
+            !isCoarseViewport() ||
+            rect.width !== previous.width)
+            return false;
+        const panelDelta = rect.height - previous.height;
+        const rootDelta = rootHeight - tabInfo._panelRootHeight;
+        if (panelDelta === 0 || rootDelta === 0)
+            return false;
+        // Fractional layout rounding can differ by a subpixel.
+        return Math.abs(panelDelta - rootDelta) <= 1;
     }
     _terminalPanelVisible(tabInfo) {
         if (typeof document === 'undefined' || document.hidden)
@@ -5045,6 +5072,19 @@ export class TabManager {
         // there is nothing to paint and nothing to measure in that case.
         const toggle = this.directModeToggle;
         const bar = this.inputBarContainer;
+        const terminalComposer = tab.coder !== 'pi-rpc' &&
+            tab.coder !== 'review' &&
+            tab.coder !== 'kanban';
+        const wasTerminalComposer = bar.classList.contains('terminal-composer');
+        bar.classList.toggle('terminal-composer', terminalComposer);
+        if (terminalComposer) {
+            // The fixed CSS height owns the terminal composer. Drop any
+            // inline autosize height left by a Pi RPC tab.
+            this.inputTextArea?.style.removeProperty('height');
+        }
+        else if (wasTerminalComposer) {
+            this.adjustInputHeight?.();
+        }
         const modeLabel = tab.directMode
             ? 'Switch to staged text input and expand the text bar'
             : 'Switch to direct terminal input and collapse the text bar';
@@ -15634,6 +15674,16 @@ export class TabManager {
     adjustInputHeight() {
         if (!this.inputTextArea)
             return;
+        if (this.inputBarContainer.classList.contains('terminal-composer')) {
+            // The terminal composer has a fixed height. Text scrolls inside
+            // it; it must not resize the terminal panel on every keystroke.
+            if (this.inputTextArea.value.trim() === '' && isCompactViewport()) {
+                this.inputTextArea.placeholder = 'Type a prompt...';
+            }
+            if (this.inputTextArea.style.height)
+                this.inputTextArea.style.removeProperty('height');
+            return;
+        }
         this.inputTextArea.style.height = 'auto';
         let newHeight = this.inputTextArea.scrollHeight;
         // If empty, prevent the placeholder wrap from making the textarea fat

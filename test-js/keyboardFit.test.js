@@ -73,6 +73,96 @@ describe('classifyGeometryChange', () => {
     });
 });
 
+describe('_isKeyboardViewportResize', () => {
+    const box = (width, height) => ({ width, height });
+    const tab = (panel, root) => ({
+        _panelBox: panel,
+        _panelRootHeight: root,
+    });
+
+    it('skips a shrink when panel and app root move together', () => {
+        const m = makeTm();
+        setPointer(true);
+        const t = tab(box(800, 600), 844);
+        expect(m._isKeyboardViewportResize(t, box(800, 256), 500)).toBe(true);
+    });
+
+    it('skips a growth when panel and app root move together', () => {
+        const m = makeTm();
+        setPointer(true);
+        const t = tab(box(800, 256), 500);
+        expect(m._isKeyboardViewportResize(t, box(800, 600), 844)).toBe(true);
+    });
+
+    it('does not skip a composer or attachment change that moves only the panel', () => {
+        const m = makeTm();
+        setPointer(true);
+        const t = tab(box(800, 600), 844);
+        expect(m._isKeyboardViewportResize(t, box(800, 560), 844)).toBe(false);
+    });
+
+    it('does not skip a panel-only change while the keyboard is open', () => {
+        const m = makeTm();
+        setPointer(true);
+        const t = tab(box(800, 256), 500);
+        expect(m._isKeyboardViewportResize(t, box(800, 216), 500)).toBe(false);
+    });
+
+    it('does not skip fine-pointer height changes', () => {
+        const m = makeTm();
+        setPointer(false);
+        const t = tab(box(800, 600), 844);
+        expect(m._isKeyboardViewportResize(t, box(800, 256), 500)).toBe(false);
+    });
+
+    it('does not skip width changes (rotation or drawer)', () => {
+        const m = makeTm();
+        setPointer(true);
+        const t = tab(box(800, 600), 844);
+        expect(m._isKeyboardViewportResize(t, box(600, 256), 500)).toBe(false);
+    });
+
+    it('does not skip before the first measured box and root', () => {
+        const m = makeTm();
+        setPointer(true);
+        expect(
+            m._isKeyboardViewportResize(
+                tab(undefined, undefined),
+                box(800, 600),
+                844,
+            ),
+        ).toBe(false);
+        expect(
+            m._isKeyboardViewportResize(
+                tab(undefined, 844),
+                box(800, 600),
+                500,
+            ),
+        ).toBe(false);
+    });
+
+    it('tolerates subpixel rounding but not a real chrome delta', () => {
+        const m = makeTm();
+        setPointer(true);
+        const t = tab(box(800, 600.5), 844.5);
+        expect(m._isKeyboardViewportResize(t, box(800, 256.5), 500.25)).toBe(
+            true,
+        );
+        expect(m._isKeyboardViewportResize(t, box(800, 254), 500.25)).toBe(
+            false,
+        );
+    });
+
+    it('does not skip when the app root did not move', () => {
+        const m = makeTm();
+        setPointer(true);
+        const t = tab(box(800, 600), 844);
+        expect(m._isKeyboardViewportResize(t, box(800, 600.5), 844)).toBe(
+            false,
+        );
+    });
+});
+
 describe('handleWindowResize NEVER suppression', () => {
     it('coarse + height-only: NO fit, NO send, ever', () => {
         const m = makeTm();
