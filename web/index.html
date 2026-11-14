@@ -133,15 +133,38 @@ eager to avoid a first-open unstyled flash. -->
                         ></path>
                     </svg>
                     <select id="workspace-select"></select>
-                    <button id="add-workspace-btn" title="Add Workspace">
-                        +
+                    <button
+                        id="add-workspace-btn"
+                        title="Add Workspace"
+                        aria-label="Add workspace"
+                    >
+                        <svg
+                            class="icon"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            aria-hidden="true"
+                        >
+                            <line x1="12" y1="5" x2="12" y2="19"></line>
+                            <line x1="5" y1="12" x2="19" y2="12"></line>
+                        </svg>
                     </button>
                     <button
                         id="remove-workspace-btn"
                         title="Manage workspaces"
                         aria-label="Manage workspaces"
                     >
-                        …
+                        <svg
+                            class="icon icon-dots"
+                            viewBox="0 0 24 24"
+                            aria-hidden="true"
+                        >
+                            <circle cx="6" cy="12" r="1.75"></circle>
+                            <circle cx="12" cy="12" r="1.75"></circle>
+                            <circle cx="18" cy="12" r="1.75"></circle>
+                        </svg>
                     </button>
                 </div>
 
@@ -1547,7 +1570,7 @@ eager to avoid a first-open unstyled flash. -->
                         <div class="ws-manager-group-actions">
                             <button
                                 id="ws-manager-remove"
-                                class="ws-manager-link ws-manager-link-danger"
+                                class="btn btn-primary ws-manager-danger"
                                 type="button"
                                 disabled
                             >

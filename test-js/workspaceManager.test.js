@@ -272,6 +272,31 @@ describe('workspace manager', () => {
         expect(sessions.config.workspace_roots).toEqual([BROWSE_ROOT]);
     });
 
+    it('names an empty root instead of claiming every project is added', async () => {
+        installFetch({ browse: () => browseEntries() });
+        const sessions = makeSessions({ workspaces: [], roots: [BROWSE_ROOT] });
+        await openManager(sessions);
+
+        const text = document.querySelector('#ws-manager-roots').textContent;
+        expect(text).toContain('No projects in this folder.');
+        expect(text).not.toContain(
+            'Every project in this folder is already added.',
+        );
+    });
+
+    it('says every project is added only when the folder has children', async () => {
+        installFetch({ browse: () => browseEntries('psi') });
+        const sessions = makeSessions({
+            workspaces: ['/code/psi'],
+            roots: [BROWSE_ROOT],
+        });
+        await openManager(sessions);
+
+        expect(
+            document.querySelector('#ws-manager-roots').textContent,
+        ).toContain('Every project in this folder is already added.');
+    });
+
     it('keeps the active workspace when a config payload omits the list', async () => {
         installFetch({});
         const sessions = makeSessions({
