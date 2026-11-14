@@ -162,6 +162,11 @@ describe('single-tab switch: right panel surfaces', () => {
     afterEach(() => {
         for (const interval of appIntervals) realClearInterval(interval);
         appIntervals = [];
+        // A notification write is scheduled on a 0ms timer. Left alive, it
+        // fires after jsdom has torn down the window and fails the run with
+        // "window is not defined". Destroying flushes it while the window
+        // still exists.
+        app?.notifications?.destroy();
         setEmbeddedBackend('', '');
         if (typeof app?.scope?.abort === 'function') {
             app.scope.abort('test teardown');

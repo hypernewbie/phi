@@ -1041,8 +1041,7 @@ describe('Add Workspace directory tree', () => {
             0,
         );
         expect(document.activeElement).toBe(opener);
-        expect(manager.wsModalKeydownHandler).toBeNull();
-        expect(manager.wsModalFocusinHandler).toBeNull();
+        expect(manager.wsModalTrap).toBeNull();
 
         opener.click();
         await waitForRow('/ws');
