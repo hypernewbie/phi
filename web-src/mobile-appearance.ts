@@ -1,5 +1,6 @@
 import { BackendScope } from './backend-scope.js';
 import type { AuthContext, FetchLike } from './auth.js';
+import { v } from './valibot.js';
 
 export type AppearanceProfile = 'desktop' | 'mobile';
 export type ProfileOverride = 'auto' | AppearanceProfile;
@@ -120,9 +121,8 @@ export function readAppearanceCache(
         const cache = JSON.parse(
             localStorage.getItem(appearanceCacheKey(scope)) || 'null',
         );
-        return cache?.schema === 1 && validMobileAppearance(cache.mobile)
-            ? cache.mobile
-            : null;
+        if (cache?.schema !== 1) return null;
+        return parseMobileAppearance(cache.mobile);
     } catch {
         return null;
     }
@@ -134,48 +134,58 @@ export function readInheritanceCache(
         const cache = JSON.parse(
             localStorage.getItem(appearanceCacheKey(scope)) || 'null',
         );
-        return cache?.schema === 1 && validInheritedFamilies(cache.inheritance)
-            ? cache.inheritance
-            : null;
+        if (cache?.schema !== 1) return null;
+        return parseInheritedFamilies(cache.inheritance);
     } catch {
         return null;
     }
 }
-function validInheritedFamilies(value: unknown): value is InheritedFamilies {
-    if (!value || typeof value !== 'object') return false;
-    const fields = value as Record<string, unknown>;
-    return ['ui_font_family', 'terminal_font_family'].every(
-        (key) =>
-            typeof fields[key] === 'string' &&
-            new TextEncoder().encode(fields[key]).length <= 512 &&
-            !/\p{Cc}/u.test(fields[key] as string),
-    );
+// A font family is a CSS value, so a control character is either a corrupt
+// entry or an injection attempt. 512 is a UTF-8 byte cap, not a length cap.
+const noControlChars = (value: string) => !/\p{Cc}/u.test(value);
+const fontFamily = v.nullable(
+    v.pipe(v.string(), v.maxBytes(512), v.check(noControlChars)),
+);
+// Extra fields are ignored, not fatal: a newer server may add one, and
+// rejecting the whole payload would reset every saved setting. `object()`
+// strips them, `strictObject()` would reject them.
+const MobileAppearanceSchema = v.object({
+    revision: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+    ui_font_size: v.nullable(
+        v.pipe(v.number(), v.integer(), v.minValue(10), v.maxValue(24)),
+    ),
+    terminal_font_size: v.nullable(
+        v.pipe(v.number(), v.integer(), v.minValue(8), v.maxValue(32)),
+    ),
+    ui_font_family: fontFamily,
+    terminal_font_family: fontFamily,
+});
+// Inherited families come from the desktop config and are always set; unlike
+// the appearance payload, a null here is a malformed response.
+const inheritedFamily = v.pipe(
+    v.string(),
+    v.maxBytes(512),
+    v.check(noControlChars),
+);
+const InheritedFamiliesSchema = v.object({
+    ui_font_family: inheritedFamily,
+    terminal_font_family: inheritedFamily,
+});
+/**
+ * Validates one appearance payload from the server, the cache, or storage.
+ * Returns the normalized record, or null when the shape is unusable. The
+ * return type is the interface, so a schema/interface drift fails `tsc`.
+ */
+export function parseMobileAppearance(value: unknown): MobileAppearance | null {
+    const parsed = v.safeParse(MobileAppearanceSchema, value);
+    return parsed.success ? parsed.output : null;
 }
-export function validMobileAppearance(value: any): value is MobileAppearance {
-    return (
-        value &&
-        typeof value === 'object' &&
-        !Array.isArray(value) &&
-        // Extra fields are ignored, not fatal: a newer server may add one,
-        // and rejecting the whole payload would reset every saved setting.
-        Number.isSafeInteger(value.revision) &&
-        value.revision >= 0 &&
-        KEYS.every((key) => {
-            const v = value[key];
-            if (v === null) return true;
-            if (key.endsWith('_size'))
-                return (
-                    Number.isInteger(v) &&
-                    v >= (key === 'ui_font_size' ? 10 : 8) &&
-                    v <= (key === 'ui_font_size' ? 24 : 32)
-                );
-            return (
-                typeof v === 'string' &&
-                new TextEncoder().encode(v).length <= 512 &&
-                !/\p{Cc}/u.test(v)
-            );
-        })
-    );
+/** Validates the inherited-font payload, or null when it is malformed. */
+export function parseInheritedFamilies(
+    value: unknown,
+): InheritedFamilies | null {
+    const parsed = v.safeParse(InheritedFamiliesSchema, value);
+    return parsed.success ? parsed.output : null;
 }
 export function effectiveAppearance(
     profile: AppearanceProfile,
@@ -699,11 +709,12 @@ export class MobileAppearanceStore {
         this.cache();
     }
     ingestInheritance(data: unknown): void {
-        if (this.disposed || !validInheritedFamilies(data)) return;
+        const parsed = parseInheritedFamilies(data);
+        if (this.disposed || !parsed) return;
         this.inheritanceGeneration++;
         this.inheritance = {
-            ui_font_family: data.ui_font_family,
-            terminal_font_family: data.terminal_font_family,
+            ui_font_family: parsed.ui_font_family,
+            terminal_font_family: parsed.terminal_font_family,
         };
         this.inheritanceWarning = '';
         this.cache();
@@ -721,12 +732,12 @@ export class MobileAppearanceStore {
                 });
                 if (!response.ok)
                     throw new Error('Unable to refresh inherited fonts.');
-                const data = await response.json();
-                if (!validInheritedFamilies(data))
+                const parsed = parseInheritedFamilies(await response.json());
+                if (!parsed)
                     throw new Error('Invalid inherited fonts response.');
                 if (this.disposed || generation !== this.inheritanceGeneration)
                     return false;
-                this.ingestInheritance(data);
+                this.ingestInheritance(parsed);
                 return true;
             } catch {
                 if (!this.disposed) {
@@ -747,11 +758,10 @@ export class MobileAppearanceStore {
                 this.owner,
                 (record, drafts) => ({ record, drafts }),
             );
-            if (
-                this.records.record.confirmed &&
-                validMobileAppearance(this.records.record.confirmed)
-            )
-                this.adopt(this.records.record.confirmed);
+            const confirmed = parseMobileAppearance(
+                this.records.record.confirmed,
+            );
+            if (confirmed) this.adopt(confirmed);
             this.storageWarning = '';
         } catch {
             this.storageError();
@@ -854,8 +864,8 @@ export class MobileAppearanceStore {
                             ? 'Sign in again to save mobile settings.'
                             : 'Unable to refresh mobile settings.',
                     );
-                const state = await response.json();
-                if (!validMobileAppearance(state))
+                const state = parseMobileAppearance(await response.json());
+                if (!state)
                     throw new Error('Invalid mobile settings response.');
                 if (this.disposed) return false;
                 if (startRevision !== null && state.revision < startRevision) {
@@ -1132,9 +1142,8 @@ export class MobileAppearanceStore {
                 response.status === 200 ||
                 (response.status === 409 && generation === null)
             ) {
-                const parsed = await response.json();
-                if (!validMobileAppearance(parsed))
-                    throw new Error('Invalid save response');
+                const parsed = parseMobileAppearance(await response.json());
+                if (!parsed) throw new Error('Invalid save response');
                 state = parsed;
                 if (
                     response.status === 200 &&

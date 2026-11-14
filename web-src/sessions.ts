@@ -31,6 +31,7 @@ import {
     renderLogo,
     RESERVED_CODER_IDS,
 } from './coders.js';
+import { v } from './valibot.js';
 
 export function normalizePath(p: string): string {
     if (!p) return '';
@@ -163,45 +164,44 @@ function recoverSessionNamespace(identity: SessionCacheIdentity): void {
     unconfirmedSessionRemovals.delete(identity.namespace);
 }
 
+const SessionEntrySchema = v.object({
+    id: v.pipe(v.string(), v.minLength(1)),
+    title: v.string(),
+    // The server always sends a parseable timestamp; a cached page with an
+    // unreadable one is stale, not merely odd.
+    time_updated: v.pipe(
+        v.string(),
+        v.check((value) => Number.isFinite(Date.parse(value))),
+    ),
+    cwd: v.optional(v.string()),
+    coder: v.optional(v.string()),
+    session_path: v.optional(v.string()),
+});
+
+const WorktreeSchema = v.object({
+    path: v.pipe(v.string(), v.minLength(1)),
+    branch: v.optional(v.string()),
+    active: v.optional(v.boolean()),
+    expanded: v.optional(v.boolean()),
+});
+
+const WorktreeListSchema = v.array(WorktreeSchema);
+
+// Only the shape is checked here: the caller keeps the original objects,
+// including fields this module does not know about.
 function isSessionPage(value: unknown, limit: number): value is any[] {
-    if (!Array.isArray(value) || value.length > limit) return false;
-    return value.every((session) => {
-        if (!session || typeof session !== 'object' || Array.isArray(session)) {
-            return false;
-        }
-        if (
-            typeof session.id !== 'string' ||
-            session.id.length === 0 ||
-            typeof session.title !== 'string' ||
-            typeof session.time_updated !== 'string' ||
-            !Number.isFinite(Date.parse(session.time_updated))
-        ) {
-            return false;
-        }
-        return ['cwd', 'coder', 'session_path'].every(
-            (key) => !(key in session) || typeof session[key] === 'string',
-        );
-    });
+    if (!Array.isArray(value)) return false;
+    return v.safeParse(
+        v.pipe(v.array(SessionEntrySchema), v.maxLength(limit)),
+        value,
+    ).success;
 }
 
 function normalizeWorktrees(value: unknown): any[] | null {
     if (value === null) return [];
-    if (!Array.isArray(value)) return null;
-    for (const worktree of value) {
-        if (
-            !worktree ||
-            typeof worktree !== 'object' ||
-            Array.isArray(worktree) ||
-            typeof worktree.path !== 'string' ||
-            worktree.path.length === 0 ||
-            ('branch' in worktree && typeof worktree.branch !== 'string') ||
-            ('active' in worktree && typeof worktree.active !== 'boolean') ||
-            ('expanded' in worktree && typeof worktree.expanded !== 'boolean')
-        ) {
-            return null;
-        }
-    }
-    return value;
+    return v.safeParse(WorktreeListSchema, value).success
+        ? (value as any[])
+        : null;
 }
 
 function featureKeyNamespace(key: string): string | null {
@@ -211,23 +211,27 @@ function featureKeyNamespace(key: string): string | null {
         : null;
 }
 
+const FeatureCacheEnvelopeSchema = v.object({
+    v: v.literal(1),
+    saved_at: v.pipe(v.number(), v.finite(), v.minValue(0)),
+    // The payload is whatever the caller's validator accepts.
+    data: v.unknown(),
+});
+
 function parseFeatureCache(
     raw: unknown,
     validate: SessionCacheValidator,
 ): any | null {
     if (typeof raw !== 'string') return null;
+    let json: unknown;
     try {
-        const envelope = JSON.parse(raw);
-        return envelope?.v === 1 &&
-            typeof envelope.saved_at === 'number' &&
-            Number.isFinite(envelope.saved_at) &&
-            envelope.saved_at >= 0 &&
-            validate(envelope.data)
-            ? envelope.data
-            : null;
+        json = JSON.parse(raw);
     } catch {
         return null;
     }
+    const envelope = v.safeParse(FeatureCacheEnvelopeSchema, json);
+    if (!envelope.success || !validate(envelope.output.data)) return null;
+    return envelope.output.data;
 }
 
 function readFeatureCache(

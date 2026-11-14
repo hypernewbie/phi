@@ -15,6 +15,7 @@ import { hmac } from './vendor/noble-hashes/hmac.js';
 import { sha256 } from './vendor/noble-hashes/sha2.js';
 import { isAbortError, serverKey } from './util.js';
 import type { PhiAccessAuthBridge } from './types.js';
+import { v } from './valibot.js';
 
 /** The protocols this client can speak. */
 type Protocol = 'v1' | 'v2';
@@ -214,23 +215,30 @@ function base64URLToBytes(value: unknown) {
     return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
 
+const V1StatusSchema = v.object({
+    enabled: v.literal(true),
+    version: v.literal('v1'),
+    algorithm: v.literal('pbkdf2-sha256'),
+    iterations: v.pipe(v.number(), v.integer(), v.minValue(1)),
+    salt: v.string(),
+    challenge: v.string(),
+});
+
 function validStatus(status: unknown): status is V1Status {
-    const raw = status as V1Status | null | undefined;
-    return (
-        !!raw &&
-        raw.enabled === true &&
-        raw.version === 'v1' &&
-        raw.algorithm === 'pbkdf2-sha256' &&
-        Number.isInteger(raw.iterations) &&
-        raw.iterations > 0 &&
-        typeof raw.salt === 'string' &&
-        typeof raw.challenge === 'string'
-    );
+    return v.safeParse(V1StatusSchema, status).success;
 }
 
 function invalidStatusError() {
     return new Error('Phi returned invalid access protection settings');
 }
+
+// A protocol name list: nonempty, unique, no empty names. The supported
+// subset is picked out afterwards, so one unknown name is tolerated.
+const ProtocolListSchema = v.pipe(
+    v.array(v.pipe(v.string(), v.minLength(1))),
+    v.minLength(1),
+    v.check((list) => new Set(list).size === list.length),
+);
 
 // parseProtocols maps the capability field to the protocols this client can
 // speak. An absent field is the legacy v1-only response. A present field must
@@ -238,32 +246,36 @@ function invalidStatusError() {
 // tolerated beside a supported protocol.
 function parseProtocols(value: unknown): Protocol[] {
     if (value === undefined) return ['v1'];
-    if (!Array.isArray(value) || value.length === 0) throw invalidStatusError();
-    const seen = new Set<string>();
-    for (const protocol of value) {
-        if (typeof protocol !== 'string' || !protocol || seen.has(protocol))
-            throw invalidStatusError();
-        seen.add(protocol);
-    }
-    const supported = value.filter(
+    const parsed = v.safeParse(ProtocolListSchema, value);
+    if (!parsed.success) throw invalidStatusError();
+    const supported = parsed.output.filter(
         (p): p is Protocol => p === 'v1' || p === 'v2',
     );
     if (supported.length === 0) throw invalidStatusError();
     return supported;
 }
 
+// `raw` stays the original object: the v1 KDF fields are read from it later.
+const AccessStatusSchema = v.pipe(
+    // `protocols` is parsed separately: it has a legacy default and a
+    // tolerance rule that a field schema cannot express.
+    v.object({
+        enabled: v.boolean(),
+        authenticated: v.optional(v.boolean()),
+    }),
+    // Access status without an authentication flag is unusable when enabled.
+    v.check((status) => !status.enabled || status.authenticated !== undefined),
+);
+
 // parseAccessStatus validates the status contract shared by both protocols.
 function parseAccessStatus(payload: unknown): AccessStatus {
-    if (!payload || typeof payload !== 'object' || Array.isArray(payload))
-        throw invalidStatusError();
+    const parsed = v.safeParse(AccessStatusSchema, payload);
+    if (!parsed.success) throw invalidStatusError();
     const raw = payload as RawAccessStatus;
-    if (typeof raw.enabled !== 'boolean') throw invalidStatusError();
     const protocols = parseProtocols(raw.protocols);
-    if (raw.enabled && typeof raw.authenticated !== 'boolean')
-        throw invalidStatusError();
     return {
-        enabled: raw.enabled,
-        authenticated: raw.authenticated === true,
+        enabled: parsed.output.enabled,
+        authenticated: parsed.output.authenticated === true,
         protocols,
         raw,
     };
@@ -790,34 +802,46 @@ async function withAuthDeadline<T>(
     }
 }
 
+// A v2 status body always carries both flags; `owned` is only sent by hosts
+// that manage access themselves.
+const V2StatusBodySchema = v.object({
+    enabled: v.boolean(),
+    authenticated: v.boolean(),
+    owned: v.optional(v.unknown()),
+});
+const PasswordAcceptedSchema = v.object({ enabled: v.literal(true) });
+const HostPasswordAcceptedSchema = v.object({
+    ok: v.literal(true),
+    enabled: v.literal(true),
+});
+
+// A nonpositive `expires_in` is returned as-is; only the deadlines must be
+// usable, and the idle one may not outlive the absolute one.
+const CredentialBundleSchema = v.pipe(
+    v.object({
+        token: v.pipe(v.string(), v.minLength(1)),
+        expires_at: v.pipe(v.number(), v.integer(), v.minValue(1)),
+        expires_in: v.pipe(v.number(), v.integer()),
+        refresh_idle_expires_at: v.pipe(v.number(), v.integer(), v.minValue(1)),
+        refresh_absolute_expires_at: v.pipe(
+            v.number(),
+            v.integer(),
+            v.minValue(1),
+        ),
+    }),
+    v.check((b) => b.refresh_idle_expires_at <= b.refresh_absolute_expires_at),
+);
+
 function parseCredentialBundle(payload: unknown): CredentialBundle | null {
-    if (!payload || typeof payload !== 'object' || Array.isArray(payload))
-        return null;
-    const {
-        token,
-        expires_at: expiresAt,
-        expires_in: expiresIn,
-        refresh_idle_expires_at: refreshIdle,
-        refresh_absolute_expires_at: refreshAbsolute,
-    } = payload as Record<string, unknown>;
-    if (typeof token !== 'string' || !token) return null;
-    for (const value of [expiresAt, expiresIn, refreshIdle, refreshAbsolute]) {
-        if (typeof value !== 'number' || !Number.isInteger(value)) return null;
-    }
-    const expires = [
-        expiresAt,
-        expiresIn,
-        refreshIdle,
-        refreshAbsolute,
-    ] as number[];
-    if (expires[0] <= 0 || expires[2] <= 0 || expires[3] <= 0) return null;
-    if (expires[2] > expires[3]) return null;
+    const parsed = v.safeParse(CredentialBundleSchema, payload);
+    if (!parsed.success) return null;
+    const bundle = parsed.output;
     return {
-        token,
-        expiresAt: expires[0],
-        expiresIn: expires[1],
-        refreshIdleExpiresAt: expires[2],
-        refreshAbsoluteExpiresAt: expires[3],
+        token: bundle.token,
+        expiresAt: bundle.expires_at,
+        expiresIn: bundle.expires_in,
+        refreshIdleExpiresAt: bundle.refresh_idle_expires_at,
+        refreshAbsoluteExpiresAt: bundle.refresh_absolute_expires_at,
     };
 }
 
@@ -1147,17 +1171,9 @@ async function checkV2Token(
         } catch {
             throw invalidStatusError();
         }
-        const body = payload as {
-            enabled?: unknown;
-            authenticated?: unknown;
-            owned?: unknown;
-        } | null;
-        if (
-            !body ||
-            typeof body.enabled !== 'boolean' ||
-            typeof body.authenticated !== 'boolean'
-        )
-            throw invalidStatusError();
+        const parsed = v.safeParse(V2StatusBodySchema, payload);
+        if (!parsed.success) throw invalidStatusError();
+        const body = parsed.output;
         if (!body.enabled) return 'invalid';
         if (body.owned === false)
             throw new Error('Another Phi instance owns access state');
@@ -1251,7 +1267,7 @@ async function saveV2Password(
         }
     });
     if (hostAuthenticatedMode()) {
-        if (!payload || payload.ok !== true || payload.enabled !== true)
+        if (!v.safeParse(HostPasswordAcceptedSchema, payload).success)
             throw new Error('Unable to save access password');
         if (epoch === state.epoch) {
             state.hostSession = true;
@@ -1264,8 +1280,7 @@ async function saveV2Password(
     }
     const bundle = parseCredentialBundle(payload);
     if (
-        !payload ||
-        payload.enabled !== true ||
+        !v.safeParse(PasswordAcceptedSchema, payload).success ||
         !bundle ||
         bundle.expiresIn <= 0
     )

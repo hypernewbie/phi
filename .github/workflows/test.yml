@@ -257,6 +257,13 @@ jobs:
       - name: Type Check (web-src)
         run: pnpm run typecheck
 
+      # Must run before build:web, which regenerates these files. Here it
+      # compares the committed bundle, license and declaration against a fresh
+      # generation, so a stale web-src/valibot.d.ts fails with a precise
+      # message; the web/ drift guard below only inspects web/.
+      - name: Verify valibot facade generated assets
+        run: pnpm run check:valibot-generated
+
       - name: Build Emitted JS
         run: pnpm run build:web
 

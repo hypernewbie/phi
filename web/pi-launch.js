@@ -1,4 +1,5 @@
 import { appearanceOwner, appearanceRequestContext, } from './mobile-appearance.js';
+import { v } from './valibot.js';
 const SCHEMA = 2;
 const CACHE_PREFIX = 'phi:pi-launch-cache:v1:';
 const RECORD_PREFIX = 'phi:pi-launch-record:v1:';
@@ -38,10 +39,8 @@ const emptyDraft = () => ({
     base: null,
     version: 0,
 });
-const validRevision = (value) => typeof value === 'number' &&
-    Number.isSafeInteger(value) &&
-    value >= 0 &&
-    value <= MAX_REVISION;
+const RevisionSchema = v.pipe(v.number(), v.safeInteger(), v.minValue(0), v.maxValue(MAX_REVISION));
+const validRevision = (value) => v.safeParse(RevisionSchema, value).success;
 const object = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
 const validArgs = (value) => Array.isArray(value) && value.every((item) => typeof item === 'string');
 const validEnv = (value) => object(value) &&

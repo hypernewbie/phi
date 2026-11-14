@@ -3,6 +3,7 @@ import { escapeHtml, getLastFolderName as getLastFolderNameUtil, formatWorkspace
 import { openPiRpcChatTab } from './chat-pi/tab.js';
 import { createReviewTranscriptView } from './review-transcript.js';
 import { loadCoderRegistry, openCodePaneMode, visibleCoders, getCoder, hasTranscript, hasPiRpc, hasRename, hasSessions, isShell, renderLogo, RESERVED_CODER_IDS, } from './coders.js';
+import { v } from './valibot.js';
 export function normalizePath(p) {
     if (!p)
         return '';
@@ -101,41 +102,36 @@ function recoverSessionNamespace(identity) {
         recoveredSessionNamespaces.add(identity.namespace);
     unconfirmedSessionRemovals.delete(identity.namespace);
 }
+const SessionEntrySchema = v.object({
+    id: v.pipe(v.string(), v.minLength(1)),
+    title: v.string(),
+    // The server always sends a parseable timestamp; a cached page with an
+    // unreadable one is stale, not merely odd.
+    time_updated: v.pipe(v.string(), v.check((value) => Number.isFinite(Date.parse(value)))),
+    cwd: v.optional(v.string()),
+    coder: v.optional(v.string()),
+    session_path: v.optional(v.string()),
+});
+const WorktreeSchema = v.object({
+    path: v.pipe(v.string(), v.minLength(1)),
+    branch: v.optional(v.string()),
+    active: v.optional(v.boolean()),
+    expanded: v.optional(v.boolean()),
+});
+const WorktreeListSchema = v.array(WorktreeSchema);
+// Only the shape is checked here: the caller keeps the original objects,
+// including fields this module does not know about.
 function isSessionPage(value, limit) {
-    if (!Array.isArray(value) || value.length > limit)
+    if (!Array.isArray(value))
         return false;
-    return value.every((session) => {
-        if (!session || typeof session !== 'object' || Array.isArray(session)) {
-            return false;
-        }
-        if (typeof session.id !== 'string' ||
-            session.id.length === 0 ||
-            typeof session.title !== 'string' ||
-            typeof session.time_updated !== 'string' ||
-            !Number.isFinite(Date.parse(session.time_updated))) {
-            return false;
-        }
-        return ['cwd', 'coder', 'session_path'].every((key) => !(key in session) || typeof session[key] === 'string');
-    });
+    return v.safeParse(v.pipe(v.array(SessionEntrySchema), v.maxLength(limit)), value).success;
 }
 function normalizeWorktrees(value) {
     if (value === null)
         return [];
-    if (!Array.isArray(value))
-        return null;
-    for (const worktree of value) {
-        if (!worktree ||
-            typeof worktree !== 'object' ||
-            Array.isArray(worktree) ||
-            typeof worktree.path !== 'string' ||
-            worktree.path.length === 0 ||
-            ('branch' in worktree && typeof worktree.branch !== 'string') ||
-            ('active' in worktree && typeof worktree.active !== 'boolean') ||
-            ('expanded' in worktree && typeof worktree.expanded !== 'boolean')) {
-            return null;
-        }
-    }
-    return value;
+    return v.safeParse(WorktreeListSchema, value).success
+        ? value
+        : null;
 }
 function featureKeyNamespace(key) {
     const parts = key.split(':');
@@ -143,22 +139,26 @@ function featureKeyNamespace(key) {
         ? `${parts[1]}:${parts[3]}`
         : null;
 }
+const FeatureCacheEnvelopeSchema = v.object({
+    v: v.literal(1),
+    saved_at: v.pipe(v.number(), v.finite(), v.minValue(0)),
+    // The payload is whatever the caller's validator accepts.
+    data: v.unknown(),
+});
 function parseFeatureCache(raw, validate) {
     if (typeof raw !== 'string')
         return null;
+    let json;
     try {
-        const envelope = JSON.parse(raw);
-        return envelope?.v === 1 &&
-            typeof envelope.saved_at === 'number' &&
-            Number.isFinite(envelope.saved_at) &&
-            envelope.saved_at >= 0 &&
-            validate(envelope.data)
-            ? envelope.data
-            : null;
+        json = JSON.parse(raw);
     }
     catch {
         return null;
     }
+    const envelope = v.safeParse(FeatureCacheEnvelopeSchema, json);
+    if (!envelope.success || !validate(envelope.output.data))
+        return null;
+    return envelope.output.data;
 }
 function readFeatureCache(store, identity, validate) {
     if (!identity || sessionCacheBlocked(identity))

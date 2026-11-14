@@ -1,5 +1,6 @@
 /* Φ phi — saved Pi Thinking fallback options */
 import { getEmbeddedProfileId, serverKey } from './util.js';
+import { v } from './valibot.js';
 export const THINKING_PRESET_LEVELS = [
     'off',
     'minimal',
@@ -13,20 +14,10 @@ const STORAGE_PREFIX = 'phi:thinking-presets:v1';
 const REQUEST_TIMEOUT_MS = 15_000;
 const RETRY_INTERVAL_MS = 10_000;
 const STORAGE_WARNING = 'Browser storage is unavailable; Thinking changes are kept only in memory.';
+const PresetListSchema = v.pipe(v.array(v.picklist(THINKING_PRESET_LEVELS)), v.check((levels) => new Set(levels).size === levels.length));
 export function normalizeThinkingPresetList(value) {
-    if (!Array.isArray(value))
-        return null;
-    const out = [];
-    for (const item of value) {
-        if (typeof item !== 'string')
-            return null;
-        if (!THINKING_PRESET_LEVELS.includes(item))
-            return null;
-        if (out.includes(item))
-            return null;
-        out.push(item);
-    }
-    return out;
+    const parsed = v.safeParse(PresetListSchema, value);
+    return parsed.success ? [...parsed.output] : null;
 }
 export function thinkingPresetTokens(exclude = []) {
     return THINKING_PRESET_LEVELS.filter((level) => !exclude.includes(level));

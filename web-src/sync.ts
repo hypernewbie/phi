@@ -8,6 +8,7 @@ import {
     serverKey,
 } from './util.js';
 import { renderMarkdownSafe, highlightCodeIn } from './md-render.js';
+import { v } from './valibot.js';
 
 // Sync Board desktop-alert markers: a message whose key or value carries
 // one of these signals the desktop shell via a transient page title
@@ -27,27 +28,22 @@ interface SyncPushMessage {
     truncated?: boolean;
 }
 
+const SyncPushMessageSchema = v.object({
+    message_id: v.pipe(v.string(), v.minLength(1), v.maxLength(128)),
+    sender: v.pipe(v.string(), v.maxLength(128)),
+    recipient: v.pipe(v.string(), v.maxLength(128)),
+    value: v.pipe(v.string(), v.maxLength(4096)),
+    updated_at_unix_ms: v.pipe(v.number(), v.finite()),
+    truncated: v.optional(v.boolean()),
+});
+const PushListSchema = v.pipe(v.array(SyncPushMessageSchema), v.maxLength(100));
+
 function parsePushMessages(value: unknown): SyncPushMessage[] | null {
-    if (!Array.isArray(value) || value.length > 100) return null;
-    for (const item of value) {
-        const msg = asObject<SyncPushMessage>(item);
-        if (
-            !msg ||
-            typeof msg.message_id !== 'string' ||
-            !msg.message_id ||
-            msg.message_id.length > 128 ||
-            typeof msg.sender !== 'string' ||
-            msg.sender.length > 128 ||
-            typeof msg.recipient !== 'string' ||
-            msg.recipient.length > 128 ||
-            typeof msg.value !== 'string' ||
-            msg.value.length > 4096 ||
-            !Number.isFinite(msg.updated_at_unix_ms) ||
-            (msg.truncated !== undefined && typeof msg.truncated !== 'boolean')
-        )
-            return null;
-    }
-    return value as SyncPushMessage[];
+    // A gate, not a rewrite: one unusable entry rejects the whole list, and
+    // the caller keeps the original objects.
+    return v.safeParse(PushListSchema, value).success
+        ? (value as SyncPushMessage[])
+        : null;
 }
 
 /**

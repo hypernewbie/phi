@@ -14,6 +14,7 @@
  * step count and total duration, recipe validation, and "no recipe →
  * unavailable" (never a /model fallback).
  */
+import { v } from './valibot.js';
 // Max wall-clock duration an executor will spend on one recipe. The
 // largest built-in (OpenCode Mini) is 5 steps with ~1.4s of waits; 5s is a
 // generous ceiling that still aborts runaway recipes quickly. R7.
@@ -222,76 +223,68 @@ export function rebuildRegistry(data) {
     }
     registry = out;
 }
+// A field counts as set only when it is literally true.
+const flag = v.fallback(v.boolean(), false);
+const NO_CAPABILITIES = {
+    list: false,
+    transcript: false,
+    rename: false,
+    pi_rpc: false,
+};
+// A fallback value is returned by reference, so an object or array fallback
+// would be shared by every descriptor. Factories keep one entry's mistake out
+// of its neighbours.
+const freshCapabilities = () => ({ ...NO_CAPABILITIES });
+const CoderCapabilitiesSchema = v.object({
+    list: flag,
+    transcript: flag,
+    rename: flag,
+    pi_rpc: flag,
+});
+const CoderPresetSchema = v.object({ name: v.string(), value: v.string() });
+// One bad preset is dropped and the rest of the list survives, so each entry
+// falls back to a null sentinel that the transform filters out.
+const PresetListSchema = v.fallback(v.pipe(v.array(v.fallback(v.union([CoderPresetSchema, v.null()]), null)), v.transform((list) => list.filter((item) => item !== null))), () => []);
+const CoderPayloadSchema = v.object({
+    // A usable name is the one thing an entry cannot do without.
+    name: v.pipe(v.string(), v.minLength(1)),
+    // The null sentinel means "unset"; `?? undefined` below restores that.
+    order: v.fallback(v.union([v.pipe(v.number(), v.safeInteger(), v.minValue(0)), v.null()]), null),
+    // Derived from `name` below; a schema cannot read a sibling field.
+    short_label: v.fallback(v.union([v.string(), v.null()]), null),
+    logo: v.fallback(v.string(), ''),
+    sidebar_visible: flag,
+    is_shell: flag,
+    input_mode: v.fallback(v.picklist(['staged', 'direct']), 'staged'),
+    presets: PresetListSchema,
+    capabilities: v.fallback(CoderCapabilitiesSchema, freshCapabilities),
+    model_switch_disabled: flag,
+    opencode_mode: v.fallback(v.union([v.picklist(['mini', 'tui', 'legacy']), v.null()]), null),
+    opencode_mini_presets: PresetListSchema,
+    pi_mode: v.fallback(v.union([v.string(), v.null()]), null),
+});
 // coerceDescriptor validates one entry from /api/coders and returns
 // a normalized CoderDescriptor. Unknown fields are dropped silently;
 // missing required fields return null so the entry is skipped.
 function coerceDescriptor(id, raw) {
-    if (!raw || typeof raw !== 'object')
-        return null;
-    const r = raw;
     if (RESERVED_CODER_IDS.has(id))
         return null;
-    if (typeof r.name !== 'string' || r.name === '')
+    const parsed = v.safeParse(CoderPayloadSchema, raw);
+    if (!parsed.success)
         return null;
+    const r = parsed.output;
     return {
+        ...r,
         id,
-        order: typeof r.order === 'number' &&
-            Number.isSafeInteger(r.order) &&
-            r.order >= 0
-            ? r.order
-            : undefined,
-        name: r.name,
-        short_label: typeof r.short_label === 'string'
-            ? r.short_label
-            : r.name.split(/\s+/)[0],
-        logo: typeof r.logo === 'string' && r.logo ? r.logo : '',
-        sidebar_visible: r.sidebar_visible === true,
-        is_shell: r.is_shell === true,
-        input_mode: r.input_mode === 'staged' || r.input_mode === 'direct'
-            ? r.input_mode
-            : 'staged',
-        presets: Array.isArray(r.presets)
-            ? r.presets
-                .filter((p) => p &&
-                typeof p.name === 'string' &&
-                typeof p.value === 'string')
-                .map((p) => ({
-                name: p.name,
-                value: p.value,
-            }))
-            : [],
-        capabilities: coerceCapabilities(r.capabilities),
-        model_switch_disabled: r.model_switch_disabled === true,
-        opencode_mode: r.opencode_mode === 'mini' ||
-            r.opencode_mode === 'tui' ||
-            r.opencode_mode === 'legacy'
-            ? r.opencode_mode
-            : undefined,
-        opencode_mini_presets: coercePresets(r.opencode_mini_presets),
-        pi_mode: typeof r.pi_mode === 'string' ? r.pi_mode : undefined,
+        order: r.order ?? undefined,
+        // A malformed short_label falls back like an absent one.
+        short_label: r.short_label ?? r.name.split(/\s+/)[0],
+        opencode_mode: r.opencode_mode ?? undefined,
+        pi_mode: r.pi_mode ?? undefined,
     };
-}
-function coercePresets(raw) {
-    if (!Array.isArray(raw))
-        return [];
-    return raw
-        .filter((p) => p && typeof p.name === 'string' && typeof p.value === 'string')
-        .map((p) => ({ name: p.name, value: p.value }));
 }
 export function openCodePaneMode(mode) {
     return mode === 'mini' || mode === 'tui' ? mode : 'legacy';
-}
-function coerceCapabilities(raw) {
-    if (!raw || typeof raw !== 'object') {
-        return { list: false, transcript: false, rename: false, pi_rpc: false };
-    }
-    const r = raw;
-    return {
-        list: r.list === true,
-        transcript: r.transcript === true,
-        rename: r.rename === true,
-        pi_rpc: r.pi_rpc === true,
-    };
 }
 // ─── Read access ────────────────────────────────────────────────────────
 export function getCoder(id) {

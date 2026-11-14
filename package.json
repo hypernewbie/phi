@@ -9,7 +9,8 @@
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
   "scripts": {
-    "build:web": "tsc -p tsconfig.build.json && node scripts/websocket.mjs build",
+    "build:web": "node scripts/valibot.mjs build && tsc -p tsconfig.build.json && node scripts/websocket.mjs build",
+    "check:valibot-generated": "node scripts/valibot.mjs check",
     "gen:websocket": "node scripts/websocket.mjs generate",
     "check:websocket-generated": "node scripts/websocket.mjs check",
     "gen:pi-phi": "node scripts/pi-phi-generate.mjs",
@@ -67,6 +68,7 @@
     "stylelint-config-standard": "catalog:",
     "ts-proto": "2.18.0",
     "typescript": "catalog:",
+    "valibot": "1.5.0",
     "viewerjs": "catalog:",
     "vitest": "catalog:"
   }

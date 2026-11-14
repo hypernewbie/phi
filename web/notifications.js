@@ -1,4 +1,5 @@
 import { backendStores, MAX_BACKEND_STORES, } from './backend-store.js';
+import { v } from './valibot.js';
 const DEFAULT_DURATION = 6000;
 const MAX_DURATION = 2_147_483_647;
 const MAX_RECORDS = 100;
@@ -20,45 +21,32 @@ const ICONS = {
     info: 'ℹ',
 };
 const SVG_NS = 'http://www.w3.org/2000/svg';
+// The newest timestamp a JS Date can represent keeps stored history sane.
+const MAX_TIMESTAMP = 8_640_000_000_000_000;
+const DurationSchema = v.pipe(v.number(), v.finite(), v.minValue(0), v.maxValue(MAX_DURATION));
+const ToastTypeSchema = v.picklist(['info', 'success', 'error']);
+const NotificationMetadataSchema = v.object({
+    id: v.pipe(v.string(), v.minLength(1), v.maxLength(64)),
+    type: ToastTypeSchema,
+    title: v.pipe(v.string(), v.maxLength(MAX_TITLE_PREVIEW)),
+    message: v.pipe(v.string(), v.maxLength(MAX_MESSAGE_PREVIEW)),
+    timestamp: v.pipe(v.number(), v.finite(), v.minValue(-MAX_TIMESTAMP), v.maxValue(MAX_TIMESTAMP)),
+});
+const StoredHistorySchema = v.object({
+    version: v.literal(1),
+    entries: v.unknown(),
+});
 function normalizeType(type) {
-    return type === 'error' || type === 'success' ? type : 'info';
+    const parsed = v.safeParse(ToastTypeSchema, type);
+    return parsed.success ? parsed.output : 'info';
 }
 function normalizeDuration(duration) {
-    if (typeof duration === 'number' &&
-        Number.isFinite(duration) &&
-        duration >= 0 &&
-        duration <= MAX_DURATION) {
-        return duration;
-    }
-    return DEFAULT_DURATION;
+    const parsed = v.safeParse(DurationSchema, duration);
+    return parsed.success ? parsed.output : DEFAULT_DURATION;
 }
 function normalizeMetadata(value) {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-        return null;
-    }
-    const record = value;
-    if (typeof record.id !== 'string' ||
-        record.id.length === 0 ||
-        record.id.length > 64 ||
-        (record.type !== 'info' &&
-            record.type !== 'success' &&
-            record.type !== 'error') ||
-        typeof record.title !== 'string' ||
-        record.title.length > MAX_TITLE_PREVIEW ||
-        typeof record.message !== 'string' ||
-        record.message.length > MAX_MESSAGE_PREVIEW ||
-        typeof record.timestamp !== 'number' ||
-        !Number.isFinite(record.timestamp) ||
-        Math.abs(record.timestamp) > 8_640_000_000_000_000) {
-        return null;
-    }
-    return {
-        id: record.id,
-        type: record.type,
-        title: record.title,
-        message: record.message,
-        timestamp: record.timestamp,
-    };
+    const parsed = v.safeParse(NotificationMetadataSchema, value);
+    return parsed.success ? parsed.output : null;
 }
 function normalizeMetadataList(value) {
     if (!Array.isArray(value))
@@ -77,19 +65,17 @@ function normalizeMetadataList(value) {
 function parseStoredNotifications(raw) {
     if (!raw || raw.length > MAX_STORAGE_TEXT)
         return [];
+    let json;
     try {
-        const parsed = JSON.parse(raw);
-        if (typeof parsed !== 'object' ||
-            parsed === null ||
-            Array.isArray(parsed) ||
-            parsed.version !== 1) {
-            return [];
-        }
-        return normalizeMetadataList(parsed.entries);
+        json = JSON.parse(raw);
     }
     catch {
         return [];
     }
+    const envelope = v.safeParse(StoredHistorySchema, json);
+    if (!envelope.success)
+        return [];
+    return normalizeMetadataList(envelope.output.entries);
 }
 function makeButton(doc, id, className, label) {
     const button = doc.createElement('button');

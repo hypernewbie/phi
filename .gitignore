@@ -20,6 +20,7 @@ node_modules/
 
 # Local WebSocket protobuf generator plugin.
 .tools/websocket/
+.tools/valibot/
 
 # TypeScript build cache (one per tsconfig.build.json invocation).
 *.tsbuildinfo

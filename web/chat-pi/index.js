@@ -7,6 +7,7 @@ import { createReviewTranscriptView } from '../review-transcript.js';
 import { createSubagentStrip, createSubagentViewer } from './subagents.js';
 import { renderQueuePanel } from './queue.js';
 import { createPiDialogController } from './dialogs.js';
+import { v } from '../valibot.js';
 function cloneStatus(status) {
     return {
         ...status,
@@ -27,43 +28,35 @@ const stateOptionalFields = ['model', 'thinking', 'sessionPath'];
  * a hydrate pair, scoped to one instance SID. Only this shape can clear an
  * omitted optional field; partial or legacy payloads merge without clearing.
  */
+// A metric is either a finite number or explicitly null; the key itself is
+// always present in a canonical payload.
+const metric = v.nullable(v.pipe(v.number(), v.finite()));
+// `exactOptional` keeps the old rule that a present-but-undefined optional
+// field is malformed, not merely absent.
+const optionalString = v.exactOptional(v.string());
+const CanonicalStateSchema = v.object({
+    sid: v.string(),
+    title: v.string(),
+    cwd: v.string(),
+    status: v.picklist(['live', 'exited']),
+    busy: v.boolean(),
+    queueDepth: v.pipe(v.number(), v.finite(), v.minValue(0)),
+    inputTokens: metric,
+    outputTokens: metric,
+    contextUsedTokens: metric,
+    contextWindowTokens: metric,
+    cacheReadTokens: metric,
+    cacheWriteTokens: metric,
+    skills: v.nullable(v.array(v.string())),
+    model: optionalString,
+    thinking: optionalString,
+    sessionPath: optionalString,
+});
 function isCanonicalState(state, sid) {
-    if (!state || typeof state !== 'object' || sid === '')
+    if (sid === '')
         return false;
-    const source = state;
-    if (source.sid !== sid)
-        return false;
-    for (const field of ['title', 'cwd']) {
-        if (typeof source[field] !== 'string')
-            return false;
-    }
-    if (source.status !== 'live' && source.status !== 'exited')
-        return false;
-    if (typeof source.busy !== 'boolean')
-        return false;
-    const depth = source.queueDepth;
-    if (typeof depth !== 'number' || !Number.isFinite(depth) || depth < 0)
-        return false;
-    for (const field of stateMetricFields) {
-        if (!Object.hasOwn(source, field))
-            return false;
-        const value = source[field];
-        if (value !== null &&
-            !(typeof value === 'number' && Number.isFinite(value)))
-            return false;
-    }
-    if (!Object.hasOwn(source, 'skills'))
-        return false;
-    const skills = source.skills;
-    if (skills !== null &&
-        !(Array.isArray(skills) &&
-            skills.every((item) => typeof item === 'string')))
-        return false;
-    for (const field of stateOptionalFields) {
-        if (Object.hasOwn(source, field) && typeof source[field] !== 'string')
-            return false;
-    }
-    return true;
+    const parsed = v.safeParse(CanonicalStateSchema, state);
+    return parsed.success && parsed.output.sid === sid;
 }
 function mergeState(status, state, canonical = false) {
     if (!state || typeof state !== 'object')
@@ -261,47 +254,45 @@ function dialogCloseReason(value) {
             return 'server';
     }
 }
+const SnapshotSchema = v.object({
+    lastSeq: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+    messages: v.array(v.unknown()),
+});
 function isSnapshot(value) {
-    if (!value || typeof value !== 'object')
-        return false;
-    const snapshot = value;
-    return (typeof snapshot.lastSeq === 'number' &&
-        Number.isSafeInteger(snapshot.lastSeq) &&
-        snapshot.lastSeq >= 0 &&
-        Array.isArray(snapshot.messages));
+    return v.safeParse(SnapshotSchema, value).success;
 }
 function rejected(message) {
     return Promise.reject(new Error(message));
 }
+const PiModelSchema = v.object({
+    provider: v.pipe(v.string(), v.minLength(1)),
+    id: v.pipe(v.string(), v.minLength(1)),
+    name: v.optional(v.string()),
+});
+// One unusable entry is skipped, the rest of the list survives, so each entry
+// falls back to a null sentinel that the caller filters out.
+const PiModelListSchema = v.array(v.fallback(v.union([PiModelSchema, v.null()]), null));
 function validModels(value) {
     const models = value?.models;
     if (!Array.isArray(models))
         throw new Error('Pi model list is malformed');
-    return models.flatMap((item) => {
-        if (!item || typeof item !== 'object')
-            return [];
-        const model = item;
-        if (typeof model.provider !== 'string' || !model.provider)
-            return [];
-        if (typeof model.id !== 'string' || !model.id)
-            return [];
-        return [
-            {
-                provider: model.provider,
-                id: model.id,
-                ...(typeof model.name === 'string' && model.name
-                    ? { name: model.name }
-                    : {}),
-            },
-        ];
-    });
+    const parsed = v.safeParse(PiModelListSchema, models);
+    if (!parsed.success)
+        return [];
+    return parsed.output
+        .filter((model) => model !== null)
+        .map((model) => ({
+        provider: model.provider,
+        id: model.id,
+        ...(model.name ? { name: model.name } : {}),
+    }));
 }
 function validThinkingLevels(value) {
     const levels = value?.levels;
-    if (!Array.isArray(levels) ||
-        !levels.every((level) => typeof level === 'string'))
+    const parsed = v.safeParse(v.array(v.string()), levels);
+    if (!parsed.success)
         throw new Error('Pi thinking level list is malformed');
-    return [...levels];
+    return [...parsed.output];
 }
 function invokeControl(client, op, sid, args, timeoutMs) {
     return client.call(op, sid, args, timeoutMs ? { timeoutMs } : undefined);
@@ -1695,3 +1686,12 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
         },
     };
 }
+// Test-only hook: the state predicates decide what a wire message may change,
+// so their exact tolerance is verified directly rather than through a socket.
+export const __test__ = {
+    isCanonicalState,
+    mergeState,
+    isSnapshot,
+    validModels,
+    validThinkingLevels,
+};
