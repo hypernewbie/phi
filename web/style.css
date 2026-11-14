@@ -3320,7 +3320,8 @@ body.has-terminal-bg
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    flex: 0 0 auto;
+    flex: 0 1 auto;
+    min-width: 0;
 }
 
 .pi-rpc-status-model {
@@ -3329,7 +3330,13 @@ body.has-terminal-bg
     font-weight: 400;
     font-family: var(--font-mono);
     white-space: nowrap;
-    flex-shrink: 0;
+    /* The bar clips its own overflow, so every segment must be able to
+       shrink to an ellipsis. A fixed-width model here is what amputated
+       the row's right end on narrow screens. */
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
     text-align: right;
     margin-left: auto;
 }
@@ -6447,6 +6454,15 @@ html[data-phi-config-page] .settings-modal {
 
     #diff-layout-toggle-btn {
         display: none !important;
+    }
+
+    /* The Pi status row carries cwd, token counts, the context meter, and
+       the model. A phone cannot hold that on one line, and the bar clips
+       its own overflow, so the tail was amputated. Wrap the segments
+       instead: nothing is cut off and every value stays readable. */
+    .pi-rpc-status-bar {
+        flex-wrap: wrap;
+        row-gap: 2px;
     }
 
     #model-presets-dropup,
