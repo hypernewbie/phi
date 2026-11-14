@@ -1,5 +1,5 @@
 import { gzipSync } from 'node:zlib';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { v } from '../web/valibot.js';
 
@@ -47,6 +47,26 @@ describe('shipped valibot runtime', () => {
         for (const name of expected) {
             expect(typeof v[name], name).toBe('function');
         }
+    });
+
+    it('reserves the name v inside modules that import the facade', () => {
+        // `v` is the facade in these modules. A local of the same name reads
+        // like a schema, so a later `v.string()` on it fails at runtime only.
+        const binding =
+            /\b(?:const|let|var)\s+v\b|\bcatch\s*\(\s*v\b|\bfunction\b[^(]*\(\s*v\s*[:,)]|\b(?:const|let|var)\s*[[{][^\n]*\bv\b[^\n]*[\]}]\s*=/;
+        const offenders = [];
+        const root = new URL('../web-src/', import.meta.url);
+        for (const name of readdirSync(root, { recursive: true })) {
+            if (!String(name).endsWith('.ts')) continue;
+            const source = readFileSync(new URL(name, root), 'utf8');
+            if (!source.includes("'./valibot.js'")) continue;
+            for (const [index, line] of source.split('\n').entries()) {
+                if (binding.test(line)) {
+                    offenders.push(`${name}:${index + 1}: ${line.trim()}`);
+                }
+            }
+        }
+        expect(offenders).toEqual([]);
     });
 
     it('stays self-contained and inside the size budget', () => {

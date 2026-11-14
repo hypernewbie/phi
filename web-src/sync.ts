@@ -1204,10 +1204,12 @@ export class SyncManager {
         let key = '';
         for (const msg of messages) {
             const k = String(msg && msg.key !== undefined ? msg.key : '');
-            const v = String(msg && msg.value !== undefined ? msg.value : '');
+            const text = String(
+                msg && msg.value !== undefined ? msg.value : '',
+            );
             if (
                 k.includes(SYNC_ALARM_MARKER) ||
-                v.includes(SYNC_ALARM_MARKER)
+                text.includes(SYNC_ALARM_MARKER)
             ) {
                 marker = SYNC_ALARM_MARKER;
                 key = k;
@@ -1215,7 +1217,8 @@ export class SyncManager {
             }
             if (
                 marker === '' &&
-                (k.includes(SYNC_NOTIF_MARKER) || v.includes(SYNC_NOTIF_MARKER))
+                (k.includes(SYNC_NOTIF_MARKER) ||
+                    text.includes(SYNC_NOTIF_MARKER))
             ) {
                 marker = SYNC_NOTIF_MARKER;
                 key = k;

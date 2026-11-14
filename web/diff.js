@@ -4531,8 +4531,8 @@ export class DiffController {
     }
     _deleteComment(id) {
         let removedKey = null;
-        for (const [k, v] of this.reviewComments) {
-            if (v.id === id) {
+        for (const [k, comment] of this.reviewComments) {
+            if (comment.id === id) {
                 removedKey = k;
                 this.reviewComments.delete(k);
                 break;
