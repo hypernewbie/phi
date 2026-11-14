@@ -442,7 +442,8 @@ export class WorkspaceManager {
         if (this.pendingState === 'unconfirmed') {
             const check = document.createElement('button');
             check.type = 'button';
-            check.className = 'ws-manager-link ws-manager-check-btn';
+            check.className =
+                'btn btn-primary ws-manager-inline-btn ws-manager-check-btn';
             check.disabled = this.checking;
             check.textContent = 'Check status';
             check.addEventListener('click', () => void this.checkStatus());
@@ -588,10 +589,12 @@ export class WorkspaceManager {
             if (section.error) {
                 const note = document.createElement('p');
                 note.className = 'ws-manager-note';
+                note.dataset.tone = 'error';
                 note.textContent = section.error;
                 const retry = document.createElement('button');
                 retry.type = 'button';
-                retry.className = 'ws-manager-link ws-manager-retry-btn';
+                retry.className =
+                    'btn btn-primary ws-manager-inline-btn ws-manager-retry-btn';
                 retry.textContent = 'Retry';
                 retry.addEventListener('click', () => void this.loadRoot(path, this.generation));
                 note.appendChild(retry);
@@ -600,9 +603,12 @@ export class WorkspaceManager {
             const list = document.createElement('div');
             list.className = 'ws-manager-list';
             if (section.rows.length === 0 && !section.error) {
-                list.appendChild(this.emptyNote(section.loading
-                    ? 'Reading folder…'
-                    : 'Every project in this folder is already added.'));
+                let empty = 'Every project in this folder is already added.';
+                if (section.loading)
+                    empty = 'Reading folder…';
+                else if (section.allRows.length === 0)
+                    empty = 'No projects in this folder.';
+                list.appendChild(this.emptyNote(empty));
             }
             else if (visible.length === 0 && !section.error) {
                 list.appendChild(this.emptyNote('No folders here match the filter.'));
@@ -634,7 +640,7 @@ export class WorkspaceManager {
             const removeRoot = document.createElement('button');
             removeRoot.type = 'button';
             removeRoot.className =
-                'ws-manager-link ws-manager-link-danger ws-manager-root-remove';
+                'btn btn-primary ws-manager-danger ws-manager-root-remove';
             removeRoot.textContent = 'Remove root';
             removeRoot.disabled = this.isPending();
             removeRoot.addEventListener('click', () => void this.removeRoot(path));

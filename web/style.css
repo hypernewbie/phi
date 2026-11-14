@@ -698,11 +698,12 @@ html[data-sync="stale"] .brand .logo {
 .workspace-area {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 4px;
     background-color: var(--bg-elevated);
     border: 1px solid var(--bg-border);
-    padding: 4px 10px;
+    padding: 2px 6px;
     border-radius: 6px;
+    height: 28px;
     max-width: 480px;
 }
 
@@ -830,9 +831,10 @@ html[data-sync="stale"] .brand .logo {
     background: transparent;
     border: none;
     color: var(--text-muted);
-    font-size: 1.1429rem;
     cursor: pointer;
-    padding: 0 0.2857rem;
+    width: 22px;
+    height: 22px;
+    padding: 0;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -840,6 +842,16 @@ html[data-sync="stale"] .brand .logo {
     transition:
         color 0.15s,
         background-color 0.15s;
+}
+
+.workspace-area button .icon {
+    width: 12px;
+    height: 12px;
+}
+
+.workspace-area button .icon-dots {
+    fill: currentColor;
+    stroke: none;
 }
 
 .workspace-area button:hover {
@@ -4652,7 +4664,7 @@ body.has-terminal-bg
     align-items: center;
     gap: 10px;
     color: var(--text-muted);
-    font-size: calc(12px * var(--ui-scale));
+    font-size: 0.8571rem;
 }
 
 .ws-manager-status[data-tone="error"] {
@@ -4667,9 +4679,13 @@ body.has-terminal-bg
     background-color: var(--bg-elevated);
     color: var(--text-primary);
     font-family: inherit;
-    font-size: calc(13px * var(--ui-scale));
+    font-size: 1rem;
     outline: none;
     transition: border-color 0.15s;
+}
+
+.ws-manager-filter::placeholder {
+    color: var(--text-muted);
 }
 
 .ws-manager-filter:focus {
@@ -4686,7 +4702,7 @@ body.has-terminal-bg
     display: flex;
     align-items: center;
     gap: 12px;
-    margin-bottom: 6px;
+    margin-bottom: 10px;
     padding-bottom: 6px;
     border-bottom: 1px solid var(--bg-border);
 }
@@ -4696,7 +4712,7 @@ body.has-terminal-bg
     margin: 0;
     color: var(--text-muted);
     font-family: var(--font-ui);
-    font-size: calc(11px * var(--ui-scale));
+    font-size: 0.7857rem;
     font-weight: 600;
     letter-spacing: 0.6px;
     text-transform: uppercase;
@@ -4713,15 +4729,15 @@ body.has-terminal-bg
     align-items: center;
     gap: 6px;
     color: var(--text-muted);
-    font-size: calc(11px * var(--ui-scale));
+    font-size: 0.7857rem;
     letter-spacing: 0.6px;
     text-transform: uppercase;
     cursor: pointer;
 }
 
 .ws-manager-all input {
-    width: 13px;
-    height: 13px;
+    width: 18px;
+    height: 18px;
     accent-color: var(--accent);
     cursor: pointer;
 }
@@ -4749,8 +4765,8 @@ body.has-terminal-bg
 
 .ws-manager-check {
     flex: 0 0 auto;
-    width: 14px;
-    height: 14px;
+    width: 18px;
+    height: 18px;
     accent-color: var(--accent);
     cursor: pointer;
 }
@@ -4762,7 +4778,7 @@ body.has-terminal-bg
     max-width: 50%;
     overflow: hidden;
     color: var(--text-primary);
-    font-size: calc(13px * var(--ui-scale));
+    font-size: 1rem;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -4775,7 +4791,7 @@ body.has-terminal-bg
     overflow: hidden;
     color: var(--text-muted);
     font-family: var(--font-mono);
-    font-size: calc(11px * var(--ui-scale));
+    font-size: 0.8571rem;
     text-align: right;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -4785,7 +4801,7 @@ body.has-terminal-bg
     padding: 6px 0 0;
     color: var(--text-muted);
     font-family: var(--font-mono);
-    font-size: calc(11px * var(--ui-scale));
+    font-size: 0.8571rem;
     overflow-wrap: anywhere;
 }
 
@@ -4804,47 +4820,39 @@ body.has-terminal-bg
     margin-top: 8px;
 }
 
-/* One control style for every bulk action: same shape, size, and alignment.
-   Colour carries the meaning — red removes, accent adds. */
+/* Both bulk actions are shared buttons: neutral for the destructive action,
+   accent fill for the additive one. */
 .ws-manager-group-actions .btn {
     width: auto;
-    height: 32px;
     padding: 0 14px;
-    font-size: calc(12px * var(--ui-scale));
 }
 
-/* Destructive and recovery actions are text links, like the rest of Phi;
-   only the additive action carries the accent fill. A destructive link keeps
-   the quiet color until the pointer lands on it. */
-.ws-manager-link {
-    width: auto;
-    padding: 4px 6px;
-    border: none;
-    border-radius: 4px;
-    background: none;
-    color: var(--text-muted);
-    font-family: var(--font-ui);
-    font-size: calc(12px * var(--ui-scale));
-    cursor: pointer;
-    transition:
-        color 0.15s ease,
-        background-color 0.15s ease;
-}
-
-.ws-manager-link:hover:not(:disabled) {
-    color: var(--text-primary);
-    background-color: var(--bg-elevated);
-}
-
-/* Destructive links follow the settings grammar: quiet until hovered, then
-   red. Only the additive action carries the accent fill. */
-.ws-manager-link-danger:hover:not(:disabled) {
+/* Destructive actions keep the neutral button face until hover, then take the
+   same red as the Settings remove links. */
+.ws-manager-modal .btn.ws-manager-danger:hover:not(:disabled) {
     color: var(--red);
+    border-color: var(--red);
     background-color: rgba(255, 80, 80, 0.08);
+    box-shadow: none;
+}
+
+/* Compact recovery action inside a status line or a note, at the same size as
+   the attachment-status buttons. */
+.ws-manager-inline-btn {
+    display: inline-flex;
+    width: auto;
+    height: 1.8571rem;
+    padding: 0 0.5714rem;
+    font-size: 0.7857rem;
+    vertical-align: middle;
+}
+
+.ws-manager-note .ws-manager-inline-btn {
+    margin-left: 6px;
 }
 
 /* Keep every mutation control visibly disabled while a write is pending. */
-.ws-manager-modal :is(.btn, .ws-manager-link):disabled {
+.ws-manager-modal .btn:disabled {
     opacity: 0.45;
     cursor: not-allowed;
 }
@@ -4860,11 +4868,11 @@ body.has-terminal-bg
 .ws-manager-note {
     margin: 0;
     color: var(--text-muted);
-    font-size: calc(11px * var(--ui-scale));
+    font-size: 0.7857rem;
 }
 
-.ws-manager-note .ws-manager-retry-btn {
-    margin-left: 4px;
+.ws-manager-note[data-tone="error"] {
+    color: var(--red);
 }
 
 .ws-manager-root-form {
@@ -4872,11 +4880,6 @@ body.has-terminal-bg
     flex-direction: column;
     gap: 6px;
     padding-top: 10px;
-}
-
-.ws-manager-root-form .path-input-row > .btn {
-    height: 34px;
-    font-size: calc(13px * var(--ui-scale));
 }
 
 .ws-manager-root-tree .directory-tree-scroll {
@@ -4898,7 +4901,7 @@ body.has-terminal-bg
        with the same basename, and a hover title is not available. */
     .ws-manager-row {
         display: grid;
-        grid-template-columns: 16px minmax(0, 1fr);
+        grid-template-columns: 18px minmax(0, 1fr);
         gap: 3px 8px;
         margin: 0;
         padding: 6px 0;
@@ -4922,7 +4925,7 @@ body.has-terminal-bg
 
 /* Touch usability depends on input mode, not the chosen appearance profile. */
 @media (pointer: coarse) {
-    .ws-manager-modal :is(.btn, .modal-close-btn, .ws-manager-row, .ws-manager-all, .ws-manager-link, input[type="text"]) {
+    .ws-manager-modal :is(.btn, .modal-close-btn, .ws-manager-row, .ws-manager-all, input[type="text"]) {
         min-height: 44px;
     }
 
@@ -4936,8 +4939,27 @@ body.has-terminal-bg
 }
 
 html[data-appearance-profile="mobile"]
-    :is(.ws-manager-row, .ws-manager-all, .ws-manager-link) {
+    :is(.ws-manager-row, .ws-manager-all) {
     min-height: 44px;
+}
+
+/* List rows and their metadata follow the same mobile ratio as Settings, so
+   the dialog does not shrink back to desktop sizes on a phone. */
+html[data-appearance-profile="mobile"] .ws-manager-name {
+    font-size: var(--mobile-ui-size, 17px);
+}
+
+html[data-appearance-profile="mobile"]
+    .ws-manager-modal
+    :is(
+        .ws-manager-section-title,
+        .ws-manager-all,
+        .ws-manager-note,
+        .ws-manager-status,
+        .ws-manager-path,
+        .ws-manager-root-path
+    ) {
+    font-size: calc(var(--mobile-ui-size, 17px) * 0.8);
 }
 
 .directory-tree-controls {
@@ -6190,17 +6212,24 @@ html[data-phi-config-page] .settings-modal {
         max-width: 140px;
         min-width: 60px;
         margin: 0 4px;
-        padding: 4px 6px;
+        padding: 2px 6px;
+    }
+    /* The folder glyph is decoration; the label and chevron carry the control
+       once space is this tight. Removing it leaves the two icon buttons their
+       full 22px hit area instead of letting flexbox squeeze them. */
+    .workspace-area > .icon {
+        display: none;
+    }
+    .workspace-area button {
+        flex: 0 0 22px;
     }
     .workspace-area select {
-        width: 100%;
+        flex: 1 1 auto;
+        width: auto;
         min-width: 40px;
         max-width: 120px;
         font-size: 0.8571rem;
         padding-right: 1rem;
-    }
-    .workspace-area button {
-        font-size: 1rem;
     }
 
     /* Hide config backup/restore pill on mobile to save critical screen space */
