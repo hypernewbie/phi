@@ -59,7 +59,8 @@ describe('shipped valibot runtime', () => {
         for (const name of readdirSync(root, { recursive: true })) {
             if (!String(name).endsWith('.ts')) continue;
             const source = readFileSync(new URL(name, root), 'utf8');
-            if (!source.includes("'./valibot.js'")) continue;
+            // Nested modules import `../valibot.js`.
+            if (!/['"](?:\.\.?\/)+valibot\.js['"]/.test(source)) continue;
             for (const [index, line] of source.split('\n').entries()) {
                 if (binding.test(line)) {
                     offenders.push(`${name}:${index + 1}: ${line.trim()}`);
