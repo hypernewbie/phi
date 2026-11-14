@@ -224,3 +224,40 @@ it('waits for a due refresh before redialing an expired pane', async () => {
         vi.useRealTimers();
     }
 });
+
+it('same-epoch reconnect holds live output behind its delta replay', async () => {
+    const source = encode('OLDNEW');
+    const h = replayHarness(source);
+    try {
+        h.term.resize(80, 24);
+        h.pty.ws.head({ epoch: 7, oldest: 0, head: 3 });
+        await h.settle();
+        expect(h.tape.join('')).toContain('OLD');
+
+        const next = h.socket();
+        let release;
+        const gate = new Promise((resolve) => {
+            release = resolve;
+        });
+        const baseFetch = globalThis.fetch;
+        let delayed = false;
+        vi.stubGlobal('fetch', async (url, options) => {
+            if (String(url).includes('/replay') && !delayed) {
+                delayed = true;
+                await gate;
+            }
+            return baseFetch(url, options);
+        });
+        next.ws.head({ epoch: 7, oldest: 0, head: 6 });
+        next.ws.output(6, encode('LIVE'));
+        expect(next.holding).toBe(true);
+        release();
+        await h.settle();
+        const tape = h.tape.join('');
+        expect(tape).toContain('NEW');
+        expect(tape.indexOf('NEW')).toBeLessThan(tape.indexOf('LIVE'));
+        expect(next.holding).toBe(false);
+    } finally {
+        h.dispose();
+    }
+});

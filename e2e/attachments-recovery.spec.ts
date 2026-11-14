@@ -1363,3 +1363,272 @@ test('slow upload stays usable beyond 30 seconds and completes without losing ty
         await fixture.provider.close();
     }
 });
+
+test('composer compatibility', async ({ browser, request }) => {
+    test.setTimeout(120_000);
+    const fixture = await startRecoveryFixture();
+    let proxy: BridgeProxy | null = null;
+    let heldHistory: Route | null = null;
+    const release: { history: (() => void) | null } = { history: null };
+    const historyHeld = new Promise<void>((resolve) => {
+        release.history = resolve;
+    });
+    try {
+        proxy = await startAttachmentProxy(
+            fixture.phi.dir,
+            fixture.proxySocket,
+        );
+        const pane = await spawnPane(request, fixture.phi.url, fixture.work);
+        const { context, page } = await startPage(
+            browser,
+            fixture.phi.url,
+            pane,
+            false,
+        );
+        try {
+            const bar = page.locator('#input-bar-container');
+            const handle = page.locator('#terminal-input-resize-handle');
+            const textarea = page.locator('#input-textarea');
+            await expect(bar).toHaveClass(/terminal-composer/);
+            await expect(handle).toBeVisible();
+            const initial = await textarea.boundingBox();
+            const handleBox = await handle.boundingBox();
+            if (!handleBox) throw new Error('missing composer handle');
+            const x = handleBox.x + handleBox.width / 2;
+            const y = handleBox.y + handleBox.height / 2;
+            await page.mouse.move(x, y);
+            await page.mouse.down();
+            await page.mouse.move(x, y - 40, { steps: 8 });
+            await page.mouse.up();
+            await expect
+                .poll(async () => (await textarea.boundingBox())?.height ?? 0)
+                .toBeGreaterThan(initial?.height ?? 0);
+            const chosen = (await textarea.boundingBox())?.height ?? 0;
+
+            await chooseFile(page, fixture.pngPath, false);
+            const chip = page.locator('#attachment-strip .attachment-chip');
+            await expect(chip.locator('.attachment-state')).toHaveText(
+                'Ready',
+                { timeout: 30_000 },
+            );
+            expect((await textarea.boundingBox())?.height ?? 0).toBe(chosen);
+
+            await page.locator('#input-textarea').fill('composer attachment');
+            await page.locator('#send-input-btn').click();
+            await expect(page.locator('#input-textarea')).toHaveValue('', {
+                timeout: 30_000,
+            });
+            expect((await textarea.boundingBox())?.height ?? 0).toBe(chosen);
+            await expect(chip).toHaveCount(0, { timeout: 30_000 });
+
+            await page.route(
+                (url) => url.pathname === '/api/prompt-history/append',
+                async (route) => {
+                    heldHistory = route;
+                    await historyHeld;
+                    await route.continue();
+                },
+            );
+            await page.locator('#input-textarea').fill('held history');
+            await page.locator('#send-input-btn').click();
+            await expect
+                .poll(() => Boolean(heldHistory), { timeout: 10_000 })
+                .toBe(true);
+            await expect(page.locator('#input-textarea')).toHaveValue('');
+            expect((await textarea.boundingBox())?.height ?? 0).toBe(chosen);
+            release.history?.();
+            release.history = null;
+
+            await chooseFile(page, fixture.pngPath, false);
+            const second = page.locator('#attachment-strip .attachment-chip');
+            await expect(second.locator('.attachment-state')).toHaveText(
+                'Ready',
+                { timeout: 30_000 },
+            );
+            expect((await textarea.boundingBox())?.height ?? 0).toBe(chosen);
+            await page.locator('#send-input-btn').click();
+            await expect(page.locator('#input-textarea')).toHaveValue('');
+            expect((await textarea.boundingBox())?.height ?? 0).toBe(chosen);
+        } finally {
+            release.history?.();
+            release.history = null;
+            await page
+                .unroute((url) => url.pathname === '/api/prompt-history/append')
+                .catch(() => {});
+            await context.close();
+        }
+    } finally {
+        await proxy?.close();
+        await fixture.phi.stop();
+        await fixture.provider.close();
+    }
+});
+
+async function startSmokePage(
+    browser: Browser,
+    url: string,
+    pane: string,
+): Promise<{ context: import('@playwright/test').BrowserContext; page: Page }> {
+    const context = await browser.newContext({
+        viewport: { width: 1440, height: 900 },
+    });
+    const page = await context.newPage();
+    await allowLoopbackOnly(page);
+    await page.addInitScript(() => {
+        type SmokeTerm = {
+            rows: number;
+            cols: number;
+            write(data: string | Uint8Array, callback?: () => void): void;
+        };
+        const capture = window as unknown as {
+            smokeTerms: SmokeTerm[];
+            smokeWrites: string[];
+        };
+        capture.smokeTerms = [];
+        capture.smokeWrites = [];
+        let Base: new (options: Record<string, unknown>) => SmokeTerm;
+        Object.defineProperty(window, 'Terminal', {
+            configurable: true,
+            get: () => Base,
+            set: (Original: typeof Base) => {
+                Base = class extends Original {
+                    constructor(options: Record<string, unknown>) {
+                        super(options);
+                        capture.smokeTerms.push(this);
+                    }
+                    write(data: string | Uint8Array, callback?: () => void) {
+                        const text =
+                            typeof data === 'string'
+                                ? data
+                                : new TextDecoder().decode(data);
+                        capture.smokeWrites.push(text);
+                        super.write(data, callback);
+                    }
+                };
+            },
+        });
+    });
+    await page.addInitScript(
+        (activePane) => localStorage.setItem('phi_active_pane', activePane),
+        pane,
+    );
+    const contextResponse = waitForContext(page, pane);
+    await page.goto(url);
+    await selectPane(page, pane, false);
+    await contextResponse;
+    await expect(page.locator('#attach-input-btn')).toBeVisible();
+    return { context, page };
+}
+
+test('composer real psi smoke', async ({ browser, request }) => {
+    test.setTimeout(120_000);
+    const fixture = await startRecoveryFixture();
+    let proxy: BridgeProxy | null = null;
+    let context: import('@playwright/test').BrowserContext | null = null;
+    const result: Record<string, unknown> = {};
+    try {
+        proxy = await startAttachmentProxy(
+            fixture.phi.dir,
+            fixture.proxySocket,
+        );
+        const pane = await spawnPane(request, fixture.phi.url, fixture.work);
+        const started = await startSmokePage(browser, fixture.phi.url, pane);
+        context = started.context;
+        const page = started.page;
+        const bar = page.locator('#input-bar-container');
+        const handle = page.locator('#terminal-input-resize-handle');
+        const textarea = page.locator('#input-textarea');
+        await expect(bar).toHaveClass(/terminal-composer/);
+        await expect(handle).toBeVisible();
+        await page.waitForFunction(
+            () =>
+                (window as unknown as { smokeTerms: unknown[] }).smokeTerms
+                    .length > 0,
+        );
+
+        const initialHeight = (await textarea.boundingBox())?.height ?? 0;
+        const handleBox = await handle.boundingBox();
+        if (!handleBox) throw new Error('missing composer handle');
+        const x = handleBox.x + handleBox.width / 2;
+        const y = handleBox.y + handleBox.height / 2;
+        await page.mouse.move(x, y);
+        await page.mouse.down();
+        await page.mouse.move(x, y - 40, { steps: 8 });
+        await page.mouse.up();
+        await expect
+            .poll(async () => (await textarea.boundingBox())?.height ?? 0)
+            .toBeGreaterThan(initialHeight);
+        result.chosen = (await textarea.boundingBox())?.height ?? 0;
+
+        const before = await page.evaluate((paneId) => {
+            const capture = window as unknown as {
+                smokeTerms: Array<{ rows: number; cols: number }>;
+                smokeWrites: string[];
+            };
+            const panel = document.getElementById(`term-${paneId}`);
+            return {
+                rows: capture.smokeTerms.at(-1)?.rows ?? 0,
+                cols: capture.smokeTerms.at(-1)?.cols ?? 0,
+                writes: capture.smokeWrites.length,
+                panelHeight: panel?.getBoundingClientRect().height ?? 0,
+                textareaHeight:
+                    document
+                        .getElementById('input-textarea')
+                        ?.getBoundingClientRect().height ?? 0,
+            };
+        }, pane);
+        result.before = before;
+
+        await page.locator('#input-textarea').fill('/help');
+        await page.locator('#send-input-btn').click();
+        await expect(page.locator('#input-textarea')).toHaveValue('');
+        await expect
+            .poll(
+                () =>
+                    page.evaluate((count) => {
+                        const writes = (
+                            window as unknown as {
+                                smokeWrites: string[];
+                            }
+                        ).smokeWrites;
+                        return writes.length > count;
+                    }, before.writes),
+                { timeout: 30_000, message: 'real Pi output after /help' },
+            )
+            .toBe(true);
+
+        const after = await page.evaluate((paneId) => {
+            const capture = window as unknown as {
+                smokeTerms: Array<{ rows: number; cols: number }>;
+                smokeWrites: string[];
+            };
+            const panel = document.getElementById(`term-${paneId}`);
+            return {
+                rows: capture.smokeTerms.at(-1)?.rows ?? 0,
+                cols: capture.smokeTerms.at(-1)?.cols ?? 0,
+                writes: capture.smokeWrites.length,
+                panelHeight: panel?.getBoundingClientRect().height ?? 0,
+                textareaHeight:
+                    document
+                        .getElementById('input-textarea')
+                        ?.getBoundingClientRect().height ?? 0,
+            };
+        }, pane);
+        result.after = after;
+        expect(after.textareaHeight).toBe(before.textareaHeight);
+        expect(after.panelHeight).toBe(before.panelHeight);
+        expect(after.rows).toBe(before.rows);
+        expect(after.cols).toBe(before.cols);
+        result.writes = await page.evaluate(() => {
+            const writes = (window as unknown as { smokeWrites: string[] })
+                .smokeWrites;
+            return writes.slice(-3).map((text) => text.slice(0, 120));
+        });
+        console.log(`composer real psi smoke: ${JSON.stringify(result)}`);
+    } finally {
+        await context?.close();
+        await proxy?.close();
+        await fixture.phi.stop();
+        await fixture.provider.close();
+    }
+});
