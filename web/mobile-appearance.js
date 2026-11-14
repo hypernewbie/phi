@@ -1,5 +1,5 @@
 import { BackendScope } from './backend-scope.js';
-import { v } from './valibot.js';
+import * as v from './vendor/valibot/index.min.mjs';
 export const EMPTY_MOBILE = {
     revision: 0,
     ui_font_size: null,

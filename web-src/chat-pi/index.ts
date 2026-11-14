@@ -17,7 +17,7 @@ import { renderQueuePanel } from './queue.js';
 import type { QueueItem } from './queue.js';
 import { createPiDialogController } from './dialogs.js';
 import type { DialogCloseReason, DialogRecord } from './dialogs.js';
-import { v } from '../valibot.js';
+import * as v from '../vendor/valibot/index.min.mjs';
 
 export interface PiModel {
     provider: string;

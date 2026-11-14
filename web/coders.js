@@ -14,7 +14,7 @@
  * step count and total duration, recipe validation, and "no recipe →
  * unavailable" (never a /model fallback).
  */
-import { v } from './valibot.js';
+import * as v from './vendor/valibot/index.min.mjs';
 // Max wall-clock duration an executor will spend on one recipe. The
 // largest built-in (OpenCode Mini) is 5 steps with ~1.4s of waits; 5s is a
 // generous ceiling that still aborts runaway recipes quickly. R7.

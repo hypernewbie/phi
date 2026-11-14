@@ -7,7 +7,7 @@ import { createReviewTranscriptView } from '../review-transcript.js';
 import { createSubagentStrip, createSubagentViewer } from './subagents.js';
 import { renderQueuePanel } from './queue.js';
 import { createPiDialogController } from './dialogs.js';
-import { v } from '../valibot.js';
+import * as v from '../vendor/valibot/index.min.mjs';
 function cloneStatus(status) {
     return {
         ...status,

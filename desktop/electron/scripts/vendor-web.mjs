@@ -56,6 +56,7 @@ const WEB_JS_MODULES = readdirSync(webRoot)
  *  standard_fonts/, image_decoders/) — the recursive copy below
  *  preserves them. */
 const WEB_JS_VENDOR_DIRS = [
+  'valibot',
   'noble-hashes',
   'viewerjs',
   'plyr',

@@ -1,5 +1,5 @@
 import { backendStores, MAX_BACKEND_STORES, } from './backend-store.js';
-import { v } from './valibot.js';
+import * as v from './vendor/valibot/index.min.mjs';
 const DEFAULT_DURATION = 6000;
 const MAX_DURATION = 2_147_483_647;
 const MAX_RECORDS = 100;

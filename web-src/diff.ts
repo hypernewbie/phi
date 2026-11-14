@@ -23,7 +23,7 @@ import {
     normalizeHostname,
     isVSCodeLaunchUnsupported,
 } from './vscode.js';
-import { v } from './valibot.js';
+import * as v from './vendor/valibot/index.min.mjs';
 
 interface GitManageTarget {
     root: string;

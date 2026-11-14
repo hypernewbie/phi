@@ -85,6 +85,10 @@ export const VENDOR_GROUPS = {
     license('chart.js', 'chart.LICENSE'),
     license('sortablejs', 'Sortable.LICENSE'),
   ],
+  validation: [
+    file('valibot', 'dist/index.min.mjs', 'valibot/index.min.mjs'),
+    license('valibot', 'valibot/LICENSE'),
+  ],
   auth: [
     file('@noble/hashes', '_md.js', 'noble-hashes/_md.js'),
     file('@noble/hashes', '_u64.js', 'noble-hashes/_u64.js'),

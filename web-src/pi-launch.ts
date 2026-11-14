@@ -3,7 +3,7 @@ import {
     appearanceOwner,
     appearanceRequestContext,
 } from './mobile-appearance.js';
-import { v } from './valibot.js';
+import * as v from './vendor/valibot/index.min.mjs';
 
 export type PiAgent = 'pi' | 'psi';
 export interface PiLaunchState {

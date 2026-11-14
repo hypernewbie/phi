@@ -2,7 +2,7 @@
 import { PTYWebSocket } from './ws.js';
 import { getLastFolderName, worktreeGlyph, isCoarseViewport, isDiffDrawerViewport, terminalPreferredFontSize, responsiveTerminalFontSize, DIFF_TERMINAL_TARGET_COLUMNS, openExternalLink, installTerminalLinkProvider, getEmbeddedBackendOrigin, getEmbeddedProfileId, serverKey, isAbortError, } from './util.js';
 import { buildVSCodeURI, buildVSCodeRemoteURI, normalizeHostname, isVSCodeLaunchUnsupported, } from './vscode.js';
-import { v } from './valibot.js';
+import * as v from './vendor/valibot/index.min.mjs';
 const GitStatusFileEntrySchema = v.object({
     path: v.string(),
     index: v.string(),

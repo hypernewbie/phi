@@ -14,7 +14,7 @@ import { pbkdf2Async } from './vendor/noble-hashes/pbkdf2.js';
 import { hmac } from './vendor/noble-hashes/hmac.js';
 import { sha256 } from './vendor/noble-hashes/sha2.js';
 import { isAbortError, serverKey } from './util.js';
-import { v } from './valibot.js';
+import * as v from './vendor/valibot/index.min.mjs';
 const CREDENTIAL_KEY = 'phi_access_credential_v1';
 // Legacy browser storage for the v2 bearer. Tokens now live only in memory;
 // the refresh handle stays in its HttpOnly cookie.

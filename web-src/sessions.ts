@@ -31,7 +31,7 @@ import {
     renderLogo,
     RESERVED_CODER_IDS,
 } from './coders.js';
-import { v } from './valibot.js';
+import * as v from './vendor/valibot/index.min.mjs';
 
 export function normalizePath(p: string): string {
     if (!p) return '';

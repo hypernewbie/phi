@@ -15,7 +15,7 @@ import { hmac } from './vendor/noble-hashes/hmac.js';
 import { sha256 } from './vendor/noble-hashes/sha2.js';
 import { isAbortError, serverKey } from './util.js';
 import type { PhiAccessAuthBridge } from './types.js';
-import { v } from './valibot.js';
+import * as v from './vendor/valibot/index.min.mjs';
 
 /** The protocols this client can speak. */
 type Protocol = 'v1' | 'v2';

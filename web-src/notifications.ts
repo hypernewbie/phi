@@ -5,7 +5,7 @@ import {
     type NotificationMetadata,
 } from './backend-store.js';
 import type { ToastOptions } from './types.js';
-import { v } from './valibot.js';
+import * as v from './vendor/valibot/index.min.mjs';
 
 type ToastType = NonNullable<ToastOptions['type']>;
 

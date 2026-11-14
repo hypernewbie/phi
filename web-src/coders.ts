@@ -14,7 +14,7 @@
  * step count and total duration, recipe validation, and "no recipe →
  * unavailable" (never a /model fallback).
  */
-import { v } from './valibot.js';
+import * as v from './vendor/valibot/index.min.mjs';
 
 export interface CoderCapabilities {
     list: boolean;

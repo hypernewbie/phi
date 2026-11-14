@@ -1,7 +1,7 @@
 /* Φ phi — AI Sync Board Manager */
 import { escapeHtml as escapeHtmlUtil, buildProxyUrl, serverKey, } from './util.js';
 import { renderMarkdownSafe, highlightCodeIn } from './md-render.js';
-import { v } from './valibot.js';
+import * as v from './vendor/valibot/index.min.mjs';
 // Sync Board desktop-alert markers: a message whose key or value carries
 // one of these signals the desktop shell via a transient page title
 // (see signalDesktopAlert). Display data only — never a remote action.

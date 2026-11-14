@@ -1,6 +1,6 @@
 /* Φ phi — saved Pi Thinking fallback options */
 import { getEmbeddedProfileId, serverKey } from './util.js';
-import { v } from './valibot.js';
+import * as v from './vendor/valibot/index.min.mjs';
 export const THINKING_PRESET_LEVELS = [
     'off',
     'minimal',

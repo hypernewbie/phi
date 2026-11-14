@@ -3,7 +3,7 @@ import { escapeHtml, getLastFolderName as getLastFolderNameUtil, formatWorkspace
 import { openPiRpcChatTab } from './chat-pi/tab.js';
 import { createReviewTranscriptView } from './review-transcript.js';
 import { loadCoderRegistry, openCodePaneMode, visibleCoders, getCoder, hasTranscript, hasPiRpc, hasRename, hasSessions, isShell, renderLogo, RESERVED_CODER_IDS, } from './coders.js';
-import { v } from './valibot.js';
+import * as v from './vendor/valibot/index.min.mjs';
 export function normalizePath(p) {
     if (!p)
         return '';

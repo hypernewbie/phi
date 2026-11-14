@@ -1,6 +1,6 @@
 import { BackendScope } from './backend-scope.js';
 import type { AuthContext, FetchLike } from './auth.js';
-import { v } from './valibot.js';
+import * as v from './vendor/valibot/index.min.mjs';
 
 export type AppearanceProfile = 'desktop' | 'mobile';
 export type ProfileOverride = 'auto' | AppearanceProfile;

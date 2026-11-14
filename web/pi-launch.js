@@ -1,5 +1,5 @@
 import { appearanceOwner, appearanceRequestContext, } from './mobile-appearance.js';
-import { v } from './valibot.js';
+import * as v from './vendor/valibot/index.min.mjs';
 const SCHEMA = 2;
 const CACHE_PREFIX = 'phi:pi-launch-cache:v1:';
 const RECORD_PREFIX = 'phi:pi-launch-record:v1:';

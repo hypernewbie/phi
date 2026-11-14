@@ -9,8 +9,7 @@
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
   "scripts": {
-    "build:web": "node scripts/valibot.mjs build && tsc -p tsconfig.build.json && node scripts/websocket.mjs build",
-    "check:valibot-generated": "node scripts/valibot.mjs check",
+    "build:web": "tsc -p tsconfig.build.json && node scripts/websocket.mjs build",
     "gen:websocket": "node scripts/websocket.mjs generate",
     "check:websocket-generated": "node scripts/websocket.mjs check",
     "gen:pi-phi": "node scripts/pi-phi-generate.mjs",
