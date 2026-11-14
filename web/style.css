@@ -3274,18 +3274,6 @@ body.has-terminal-bg
     box-shadow: 0 0 10px rgba(239, 68, 68, 0.4);
 }
 
-/* Touch entry point for session search. Hidden where the keyboard shortcut
-   is the established opener. */
-.session-search-btn .icon {
-    width: 18px;
-    height: 18px;
-}
-
-.session-search-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-}
-
 .input-bar-container.direct-mode-active {
     display: none !important;
 }
@@ -3295,13 +3283,6 @@ body.has-terminal-bg
     .presets-actions
     > :not(#cancel-input-btn, #direct-mode-toggle, #session-search-btn) {
     display: none !important;
-}
-
-.presets-actions > #cancel-input-btn {
-    width: 24px;
-    height: 24px;
-    margin-left: 0;
-    order: 0;
 }
 
 /* PI RPC STATUS BAR */
@@ -3583,6 +3564,48 @@ body.has-terminal-bg
     opacity: 0.35;
     cursor: not-allowed !important;
     pointer-events: none;
+}
+
+/* Shared geometry for the controls in the staged composer and the footer
+   action bar. The owning class keeps its colour, hover, and behaviour. */
+.input-actions > button:is(.btn, .direct-mode-btn, .preset-btn):not(
+        #attach-input-btn
+    ) {
+    box-sizing: border-box;
+    height: 2.5714rem;
+    min-height: 2.5714rem;
+}
+
+.input-actions > button .icon,
+.presets-actions > button .icon {
+    width: 15px;
+    height: 15px;
+}
+
+.presets-actions > :is(.preset-btn.btn-icon, .direct-mode-btn, .tab-action-btn) {
+    box-sizing: border-box;
+    width: 24px;
+    height: 24px;
+    min-width: 24px;
+    min-height: 24px;
+    padding: 0;
+    border-radius: 4px;
+}
+
+@media (pointer: coarse) {
+    .presets-actions
+        > :is(.preset-btn.btn-icon, .direct-mode-btn, .tab-action-btn) {
+        width: 48px;
+        height: 48px;
+        min-width: 48px;
+        min-height: 48px;
+    }
+}
+
+.input-actions > button:disabled,
+.presets-actions > button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
 }
 
 /* A compact press held for the running turn stays visibly queued,
@@ -6424,16 +6447,19 @@ html[data-phi-config-page] .settings-modal {
         order: 2;
     }
 
-    /* Search is a finger target even though the preset chips beside it keep
-       their 24px row height. Scoped to the staged row: the collapsed footer
-       applies its own 48px coarse-pointer floor.
-       Id selectors: the compact blocks below set the same properties with
-       !important for .direct-mode-btn. */
-    .input-actions > #session-search-btn {
-        order: 0;
-        min-width: 44px !important;
-        min-height: 44px !important;
-        margin-left: 0;
+    /* The staged composer is one row: its quick chips, Search, Send, and
+       Interrupt share a height so one control cannot make the row taller. */
+    .input-actions
+        > button:is(.btn, .direct-mode-btn, .preset-btn):not(
+            #attach-input-btn
+        ) {
+        box-sizing: border-box;
+        height: 1.7143rem !important;
+        min-height: 1.7143rem !important;
+    }
+
+    .input-actions > :is(.preset-btn, .direct-mode-btn) {
+        border-radius: 4px;
     }
 
     .input-actions .btn {
