@@ -1611,7 +1611,15 @@ test('mobile source menu supports keyboard, distinct inputs, and cancel drafts',
             const menuItems = sourceMenu.getByRole('menuitem');
             await expect(attachButton).toHaveAttribute('aria-expanded', 'true');
             await expect(menuItems).toHaveCount(3);
-            for (const target of [attachButton, ...(await menuItems.all())]) {
+            // The composer controls follow the font-relative 2rem metric;
+            // the dropup items remain 44px touch targets.
+            const composerSize = await page.evaluate(
+                () =>
+                    parseFloat(
+                        getComputedStyle(document.documentElement).fontSize,
+                    ) * 2,
+            );
+            for (const target of await menuItems.all()) {
                 // Translated entrance frames can round a 44px rect below 44.
                 await expect
                     .poll(() =>
@@ -1628,6 +1636,20 @@ test('mobile source menu supports keyboard, distinct inputs, and cancel drafts',
                     )
                     .toBeGreaterThanOrEqual(44);
             }
+            await expect
+                .poll(() =>
+                    attachButton.evaluate(
+                        (element) => element.getBoundingClientRect().height,
+                    ),
+                )
+                .toBeGreaterThanOrEqual(composerSize - 1);
+            await expect
+                .poll(() =>
+                    attachButton.evaluate(
+                        (element) => element.getBoundingClientRect().width,
+                    ),
+                )
+                .toBeGreaterThanOrEqual(composerSize - 1);
             await page.keyboard.press('Escape');
             await expect(sourceMenu).toBeHidden();
             await expect(attachButton).toHaveAttribute(

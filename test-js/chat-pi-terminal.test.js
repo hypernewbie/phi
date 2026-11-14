@@ -612,9 +612,9 @@ describe('Pi RPC TabManager boundaries', () => {
         const piControlRules = piControlSelectors.map((selector) =>
             expectRuleDeclarations(finalMobile.rules, selector, {
                 'font-size': '10px !important',
-                'min-height': '24px',
-                height: '24px !important',
-                'line-height': '22px !important',
+                'min-height': 'var(--composer-control-size)',
+                height: 'var(--composer-control-size) !important',
+                'line-height': '1.2 !important',
             }),
         );
         expect(new Set(piControlRules).size).toBe(1);
@@ -624,7 +624,7 @@ describe('Pi RPC TabManager boundaries', () => {
             '.presets-container > .pi-rpc-context-meter',
             {
                 'font-size': 'inherit !important',
-                'min-height': '24px',
+                'min-height': 'var(--composer-control-size)',
                 height: 'auto !important',
                 'line-height': 'normal !important',
             },

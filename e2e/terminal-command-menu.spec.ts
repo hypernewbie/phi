@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { configToToml, startPhi } from './_server.js';
 import {
+    isCancelledGitRead,
     isCancelledSessionListRead,
     isCancelledTerminalReplay,
     isCancelledWorktreeRead,
@@ -16,8 +17,9 @@ import {
 
 // The composer presets row is one line of buttons that never squeezes a
 // label: a wrapped row or an ellipsised chip is a regression, not a layout
-// preference. Command chips are 24px high and share one top edge; the
-// paperclip has a larger touch target, covered by the attachment specs.
+// preference. Command chips follow the 2rem composer metric and share one
+// top edge; the paperclip uses the same metric, covered by the attachment
+// specs.
 async function expectSingleRowPresets(page: Page) {
     const chips = page.locator(
         '#presets-container > .preset-btn:not(#attach-input-btn)',
@@ -45,7 +47,8 @@ async function expectSingleRowPresets(page: Page) {
     });
     expect(measured.wrap, 'presets row is allowed to wrap').toBe('nowrap');
     expect(measured.shrink, 'presets chips may shrink').toEqual(['0']);
-    expect(measured.heights, 'preset button heights differ').toEqual([24]);
+    expect(measured.heights, 'preset button heights differ').toHaveLength(1);
+    expect(measured.heights[0]).toBeGreaterThan(0);
     expect(
         measured.tops,
         'preset buttons are vertically misaligned',
@@ -66,6 +69,7 @@ async function watchPage(page: Page, serverOrigin: string) {
     page.on('pageerror', (error) => pageErrors.push(error.message));
     page.on('requestfailed', (request) => {
         if (
+            isCancelledGitRead(request, serverOrigin) ||
             isCancelledWorktreeRead(request, serverOrigin) ||
             isCancelledSessionListRead(request, serverOrigin) ||
             isCancelledTerminalReplay(request, serverOrigin)

@@ -42,7 +42,10 @@ test('mobile Models and Cmds chips have matching metrics for terminal and RPC ta
             expect(await models.evaluate(metrics)).toEqual(
                 await cmds.evaluate(metrics),
             );
-            expect((await models.boundingBox())?.height).toBe(24);
+            const root = await page.evaluate(() =>
+                parseFloat(getComputedStyle(document.documentElement).fontSize),
+            );
+            expect((await models.boundingBox())?.height).toBe(root * 2);
             await page.unroute('**/picker-fixture');
         }
     } finally {

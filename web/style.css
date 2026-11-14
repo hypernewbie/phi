@@ -40,6 +40,12 @@
        18px. The floor keeps the strip at its authored height. */
     --app-header-height: max(48px, 3.4286rem);
 
+    /* Both rows of the compact composer use this height. It is rem-based
+       so the controls follow the configured UI font size (and iOS system
+       text scaling); 2rem is 28px at the 14px authored anchor and 34px at
+       the 17px mobile default. The collapsed footer keeps its 48px floor. */
+    --composer-control-size: 2rem;
+
     /* JS replaces this with a measured px value on touch shells. Keeping
        a valid baseline here makes every var(--vv-height, 100dvh) consumer
        safe on old Chromium, which does not parse the dvh fallback unit. */
@@ -3215,13 +3221,7 @@ body.has-terminal-bg
     max-width: calc(100vw - 24px);
 }
 
-#attach-input-btn.input-quick-chip:not(:hover, :focus-visible, [aria-expanded="true"]) {
-    background: transparent;
-    border-color: transparent;
-}
-
 @media (pointer: coarse) {
-    #attach-input-btn,
     #attachment-source-dropup .dropup-model-btn {
         min-width: 44px;
         min-height: 44px;
@@ -3424,7 +3424,12 @@ body.has-terminal-bg
 }
 
 @media (pointer: coarse) {
-    .presets-actions > button {
+    /* Collapsed footer only: the expanded composer follows the rem-sized
+       control metric so the two rows stay consistent with the UI font. */
+    .input-bar-container.direct-mode-active
+        + .presets-toolbar
+        .presets-actions
+        > button {
         min-width: 48px !important;
         min-height: 48px;
     }
@@ -3568,12 +3573,9 @@ body.has-terminal-bg
 
 /* Shared geometry for the controls in the staged composer and the footer
    action bar. The owning class keeps its colour, hover, and behaviour. */
-.input-actions > button:is(.btn, .direct-mode-btn, .preset-btn):not(
-        #attach-input-btn
-    ) {
+.input-actions > button:is(.btn, .direct-mode-btn, .preset-btn) {
     box-sizing: border-box;
     height: 2.5714rem;
-    min-height: 2.5714rem;
 }
 
 .input-actions > button .icon,
@@ -3586,20 +3588,8 @@ body.has-terminal-bg
     box-sizing: border-box;
     width: 24px;
     height: 24px;
-    min-width: 24px;
-    min-height: 24px;
     padding: 0;
     border-radius: 4px;
-}
-
-@media (pointer: coarse) {
-    .presets-actions
-        > :is(.preset-btn.btn-icon, .direct-mode-btn, .tab-action-btn) {
-        width: 48px;
-        height: 48px;
-        min-width: 48px;
-        min-height: 48px;
-    }
 }
 
 .input-actions > button:disabled,
@@ -6447,30 +6437,28 @@ html[data-phi-config-page] .settings-modal {
         order: 2;
     }
 
-    /* The staged composer is one row: its quick chips, Search, Send, and
-       Interrupt share a height so one control cannot make the row taller. */
-    .input-actions
-        > button:is(.btn, .direct-mode-btn, .preset-btn):not(
-            #attach-input-btn
-        ) {
-        box-sizing: border-box;
-        height: 1.7143rem !important;
-        min-height: 1.7143rem !important;
+    /* Both composer rows use the shared rem metric so the controls follow
+       the UI font size instead of drifting between fixed px boxes. */
+    .input-actions .btn,
+    .direct-mode-btn {
+        height: var(--composer-control-size) !important;
+        min-width: var(--composer-control-size) !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
+
+    .direct-mode-btn {
+        width: var(--composer-control-size) !important;
+    }
+
+    .input-actions .btn {
+        padding: 0 10px !important;
+        font-size: 0.8571rem;
     }
 
     .input-actions > :is(.preset-btn, .direct-mode-btn) {
         border-radius: 4px;
-    }
-
-    .input-actions .btn {
-        padding: 0 0.7143rem;
-        height: 2.5714rem;
-        font-size: 0.8571rem;
-    }
-
-    .direct-mode-btn {
-        width: 32px;
-        height: 36px;
     }
 
     /* Preset buttons container styling for mobile - swipeable capsule pills */
@@ -6493,7 +6481,7 @@ html[data-phi-config-page] .settings-modal {
 
     .preset-btn {
         flex-shrink: 0;
-        height: 2.1429rem;
+        height: var(--composer-control-size) !important;
         padding: 0 0.8571rem;
         font-size: 0.7857rem;
         font-weight: 500;
@@ -6518,12 +6506,41 @@ html[data-phi-config-page] .settings-modal {
         border-color: var(--accent) !important;
         color: var(--accent-bright) !important;
         font-size: 0.8571rem !important;
-        width: 32px !important;
-        height: 2.1429rem !important;
+        width: var(--composer-control-size) !important;
+        height: var(--composer-control-size) !important;
         padding: 0 !important;
         display: inline-flex !important;
         align-items: center !important;
         justify-content: center !important;
+    }
+
+    /* Icon-only controls are square at the shared metric. Text chips keep
+       their content-driven widths. The glyphs scale with the UI font too. */
+    .input-actions > .preset-btn.btn-icon,
+    .presets-container > .preset-btn.btn-icon,
+    .presets-actions > .preset-btn.btn-icon,
+    .presets-container > .keys-trigger-btn {
+        width: var(--composer-control-size) !important;
+        min-width: var(--composer-control-size) !important;
+        padding: 0 !important;
+    }
+
+    .input-mode-toggle {
+        flex: 0 0 var(--composer-control-size) !important;
+        width: var(--composer-control-size) !important;
+        height: var(--composer-control-size) !important;
+    }
+
+    .input-actions > button .icon,
+    .presets-actions > button .icon,
+    .presets-container > .preset-btn.btn-icon .icon {
+        width: 1.0714rem;
+        height: 1.0714rem;
+    }
+
+    .presets-container > .keys-trigger-btn .icon {
+        width: 1rem !important;
+        height: 1rem !important;
     }
 
     /* Compact layout can still use the desktop appearance profile. */
@@ -6703,14 +6720,18 @@ html[data-phi-config-page] .settings-modal {
         overflow-y: auto !important;
     }
 
-    /* Touch friendly input actions, sized like the preset row below */
+    /* Touch friendly input actions, sized like the preset row below. Both
+       use the shared rem metric so the controls follow the UI font size. */
     .input-actions .btn,
     .direct-mode-btn {
-        height: 24px !important;
-        min-width: 24px !important;
+        height: var(--composer-control-size) !important;
+        min-width: var(--composer-control-size) !important;
         display: flex !important;
         align-items: center !important;
         justify-content: center !important;
+    }
+    .direct-mode-btn {
+        width: var(--composer-control-size) !important;
     }
     .input-actions .btn {
         padding: 0 10px !important;
@@ -10079,8 +10100,8 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     }
 
     .input-actions .direct-mode-btn {
-        width: 28px !important;
-        min-width: 28px !important;
+        width: var(--composer-control-size) !important;
+        min-width: var(--composer-control-size) !important;
     }
 
     /* Keep the whole picker row on screen at 320px. Id selectors: the
@@ -10115,8 +10136,8 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     .preset-btn {
         font-size: 0.7143rem !important;
         padding: 0 0.5714rem !important;
-        height: 1.7143rem !important;
-        line-height: 1.5714rem !important;
+        height: var(--composer-control-size) !important;
+        line-height: 1.2 !important;
         border-radius: 4px !important;
     }
 
@@ -10126,21 +10147,21 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     .presets-container > .pi-rpc-compact-btn,
     .presets-container > .pi-rpc-reset-btn {
         font-size: 0.7143rem !important;
-        min-height: 1.7143rem;
-        height: 1.7143rem !important;
-        line-height: 1.5714rem !important;
+        min-height: var(--composer-control-size);
+        height: var(--composer-control-size) !important;
+        line-height: 1.2 !important;
     }
 
     .presets-container > .pi-rpc-context-meter {
         font-size: inherit !important;
-        min-height: 24px;
+        min-height: var(--composer-control-size);
         height: auto !important;
         line-height: normal !important;
     }
 
     .preset-btn.mobile-nav-btn {
-        width: 28px !important;
-        height: 1.7143rem !important;
+        width: var(--composer-control-size) !important;
+        height: var(--composer-control-size) !important;
         font-size: 0.7857rem !important;
     }
 }
