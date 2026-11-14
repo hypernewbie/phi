@@ -724,6 +724,27 @@ describe('workspace manager', () => {
         expect(sessions.workspaces).toEqual(['/code/theta']);
     });
 
+    it('clears root selections when the dialog is closed and reopened', async () => {
+        installFetch({ browse: () => browseEntries('psi') });
+        const sessions = makeSessions({ workspaces: [], roots: [BROWSE_ROOT] });
+        await openManager(sessions);
+
+        toggle('/code/psi', true);
+        expect(
+            document.querySelector('#ws-manager-roots .ws-manager-add-btn')
+                .textContent,
+        ).toBe('Add selected (1)');
+
+        sessions.workspaceManager.close();
+        sessions.workspaceManager.open();
+
+        expect(
+            document.querySelector('#ws-manager-roots .ws-manager-add-btn')
+                .textContent,
+        ).toBe('Add selected (0)');
+        expect(rootRows().map((row) => row.checked)).toEqual([false]);
+    });
+
     it('drops a late root listing after the dialog is closed and reopened', async () => {
         let resolveStale;
         const stale = new Promise((resolve) => {
@@ -1273,6 +1294,96 @@ describe('workspace manager', () => {
             ).toContain('Rest of new-root'),
         );
         expect(sessions.workspaces).toEqual(['/code/keep']);
+        await vi.waitFor(() =>
+            expect(
+                document.querySelector('#ws-manager-roots').textContent,
+            ).toContain('/new-root/one'),
+        );
+    });
+
+    it('loads a root introduced by a background config sync', async () => {
+        installFetch({
+            browse: (path) =>
+                path === '/late-root'
+                    ? {
+                          ok: true,
+                          status: 200,
+                          json: {
+                              path: '/late-root',
+                              parent: '/',
+                              truncated: false,
+                              entries: [
+                                  { name: 'psi', path: '/late-root/psi' },
+                              ],
+                          },
+                      }
+                    : browseEntries(),
+        });
+        const sessions = makeSessions({ workspaces: [] });
+        await openManager(sessions, 0);
+
+        sessions.applyConfigData({
+            workspaces: [],
+            workspace_roots: ['/late-root'],
+            active_cwd: '',
+        });
+
+        await vi.waitFor(() =>
+            expect(
+                document.querySelector('#ws-manager-roots').textContent,
+            ).toContain('/late-root/psi'),
+        );
+    });
+
+    it('shows a new root as reading while its write is still pending', async () => {
+        let releaseWrite;
+        let releaseBrowse;
+        const { calls } = installFetch({
+            browse: (path) =>
+                path === '/new-root'
+                    ? new Promise((resolve) => {
+                          releaseBrowse = () =>
+                              resolve({
+                                  ok: true,
+                                  status: 200,
+                                  json: {
+                                      path: '/new-root',
+                                      parent: '/',
+                                      truncated: false,
+                                      entries: [
+                                          {
+                                              name: 'one',
+                                              path: '/new-root/one',
+                                          },
+                                      ],
+                                  },
+                              });
+                      })
+                    : browseEntries(),
+            write: () =>
+                new Promise((resolve) => {
+                    releaseWrite = resolve;
+                }),
+        });
+        const sessions = makeSessions({ workspaces: [] });
+        await openManager(sessions, 0);
+
+        document.getElementById('ws-manager-root-input').value = '/new-root';
+        document.getElementById('ws-manager-root-add').click();
+
+        await vi.waitFor(() => expect(calls.length).toBe(1));
+        const text = document.querySelector('#ws-manager-roots').textContent;
+        expect(text).toContain('Reading folder…');
+        expect(text).not.toContain('No projects in this folder.');
+
+        releaseWrite({ ok: true, status: 200, json: {} });
+        await vi.waitFor(() =>
+            expect(
+                document.querySelector('#ws-manager-roots').textContent,
+            ).toContain('Rest of new-root'),
+        );
+        await vi.waitFor(() => expect(releaseBrowse).toBeTypeOf('function'));
+        releaseBrowse();
         await vi.waitFor(() =>
             expect(
                 document.querySelector('#ws-manager-roots').textContent,

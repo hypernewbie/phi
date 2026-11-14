@@ -147,6 +147,8 @@ export class WorkspaceManager {
         if (this.filterInput)
             this.filterInput.value = '';
         this.projectSelection.clear();
+        for (const section of this.sections.values())
+            section.selection.clear();
         this.restoreOutbox();
         this.syncFromConfig();
         this.overlay.classList.remove('hidden');
@@ -217,12 +219,19 @@ export class WorkspaceManager {
             this.storageKey !== serverKey(OUTBOX_KEY)) {
             this.resetForBackend();
         }
+        const previousRoots = this.rootPaths;
         this.restoreOutbox();
         this.syncFromConfig();
         if (!stale)
             this.configEpoch++;
-        if (this.isOpen())
+        if (this.isOpen()) {
             this.render();
+            for (const path of this.rootPaths) {
+                if (!previousRoots.includes(path)) {
+                    void this.loadRoot(path, this.generation);
+                }
+            }
+        }
         if (this.pendingState === 'unsent' && this.isOnline()) {
             void this.flushPending();
         }
@@ -292,7 +301,7 @@ export class WorkspaceManager {
                     allRows: [],
                     rows: [],
                     selection: new Set(),
-                    loading: false,
+                    loading: true,
                     error: '',
                     truncated: false,
                 });

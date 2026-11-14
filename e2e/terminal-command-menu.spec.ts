@@ -47,8 +47,14 @@ async function expectSingleRowPresets(page: Page) {
     });
     expect(measured.wrap, 'presets row is allowed to wrap').toBe('nowrap');
     expect(measured.shrink, 'presets chips may shrink').toEqual(['0']);
-    expect(measured.heights, 'preset button heights differ').toHaveLength(1);
-    expect(measured.heights[0]).toBeGreaterThan(0);
+    const root = await page.evaluate(() =>
+        parseFloat(getComputedStyle(document.documentElement).fontSize),
+    );
+    const expectedHeight =
+        (page.viewportSize()?.width ?? 0) <= 768 ? 2 * root : 24;
+    expect(measured.heights, 'preset button heights differ').toEqual([
+        expectedHeight,
+    ]);
     expect(
         measured.tops,
         'preset buttons are vertically misaligned',
