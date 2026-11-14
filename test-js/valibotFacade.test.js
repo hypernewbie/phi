@@ -1,5 +1,12 @@
+import { gzipSync } from 'node:zlib';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { v } from '../web/valibot.js';
+
+const bundle = readFileSync(
+    new URL('../web/valibot.js', import.meta.url),
+    'utf8',
+);
 
 // Guards the shipped browser runtime, not valibot itself: a facade that stops
 // exporting a function breaks every converted module at load time. Schema
@@ -40,5 +47,15 @@ describe('shipped valibot runtime', () => {
         for (const name of expected) {
             expect(typeof v[name], name).toBe('function');
         }
+    });
+
+    it('stays self-contained and inside the size budget', () => {
+        // The browser loads this as a plain module, with no import map and no
+        // bundler. A bare import here breaks every converted module.
+        expect(bundle).not.toMatch(/\bfrom\s*["']/);
+        expect(bundle).not.toMatch(/\bimport\s*\(/);
+        // Budget from the plan. Growing the facade is allowed; growing it by
+        // accident is not, because every module pays for it on first load.
+        expect(gzipSync(bundle, { level: 9 }).length).toBeLessThanOrEqual(4000);
     });
 });

@@ -146,11 +146,15 @@ describe('cached session page', () => {
     async function cacheIsAccepted(data) {
         const { manager, container, store, profile } = fixture();
         store.responses.set(key(sessionURL(), profile), envelope(data));
-        mockFetch(() => new Promise(() => {}));
+        // The cached page is painted before the network answers, so hold the
+        // request open for the assertion and then release it, leaving no
+        // promise pending after the test.
+        let release;
+        mockFetch(() => new Promise((resolve) => (release = resolve)));
         const pending = manager.loadWorktreeSessions('/work/demo', container);
         const accepted = container.textContent.includes('cached-title');
-        manager.destroy?.();
-        await Promise.race([pending, Promise.resolve()]);
+        release([]);
+        await pending.catch(() => {});
         return accepted;
     }
 
@@ -197,7 +201,14 @@ describe('cached session page', () => {
         });
     }
 
-    it('rejects a page longer than the requested limit', async () => {
+    it('accepts a page of exactly the requested limit', async () => {
+        const full = Array.from({ length: 10 }, (_, index) =>
+            session(`id-${index}`, { title: 'cached-title' }),
+        );
+        expect(await cacheIsAccepted(full)).toBe(true);
+    });
+
+    it('rejects a page one longer than the requested limit', async () => {
         const long = Array.from({ length: 11 }, (_, index) =>
             session(`id-${index}`, { title: 'cached-title' }),
         );

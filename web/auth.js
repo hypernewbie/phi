@@ -129,7 +129,6 @@ function parseProtocols(value) {
         throw invalidStatusError();
     return supported;
 }
-// `raw` stays the original object: the v1 KDF fields are read from it later.
 const AccessStatusSchema = v.pipe(
 // `protocols` is parsed separately: it has a legacy default and a
 // tolerance rule that a field schema cannot express.
@@ -140,6 +139,7 @@ v.object({
 // Access status without an authentication flag is unusable when enabled.
 v.check((status) => !status.enabled || status.authenticated !== undefined));
 // parseAccessStatus validates the status contract shared by both protocols.
+// `raw` stays the original object: the v1 KDF fields are read from it later.
 function parseAccessStatus(payload) {
     const parsed = v.safeParse(AccessStatusSchema, payload);
     if (!parsed.success)
@@ -588,18 +588,6 @@ async function withAuthDeadline(run, timeoutMs = AUTH_TIMEOUT_MS) {
             clearTimeout(timer);
     }
 }
-// A v2 status body always carries both flags; `owned` is only sent by hosts
-// that manage access themselves.
-const V2StatusBodySchema = v.object({
-    enabled: v.boolean(),
-    authenticated: v.boolean(),
-    owned: v.optional(v.unknown()),
-});
-const PasswordAcceptedSchema = v.object({ enabled: v.literal(true) });
-const HostPasswordAcceptedSchema = v.object({
-    ok: v.literal(true),
-    enabled: v.literal(true),
-});
 // A nonpositive `expires_in` is returned as-is; only the deadlines must be
 // usable, and the idle one may not outlive the absolute one.
 const CredentialBundleSchema = v.pipe(v.object({
@@ -893,6 +881,13 @@ export function refreshAccessIfDue(context) {
     }
     return renewIfDue({}, ownerContext);
 }
+// A v2 status body always carries both flags; `owned` is only sent by hosts
+// that manage access themselves.
+const V2StatusBodySchema = v.object({
+    enabled: v.boolean(),
+    authenticated: v.boolean(),
+    owned: v.optional(v.unknown()),
+});
 // checkV2Token reports whether the server still accepts token. A rejected
 // token is 'invalid'; transport errors and 429/5xx throw, so a transient
 // failure never destroys a saved credential or changes protocol.
@@ -983,6 +978,13 @@ function validateV2Password(password) {
     if (bytes > 1024)
         throw new Error('Password must be at most 1024 bytes');
 }
+// The password endpoints answer with `enabled: true`; a host that manages
+// access itself also confirms the operation with `ok: true`.
+const PasswordAcceptedSchema = v.object({ enabled: v.literal(true) });
+const HostPasswordAcceptedSchema = v.object({
+    ok: v.literal(true),
+    enabled: v.literal(true),
+});
 async function saveV2Password(password, context) {
     validateV2Password(password);
     const state = stateFor(context);
