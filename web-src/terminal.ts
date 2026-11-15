@@ -7304,6 +7304,7 @@ export class TabManager {
             'touchstart',
             (e) => {
                 if (isFindBarTarget(e.target)) return;
+                if (tabInfo.touchSelection?.isSelecting()) return;
                 if (tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo))
                     return;
                 if (e.touches.length === 1) {
@@ -7318,6 +7319,7 @@ export class TabManager {
             'touchmove',
             (e) => {
                 if (isFindBarTarget(e.target)) return;
+                if (tabInfo.touchSelection?.isSelecting()) return;
                 if (tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo))
                     return;
                 if (e.touches.length === 1 && termTouchStartY !== null) {

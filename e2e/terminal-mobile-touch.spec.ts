@@ -545,3 +545,81 @@ test('the desktop mouse path still auto-copies', async ({
         .toContain(PLAIN_TEXT);
     await context.close();
 });
+
+test('a drag extends the selection and does not scroll', async ({
+    browser,
+    request,
+}) => {
+    test.setTimeout(120_000);
+    const context = await browser.newContext({
+        viewport: { width: 390, height: 844 },
+        isMobile: true,
+        hasTouch: true,
+    });
+    const page = await context.newPage();
+    await touchPage(context, page);
+    const pane = await openPane(page, request, 'TouchDrag');
+    const start = await cellPoint(page, pane, PLAIN_TEXT);
+    const end = await cellPoint(page, pane, '12345');
+    const before = await termState(page, pane);
+    // One gesture: press, hold past the long-press delay, then move to the
+    // end cell before lifting.
+    const cdp = await context.newCDPSession(page);
+    try {
+        await cdp.send('Input.dispatchTouchEvent', {
+            type: 'touchStart',
+            touchPoints: [{ x: start.x, y: start.y, id: 1 }],
+        });
+        await page.waitForTimeout(700);
+        await cdp.send('Input.dispatchTouchEvent', {
+            type: 'touchMove',
+            touchPoints: [{ x: end.x, y: end.y, id: 1 }],
+        });
+        await cdp.send('Input.dispatchTouchEvent', {
+            type: 'touchEnd',
+            touchPoints: [],
+        });
+    } finally {
+        await cdp.detach();
+    }
+    await expect
+        .poll(async () => (await termState(page, pane)).selection, {
+            timeout: 10_000,
+        })
+        .toMatch(new RegExp(`^${PLAIN_TEXT}.{2,}`));
+    expect((await termState(page, pane)).selection!.length).toBeGreaterThan(10);
+    // The drag owns the screen: the viewport must not move under the finger.
+    expect((await termState(page, pane)).viewportY).toBe(before.viewportY);
+    await context.close();
+});
+
+test('a swipe after a selection clears it and still scrolls', async ({
+    browser,
+    request,
+}) => {
+    test.setTimeout(120_000);
+    const context = await browser.newContext({
+        viewport: { width: 390, height: 844 },
+        isMobile: true,
+        hasTouch: true,
+    });
+    const page = await context.newPage();
+    await touchPage(context, page);
+    const pane = await openPane(page, request, 'TouchUnlock');
+    const point = await cellPoint(page, pane, PLAIN_TEXT);
+    await longPress(page, point);
+    await expect
+        .poll(async () => (await termState(page, pane)).hasSelection, {
+            timeout: 15_000,
+        })
+        .toBe(true);
+    const before = await termState(page, pane);
+    await gesture(page, [point, { x: point.x, y: point.y + 120 }]);
+    await expect
+        .poll(async () => (await termState(page, pane)).viewportY, {
+            timeout: 10_000,
+        })
+        .not.toBe(before.viewportY);
+    expect((await termState(page, pane)).hasSelection).toBe(false);
+    await context.close();
+});

@@ -33,6 +33,15 @@ export function linkAtCell(links, col1, row1) {
 export function cellIndex(col, row, cols) {
     return row * cols + col;
 }
+export function selectionRange(startIndex, endIndex, cols) {
+    const from = Math.min(startIndex, endIndex);
+    const to = Math.max(startIndex, endIndex);
+    return {
+        col: from % cols,
+        row: Math.floor(from / cols),
+        length: to - from + 1,
+    };
+}
 export function installTerminalTouch(options) {
     const { term, container } = options;
     const screen = term.element?.querySelector('.xterm-screen');
@@ -192,6 +201,11 @@ export function installTerminalTouch(options) {
         }
         if (!isScreenTarget(event.target))
             return;
+        // A new gesture owns the screen again. Clearing here is what keeps
+        // the terminal scrollable: a selection that is never released would
+        // make every later touchmove extend it instead of scrolling.
+        if (selectionActive)
+            clear();
         const t = event.touches[0];
         if (!t)
             return;
@@ -244,6 +258,25 @@ export function installTerminalTouch(options) {
             moved = true;
             dropTimer();
         }
+        if (!selectionActive)
+            return;
+        event.preventDefault();
+        event.stopPropagation();
+        const cell = cellAt(t.clientX, t.clientY, true);
+        if (!cell)
+            return;
+        const row0 = term.buffer.active.viewportY + cell.row1 - 1;
+        const focusIndex = cellIndex(Math.min(cell.col1 - 1, term.cols - 1), row0, term.cols);
+        const from = focusIndex <= wordStartIndex ? focusIndex : wordStartIndex;
+        const to = focusIndex >= wordEndIndex ? focusIndex : wordEndIndex;
+        const range = selectionRange(from, to, term.cols);
+        if (lastRange &&
+            lastRange.col === range.col &&
+            lastRange.row === range.row &&
+            lastRange.length === range.length)
+            return;
+        term.select(range.col, range.row, range.length);
+        lastRange = range;
     }
     container.addEventListener('touchstart', onTouchStart, {
         capture: true,
@@ -257,6 +290,16 @@ export function installTerminalTouch(options) {
         capture: true,
         passive: false,
     });
+    function onTouchCancel() {
+        dropTimer();
+        touchActive = false;
+        touchGestureActive = false;
+        clear();
+    }
+    container.addEventListener('touchcancel', onTouchCancel, {
+        capture: true,
+        passive: true,
+    });
     return {
         isSelecting: () => selectionActive || touchGestureActive,
         clear,
@@ -269,6 +312,9 @@ export function installTerminalTouch(options) {
                 capture: true,
             });
             container.removeEventListener('touchmove', onTouchMove, {
+                capture: true,
+            });
+            container.removeEventListener('touchcancel', onTouchCancel, {
                 capture: true,
             });
             selectionActive = false;
