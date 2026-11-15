@@ -52,7 +52,23 @@ fun defaultLabelFor(origin: String): String {
     return "$host$port"
 }
 
-/** SharedPreferences-backed profile list. Synchronous; lists are tiny. */
+/** Display name shown in the drawer: cached server-reported hostname, else pretty host. */
+fun prettyHost(origin: String): String {
+    val host = android.net.Uri.parse(origin).host ?: return origin
+    val first = host.split(".").firstOrNull().orEmpty()
+    return first.uppercase().ifEmpty { host.uppercase() }
+}
+
+/** Deterministic badge slot per origin; stable across restarts, no storage.
+ * Letters follow drawer order (caller passes the index); colors hash the URL. */
+fun badgeSlot(origin: String, index: Int, paletteSize: Int, letterCount: Int): Pair<Int, Int> {
+    val color = (origin.hashCode() and 0x7fffffff) % paletteSize
+    return Pair(color, index % letterCount)
+}
+
+/** SharedPreferences-backed profile list. Synchronous; lists are tiny.
+ * Also caches per-origin display names (server-reported hostnames) and the
+ * app-wide text zoom. */
 class ServerStore(context: Context) {
     private val prefs: SharedPreferences =
         context.getSharedPreferences("phi_servers", Context.MODE_PRIVATE)
@@ -90,4 +106,17 @@ class ServerStore(context: Context) {
     }
 
     fun newId(): String = UUID.randomUUID().toString()
+
+    fun displayNameFor(origin: String): String =
+        prefs.getString("name:$origin", null) ?: prettyHost(origin)
+
+    fun setDisplayName(origin: String, name: String) {
+        prefs.edit().putString("name:$origin", name).apply()
+    }
+
+    fun zoom(): Int = prefs.getInt("zoom", 100).coerceIn(50, 200)
+
+    fun setZoom(z: Int) {
+        prefs.edit().putInt("zoom", z.coerceIn(50, 200)).apply()
+    }
 }
