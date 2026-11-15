@@ -496,6 +496,46 @@ test('the Copy pill copies the selection and clears it', async ({
     await context.close();
 });
 
+test('the pill stays inside the pane after a rotation', async ({
+    browser,
+    request,
+}) => {
+    test.setTimeout(120_000);
+    const context = await browser.newContext({
+        viewport: { width: 390, height: 844 },
+        isMobile: true,
+        hasTouch: true,
+    });
+    const page = await context.newPage();
+    await touchPage(context, page);
+    const pane = await openPane(page, request, 'TouchRotate');
+    const point = await cellPoint(page, pane, PLAIN_TEXT);
+    await longPress(page, point);
+    const pill = page.locator(`#term-${pane} .terminal-copy-pill`);
+    await expect(pill).toBeVisible();
+    await page.setViewportSize({ width: 844, height: 390 });
+    await expect
+        .poll(
+            async () => {
+                const pillBox = await pill.boundingBox();
+                const paneBox = await page
+                    .locator(`#term-${pane}`)
+                    .boundingBox();
+                if (!pillBox || !paneBox) return false;
+                return (
+                    pillBox.x >= paneBox.x - 1 &&
+                    pillBox.y >= paneBox.y - 1 &&
+                    pillBox.x + pillBox.width <=
+                        paneBox.x + paneBox.width + 1 &&
+                    pillBox.y + pillBox.height <= paneBox.y + paneBox.height + 1
+                );
+            },
+            { timeout: 10_000 },
+        )
+        .toBe(true);
+    await context.close();
+});
+
 test('the pill hides when the selection scrolls out of view', async ({
     browser,
     request,
