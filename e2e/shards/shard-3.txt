@@ -1,0 +1,96 @@
+appearance-unset.spec.ts › an unrelated save never persists font sizes the user did not set
+auth-transition.spec.ts › MVP legacy home › MVP legacy home / desktop
+auth-transition.spec.ts › MVP legacy home › MVP legacy home / mobile touch
+auth-transition.spec.ts › a signed-in session stays quiet › desktop: sign-in and reload raise no unexpected errors
+auth-transition.spec.ts › a signed-in session stays quiet › mobile touch: sign-in and reload raise no unexpected errors
+auth-transition.spec.ts › migration failure › / corrupt DB
+auth-transition.spec.ts › migration failure › / missing DB
+auth-transition.spec.ts › poor network › / desktop
+auth-transition.spec.ts › poor network › / mobile touch
+auth-transition.spec.ts › post-commit response loss › / desktop
+auth-transition.spec.ts › post-commit response loss › / mobile touch
+auth-transition.spec.ts › public pages, sockets, and rotation › a mobile context signs in with the same bearer flow
+auth-transition.spec.ts › public pages, sockets, and rotation › carries the bearer on all three socket URLs, then rotates once
+auth-transition.spec.ts › public pages, sockets, and rotation › retires the old password and its bearer after rotation
+auth-transition.spec.ts › public pages, sockets, and rotation › serves help and changelog without a login
+auth-transition.spec.ts › route-local CSRF and credential precedence › a refresh or asset cookie never authorizes an API call or a socket
+auth-transition.spec.ts › route-local CSRF and credential precedence › rejects every v2 mutation without the route-local CSRF proof
+auth-transition.spec.ts › route-local CSRF and credential precedence › renders without horizontal overflow on desktop and mobile
+auth-transition.spec.ts › session lifecycle and precedence › a late refresh answer never resurrects a logged-out session
+auth-transition.spec.ts › session lifecycle and precedence › a rotation that lands during the logout still drops the credential
+auth-transition.spec.ts › session lifecycle and precedence › a valid family refreshes without a new sign-in, then clearing the password disables auth
+auth-transition.spec.ts › session lifecycle and precedence › logout closes the admitted socket, drops the credential, and reaches other tabs
+auth-transition.spec.ts › session lifecycle and precedence › logout-all ends every v2 session
+auth-transition.spec.ts › two same-origin tabs › renews without locks or a broadcast channel
+auth-transition.spec.ts › two same-origin tabs › replays a renewed read but never a mutation
+auth-transition.spec.ts › two same-origin tabs › shares one renewal across tabs and survives a lost refresh
+auth-transition.spec.ts › v1 compatibility › keeps a legacy cookie session without a prompt or a JWT
+auth-transition.spec.ts › v1 compatibility › recovers a saved verifier without a prompt or a JWT
+auth-transition.spec.ts › v1-only capability › a failing v2 login never downgrades to the legacy route
+auth-transition.spec.ts › v1-only capability › a v1-only status negotiates the legacy login
+auth-transition.spec.ts › v1-only capability › an old-v2 server without the refresh route leaves no durable credential
+auth-transition.spec.ts › v2 bearer session › sends the bearer ahead of a legacy cookie and on auth routes
+auth-transition.spec.ts › v2 bearer session › signs in with the raw password, survives reload, and reuses the bearer
+diff-review-ux.spec.ts › hovering unified old/new lines does not move diff rows; comments and modal sizing work
+diff-review-ux.spec.ts › modal size toggle remains an in-page dialog on a narrow viewport
+diff-review-ux.spec.ts › touch diff maximize › touch maximizes and restores the loaded diff offline
+input-lock.spec.ts › input.html shows the shared sign-in dialog when cookie is missing
+mobile-modal-drawers.spec.ts › Markdown and diff modals sit above open mobile navigation drawers
+mobile-settings.spec.ts › a cold-start offline draft saves once after reconnect (desktop)
+mobile-settings.spec.ts › a cold-start offline draft saves once after reconnect (touch)
+mobile-settings.spec.ts › a rejected 401 fence cannot block an older held save or free its slot
+mobile-settings.spec.ts › a rejected 404 fence cannot block an older held save or free its slot
+mobile-settings.spec.ts › a still-open document flushes only never-dispatched work after reconnect
+mobile-settings.spec.ts › an edit queued behind a held save sends after acknowledgment without refetching
+mobile-settings.spec.ts › an old save reply cannot clear a different draft restored while it was pending
+mobile-settings.spec.ts › an older save acknowledgment cannot clear a pending fence or newer edits
+mobile-settings.spec.ts › auth-status-offline startup remains locked without deleting retained drafts
+mobile-settings.spec.ts › desktop and mobile sizes stay independent through drawer, editing and reload
+mobile-settings.spec.ts › four font overrides update real terminals, inherit remote desktop families and survive a process restart
+mobile-settings.spec.ts › fresh main-page Settings opens before shared config and version finish loading
+mobile-settings.spec.ts › invalid input cancels a save waiting for actual IndexedDB (desktop)
+mobile-settings.spec.ts › invalid input cancels a save waiting for actual IndexedDB (touch)
+mobile-settings.spec.ts › lost save and fence responses retain an occupied slot across reload without resending
+mobile-settings.spec.ts › missing custom fonts remain selected and reset waits for explicit resolution of an unknown save
+mobile-settings.spec.ts › mobile shared edits preserve newer desktop cache values when broadcasts are unavailable
+mobile-settings.spec.ts › mobile typography and Settings remain reachable at 320x568
+mobile-settings.spec.ts › mobile typography and Settings remain reachable at 844x390
+mobile-settings.spec.ts › narrow desktop keeps desktop identity and standalone font saves preserve shared fields
+mobile-settings.spec.ts › narrow screens scale with the UI size and keep inputs zoom-safe
+mobile-settings.spec.ts › offline drafts survive a closed document and require explicit restore/save
+mobile-settings.spec.ts › offline mobile reset preserves desktop fields and browser-local font/background blobs
+mobile-settings.spec.ts › real Pi RPC chat keeps terminal fonts through live edits, disconnection and restore
+mobile-settings.spec.ts › server values cancels a save waiting for actual IndexedDB (desktop)
+mobile-settings.spec.ts › server values cancels a save waiting for actual IndexedDB (touch)
+mobile-settings.spec.ts › slow background reads and storage failure do not block local typing
+mobile-settings.spec.ts › two documents keep separate drafts despite cloned session storage
+mobile-settings.spec.ts › wide touch tablets can choose a rendering profile and reach Mobile Settings
+pi-bridge-thinking.spec.ts › bridge thinking levels list, set and cycle; native and absent panes stay usable
+pi-bridge.spec.ts › Pi bridge reports managed state and rings the bell on settlement
+pi-compact-mobile.spec.ts › native mobile compact: slash entry, keyboard, pending, preserved draft
+pi-syncboard-fallback.spec.ts › preserves built-in Pi tools when phi bridge injection disabled
+pi-syncboard-fallback.spec.ts › preserves built-in Pi tools when pi-side bridge disabled
+pi-syncboard-routing.spec.ts › each real Pi session routes the same key to its owning coordinator
+pi-title-sync.spec.ts › Pi terminal labels follow native file titles through reload and reconnect
+pi-title-sync.spec.ts › a bridge-bound Pi pane adopts the identity its runtime reports
+session-list-refresh.spec.ts › refreshes Pi and Claude sessions across desktop and touch without reloading
+session-list-refresh.spec.ts › restores saved Pi pages on desktop while list requests fail
+session-list-refresh.spec.ts › restores saved Pi pages on touch while list requests fail
+terminal-command-menu.spec.ts › low-frequency Pi presets move to Cmds on desktop and mobile
+terminal-live-resize.spec.ts › live resize on desktop › preserves output exactly once (synchronized=false)
+terminal-live-resize.spec.ts › live resize on desktop › preserves output exactly once (synchronized=true)
+terminal-live-resize.spec.ts › live resize on mobile › preserves output exactly once (synchronized=false)
+terminal-live-resize.spec.ts › live resize on mobile › preserves output exactly once (synchronized=true)
+terminal-panel-geometry.spec.ts › actual panel CSS resize, tab activation and refresh synchronize backend dimensions
+terminal-ram-window.spec.ts › mobile › retained window renders on a touch layout without overflow
+terminal-ram-window.spec.ts › retained window repaints once and keeps input live
+terminal-raw-replay.spec.ts › an exit during bootstrap retains its complete final output
+terminal-raw-replay.spec.ts › retained raw replay preserves split VT and UTF-8 after rollover
+ui-font-size.spec.ts › a stale browser appearance cache cannot shrink the interface below the configured size
+ui-font-size.spec.ts › the configured UI font size is the size of the interface text
+ui-font-size.spec.ts › the interface is never rendered smaller than the terminal
+ui-font-size.spec.ts › the interface text fits its containers at the largest UI size
+websocket-terminal.spec.ts › terminal pane flows over protobuf in Chromium
+websocket-terminal.spec.ts › terminal pane flows through the real phic console
+xterm-runtime.spec.ts › real browser xterm recovers a gap and overlaps across a split UTF-8 bootstrap
+xterm-runtime.spec.ts › xterm preserves ASCII and CJK text in the browser buffer

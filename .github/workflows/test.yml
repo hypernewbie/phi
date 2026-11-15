@@ -439,10 +439,18 @@ jobs:
           PLAYWRIGHT_BROWSERS_PATH: 0
         run: pnpm exec playwright install chromium
 
+      # The manifests are duration-balanced and the check proves they still
+      # cover every test: `--test-list` silently ignores ids it cannot find.
+      - name: Check e2e shard manifests
+        if: matrix.shard == 1
+        run: pnpm run check:e2e-shards
+
       - name: Run Playwright suite
         env:
           PLAYWRIGHT_BROWSERS_PATH: 0
-        run: pnpm exec playwright test --shard=${{ matrix.shard }}/5
+        run: >-
+          pnpm exec playwright test
+          --test-list=e2e/shards/shard-${{ matrix.shard }}.txt
 
       - name: Upload Playwright artifacts on failure
         if: failure()

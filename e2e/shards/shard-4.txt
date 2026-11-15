@@ -1,0 +1,65 @@
+attachments-recovery.spec.ts › a canceled waiting send stays canceled after reload and never removes the server file
+attachments-recovery.spec.ts › a never-attempted offline send survives reload and dispatches once after live identity refresh
+attachments-recovery.spec.ts › aborted local storage keeps attachment drafts editable without unhandled errors
+attachments-recovery.spec.ts › an attempted send remains unknown across reload and Phi restart without replay
+attachments-recovery.spec.ts › composer compatibility
+attachments-recovery.spec.ts › composer real psi smoke
+attachments-recovery.spec.ts › native Pi reload preserves attachment drafts without sending until explicit Send on desktop and touch
+attachments-recovery.spec.ts › offline upload draft survives reload and retries only after explicit status recovery on desktop and touch
+attachments-recovery.spec.ts › pane switching keeps attachment drafts and sends with their captured pane
+attachments-recovery.spec.ts › slow upload stays usable beyond 30 seconds and completes without losing typing
+attachments-recovery.spec.ts › two tabs freeze the same draft revision to one send ID and one Pi dispatch
+attachments-syncboard.spec.ts › native image attachments and owner-routed Syncboard coexist on desktop without replay
+attachments-syncboard.spec.ts › native image attachments and owner-routed Syncboard coexist on touch without replay
+coder-sidebar-parity.spec.ts › built-in coder controls keep their pre-registry layout before and after bootstrap
+coder-sidebar-parity.spec.ts › initial coder controls remain when config cannot load
+codex-backend.spec.ts › Codex launches safely and Models sends only the native picker command
+composer-fold.spec.ts › composer folding on desktop › keeps only Interrupt, touch Search, and Expand, preserves drafts, and works offline
+composer-fold.spec.ts › composer folding on touch › keeps only Interrupt, touch Search, and Expand, preserves drafts, and works offline
+composer-fold.spec.ts › mobile composer rows share the font-relative control size
+desktop-sidebar-toggle.spec.ts › M2 coder 503 does not block local visibility toggles
+desktop-sidebar-toggle.spec.ts › M2 local toggles work before authentication status returns
+desktop-sidebar-toggle.spec.ts › M2 local toggles work when the visibility preference read throws
+desktop-sidebar-toggle.spec.ts › M2 local toggles work when the visibility preference write throws
+desktop-sidebar-toggle.spec.ts › M2 local toggles work while coder startup is delayed
+desktop-sidebar-toggle.spec.ts › M2 locked authentication still blocks protected APIs and the toggle
+desktop-sidebar-toggle.spec.ts › M2 offline visibility changes preserve a staged draft
+desktop-sidebar-toggle.spec.ts › M2 responsive mouse and touch layouts preserve desktop state and keyboard input
+desktop-sidebar-toggle.spec.ts › M2 saved visibility and widths survive reloads and rapid toggles
+desktop-sidebar-toggle.spec.ts › MVP desktop hides and restores a live terminal
+desktop-sidebar-toggle.spec.ts › hidden desktop sidebar recovers focus from a 390px drawer
+desktop-sidebar-toggle.spec.ts › hidden desktop sidebar recovers focus from a 900px drawer
+input-remote.spec.ts › input.html sends keystrokes into a live pane
+pi-model-picker-mobile.spec.ts › mobile Models and Cmds chips have matching metrics for terminal and RPC tabs
+pi-model-picker-mobile.spec.ts › phone picker uses short names, wide rows, scrolling and full-width tap targets; desktop keeps identities
+pi-model-picker-mobile.spec.ts › slow lists stay visible, offline picks wait, and lost acks are never replayed
+pi-native-adversarial.spec.ts › real Pi fullscreen: inactive-producer; narrow viewport
+pi-native-adversarial.spec.ts › real Pi fullscreen: offline-producer; narrow viewport
+pi-native-adversarial.spec.ts › real Pi regular: inactive-producer; narrow viewport
+pi-native-adversarial.spec.ts › real Pi regular: offline-producer; narrow viewport
+pi-reload-reconnect.spec.ts › offline reload waits for reconnect and restores without replay
+pi-reload.spec.ts › native reload from Cmds on desktop and mobile touch
+pi-transcript-search.spec.ts › managed Pi transcript search works through the find bar on desktop and touch
+preview-lazy.spec.ts › preview vendor JS loads on first open, not on page load
+preview-runtime.spec.ts › image, JSON, and PDF previews use local runtime vendors
+preview-runtime.spec.ts › reopening a JSON preview reuses its loaded bundle
+session-search.spec.ts › Ctrl/Cmd+F searches resident terminal output without sending search keys to the PTY
+tab-workspace-navigation.spec.ts › New Session refreshes the open navigator through the Bash creation path
+tab-workspace-navigation.spec.ts › long navigator scrolls at desktop widths and keeps compact navigation unchanged
+tab-workspace-navigation.spec.ts › sorting preserves the selected tab draft through reload
+tab-workspace-navigation.spec.ts › wide touch navigator retains native keyboard behavior and desktop controls
+tab-workspace-navigation.spec.ts › workspace navigator sorts, discloses natively, preserves order, and navigates tabs
+tabs-server-restart.spec.ts › close/restart preserves every backend, exact session, pane identity, flags, order, active tab, and drafts
+terminal-bootstrap-reconnect.spec.ts › real browser resume during parser batch 1 must show the newest retained screen
+terminal-bootstrap-reconnect.spec.ts › real browser resume during parser batch 3 must show the newest retained screen
+terminal-history-retention.spec.ts › RAM history honors its lifetime: Phi server restart
+terminal-history-retention.spec.ts › RAM history honors its lifetime: history disabled
+terminal-history-retention.spec.ts › RAM history honors its lifetime: tiny RAM window
+terminal-ram-recovery.spec.ts › a held replay keeps terminal input usable
+terminal-ram-recovery.spec.ts › a refused prefix resumes at the certified floor
+terminal-ram-recovery.spec.ts › a reload replays the retained tail exactly once
+terminal-ram-recovery.spec.ts › an expired replay never repeats the same refused pair
+terminal-ram-recovery.spec.ts › desktop manual recovery › manual refresh retries history after live-only recovery
+terminal-ram-recovery.spec.ts › mobile › a slow replay leaves a usable touch layout without overflow
+terminal-ram-recovery.spec.ts › touch manual recovery › manual refresh retries history after live-only recovery
+websocket-control.spec.ts › chat control endpoint spawns, streams, reports errors, and rehydrates

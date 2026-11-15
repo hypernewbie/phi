@@ -1547,31 +1547,47 @@ test('mobile source menu supports keyboard, distinct inputs, and cancel drafts',
         try {
             for (const width of [390, 320]) {
                 await page.setViewportSize({ width, height: 740 });
-                const attach = page.locator(
-                    '.input-actions > #attach-input-btn',
-                );
-                const slash = page.locator(
-                    '.input-actions > .slash-trigger-btn',
-                );
-                await expect(attach).toBeVisible();
+                // One snapshot per attempt: two separate boundingBox() calls can
+                // straddle a re-render, and then the row looks misaligned.
+                await expect
+                    .poll(() =>
+                        page.evaluate(() => {
+                            const actions = document.querySelector(
+                                '#input-bar-container .input-actions',
+                            );
+                            const attach =
+                                actions?.querySelector<HTMLElement>(
+                                    '#attach-input-btn',
+                                );
+                            const slash =
+                                actions?.querySelector<HTMLElement>(
+                                    '.slash-trigger-btn',
+                                );
+                            if (!actions || !attach || !slash) return 'missing';
+                            const a = attach.getBoundingClientRect();
+                            const s = slash.getBoundingClientRect();
+                            const measured = {
+                                first: actions.firstElementChild === attach,
+                                visible: a.width > 0 && a.height > 0,
+                                gap: Math.round(s.left - a.right),
+                                centerDelta: Math.round(
+                                    Math.abs(
+                                        a.y + a.height / 2 - s.y - s.height / 2,
+                                    ),
+                                ),
+                            };
+                            const ok =
+                                measured.first &&
+                                measured.visible &&
+                                measured.gap >= 0 &&
+                                measured.centerDelta < 1;
+                            return ok ? 'ok' : JSON.stringify(measured);
+                        }),
+                    )
+                    .toBe('ok');
                 await expect(
                     page.locator('#presets-container #attach-input-btn'),
                 ).toHaveCount(0);
-                const attachBounds = await attach.boundingBox();
-                const slashBounds = await slash.boundingBox();
-                expect(attachBounds).not.toBeNull();
-                expect(slashBounds).not.toBeNull();
-                expect(
-                    attachBounds!.x + attachBounds!.width,
-                ).toBeLessThanOrEqual(slashBounds!.x);
-                expect(
-                    Math.abs(
-                        attachBounds!.y +
-                            attachBounds!.height / 2 -
-                            slashBounds!.y -
-                            slashBounds!.height / 2,
-                    ),
-                ).toBeLessThan(1);
             }
             await expect(
                 page.locator('#attachment-camera-input'),
@@ -1729,9 +1745,17 @@ test('mobile source menu supports keyboard, distinct inputs, and cancel drafts',
                 /input-quick-chip/,
             );
             await page.setViewportSize({ width: 390, height: 740 });
-            await expect(
-                page.locator('.input-actions > #attach-input-btn:first-child'),
-            ).toBeVisible();
+            // Same one-snapshot rule: the chip must lead the compact row.
+            await expect
+                .poll(() =>
+                    page.evaluate(
+                        () =>
+                            document.querySelector(
+                                '#input-bar-container .input-actions',
+                            )?.firstElementChild?.id ?? null,
+                    ),
+                )
+                .toBe('attach-input-btn');
             await expect(page.locator('#attach-input-btn')).toHaveCount(1);
 
             expect(watched.errors).toEqual([]);

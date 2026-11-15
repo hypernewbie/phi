@@ -13,10 +13,9 @@ import type {
 import { startPhi, type PhiServer } from './_server.js';
 import { readReplay } from './_terminal-replay.js';
 import {
+    isCancelledBackgroundRead,
     isCancelledBellAudio,
-    isCancelledSessionListRead,
     isCancelledTerminalReplay,
-    isCancelledWorktreeRead,
 } from './_session-requests.js';
 
 interface FitAddon {
@@ -249,13 +248,9 @@ function observeBrowser(page: Page, origin: string): BrowserEvents {
             events.themePosts++;
     });
     page.on('requestfailed', (request) => {
-        if (
-            isCancelledSessionListRead(request, origin) ||
-            isCancelledWorktreeRead(request, origin) ||
-            isCancelledTerminalReplay(request, origin) ||
-            isCancelledBellAudio(request, origin)
-        )
-            return;
+        if (isCancelledBackgroundRead(request, origin)) return;
+        if (isCancelledTerminalReplay(request, origin)) return;
+        if (isCancelledBellAudio(request, origin)) return;
         const url = new URL(request.url());
         events.failedRequests.push(
             `${request.method()} ${url.pathname}${url.search}: ${request.failure()?.errorText}`,

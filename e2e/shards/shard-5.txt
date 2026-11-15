@@ -1,0 +1,63 @@
+code-preview-font.spec.ts › C++ preview uses readable monospace text (1400px, highlight false)
+code-preview-font.spec.ts › C++ preview uses readable monospace text (1400px, highlight true)
+code-preview-font.spec.ts › C++ preview uses readable monospace text (420px, highlight true)
+git-drawer-management.spec.ts › Git drawer actions stay safe in desktop and mobile contexts
+git-drawer-management.spec.ts › Git drawer stages and unstages one file (desktop)
+git-drawer-management.spec.ts › Git drawer stages and unstages one file (touch)
+git-drawer-management.spec.ts › Workspace switches isolate Git targets and drafts (desktop)
+git-drawer-management.spec.ts › Workspace switches isolate Git targets and drafts (touch)
+image-copy.spec.ts › Copy Image writes actual PNG data when the browser supports it
+image-copy.spec.ts › a denied image copy preserves the clipboard and offers a working download button
+image-copy.spec.ts › without image clipboard support, the primary action downloads the image and leaves the clipboard alone
+list-title-wrap.spec.ts › MVP desktop tab lists
+list-title-wrap.spec.ts › MVP touch titles and review
+list-title-wrap.spec.ts › edge desktop brand scroll and controls
+list-title-wrap.spec.ts › edge touch labels 320x844
+list-title-wrap.spec.ts › edge touch labels 844x390
+list-title-wrap.spec.ts › edge touch no branch or sessions
+list-title-wrap.spec.ts › latency cached sessions refresh
+list-title-wrap.spec.ts › offline warmed sessions
+list-title-wrap.spec.ts › offline warmed tabs
+pi-bridge-models.spec.ts › bridge-live Pi models picker lists and switches, bridge-absent keeps legacy
+pi-chat-offline-send.spec.ts › a prompt typed while the control socket is down is queued and delivered
+pi-launch-config.spec.ts › Pi launch default › a request without a mode uses the saved default
+pi-launch-config.spec.ts › Pi launch default › invalid raw input survives reopening and reload without saving a valid prefix
+pi-launch-config.spec.ts › Pi launch default › the configured path, arguments, and env reach the process
+pi-launch-config.spec.ts › Pi launch default › the saved default decides which agent runs
+pi-launch-config.spec.ts › Pi launch fields › labels follow the default and each agent keeps its own fields
+pi-native-history.spec.ts › native Pi fullscreen: populated resume, wheel, reload, and server restart
+pi-native-history.spec.ts › native Pi regular: populated resume, wheel, reload, and server restart
+pi-rpc-state.spec.ts › M1 real offline Pi rename keeps metadata and the later hydrate coherent
+pi-rpc-state.spec.ts › M2 real offline Pi reset invalidates the old boundary exactly once
+pi-rpc-state.spec.ts › M3 real offline Pi UI reset clears the transcript, keeps narrow and keyboard behavior
+pi-rpc-state.spec.ts › composer compatibility
+pi-rpc-transcript-search.spec.ts › Pi RPC active-session search reveals local transcript rows while offline on desktop and touch
+pi-scroll.spec.ts › Pi scroll-up reaches older rows in staged mode: new pane
+pi-scroll.spec.ts › Pi scroll-up reaches older rows in staged mode: page reload
+pi-scroll.spec.ts › Pi scroll-up reaches older rows in staged mode: return from an inactive tab
+pi-terminal-refresh.spec.ts › Refresh Console repaints in place and keeps the draft
+pi-terminal-refresh.spec.ts › a dropped bridge keeps input and the fallback, then repaints again
+pi-terminal-refresh.spec.ts › a repaint mid-turn neither resubmits nor duplicates the turn
+pi-terminal-refresh.spec.ts › a withheld receipt falls back once and never retries
+pi-terminal-refresh.spec.ts › absent bridge keeps the bounded history fallback
+pi-terminal-refresh.spec.ts › fresh viewer repaints the live Pi fullscreen screen without history
+pi-terminal-refresh.spec.ts › fresh viewer repaints the live Pi regular screen without history
+pi-terminal-refresh.spec.ts › mobile reload preserves an offline draft and repaints after reconnect
+sync-commit-diff.spec.ts › a show-commit card selects an older hash and opens that hash in the pretty viewer
+sync-done-card.spec.ts › done card stays glanceable and shows its source machine on mobile
+syncboard-push.spec.ts › a pushed message reaches the receiving Pi model without a tool call
+tabs-restore-fallback.spec.ts › corrupt saved tabs do not abort Phi startup and Shell still launches
+tabs-restore-fallback.spec.ts › invalid native resume becomes a fresh live tab without blocking another backend
+terminal-panel-geometry-real.spec.ts › composer MVP
+terminal-panel-geometry-real.spec.ts › composer drag compact
+terminal-panel-geometry-real.spec.ts › composer drag desktop
+terminal-panel-geometry-real.spec.ts › composer drag scroll
+terminal-panel-geometry-real.spec.ts › composer keyboard baseline
+terminal-panel-geometry-real.spec.ts › composer persistence
+terminal-panel-geometry-real.spec.ts › composer recovery
+terminal-panel-geometry-real.spec.ts › real PTY follows desktop and touch panel geometry
+terminal-reader-geometry.spec.ts › desktop › live geometry preserves the reading row
+terminal-reader-geometry.spec.ts › touch › live geometry preserves the reading row
+terminal-scroll-anchor.spec.ts › one wheel notch keeps the reading row when a burst follows
+terminal-tab-switch.spec.ts › a warm tab switch paints the GL canvas in the reveal task
+terminal-tab-switch.spec.ts › warm tab switches do not resize either terminal

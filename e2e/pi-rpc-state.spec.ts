@@ -28,10 +28,7 @@ import type {
     StateChangedEvent,
 } from '../web-src/proto/control.js';
 import { configToToml, startPhi, type PhiServer } from './_server.js';
-import {
-    isCancelledSessionListRead,
-    isCancelledWorktreeRead,
-} from './_session-requests.js';
+import { isCancelledBackgroundRead } from './_session-requests.js';
 
 // The served codec carries no types; bind its runtime decoders to the
 // generated declarations so spec-side decoding is fully checked.
@@ -712,11 +709,7 @@ test('M1 real offline Pi rename keeps metadata and the later hydrate coherent', 
             browserErrors.pageErrors.push(error.message),
         );
         page.on('requestfailed', (failed) => {
-            if (
-                isCancelledSessionListRead(failed, fixture.phi.url) ||
-                isCancelledWorktreeRead(failed, fixture.phi.url)
-            )
-                return;
+            if (isCancelledBackgroundRead(failed, fixture.phi.url)) return;
             browserErrors.failedRequests.push(
                 `${failed.method()} ${failed.url()} ${failed.failure()?.errorText ?? ''}`,
             );
@@ -956,11 +949,7 @@ test('M2 real offline Pi reset invalidates the old boundary exactly once', async
             browserErrors.pageErrors.push(error.message),
         );
         page.on('requestfailed', (failed) => {
-            if (
-                isCancelledSessionListRead(failed, fixture.phi.url) ||
-                isCancelledWorktreeRead(failed, fixture.phi.url)
-            )
-                return;
+            if (isCancelledBackgroundRead(failed, fixture.phi.url)) return;
             browserErrors.failedRequests.push(
                 `${failed.method()} ${failed.url()} ${failed.failure()?.errorText ?? ''}`,
             );
@@ -1135,11 +1124,7 @@ test('M3 real offline Pi UI reset clears the transcript, keeps narrow and keyboa
                     errorText: failed.failure()?.errorText ?? '',
                 };
             }
-            if (
-                isCancelledSessionListRead(failed, fixture.phi.url) ||
-                isCancelledWorktreeRead(failed, fixture.phi.url)
-            )
-                return;
+            if (isCancelledBackgroundRead(failed, fixture.phi.url)) return;
             browserErrors.failedRequests.push(
                 `${failed.method()} ${failed.url()} ${failed.failure()?.errorText ?? ''}`,
             );

@@ -10,8 +10,8 @@ import {
 } from '@playwright/test';
 import { configToToml, startPhi, type PhiServer } from './_server.js';
 import {
+    isCancelledBackgroundRead,
     isCancelledTerminalReplay,
-    isCancelledWorktreeRead,
 } from './_session-requests.js';
 
 let phi: PhiServer | undefined;
@@ -45,11 +45,8 @@ async function observe(p: Page) {
         if (!expected) errors.push(`console: ${message.text()}`);
     });
     p.on('requestfailed', (request) => {
-        if (
-            isCancelledWorktreeRead(request, p.url()) ||
-            isCancelledTerminalReplay(request, p.url())
-        )
-            return;
+        if (isCancelledBackgroundRead(request, p.url())) return;
+        if (isCancelledTerminalReplay(request, p.url())) return;
         // Chromium can report successful empty pin responses as aborted.
         if (
             successfulPins.has(request) &&

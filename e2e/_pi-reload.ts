@@ -228,21 +228,17 @@ export async function clickReloadDesktop(page: Page): Promise<void> {
 }
 
 // Mark the toasts already on screen, then wait for an unmarked one
-// with the text. Counting before the click races the toast that
-// dismisses while the new one appears: the replacement takes the
-// index the count promised, and an index wait never sees it.
+// with the text. Mark in a single evaluation over the current matches:
+// a toast that dismisses mid-marking is simply no longer in the set,
+// while an index wait would block until the test timeout.
 export async function expectNewToast(
     page: Page,
     text: string,
     click: () => Promise<void>,
 ): Promise<void> {
-    const existing = page.locator('.toast', { hasText: text });
-    const before = await existing.count();
-    for (let index = 0; index < before; index++) {
-        await existing
-            .nth(index)
-            .evaluate((toast) => toast.setAttribute('data-toast-seen', ''));
-    }
+    await page.locator('.toast', { hasText: text }).evaluateAll((toasts) => {
+        for (const toast of toasts) toast.setAttribute('data-toast-seen', '');
+    });
     await click();
     await expect(
         page.locator('.toast:not([data-toast-seen])', { hasText: text }),

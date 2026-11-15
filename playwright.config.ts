@@ -14,6 +14,10 @@ export default defineConfig({
         '**/terminal-ram-electron.spec.ts',
         '**/desktop-switch-storm.spec.ts',
         '**/desktop-identity-attribution.spec.ts',
+        // Real Electron specs: they need desktop/electron/dist, which this
+        // suite never builds. The desktop config owns them.
+        '**/auth-desktop.spec.ts',
+        '**/desktop-shell-drawer.spec.ts',
     ],
     timeout: 120_000,
     retries: 0,

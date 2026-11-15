@@ -1,0 +1,68 @@
+attachments-device.spec.ts › a busy Pi turn takes an attachment send as a steer
+attachments-device.spec.ts › bridge loss before Send refuses without dispatch or later replay
+attachments-device.spec.ts › bridge-free Pi keeps ordinary text usable and retains attachment drafts
+attachments-device.spec.ts › device attachments reach interactive Pi as images and readable files on desktop and touch
+attachments-device.spec.ts › extension transformations are not mistaken for model receipt; lost ack is never replayed
+attachments-device.spec.ts › idle extension metadata does not falsely stale a fresh attachment send
+attachments-device.spec.ts › pinned Pi OpenAI-compatible provider receives an image block
+config-toml-persistence.spec.ts › config TOML persistence works with desktop keyboard and mobile touch settings
+diff-modal-commit-selector.spec.ts › Pretty Diff commit selector changes the modal diff and follows the panel selector
+diff-review-prompt-whitespace.spec.ts › an existing broken draft is cleaned on Copy, edit, and Apply without changing its saved context
+diff-review-prompt-whitespace.spec.ts › side-by-side CRLF, syntax off: Copy and Apply preserve source whitespace
+diff-review-prompt-whitespace.spec.ts › side-by-side CRLF, syntax on: Copy and Apply preserve source whitespace
+diff-review-prompt-whitespace.spec.ts › side-by-side LF, syntax off: Copy and Apply preserve source whitespace
+diff-review-prompt-whitespace.spec.ts › side-by-side LF, syntax on: Copy and Apply preserve source whitespace
+diff-review-prompt-whitespace.spec.ts › unified CRLF, syntax off: Copy and Apply preserve source whitespace
+diff-review-prompt-whitespace.spec.ts › unified CRLF, syntax on: Copy and Apply preserve source whitespace
+diff-review-prompt-whitespace.spec.ts › unified LF, syntax off: Copy and Apply preserve source whitespace
+diff-review-prompt-whitespace.spec.ts › unified LF, syntax on: Copy and Apply preserve source whitespace
+markdown-maximize.spec.ts › Markdown preview maximizes, keeps its scroll position, and restores (1400px)
+markdown-maximize.spec.ts › Markdown preview maximizes, keeps its scroll position, and restores (420px)
+mobile-new-session-drawer.spec.ts › desktop Enter starts one session
+mobile-new-session-drawer.spec.ts › http launch does not retry
+mobile-new-session-drawer.spec.ts › landscape touch closes on new session and direct Shell
+mobile-new-session-drawer.spec.ts › lost launch does not retry
+mobile-new-session-drawer.spec.ts › mobile Enter starts one session
+mobile-new-session-drawer.spec.ts › offline launch does not retry
+mobile-new-session-drawer.spec.ts › phone MVP
+mobile-new-session-drawer.spec.ts › reopened drawer remains open after held response
+mobile-new-session-drawer.spec.ts › tablet drawer stays open
+mobile-tab-drawer.spec.ts › New or Resume Session swaps to the sessions block, back arrow returns
+mobile-tab-drawer.spec.ts › a left-edge swipe opens the drawer on the tab tree
+mobile-tab-drawer.spec.ts › a tablet drawer keeps sessions content and closes on a terminal tap
+mobile-tab-drawer.spec.ts › compact drawer shows the tab tree and a row tap switches tabs
+mobile-tab-drawer.spec.ts › desktop sidebar and tab-bar dropdown are unchanged
+mobile-tab-drawer.spec.ts › drawer keys never reach the PTY: Enter activates the row
+mobile-tab-drawer.spec.ts › tapping the terminal dismisses either mobile drawer screen
+mobile-tab-drawer.spec.ts › the brand opens the drawer on phones, the desktop dropdown on wide screens
+opencode-mini.spec.ts › configured legacy: launch, restore metadata, and wheel routing agree
+opencode-mini.spec.ts › configured mini: launch, restore metadata, and wheel routing agree
+opencode-mini.spec.ts › configured tui: launch, restore metadata, and wheel routing agree
+opencode-mini.spec.ts › right-click Open Mini opts in once, then normal launch remains full TUI
+pi-bridge-skills.spec.ts › a busy agent queues the skill as a follow-up
+pi-bridge-skills.spec.ts › bridge-live Pi lists and sends skills, bridge-absent keeps the composer
+pi-bridge-skills.spec.ts › the skills picker lists, filters, and sends on a phone
+pi-history-recall.spec.ts › bridge-live Pi history recalls, bridge-absent falls back
+pi-model-cache-offline.spec.ts › model picker opens from cache when the catalog request fails
+pi-reload-queue.spec.ts › queued reload waits for its turn, then cancels or flushes
+shell-one-click.spec.ts › one Shell click opens one live session, and another click opens another
+terminal-background-reconnect.spec.ts › synthetic visibility desktop-off restores all panes without changing reader/input state @desktop
+terminal-background-reconnect.spec.ts › synthetic visibility desktop-wake restores all panes without changing reader/input state @desktop
+terminal-background-reconnect.spec.ts › synthetic visibility late-close restores all panes without changing reader/input state @desktop
+terminal-background-reconnect.spec.ts › synthetic visibility late-close restores all panes without changing reader/input state @mobile
+terminal-background-reconnect.spec.ts › synthetic visibility normal restores all panes without changing reader/input state @desktop
+terminal-background-reconnect.spec.ts › synthetic visibility normal restores all panes without changing reader/input state @mobile
+terminal-background-reconnect.spec.ts › synthetic visibility off-manual restores all panes without changing reader/input state @desktop
+terminal-background-reconnect.spec.ts › synthetic visibility off-manual restores all panes without changing reader/input state @mobile
+terminal-background-reconnect.spec.ts › synthetic visibility reject restores all panes without changing reader/input state @desktop
+terminal-background-reconnect.spec.ts › synthetic visibility reject restores all panes without changing reader/input state @mobile
+terminal-background-reconnect.spec.ts › synthetic visibility slow restores all panes without changing reader/input state @desktop
+terminal-background-reconnect.spec.ts › synthetic visibility slow restores all panes without changing reader/input state @mobile
+terminal-mobile-recovery.spec.ts › slow touch browser recovers split UTF-8, reconnect and raw replay reload (TUI)
+terminal-mobile-recovery.spec.ts › slow touch browser recovers split UTF-8, reconnect and raw replay reload (normal)
+terminal-paste.spec.ts › desktop › terminal paste: bytes, recovery, and no-retry
+terminal-paste.spec.ts › mobile touch › terminal paste: bytes, recovery, and no-retry
+terminal-phone-performance.spec.ts › phone alternate raw replay and preview upload keep the event loop responsive
+terminal-phone-performance.spec.ts › phone normal raw replay and preview upload keep the event loop responsive
+terminal-raw-books.spec.ts › raw replay preserves alternate screen, split UTF-8 and return to primary
+terminal-redraw-tracepoint.spec.ts › every redraw lands on the trace track, fast ones included

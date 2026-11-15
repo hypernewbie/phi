@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+    isCancelledBackgroundRead,
     isCancelledBellAudio,
     isCancelledGitRead,
     isCancelledSessionListRead,
@@ -187,6 +188,48 @@ describe('expected Git read cancellation diagnostics', () => {
     ])('does not exempt %s %s %s', (url, method, errorText) => {
         expect(
             isCancelledGitRead(request(url, method, errorText), origin),
+        ).toBe(false);
+    });
+});
+
+describe('expected background cancellation aggregate', () => {
+    // Sidebar ownership changes supersede these reads on purpose. The
+    // aggregate is what specs use when they assert "no unexpected failed
+    // requests", so it must cover every deliberate cancellation and nothing
+    // else.
+    it.each([
+        '/api/git/worktrees',
+        '/api/git/worktree-dirty',
+        '/api/sessions',
+        '/api/git/info',
+        '/api/git/status-files',
+    ])('exempts a deliberate same-origin abort of %s', (path) => {
+        expect(
+            isCancelledBackgroundRead(request(`${origin}${path}`), origin),
+        ).toBe(true);
+    });
+
+    it.each([
+        ['/api/git/info', 'POST', 'net::ERR_ABORTED'],
+        ['/api/git/info', 'GET', 'net::ERR_CONNECTION_RESET'],
+        ['/api/git/status-files', 'GET', null],
+        ['/api/git/info/extra', 'GET', 'net::ERR_ABORTED'],
+        ['/api/terminals/t1/replay', 'GET', 'net::ERR_ABORTED'],
+    ])('does not exempt %s %s %s', (path, method, errorText) => {
+        expect(
+            isCancelledBackgroundRead(
+                request(`${origin}${path}`, method, errorText),
+                origin,
+            ),
+        ).toBe(false);
+    });
+
+    it('does not exempt another origin', () => {
+        expect(
+            isCancelledBackgroundRead(
+                request('http://127.0.0.1:17778/api/git/info'),
+                origin,
+            ),
         ).toBe(false);
     });
 });

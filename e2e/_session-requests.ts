@@ -78,6 +78,7 @@ export function isCancelledBackgroundRead(
 ): boolean {
     return (
         isCancelledWorktreeRead(request, origin) ||
-        isCancelledSessionListRead(request, origin)
+        isCancelledSessionListRead(request, origin) ||
+        isCancelledGitRead(request, origin)
     );
 }
