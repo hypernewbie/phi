@@ -58,8 +58,6 @@ interface KeyboardWindow extends Window {
     geometryRefreshes: number;
     geometryGridEvents: { cols: number; rows: number }[];
     geometryPendingWrites: number;
-    geometryWriteCompletions: number;
-    geometryCompletedTexts: string[];
     geometryPanelResizes: { id: string; width: number; height: number }[];
     __setVisualViewportHeight: (height: number) => void;
     __visualViewportListenerCount: () => number;
@@ -103,7 +101,6 @@ interface KeyboardState {
     kbContentTop: string;
     vvHeight: string;
     activePane: string;
-    textareaValue: string;
 }
 
 interface ShiftLimits {
@@ -195,8 +192,6 @@ async function captureGeometry(page: Page) {
         win.geometryRefreshes = 0;
         win.geometryGridEvents = [];
         win.geometryPendingWrites = 0;
-        win.geometryWriteCompletions = 0;
-        win.geometryCompletedTexts = [];
         let Constructor: typeof win.Terminal;
         Object.defineProperty(window, 'Terminal', {
             configurable: true,
@@ -230,16 +225,9 @@ async function captureGeometry(page: Page) {
                         super.refresh(start, end);
                     }
                     write(data: string | Uint8Array, callback?: () => void) {
-                        const text =
-                            typeof data === 'string'
-                                ? data
-                                : new TextDecoder().decode(data);
                         win.geometryPendingWrites++;
                         super.write(data, () => {
                             win.geometryPendingWrites--;
-                            win.geometryWriteCompletions++;
-                            if (text.includes('DRAW'))
-                                win.geometryCompletedTexts.push(text);
                             callback?.();
                         });
                     }
@@ -524,12 +512,6 @@ async function keyboardState(page: Page): Promise<KeyboardState | null> {
                 document
                     .querySelector('#tabs-container .tab.active')
                     ?.getAttribute('data-pane-id') ?? '',
-            textareaValue:
-                (
-                    document.getElementById(
-                        'input-textarea',
-                    ) as HTMLTextAreaElement | null
-                )?.value ?? '',
         };
     });
 }
@@ -968,6 +950,53 @@ async function keyboardSample(
     await setVisualHeight(page, visualHeight);
     await expectVisibleHeight(page, expectedVisible);
     return requireState(page, `sample ${visualHeight}`);
+}
+
+/**
+ * A real layout change legitimately fits the grid, and the app may debounce
+ * that fit. Baselines taken across such a boundary wait until the fit,
+ * refresh and grid counters stop moving, so a legitimate late fit can never
+ * be counted as a keyboard fit. Bounded, never a fixed sleep.
+ */
+async function waitForQuietCounters(
+    page: Page,
+    label: string,
+): Promise<KeyboardState> {
+    const quietMs = 500;
+    const deadline = Date.now() + 15_000;
+    const counters = () =>
+        page.evaluate(() => {
+            const win = window as unknown as KeyboardWindow;
+            return {
+                fits: win.geometryFits,
+                refreshes: win.geometryRefreshes,
+                gridEvents: win.geometryGridEvents.length,
+            };
+        });
+    let last = await counters();
+    let lastChange = Date.now();
+    while (Date.now() < deadline) {
+        await page.evaluate(
+            () =>
+                new Promise<void>((resolve) =>
+                    requestAnimationFrame(() =>
+                        requestAnimationFrame(() => resolve()),
+                    ),
+                ),
+        );
+        const current = await counters();
+        if (
+            current.fits !== last.fits ||
+            current.refreshes !== last.refreshes ||
+            current.gridEvents !== last.gridEvents
+        ) {
+            lastChange = Date.now();
+        }
+        last = current;
+        if (Date.now() - lastChange >= quietMs)
+            return requireState(page, label);
+    }
+    throw new Error(`${label}: fit counters never settled`);
 }
 
 async function expectShiftClearedEventually(page: Page, label: string) {
@@ -1515,7 +1544,10 @@ test('B3 smaller layout baseline', async ({ browser, request }) => {
             // No waitForGrid here: this base suppresses same-width
             // height-only fits, so the frozen grid stays frozen after the
             // legitimate layout shrink. That policy is not this change's.
-            const shrunken = await requireState(page, 'B3 shrunk baseline');
+            const shrunken = await waitForQuietCounters(
+                page,
+                'B3 shrunk baseline',
+            );
             expect
                 .soft(shrunken.root?.height, 'B3 shrunk root height')
                 .toBeCloseTo(780, 3);
@@ -1588,7 +1620,10 @@ test('B4 width reset and page restore', async ({ browser, request }) => {
             await expectShiftClearedEventually(page, 'B4 rotate');
             await waitForGrid(page, 'B4 rotated');
             await waitForSettledGrid(page, 'B4 rotated settled');
-            const rotated = await requireState(page, 'B4 rotated baseline');
+            const rotated = await waitForQuietCounters(
+                page,
+                'B4 rotated baseline',
+            );
             expect
                 .soft(rotated.root?.height, 'B4 rotated root height')
                 .toBeCloseTo(390, 3);
@@ -1648,7 +1683,7 @@ test('B4 width reset and page restore', async ({ browser, request }) => {
 
             // Fresh cycle after the explicit pageshow fit settled.
             await waitForSettledGrid(page, 'B4 fresh');
-            const fresh = await requireState(page, 'B4 fresh baseline');
+            const fresh = await waitForQuietCounters(page, 'B4 fresh baseline');
             const resizeBase2 = wire.resize.length;
             const inputBase2 = wire.input.length;
             await runKeyboardCycle({
@@ -2247,7 +2282,12 @@ test('B9 offline keyboard', async ({ browser, request }) => {
                 timeout: 10_000,
             });
             await settleComposer(page);
-            const baseline = await requireState(page, 'B9 offline baseline');
+            // The reconnect banner is a real layout change, so let any
+            // legitimate fit settle before the keyboard baseline.
+            const baseline = await waitForQuietCounters(
+                page,
+                'B9 offline baseline',
+            );
             expect(
                 baseline.kbAttribute,
                 'B9 baseline: no shift yet',
@@ -2436,7 +2476,10 @@ test('B10 moving content origin', async ({ browser, request }) => {
             await waitForGrid(page, 'B10 final grid');
             await waitForSettledGrid(page, 'B10 final settled');
             await settleComposer(page);
-            const fresh = await requireState(page, 'B10 fresh baseline');
+            const fresh = await waitForQuietCounters(
+                page,
+                'B10 fresh baseline',
+            );
             expect(fresh.kbAttribute, 'B10 fresh: no capture').toBeNull();
             const resizeBase = wire.resize.length;
             const inputBase = wire.input.length;
