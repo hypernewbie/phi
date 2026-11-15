@@ -8,14 +8,19 @@ import (
 
 func TestCatalogModelsCountAndProperties(t *testing.T) {
 	cat := Catalog()
-	if len(cat) != 13 {
-		t.Fatalf("expected 13 models in verified catalog, got %d", len(cat))
+	if len(cat) != 18 {
+		t.Fatalf("expected 18 models in verified catalog, got %d", len(cat))
 	}
 
 	expectedSlugs := []string{
 		"gemini-4-argon-high",
 		"gemini-4-argon-medium",
 		"gemini-4-argon-low",
+		"gemini-4-hydrogen-high",
+		"gemini-4-hydrogen-xhigh",
+		"gemini-4-hydrogen-medium",
+		"gemini-4-hydrogen-low",
+		"gemini-pro-orchestrator-g1-pro",
 		"gemini-3.8-flash-high",
 		"gemini-3.8-flash-medium",
 		"gemini-3.8-flash-low",
@@ -57,6 +62,11 @@ func TestDisplayNamesMatchVerified(t *testing.T) {
 		{"gemini-4-argon-high", "Gemini 4 Argon (High)"},
 		{"gemini-4-argon-medium", "Gemini 4 Argon (Medium)"},
 		{"gemini-4-argon-low", "Gemini 4 Argon (Low)"},
+		{"gemini-4-hydrogen-high", "Gemini 4 Hydrogen (High)"},
+		{"gemini-4-hydrogen-xhigh", "Gemini 4 Hydrogen (XHigh)"},
+		{"gemini-4-hydrogen-medium", "Gemini 4 Hydrogen (Medium)"},
+		{"gemini-4-hydrogen-low", "Gemini 4 Hydrogen (Low)"},
+		{"gemini-pro-orchestrator-g1-pro", "Orchestrator (Argon)"},
 		{"gemini-3.8-flash-high", "Gemini 3.8 Flash (High)"},
 		{"gemini-3.8-flash-medium", "Gemini 3.8 Flash (Medium)"},
 		{"gemini-3.8-flash-low", "Gemini 3.8 Flash (Low)"},
@@ -109,6 +119,8 @@ func TestAliasNormalization(t *testing.T) {
 		// Gemini base names map to default medium effort
 		{"gemini-4-argon", "gemini-4-argon-medium"},
 		{"gemini-4-argon-med", "gemini-4-argon-medium"},
+		{"gemini-4-hydrogen", "gemini-4-hydrogen-medium"},
+		{"gemini-4-hydrogen-med", "gemini-4-hydrogen-medium"},
 		{"gemini-3.8-flash", "gemini-3.8-flash-medium"},
 		{"gemini-3.8-flash-med", "gemini-3.8-flash-medium"},
 

@@ -9,6 +9,7 @@ All notable changes to phi are documented here. Newest versions first.
 
 ### Fixed
 - **The Antigravity (agy) Models button works** (`a5672b51`). The button was disabled with "Model selection not supported for Antigravity" even though the backend already had a verified model catalog and a `/model <slug>` recipe. The button now opens the preset dropup, and a selected preset sends `/model <slug>` to the pane that was clicked.
+- **Agy presets match the installed CLI** — the verified catalog gains the Gemini 4 Hydrogen family (`gemini-4-hydrogen-high`, `-xhigh`, `-medium`, `-low`) and the orchestrator model, exactly as `agy models` reports them. Hydrogen slugs were previously rejected when saving a preset; they now validate and save.
 
 ## v0.39.0 — 2026-11-15
 

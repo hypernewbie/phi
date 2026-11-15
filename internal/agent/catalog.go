@@ -13,6 +13,7 @@ const (
 	EffortLow    Effort = "low"
 	EffortMedium Effort = "medium"
 	EffortHigh   Effort = "high"
+	EffortXHigh  Effort = "xhigh"
 )
 
 // Model describes an Antigravity (agy) model in the catalog.
@@ -58,6 +59,45 @@ var verifiedCatalog = []Model{
 		Family:      "gemini-4-argon",
 		Effort:      EffortLow,
 		Description: "Gemini 4 Argon with low reasoning effort",
+	},
+	{
+		Slug:        "gemini-4-hydrogen-high",
+		DisplayName: "Gemini 4 Hydrogen (High)",
+		Vendor:      "Google",
+		Family:      "gemini-4-hydrogen",
+		Effort:      EffortHigh,
+		Description: "Gemini 4 Hydrogen with high reasoning effort",
+	},
+	{
+		Slug:        "gemini-4-hydrogen-xhigh",
+		DisplayName: "Gemini 4 Hydrogen (XHigh)",
+		Vendor:      "Google",
+		Family:      "gemini-4-hydrogen",
+		Effort:      EffortXHigh,
+		Description: "Gemini 4 Hydrogen with extra-high reasoning effort",
+	},
+	{
+		Slug:        "gemini-4-hydrogen-medium",
+		DisplayName: "Gemini 4 Hydrogen (Medium)",
+		Vendor:      "Google",
+		Family:      "gemini-4-hydrogen",
+		Effort:      EffortMedium,
+		Description: "Gemini 4 Hydrogen with medium reasoning effort (default)",
+	},
+	{
+		Slug:        "gemini-4-hydrogen-low",
+		DisplayName: "Gemini 4 Hydrogen (Low)",
+		Vendor:      "Google",
+		Family:      "gemini-4-hydrogen",
+		Effort:      EffortLow,
+		Description: "Gemini 4 Hydrogen with low reasoning effort",
+	},
+	{
+		Slug:        "gemini-pro-orchestrator-g1-pro",
+		DisplayName: "Orchestrator (Argon)",
+		Vendor:      "Google",
+		Family:      "gemini-pro-orchestrator",
+		Description: "Orchestrator model (Argon)",
 	},
 	{
 		Slug:        "gemini-3.8-flash-high",
@@ -144,10 +184,12 @@ var verifiedCatalog = []Model{
 // aliasMap normalizes common variants and base model names to exact verified slugs.
 var aliasMap = map[string]string{
 	// Gemini base models default to medium effort
-	"gemini-4-argon":       "gemini-4-argon-medium",
-	"gemini-4-argon-med":   "gemini-4-argon-medium",
-	"gemini-3.8-flash":     "gemini-3.8-flash-medium",
-	"gemini-3.8-flash-med": "gemini-3.8-flash-medium",
+	"gemini-4-argon":        "gemini-4-argon-medium",
+	"gemini-4-argon-med":    "gemini-4-argon-medium",
+	"gemini-4-hydrogen":     "gemini-4-hydrogen-medium",
+	"gemini-4-hydrogen-med": "gemini-4-hydrogen-medium",
+	"gemini-3.8-flash":      "gemini-3.8-flash-medium",
+	"gemini-3.8-flash-med":  "gemini-3.8-flash-medium",
 
 	// Claude Sonnet variants
 	"claude-5.5-sonnet":        "claude-sonnet-5-5-medium",
