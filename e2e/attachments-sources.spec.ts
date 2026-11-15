@@ -879,10 +879,6 @@ test('changed, deleted, and unsafe server sources keep a retained error chip', a
     request,
 }) => {
     test.setTimeout(240_000);
-    test.skip(
-        !!process.env.CI,
-        'known CI flake (#78): extra server-items refusal under load; passes locally',
-    );
     const fixture = await startSourcesFixture();
     let proxy: BridgeProxy | null = null;
     try {
