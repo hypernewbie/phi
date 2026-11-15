@@ -32,7 +32,8 @@ function makeSessions(options = {}) {
         <button id="new-session-btn"></button>
         <select id="workspace-select"></select>
         <button id="add-workspace-btn">+</button>
-        <button id="remove-workspace-btn">…</button>
+        <button id="remove-workspace-btn">-</button>
+        <button id="ws-manager-btn">…</button>
         <div id="ws-modal" class="modal-overlay hidden">
             <div class="modal-content" role="dialog" aria-modal="true">
                 <button id="ws-modal-close" type="button">×</button>

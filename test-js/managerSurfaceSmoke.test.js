@@ -75,6 +75,7 @@ function stubDom() {
         'workspace-select',
         'add-workspace-btn',
         'remove-workspace-btn',
+        'ws-manager-btn',
         'ws-modal',
         'ws-modal-close',
         'ws-modal-input',

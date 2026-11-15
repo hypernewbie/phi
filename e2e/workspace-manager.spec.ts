@@ -9,7 +9,7 @@ import { startPhi } from './_server.js';
 const STATUS = '#ws-manager-status';
 
 async function openManager(page: Page): Promise<void> {
-    await page.click('#remove-workspace-btn');
+    await page.click('#ws-manager-btn');
     await expect(page.locator('#ws-manager-modal')).toBeVisible();
 }
 

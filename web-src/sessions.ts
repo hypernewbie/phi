@@ -374,6 +374,7 @@ export class SessionsManager {
     workspaceSelect: HTMLSelectElement;
     addWorkspaceBtn: HTMLElement;
     removeWorkspaceBtn: HTMLElement;
+    wsManagerBtn: HTMLElement;
     wsModal: HTMLElement;
     wsModalClose: HTMLElement;
     wsModalInput: HTMLInputElement;
@@ -461,6 +462,7 @@ export class SessionsManager {
         this.removeWorkspaceBtn = document.getElementById(
             'remove-workspace-btn',
         )!;
+        this.wsManagerBtn = document.getElementById('ws-manager-btn')!;
 
         // Workspace Modal Controls
         this.wsModal = document.getElementById('ws-modal')!;
@@ -716,6 +718,12 @@ export class SessionsManager {
         });
 
         this.removeWorkspaceBtn.addEventListener('click', () => {
+            if (confirm(`Remove workspace: ${this.activeWorkspace}?`)) {
+                this.removeWorkspace(this.activeWorkspace);
+            }
+        });
+
+        this.wsManagerBtn?.addEventListener('click', () => {
             this.workspaceManager.open();
         });
 
@@ -1049,6 +1057,24 @@ export class SessionsManager {
         this.activeWorkspace = path;
         this.updateWorkspaceSelectWidth();
         this.loadWorktrees();
+    }
+
+    /** Quick remove from the header: one confirmed path, straight to the
+     *  server, then a config reload. Batch work lives in the manager. */
+    async removeWorkspace(path: string): Promise<void> {
+        try {
+            const res = await fetch('/api/config/workspaces', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path }),
+            });
+            if (res.ok) {
+                await this.loadConfig();
+                this.updateWorkspaceSelectWidth();
+            }
+        } catch (e) {
+            console.error('[config] Failed to remove workspace:', e);
+        }
     }
 
     private setSessionRefreshStatus(message: string): void {

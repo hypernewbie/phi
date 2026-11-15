@@ -281,6 +281,7 @@ export class SessionsManager {
     workspaceSelect;
     addWorkspaceBtn;
     removeWorkspaceBtn;
+    wsManagerBtn;
     wsModal;
     wsModalClose;
     wsModalInput;
@@ -334,6 +335,7 @@ export class SessionsManager {
         this.workspaceSelect = document.getElementById('workspace-select');
         this.addWorkspaceBtn = document.getElementById('add-workspace-btn');
         this.removeWorkspaceBtn = document.getElementById('remove-workspace-btn');
+        this.wsManagerBtn = document.getElementById('ws-manager-btn');
         // Workspace Modal Controls
         this.wsModal = document.getElementById('ws-modal');
         this.wsModalClose = document.getElementById('ws-modal-close');
@@ -542,6 +544,11 @@ export class SessionsManager {
             this.openWorkspaceModal();
         });
         this.removeWorkspaceBtn.addEventListener('click', () => {
+            if (confirm(`Remove workspace: ${this.activeWorkspace}?`)) {
+                this.removeWorkspace(this.activeWorkspace);
+            }
+        });
+        this.wsManagerBtn?.addEventListener('click', () => {
             this.workspaceManager.open();
         });
         // Modal Action Bindings
@@ -833,6 +840,24 @@ export class SessionsManager {
         this.activeWorkspace = path;
         this.updateWorkspaceSelectWidth();
         this.loadWorktrees();
+    }
+    /** Quick remove from the header: one confirmed path, straight to the
+     *  server, then a config reload. Batch work lives in the manager. */
+    async removeWorkspace(path) {
+        try {
+            const res = await fetch('/api/config/workspaces', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path }),
+            });
+            if (res.ok) {
+                await this.loadConfig();
+                this.updateWorkspaceSelectWidth();
+            }
+        }
+        catch (e) {
+            console.error('[config] Failed to remove workspace:', e);
+        }
     }
     setSessionRefreshStatus(message) {
         const status = document.getElementById('session-refresh-status');

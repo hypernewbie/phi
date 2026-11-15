@@ -22,7 +22,8 @@ function makeManager() {
         <button id="new-session-btn"></button>
         <select id="workspace-select"><option value="/configured">Workspace</option></select>
         <button id="add-workspace-btn">+</button>
-        <button id="remove-workspace-btn"></button>
+        <button id="remove-workspace-btn">-</button>
+        <button id="ws-manager-btn">…</button>
         <div id="ws-modal" class="modal-overlay hidden">
             <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="ws-modal-title">
                 <div class="modal-header">
@@ -1212,5 +1213,53 @@ describe('workspace selector', () => {
         expect(select.style.width).toBe('');
         expect(select.title).toBe('');
         expect(select.options.length).toBe(0);
+    });
+});
+
+describe('header quick remove', () => {
+    it('removes the active workspace only after confirm, and never opens the manager', async () => {
+        const calls = [];
+        const manager = makeManager();
+        manager.activeWorkspace = '/configured';
+        mockFetch((url, options = {}) => {
+            const request = new URL(String(url), 'http://localhost');
+            calls.push({
+                url: request.pathname,
+                method: options.method ?? 'GET',
+                body: JSON.parse(options.body ?? '{}'),
+            });
+            if ((options.method ?? 'GET') === 'DELETE') return { ok: true };
+            return {
+                ok: true,
+                json: async () => ({
+                    workspaces: ['/other'],
+                    workspace_roots: [],
+                    active_cwd: '/other',
+                }),
+            };
+        });
+        const confirmSpy = vi
+            .spyOn(window, 'confirm')
+            .mockReturnValueOnce(false)
+            .mockReturnValueOnce(true);
+
+        document.getElementById('remove-workspace-btn').click();
+        expect(confirmSpy).toHaveBeenCalledTimes(1);
+        expect(calls).toEqual([]); // rejected confirm sends nothing
+
+        document.getElementById('remove-workspace-btn').click();
+        expect(confirmSpy).toHaveBeenCalledTimes(2);
+        await vi.waitFor(() =>
+            expect(calls.filter((call) => call.method === 'DELETE')).toEqual([
+                {
+                    url: '/api/config/workspaces',
+                    method: 'DELETE',
+                    body: { path: '/configured' },
+                },
+            ]),
+        );
+        // The manager stays closed: quick remove is not the manager's door.
+        expect(manager.workspaceManager.isOpen()).toBe(false);
+        confirmSpy.mockRestore();
     });
 });

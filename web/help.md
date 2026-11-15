@@ -38,6 +38,7 @@ The workspace picker in the header controls which project Phi is looking at.
 
 - The directory where Phi starts becomes the default workspace.
 - Use `+` next to the workspace picker to add another workspace path.
+- Use `-` to remove the selected workspace from the picker.
 - Use `…` to open **Workspaces**, which manages every workspace at once.
 - Workspace choices affect session discovery, Git worktrees, Markdown scanning, and default new-session directories.
 - Phi remembers your last selected workspace in local browser storage.
