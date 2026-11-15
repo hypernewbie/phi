@@ -4,22 +4,28 @@ All notable changes to phi are documented here. Newest versions first.
 
 ## Unreleased
 
+## v0.40.0 — 2026-11-16
+
 ### Added
-- **Declarative model-switch recipes for custom backends** (`8d19fce0`). A backend file in `~/.phi/backends/` can declare a bounded recipe instead of having Phi guess a command: `"model_switch": [{"send": "/model {model}\r"}]`. The `{model}` token is substituted with the chosen preset, `delay_ms` pauses between steps, and an explicit `model_switch_disabled` still wins. The server and the browser both validate the recipe (at most 8 steps, 256 bytes per step, 5 seconds of total delay) and reject a malformed one instead of sending it, so an unknown backend never gets a guessed `/model`.
+- **Custom backends can declare model-switch recipes** (`8d19fce0`). A file in `~/.phi/backends/` can declare a recipe such as `"model_switch": [{"send": "/model {model}\r"}]`. Phi replaces `{model}` with the selected preset. `delay_ms` adds a pause between steps, and `model_switch_disabled` takes precedence. The server and browser reject malformed recipes. A recipe can contain at most 8 steps, 256 bytes per step, and 5 seconds of total delay.
+
+  Phi does not guess a `/model` command for an unknown backend.
 
 ### Changed
-- **Compact Pi tabs show the model provider and thinking level as icons.**
-  On a phone or a narrow window, the model button shows the logo of the
-  active provider, such as the DeepSeek whale or the MiniMax mark. The logo
-  uses the current theme color and appears immediately. High-contrast mode
-  uses the system colors. The robot appears only when the provider is unknown.
-  The thinking button shows a brain that
-  grows with the level, and a galaxy at the highest level. Wide layouts keep
-  their text labels.
+- **Compact Pi tabs show provider and thinking icons** (`efc89156`). On a phone or narrow window, the model button shows the active provider's logo in the current theme color. The logo appears immediately. Examples include the DeepSeek whale and the MiniMax mark. High-contrast mode uses system colors. The robot icon appears only for an unknown provider.
+
+  The thinking button shows a brain that grows with the level, and a galaxy at the highest level. Wide layouts keep text labels.
 
 ### Fixed
-- **The Antigravity (agy) Models button works** (`a5672b51`). The button was disabled with "Model selection not supported for Antigravity" even though the backend already had a verified model catalog and a `/model <slug>` recipe. The button now opens the preset dropup, and a selected preset sends `/model <slug>` to the pane that was clicked.
-- **Agy presets match the installed CLI** — the verified catalog gains the Gemini 4 Hydrogen family (`gemini-4-hydrogen-high`, `-xhigh`, `-medium`, `-low`) and the orchestrator model, exactly as `agy models` reports them. Hydrogen slugs were previously rejected when saving a preset; they now validate and save.
+- **The Antigravity (agy) Models button works** (`a5672b51`). The button was disabled with "Model selection not supported for Antigravity" despite the verified model catalog and `/model <slug>` recipe. The button now opens the preset menu. A selected preset sends `/model <slug>` to the pane whose button was clicked.
+
+- **Agy presets match the installed CLI** (`f78a357c`). The verified catalog includes the Gemini 4 Hydrogen family (`gemini-4-hydrogen-high`, `-xhigh`, `-medium`, `-low`) and the orchestrator model. These match the output of `agy models`. Phi rejected Hydrogen slugs on preset save. The slugs now validate and save.
+
+- **The desktop workspace manager opens from the header** (`469d66e8`). The desktop shell now sends the workspace manager action to the active body view. The dialog receives keyboard focus.
+
+- **The mobile keyboard no longer resizes the terminal grid** (`75daacc4`). On visual-only keyboard occlusion, the terminal moves up by the overlap while the shell keeps its previous height. The keyboard path no longer fits the frozen grid.
+
+- **Fast-mode surfaces stay readable without backdrop blur** (`f8c51920`). Panels, menus, and overlays use opaque backgrounds or darker overlays. These reduce bleed-through from terminal text.
 
 ## v0.39.0 — 2026-11-15
 
