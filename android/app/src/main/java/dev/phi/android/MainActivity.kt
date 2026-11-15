@@ -2,8 +2,14 @@ package dev.phi.android
 
 import android.annotation.SuppressLint
 import android.app.AlertDialog
+import android.content.Intent
+import android.content.pm.ShortcutInfo
+import android.content.pm.ShortcutManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.RenderEffect
+import android.graphics.drawable.Icon
 import android.graphics.Shader
 import android.os.Build
 import android.os.Bundle
@@ -140,10 +146,24 @@ class MainActivity : ComponentActivity() {
         )
 
         rebuildServerList()
+        refreshShortcuts()
         val start =
-            profiles.firstOrNull { it.id == activeId }
+            intent?.getStringExtra("phi_server_id")?.let { id ->
+                profiles.firstOrNull { it.id == id }
+            } ?: profiles.firstOrNull { it.id == activeId }
                 ?: profiles.firstOrNull()
         if (start != null) showServer(start.id) else showEmpty()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.getStringExtra("phi_server_id")?.let { id ->
+            if (profiles.any { it.id == id }) {
+                drawer.closeDrawer(GravityCompat.START)
+                showServer(id)
+            }
+        }
     }
 
     // ---------- servers ----------
@@ -286,19 +306,9 @@ class MainActivity : ComponentActivity() {
 
     private fun rebuildServerList() {
         serverList.removeAllViews()
-        val palette = resources.getStringArray(R.array.server_palette)
-        val letters = resources.getStringArray(R.array.server_letters)
         profiles.forEachIndexed { index, p ->
-            val (colorSlot, letterSlot) =
-                badgeSlot(p.origin, index, palette.size, letters.size)
-            val color =
-                store.accentFor(p.origin)?.let {
-                    try {
-                        Color.parseColor(it)
-                    } catch (e: Exception) {
-                        null
-                    }
-                } ?: Color.parseColor(palette[colorSlot])
+            val (color, letter) = badgeFor(p, index)
+            val rowTitle = p.label.takeIf { it != defaultLabelFor(p.origin) }
             val row =
                 LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
@@ -309,7 +319,7 @@ class MainActivity : ComponentActivity() {
                 }
             val badge =
                 ImageView(this).apply {
-                    setImageDrawable(BadgeDrawable(letters[letterSlot], color))
+                    setImageDrawable(BadgeDrawable(letter, color))
                     layoutParams = LinearLayout.LayoutParams(96, 96)
                 }
             val texts =
@@ -321,7 +331,7 @@ class MainActivity : ComponentActivity() {
                 }
             val name =
                 TextView(this).apply {
-                    text = store.displayNameFor(p.origin)
+                    text = rowTitle ?: store.displayNameFor(p.origin)
                     textSize = 16f
                     setTextColor(Color.parseColor("#E8E8EA"))
                 }
@@ -344,6 +354,7 @@ class MainActivity : ComponentActivity() {
             serverList.addView(row)
         }
         refreshActiveRow()
+        refreshShortcuts()
     }
 
     private fun refreshActiveRow() {
@@ -478,6 +489,53 @@ class MainActivity : ComponentActivity() {
     private fun hideLoadError() {
         errorView?.let { content.removeView(it) }
         errorView = null
+    }
+
+    /** Badge color/letter for a server: live web accent wins, else cached slot. */
+    private fun badgeFor(profile: ServerProfile, index: Int): Pair<Int, String> {
+        val palette = resources.getStringArray(R.array.server_palette)
+        val letters = resources.getStringArray(R.array.server_letters)
+        val (colorSlot, letterSlot) =
+            badgeSlot(profile.origin, index, palette.size, letters.size)
+        val color =
+            store.accentFor(profile.origin)?.let {
+                try {
+                    Color.parseColor(it)
+                } catch (e: Exception) {
+                    null
+                }
+            } ?: Color.parseColor(palette[colorSlot])
+        return Pair(color, letters[letterSlot])
+    }
+
+    private fun badgeBitmap(letter: String, color: Int): Bitmap {
+        val px = 96
+        val bmp = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888)
+        BadgeDrawable(letter, color).apply {
+            setBounds(0, 0, px, px)
+            draw(Canvas(bmp))
+        }
+        return bmp
+    }
+
+    /** Launcher long-press shortcuts: first four servers, badge icons. */
+    private fun refreshShortcuts() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N_MR1) return
+        val sm = getSystemService(ShortcutManager::class.java) ?: return
+        sm.dynamicShortcuts =
+            profiles.take(4).mapIndexed { index, p ->
+                val (color, letter) = badgeFor(p, index)
+                ShortcutInfo.Builder(this, "server:${p.id}")
+                    .setShortLabel(store.displayNameFor(p.origin).take(12))
+                    .setLongLabel(p.origin)
+                    .setIcon(Icon.createWithBitmap(badgeBitmap(letter, color)))
+                    .setIntent(
+                        Intent(this, MainActivity::class.java)
+                            .setAction("phi.OPEN")
+                            .putExtra("phi_server_id", p.id),
+                    )
+                    .build()
+            }
     }
 
     // ---------- zoom ----------
