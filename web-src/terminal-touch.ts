@@ -11,8 +11,10 @@ export interface TouchTerminalOptions {
 }
 
 export interface TouchTerminalController {
-    /** True while a touch-originated selection exists. */
+    /** True while the touch gesture owns selection and clipboard events. */
     isSelecting(): boolean;
+    /** True only once a touch selection actually exists on the screen. */
+    hasSelection(): boolean;
     /** Clear the touch selection and hide the pill. Auto-copy stays off. */
     clear(): void;
     /** Remove every listener, timer and DOM node this controller owns. */
@@ -118,6 +120,9 @@ export function installTerminalTouch(
     let lastRange: { col: number; row: number; length: number } | null = null;
     let longPressTimer: ReturnType<typeof setTimeout> | null = null;
     let pill: HTMLButtonElement | null = null;
+    let scrollSub: { dispose(): void } | null = null;
+    let docListenerActive = false;
+    let frame: number | null = null;
 
     function clamp(value: number, min: number, max: number): number {
         return value < min ? min : value > max ? max : value;
@@ -206,8 +211,105 @@ export function installTerminalTouch(
         return button;
     }
 
+    function placePill(): void {
+        if (!pill || !selectionActive) return;
+        const button = pill;
+        button.hidden = false;
+        const width = button.offsetWidth;
+        const height = button.offsetHeight;
+        if (width <= 0 || height <= 0) {
+            // The pane is hidden (display: none); a zero-size measurement
+            // would put the pill at a bogus position.
+            button.hidden = true;
+            return;
+        }
+        const pos = term.getSelectionPosition();
+        if (!pos) {
+            button.hidden = true;
+            return;
+        }
+        const screenRect = screenEl.getBoundingClientRect();
+        const containerRect = container.getBoundingClientRect();
+        const cols = term.cols;
+        const rows = term.rows;
+        if (cols <= 0 || rows <= 0) {
+            button.hidden = true;
+            return;
+        }
+        const viewportY = term.buffer.active.viewportY;
+        if (pos.start.y - viewportY > rows - 1 || pos.end.y - viewportY < 0) {
+            button.hidden = true;
+            return;
+        }
+        const cellW = screenRect.width / cols;
+        const cellH = screenRect.height / rows;
+        const row = clamp(pos.start.y - viewportY, 0, rows - 1);
+        const endRow = clamp(pos.end.y - viewportY, 0, rows - 1);
+        const originX = screenRect.left - containerRect.left;
+        const originY = screenRect.top - containerRect.top;
+        let x = originX + clamp(pos.start.x, 0, cols - 1) * cellW;
+        let top = originY + row * cellH - height - 8;
+        if (top < 0) top = originY + (endRow + 1) * cellH + 8;
+        const maxX = Math.max(0, container.clientWidth - width);
+        const maxY = Math.max(0, container.clientHeight - height);
+        x = clamp(x, 0, maxX);
+        top = clamp(top, 0, maxY);
+        button.style.left = `${Math.round(x)}px`;
+        button.style.top = `${Math.round(top)}px`;
+        button.hidden = false;
+    }
+
+    function schedulePlacement(): void {
+        if (frame !== null) return;
+        frame = requestAnimationFrame(() => {
+            frame = null;
+            placePill();
+        });
+    }
+
+    function onDocumentTouchStart(event: TouchEvent): void {
+        if (event.touches.length > 1) return;
+        const target = event.target;
+        if (pill && target instanceof Node && pill.contains(target)) return;
+        clear();
+    }
+
+    function attachDocumentClear(): void {
+        if (docListenerActive) return;
+        document.addEventListener('touchstart', onDocumentTouchStart, {
+            capture: true,
+            passive: true,
+        });
+        docListenerActive = true;
+    }
+
+    function detachDocumentClear(): void {
+        if (!docListenerActive) return;
+        document.removeEventListener('touchstart', onDocumentTouchStart, {
+            capture: true,
+        });
+        docListenerActive = false;
+    }
+
+    function attachScroll(): void {
+        if (scrollSub) return;
+        if (typeof term.onScroll !== 'function') return;
+        scrollSub = term.onScroll(() => schedulePlacement());
+    }
+
+    function detachScroll(): void {
+        scrollSub?.dispose();
+        scrollSub = null;
+        if (frame !== null) {
+            cancelAnimationFrame(frame);
+            frame = null;
+        }
+    }
+
     function clear(): void {
         dropTimer();
+        detachDocumentClear();
+        detachScroll();
         if (selectionActive) {
             // Still flagged while the selection is torn down: the app's
             // auto-copy listener must see it as touch-owned.
@@ -264,7 +366,10 @@ export function installTerminalTouch(
         wordStartIndex = cellIndex(word.start, row0, term.cols);
         wordEndIndex = wordStartIndex + word.length - 1;
         lastRange = { col: word.start, row: row0, length: word.length };
-        ensurePill().hidden = false;
+        ensurePill();
+        attachDocumentClear();
+        attachScroll();
+        placePill();
     }
 
     function onTouchStart(event: TouchEvent): void {
@@ -382,9 +487,12 @@ export function installTerminalTouch(
 
     return {
         isSelecting: () => selectionActive || touchGestureActive,
+        hasSelection: () => selectionActive,
         clear,
         dispose: () => {
             dropTimer();
+            detachDocumentClear();
+            detachScroll();
             container.removeEventListener('touchstart', onTouchStart, {
                 capture: true,
             });

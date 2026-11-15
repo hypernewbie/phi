@@ -1,5 +1,7 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 import { startPhi, type PhiServer } from './_server.js';
 
@@ -622,4 +624,223 @@ test('a swipe after a selection clears it and still scrolls', async ({
         .not.toBe(before.viewportY);
     expect((await termState(page, pane)).hasSelection).toBe(false);
     await context.close();
+});
+
+test('a tap outside the terminal clears the selection', async ({
+    browser,
+    request,
+}) => {
+    test.setTimeout(120_000);
+    const context = await browser.newContext({
+        viewport: { width: 390, height: 844 },
+        isMobile: true,
+        hasTouch: true,
+    });
+    const page = await context.newPage();
+    await touchPage(context, page);
+    const pane = await openPane(page, request, 'TouchOutside');
+    const point = await cellPoint(page, pane, PLAIN_TEXT);
+    await longPress(page, point);
+    await expect
+        .poll(async () => (await termState(page, pane)).hasSelection, {
+            timeout: 15_000,
+        })
+        .toBe(true);
+    // The app header sits above the terminal on the phone layout; the point is
+    // outside .xterm-screen either way.
+    await page.touchscreen.tap(4, 4);
+    await expect
+        .poll(async () => (await termState(page, pane)).hasSelection, {
+            timeout: 10_000,
+        })
+        .toBe(false);
+    await expect(
+        page.locator(`#term-${pane} .terminal-copy-pill`),
+    ).toBeHidden();
+    await context.close();
+});
+
+test('switching tabs clears the selection', async ({ browser, request }) => {
+    test.setTimeout(120_000);
+    const first = await request.post(`${phi.url}/api/terminals`, {
+        data: { coder: 'pi', cwd: phi.dir, title: 'TouchTabA' },
+    });
+    const a = ((await first.json()) as { pane_id: string }).pane_id;
+    openPanes.push(a);
+    const second = await request.post(`${phi.url}/api/terminals`, {
+        data: { coder: 'pi', cwd: phi.dir, title: 'TouchTabB' },
+    });
+    const b = ((await second.json()) as { pane_id: string }).pane_id;
+    openPanes.push(b);
+    const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        hasTouch: true,
+        isMobile: false,
+    });
+    const page = await context.newPage();
+    await touchPage(context, page);
+    await page.goto(phi.url);
+    await page.locator(`.tab[data-pane-id="${a}"]`).click();
+    await waitForMarker(page, a, 'READY');
+    const point = await cellPoint(page, a, PLAIN_TEXT);
+    await longPress(page, point);
+    await expect
+        .poll(async () => (await termState(page, a)).hasSelection, {
+            timeout: 15_000,
+        })
+        .toBe(true);
+    await page.locator(`.tab[data-pane-id="${b}"]`).click();
+    await expect
+        .poll(async () => (await termState(page, a)).hasSelection, {
+            timeout: 10_000,
+        })
+        .toBe(false);
+    await expect(page.locator(`#term-${a} .terminal-copy-pill`)).toBeHidden();
+    await context.close();
+});
+
+// An alt-screen TUI (OpenCode legacy) injects scroll keys on a swipe. The
+// touch selection must stand that injection down while the finger drags a
+// selection, or the TUI scrolls under the highlight.
+test.describe('opencode alt screen', () => {
+    test.skip(
+        process.platform === 'win32',
+        'POSIX fake CLI; the Go tests cover Windows argv wrapping',
+    );
+    let alt: PhiServer;
+    let fixtureDir = '';
+    let paneId = '';
+
+    test.beforeAll(async () => {
+        fixtureDir = mkdtempSync(join(tmpdir(), 'phi-touch-alt-'));
+        const command = join(fixtureDir, 'opencode');
+        writeFileSync(
+            command,
+            `#!/usr/bin/env python3
+import os, sys, tty
+if len(sys.argv) > 1 and sys.argv[1] == '--version':
+    print('1.0.21')
+    sys.exit(0)
+if len(sys.argv) > 1 and sys.argv[1] == 'debug':
+    print(os.path.expanduser('~/.local/share/opencode/opencode.db'))
+    sys.exit(0)
+tty.setraw(0)
+os.write(1, b'\\033[?1049hready\\r\\n')
+# The log lives next to this script: HOME differs between the server and the
+# PTY child, and a guessed path would make "no bytes" untestable.
+log = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'stdin.log')
+while True:
+    data = os.read(0, 1)
+    if not data:
+        break
+    with open(log, 'ab') as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+`,
+            { mode: 0o755 },
+        );
+        alt = await startPhi({
+            setup(dir) {
+                const backends = join(dir, 'home', '.phi', 'backends');
+                mkdirSync(backends, { recursive: true });
+                writeFileSync(
+                    join(backends, 'pi.json'),
+                    JSON.stringify({ id: 'pi', command }),
+                );
+            },
+            config: {
+                opencode_command: command,
+                opencode_legacy_command: command,
+                opencode_legacy: true,
+            },
+        });
+    });
+
+    test.afterAll(async () => {
+        await alt?.stop();
+        if (fixtureDir) rmSync(fixtureDir, { recursive: true, force: true });
+    });
+
+    async function openAlt(page: Page, request: Page['request']) {
+        const created = await request.post(`${alt.url}/api/terminals`, {
+            data: { coder: 'opencode', cwd: alt.dir, title: 'AltTouch' },
+        });
+        paneId = ((await created.json()) as { pane_id: string }).pane_id;
+        await page.goto(alt.url);
+        await page.locator('#mobile-sidebar-toggle').click();
+        const row = page.locator(
+            `#drawer-tabs-body .hostname-dropdown-row[data-pane-id="${paneId}"]`,
+        );
+        await expect(row).toBeVisible({ timeout: 30_000 });
+        await row.locator('.hostname-dropdown-select-btn').click();
+        await expect(page.locator('#sidebar-panel')).not.toHaveClass(
+            /drawer-open/,
+        );
+        await waitForMarker(page, paneId, 'ready');
+    }
+
+    test('a swipe injects a scroll key', async ({ browser, request }) => {
+        test.setTimeout(120_000);
+        const log = join(fixtureDir, 'stdin.log');
+        const context = await browser.newContext({
+            viewport: { width: 390, height: 844 },
+            isMobile: true,
+            hasTouch: true,
+        });
+        const page = await context.newPage();
+        await touchPage(context, page);
+        await openAlt(page, request);
+        const point = await cellPoint(page, paneId, 'ready');
+        await gesture(page, [point, { x: point.x, y: point.y + 120 }]);
+        await expect
+            .poll(() => (existsSync(log) ? readFileSync(log).length : 0), {
+                timeout: 15_000,
+            })
+            .toBeGreaterThan(0);
+        await request
+            .delete(`${alt.url}/api/terminals/${paneId}`)
+            .catch(() => {});
+        await context.close();
+    });
+
+    test('a selection drag injects nothing', async ({ browser, request }) => {
+        test.setTimeout(120_000);
+        const log = join(fixtureDir, 'stdin.log');
+        const context = await browser.newContext({
+            viewport: { width: 390, height: 844 },
+            isMobile: true,
+            hasTouch: true,
+        });
+        const page = await context.newPage();
+        await touchPage(context, page);
+        await openAlt(page, request);
+        const point = await cellPoint(page, paneId, 'ready');
+        const before = existsSync(log) ? readFileSync(log).length : 0;
+        const cdp = await context.newCDPSession(page);
+        try {
+            await cdp.send('Input.dispatchTouchEvent', {
+                type: 'touchStart',
+                touchPoints: [{ x: point.x, y: point.y, id: 1 }],
+            });
+            await page.waitForTimeout(700);
+            await cdp.send('Input.dispatchTouchEvent', {
+                type: 'touchMove',
+                touchPoints: [{ x: point.x, y: point.y + 120, id: 1 }],
+            });
+            await cdp.send('Input.dispatchTouchEvent', {
+                type: 'touchEnd',
+                touchPoints: [],
+            });
+        } finally {
+            await cdp.detach();
+        }
+        await page.waitForTimeout(400);
+        const after = existsSync(log) ? readFileSync(log).length : 0;
+        expect(after).toBe(before);
+        await request
+            .delete(`${alt.url}/api/terminals/${paneId}`)
+            .catch(() => {});
+        await context.close();
+    });
 });

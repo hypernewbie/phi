@@ -7304,7 +7304,7 @@ export class TabManager {
             'touchstart',
             (e) => {
                 if (isFindBarTarget(e.target)) return;
-                if (tabInfo.touchSelection?.isSelecting()) return;
+                if (tabInfo.touchSelection?.hasSelection()) return;
                 if (tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo))
                     return;
                 if (e.touches.length === 1) {
@@ -7319,7 +7319,7 @@ export class TabManager {
             'touchmove',
             (e) => {
                 if (isFindBarTarget(e.target)) return;
-                if (tabInfo.touchSelection?.isSelecting()) return;
+                if (tabInfo.touchSelection?.hasSelection()) return;
                 if (tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo))
                     return;
                 if (e.touches.length === 1 && termTouchStartY !== null) {
@@ -10823,6 +10823,9 @@ export class TabManager {
                     prevTab.term.buffer.active.baseY;
                 prevTab.lastScrollY = prevTab.term.buffer.active.viewportY;
             }
+            // A selection and its pill belong to the pane the finger was on;
+            // they must not survive a tab switch.
+            prevTab.touchSelection?.clear();
             // Park the draft on the outgoing tab, mirroring the scroll save
             // above. review/kanban tabs hide the input bar and never carry
             // one. Guard inputTextArea: test harnesses build partial managers.
@@ -11600,6 +11603,11 @@ export class TabManager {
         } catch (e) {
             console.error('[tab] WS close error:', e);
         }
+
+        // Dispose the controller first: it takes its listeners and its pill
+        // out of the DOM while the terminal it points at is still alive.
+        tab.touchSelection?.dispose();
+        tab.touchSelection = null;
 
         try {
             if (tab.term) tab.term.dispose();
