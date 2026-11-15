@@ -1,0 +1,14 @@
+# Android build outputs — never committed (APKs especially).
+*.apk
+*.aab
+*.ap_
+*.dex
+local.properties
+build/
+.gradle/
+captures/
+.externalNativeBuild/
+.kotlin/
+lint/
+*.keystore
+*.jks
