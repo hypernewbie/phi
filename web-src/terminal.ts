@@ -5964,7 +5964,7 @@ export class TabManager {
         tabInfo.touchSelection = installTerminalTouch({
             term: tabInfo.term,
             container: tabInfo.termContainer,
-            openLink: (url) => openExternalLink(url),
+            openLink: openExternalLink,
             copyText: (text) => this.copyTextRobustly(text),
         });
         // Hooks that need the open terminal's DOM (xterm viewport etc.).
@@ -7111,7 +7111,7 @@ export class TabManager {
         termContainer.addEventListener(
             'contextmenu',
             (e) => {
-                if (tabInfo.touchSelection?.isSelecting()) {
+                if (tabInfo.touchSelection?.ownsSelection()) {
                     // A touch selection owns the clipboard until the user
                     // taps the Copy pill.
                     e.preventDefault();
@@ -7260,7 +7260,7 @@ export class TabManager {
         });
         term.onSelectionChange(() => {
             if (selectingSearchMatch) return;
-            if (tabInfo.touchSelection?.isSelecting()) return;
+            if (tabInfo.touchSelection?.ownsSelection()) return;
             const sel = term.getSelection();
             if (sel) {
                 this.copyTextRobustly(sel, true);

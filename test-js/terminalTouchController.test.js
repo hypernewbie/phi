@@ -33,6 +33,7 @@ function mount() {
     });
 
     const calls = [];
+    const selectionHandlers = [];
     let selected = false;
     const term = {
         element: termEl,
@@ -49,6 +50,15 @@ function mount() {
         },
         hasSelection: () => selected,
         getSelection: () => (selected ? 'SELECTABLE' : ''),
+        onSelectionChange: (handler) => {
+            selectionHandlers.push(handler);
+            return {
+                dispose: () => {
+                    const at = selectionHandlers.indexOf(handler);
+                    if (at >= 0) selectionHandlers.splice(at, 1);
+                },
+            };
+        },
     };
     const openLink = vi.fn();
     const copyText = vi.fn();
@@ -58,7 +68,19 @@ function mount() {
         openLink,
         copyText,
     });
-    return { container, screen, term, calls, controller, openLink, copyText };
+    return {
+        container,
+        screen,
+        term,
+        calls,
+        controller,
+        openLink,
+        copyText,
+        dropSelection: () => {
+            selected = false;
+            for (const handler of [...selectionHandlers]) handler();
+        },
+    };
 }
 
 function touch(target, type, touches, changedTouches = []) {
@@ -78,11 +100,12 @@ describe('installTerminalTouch degraded path', () => {
         touch(screen, 'touchend', [], [{ clientX: 5, clientY: 5 }]);
 
         expect(calls).toEqual([['select', 0, 0, 1]]);
-        expect(controller.isSelecting()).toBe(true);
-        expect(controller.clear).toBeTypeOf('function');
+        expect(controller.ownsSelection()).toBe(true);
+        expect(controller.hasSelection()).toBe(true);
         controller.clear();
         expect(calls.at(-1)).toEqual(['clearSelection']);
-        expect(controller.isSelecting()).toBe(false);
+        expect(controller.ownsSelection()).toBe(false);
+        expect(controller.hasSelection()).toBe(false);
         controller.dispose();
         vi.useRealTimers();
     });
@@ -95,7 +118,59 @@ describe('installTerminalTouch degraded path', () => {
         vi.advanceTimersByTime(600);
 
         expect(calls).toEqual([]);
-        expect(controller.isSelecting()).toBe(false);
+        expect(controller.ownsSelection()).toBe(false);
+        controller.dispose();
+        vi.useRealTimers();
+    });
+
+    it('owns clipboard events from touchstart but has no selection yet', () => {
+        // The distinction that keeps OpenCode scrolling alive: a swipe owns
+        // the clipboard for its whole gesture, but only a real selection may
+        // stand the scroll injection down.
+        vi.useFakeTimers();
+        const { screen, calls, controller } = mount();
+        touch(screen, 'touchstart', [{ clientX: 5, clientY: 5 }]);
+        expect(controller.ownsSelection()).toBe(true);
+        expect(controller.hasSelection()).toBe(false);
+        expect(calls).toEqual([]);
+        vi.advanceTimersByTime(600);
+        expect(controller.hasSelection()).toBe(true);
+        controller.dispose();
+        vi.useRealTimers();
+    });
+
+    it('drops the pill when the selection disappears without clear()', async () => {
+        // A backend restart calls term.reset(), which drops the selection but
+        // leaves the pill floating over nothing.
+        vi.useFakeTimers();
+        const { screen, calls, controller, dropSelection } = mount();
+        touch(screen, 'touchstart', [{ clientX: 5, clientY: 5 }]);
+        vi.advanceTimersByTime(600);
+        touch(screen, 'touchend', [], [{ clientX: 5, clientY: 5 }]);
+        expect(controller.hasSelection()).toBe(true);
+        calls.length = 0;
+        dropSelection();
+        await Promise.resolve();
+        expect(controller.ownsSelection()).toBe(false);
+        expect(controller.hasSelection()).toBe(false);
+        // The selection was already gone: tearing down must not clear again.
+        expect(calls).toEqual([]);
+        controller.dispose();
+        vi.useRealTimers();
+    });
+
+    it('hides the pill instead of throwing when placement is impossible', () => {
+        vi.useFakeTimers();
+        // The fake terminal has no getSelectionPosition(): the placement
+        // read throws. The pill is cosmetic and must never throw into
+        // xterm's scroll emitter or the long-press timer.
+        const { screen, container, controller } = mount();
+        touch(screen, 'touchstart', [{ clientX: 5, clientY: 5 }]);
+        expect(() => vi.advanceTimersByTime(600)).not.toThrow();
+        expect(controller.hasSelection()).toBe(true);
+        expect(container.querySelector('.terminal-copy-pill')?.hidden).toBe(
+            true,
+        );
         controller.dispose();
         vi.useRealTimers();
     });

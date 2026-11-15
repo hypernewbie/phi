@@ -67,6 +67,7 @@ export function installTerminalTouch(options) {
     let longPressTimer = null;
     let pill = null;
     let scrollSub = null;
+    let selectionSub = null;
     let docListenerActive = false;
     let frame = null;
     function clamp(value, min, max) {
@@ -137,6 +138,16 @@ export function installTerminalTouch(options) {
         return button;
     }
     function placePill() {
+        // Cosmetic only: a throw here would land inside xterm's scroll
+        // emitter and break scrolling, so it must never escape.
+        try {
+            placePillUnsafe();
+        }
+        catch {
+            hidePill();
+        }
+    }
+    function placePillUnsafe() {
         if (!pill || !selectionActive)
             return;
         const button = pill;
@@ -218,6 +229,46 @@ export function installTerminalTouch(options) {
         });
         docListenerActive = false;
     }
+    function detachSelectionWatch() {
+        selectionSub?.dispose();
+        selectionSub = null;
+    }
+    // dropOwnership releases everything the selection owns without touching
+    // the terminal: the selection is already gone.
+    function dropOwnership() {
+        detachDocumentClear();
+        detachScroll();
+        detachSelectionWatch();
+        hidePill();
+        selectionActive = false;
+        lastRange = null;
+        wordStartIndex = 0;
+        wordEndIndex = 0;
+    }
+    function attachSelectionWatch() {
+        if (selectionSub)
+            return;
+        if (typeof term.onSelectionChange !== 'function')
+            return;
+        selectionSub = term.onSelectionChange(() => {
+            if (!selectionActive)
+                return;
+            if (term.hasSelection())
+                return;
+            // The selection vanished under the pill: term.reset() on a
+            // backend restart, or a reflow that dropped it. Copying then
+            // would put an empty string on the clipboard. Defer the
+            // teardown: disposing this subscription inside xterm's emitter
+            // would mutate the listener list it is iterating.
+            queueMicrotask(() => {
+                if (!selectionActive)
+                    return;
+                if (term.hasSelection())
+                    return;
+                dropOwnership();
+            });
+        });
+    }
     function attachScroll() {
         if (scrollSub)
             return;
@@ -235,15 +286,13 @@ export function installTerminalTouch(options) {
     }
     function clear() {
         dropTimer();
-        detachDocumentClear();
-        detachScroll();
         if (selectionActive) {
             // Still flagged while the selection is torn down: the app's
-            // auto-copy listener must see it as touch-owned.
+            // auto-copy listener must see it as touch-owned. The resulting
+            // selection change reaches dropOwnership() below.
             term.clearSelection();
-            selectionActive = false;
         }
-        hidePill();
+        dropOwnership();
         moved = false;
         longPressFired = false;
         touchActive = false;
@@ -291,6 +340,7 @@ export function installTerminalTouch(options) {
         lastRange = { col: word.start, row: row0, length: word.length };
         ensurePill();
         attachDocumentClear();
+        attachSelectionWatch();
         attachScroll();
         placePill();
     }
@@ -406,13 +456,14 @@ export function installTerminalTouch(options) {
         passive: true,
     });
     return {
-        isSelecting: () => selectionActive || touchGestureActive,
+        ownsSelection: () => selectionActive || touchGestureActive,
         hasSelection: () => selectionActive,
         clear,
         dispose: () => {
             dropTimer();
             detachDocumentClear();
             detachScroll();
+            detachSelectionWatch();
             container.removeEventListener('touchstart', onTouchStart, {
                 capture: true,
             });

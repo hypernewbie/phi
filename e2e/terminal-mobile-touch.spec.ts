@@ -106,22 +106,6 @@ async function installCapture(page: Page): Promise<void> {
     });
 }
 
-function paneTerm(page: Page, pane: string) {
-    return page.evaluate((id) => {
-        const capture = window as unknown as Capture;
-        return Boolean(
-            capture.terms
-                .filter(
-                    (t) =>
-                        t.element?.isConnected &&
-                        t.element.closest('.term-container')?.id ===
-                            `term-${id}`,
-                )
-                .at(-1),
-        );
-    }, pane);
-}
-
 async function waitForMarker(page: Page, pane: string, marker: string) {
     await page.waitForFunction(
         ({ id, marker }) => {
@@ -741,14 +725,7 @@ while True:
             { mode: 0o755 },
         );
         alt = await startPhi({
-            setup(dir) {
-                const backends = join(dir, 'home', '.phi', 'backends');
-                mkdirSync(backends, { recursive: true });
-                writeFileSync(
-                    join(backends, 'pi.json'),
-                    JSON.stringify({ id: 'pi', command }),
-                );
-            },
+            setup() {},
             config: {
                 opencode_command: command,
                 opencode_legacy_command: command,
@@ -793,11 +770,19 @@ while True:
         await openAlt(page, request);
         const point = await cellPoint(page, paneId, 'ready');
         await gesture(page, [point, { x: point.x, y: point.y + 120 }]);
+        // The injected navigation key is the assertion; any other byte would
+        // pass a bare length check while the feature is broken.
         await expect
-            .poll(() => (existsSync(log) ? readFileSync(log).length : 0), {
-                timeout: 15_000,
-            })
-            .toBeGreaterThan(0);
+            .poll(
+                () => {
+                    const text = existsSync(log)
+                        ? readFileSync(log).toString('latin1')
+                        : '';
+                    return text.includes('\x05') || text.includes('\x19');
+                },
+                { timeout: 15_000 },
+            )
+            .toBe(true);
         await request
             .delete(`${alt.url}/api/terminals/${paneId}`)
             .catch(() => {});

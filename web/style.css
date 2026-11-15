@@ -2797,6 +2797,10 @@ body.has-terminal-bg
     line-height: 1;
     cursor: pointer;
     touch-action: manipulation;
+    /* Long-pressing the pill must not start a text selection or the iOS
+       callout; the pill is a control, not content. */
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 .terminal-copy-pill[hidden] {
