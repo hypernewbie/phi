@@ -11,8 +11,9 @@ All notable changes to phi are documented here. Newest versions first.
 - **Compact Pi tabs show the model provider and thinking level as icons.**
   On a phone or a narrow window, the model button shows the logo of the
   active provider, such as the DeepSeek whale or the MiniMax mark. The logo
-  uses the current theme color and appears immediately. The robot appears
-  only when the provider is unknown. The thinking button shows a brain that
+  uses the current theme color and appears immediately. High-contrast mode
+  uses the system colors. The robot appears only when the provider is unknown.
+  The thinking button shows a brain that
   grows with the level, and a galaxy at the highest level. Wide layouts keep
   their text labels.
 

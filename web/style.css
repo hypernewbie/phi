@@ -3510,6 +3510,13 @@ body.has-terminal-bg
     mask-size: contain;
 }
 
+@media (forced-colors: active) {
+    .model-provider-mark {
+        forced-color-adjust: none;
+        background-color: ButtonText;
+    }
+}
+
 .thinking-glyph--off {
     opacity: 0.55;
 }

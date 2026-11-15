@@ -568,6 +568,7 @@ test.describe('compact Pi model and thinking pills', () => {
 
     test('renders every provider mark synchronously without robot or fetch', async ({
         browser,
+        browserName,
     }, testInfo) => {
         for (const mode of modes) {
             const context = await browser.newContext({
@@ -675,6 +676,29 @@ test.describe('compact Pi model and thinking pills', () => {
                     testInfo,
                     `${mode}-deepseek-red`,
                 );
+
+                // Chromium emulates the system high-contrast palettes.
+                // Background-based masks must remain visible in both.
+                if (browserName === 'chromium') {
+                    for (const colorScheme of ['light', 'dark'] as const) {
+                        await page.emulateMedia({
+                            forcedColors: 'active',
+                            colorScheme,
+                        });
+                        await expect(slot).toHaveCSS(
+                            'background-color',
+                            await model.evaluate(
+                                (el) => getComputedStyle(el).color,
+                            ),
+                        );
+                        await expectPainted(
+                            page,
+                            '.pi-rpc-model-trigger .compact-mark-slot',
+                            testInfo,
+                            `${mode}-deepseek-forced-${colorScheme}`,
+                        );
+                    }
+                }
             } finally {
                 await context.close();
             }
