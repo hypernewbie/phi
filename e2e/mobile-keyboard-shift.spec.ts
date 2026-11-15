@@ -58,8 +58,8 @@ interface KeyboardWindow extends Window {
     geometryRefreshes: number;
     geometryGridEvents: { cols: number; rows: number }[];
     geometryPendingWrites: number;
-    geometryPanelResizes: { id: string; width: number; height: number }[];
     __setVisualViewportHeight: (height: number) => void;
+    __setVisualViewportScale: (scale: number) => void;
     __visualViewportListenerCount: () => number;
 }
 
@@ -410,6 +410,15 @@ async function installVisualViewport(
             // first; the fake width must follow it so width resets are real.
             viewport.width = window.innerWidth;
             viewport.height = height;
+            for (const listener of listeners) {
+                if (typeof listener === 'function')
+                    listener(new Event('resize'));
+                else listener.handleEvent(new Event('resize'));
+            }
+        };
+        // Pinch-zoom changes scale without changing the layout viewport.
+        control.__setVisualViewportScale = (scale: number) => {
+            viewport.scale = scale;
             for (const listener of listeners) {
                 if (typeof listener === 'function')
                     listener(new Event('resize'));
@@ -857,9 +866,9 @@ async function selectTab(page: Page) {
 }
 
 /** Tab chrome can be hidden inside a drawer; a dispatched click still selects. */
-async function selectTabDispatch(page: Page) {
-    await page.locator('.tab[data-pane-id="t1"]').dispatchEvent('click');
-    await expect(page.locator('#term-t1')).toHaveClass(/active/);
+async function selectTabDispatch(page: Page, paneId = 't1') {
+    await page.locator(`.tab[data-pane-id="${paneId}"]`).dispatchEvent('click');
+    await expect(page.locator(`#term-${paneId}`)).toHaveClass(/active/);
 }
 
 async function ensureComposer(page: Page) {
@@ -1967,6 +1976,31 @@ test('B6 live HTML gate and overlays', async ({ browser, request }) => {
             expectSinkAtBaseline('B6 back', baseline, back);
             samples.back = back;
 
+            // A second terminal pane keeps the shift and compensates its
+            // own fixed sink. Tab activation may legitimately fit, so only
+            // the geometry claims are asserted here.
+            await selectTabDispatch(page, 't2');
+            await expectRootHeight(page, 844, 'B6 t2');
+            const onT2 = await requireState(page, 'B6 t2');
+            expect
+                .soft(onT2.contentTransform, 'B6 t2: content shifted')
+                .not.toBe('none');
+            expect.soft(onT2.kbShift, 'B6 t2: shift').toBe('344px');
+            expect
+                .soft(onT2.root?.height, 'B6 t2: root held')
+                .toBeCloseTo(844, 3);
+            expect
+                .soft(onT2.content?.bottom, 'B6 t2: stack bottom')
+                .toBeCloseTo(500, 3);
+            expect(onT2.activePane, 'B6 t2: active pane').toBe('t2');
+            expectSinkAtBaseline('B6 t2', baseline, onT2);
+            samples.secondPane = onT2;
+            await selectTabDispatch(page, 't1');
+            await expectRootHeight(page, 844, 'B6 t1 again');
+            const backOnT1 = await requireState(page, 'B6 t1 again');
+            expect.soft(backOnT1.kbShift, 'B6 t1 again: shift').toBe('344px');
+            expectSinkAtBaseline('B6 t1 again', baseline, backOnT1);
+
             // Overlays keep the live visible height, not the captured root.
             await page.locator('#header-config-pill').dispatchEvent('click');
             await expect(page.locator('.settings-overlay')).toBeVisible();
@@ -2611,6 +2645,95 @@ test('B11 second terminal sink', async ({ browser, request }) => {
         }
     } finally {
         await test.info().attach('B11-second-terminal-sink', {
+            body: JSON.stringify(samples, null, 2),
+            contentType: 'application/json',
+        });
+        if (phi) await phi.stop();
+    }
+});
+
+test('B12 non-unit scale fallback', async ({ browser, request }) => {
+    test.setTimeout(120_000);
+    let phi: PhiServer | undefined;
+    const samples: Record<string, unknown> = {};
+    try {
+        phi = await startGeometryFixture();
+        expect((await request.get(`${phi.url}/healthz`)).ok()).toBe(true);
+        const harness = await openHarness(
+            browser,
+            phi.url,
+            { viewport: { width: 390, height: 844 }, select: 'mobile' },
+            'B12',
+        );
+        try {
+            const { page, errors } = harness;
+            const baseline = await requireState(page, 'B12 baseline');
+            expect(baseline.root?.height, 'B12 baseline root').toBeCloseTo(
+                844,
+                3,
+            );
+            expect(baseline.kbAttribute, 'B12 baseline: no shift').toBeNull();
+
+            // Pinch-zoom: the layout viewport is unchanged but the scale is
+            // not 1, so the shift must not guess and the existing layout
+            // path must take over.
+            await page.evaluate(() =>
+                (window as unknown as KeyboardWindow).__setVisualViewportScale(
+                    2,
+                ),
+            );
+            const zoomed = await keyboardSample(page, 500);
+            expect
+                .soft(zoomed.kbAttribute, 'B12 zoomed: no shift intent')
+                .toBeNull();
+            expect
+                .soft(zoomed.kbRootHeight, 'B12 zoomed: no root var')
+                .toBe('');
+            expect.soft(zoomed.kbShift, 'B12 zoomed: no shift var').toBe('');
+            expect
+                .soft(zoomed.contentTransform, 'B12 zoomed: no transform')
+                .toBe('none');
+            expect
+                .soft(zoomed.root?.height, 'B12 zoomed: root follows live')
+                .toBeCloseTo(500, 3);
+            expect
+                .soft(zoomed.vvHeight, 'B12 zoomed: live visible var')
+                .toBe('500px');
+            samples.zoomed = zoomed;
+
+            // Restoring scale 1 discards the old detection history: this
+            // sample only seeds, a later drop may capture normally.
+            await page.evaluate(() =>
+                (window as unknown as KeyboardWindow).__setVisualViewportScale(
+                    1,
+                ),
+            );
+            await settleComposer(page);
+            const reseeded = await requireState(page, 'B12 reseeded');
+            expect
+                .soft(reseeded.kbAttribute, 'B12 reseeded: still no shift')
+                .toBeNull();
+            const dropped = await keyboardSample(page, 400);
+            expect
+                .soft(dropped.kbAttribute, 'B12 dropped: intent')
+                .toBe('terminal');
+            expect
+                .soft(dropped.kbRootHeight, 'B12 dropped: captured root')
+                .toBe('500px');
+            expect
+                .soft(shiftValue(dropped), 'B12 dropped: shift')
+                .toBeCloseTo(100, 6);
+            samples.reseeded = { reseeded, dropped };
+
+            const closed = await keyboardSample(page, 844);
+            assertShiftCleared('B12 close', closed);
+            expect(errors, 'B12 page errors').toEqual([]);
+            expectNoObserverLoop(harness, 'B12');
+        } finally {
+            await harness.context.close();
+        }
+    } finally {
+        await test.info().attach('B12-non-unit-scale', {
             body: JSON.stringify(samples, null, 2),
             contentType: 'application/json',
         });
