@@ -1004,7 +1004,17 @@ export class App {
                         root.clientWidth,
                     );
                     if (nextState.active && shiftContent) {
-                        origin = readContentOrigin(shiftContent);
+                        // The origin is shift-invariant, so it only needs a
+                        // fresh read when the applied transform changes. A
+                        // scroll-only sample (visualViewport.offsetTop moves,
+                        // height does not) must not force a layout of the
+                        // terminal subtree.
+                        if (
+                            !this._kbShiftState.active ||
+                            this._kbShiftState.shift !== nextState.shift
+                        ) {
+                            origin = readContentOrigin(shiftContent);
+                        }
                     }
                 }
             }
@@ -1016,11 +1026,13 @@ export class App {
             }
 
             this._kbShiftState = nextState;
-            if (nextState.active && shiftContent && origin) {
+            if (nextState.active && shiftContent) {
                 // Publish the intent even when an HTML tab or no xterm is
                 // live: CSS, not a sampled JS query, owns the terminal gate.
-                writeStyle('--kb-content-left', `${origin.left}px`);
-                writeStyle('--kb-content-top', `${origin.top}px`);
+                if (origin) {
+                    writeStyle('--kb-content-left', `${origin.left}px`);
+                    writeStyle('--kb-content-top', `${origin.top}px`);
+                }
                 writeStyle('--kb-root-height', `${nextState.rootHeight}px`);
                 writeStyle('--kb-shift', `${nextState.shift}px`);
                 if (root.getAttribute('data-kb-shift') !== 'terminal')
