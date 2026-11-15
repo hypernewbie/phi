@@ -768,6 +768,17 @@ func (m *tuiModel) renderFooter() string {
 	if d := m.current(); d != nil && d.loginWarning != "" {
 		status += " · login not saved: " + menuLabel(d.loginWarning)
 	}
+	// The live Pi bridge segment leads the footer exactly like the web
+	// header: model, thinking level, and context fill of the active pane.
+	if tab := m.activeTabModel(); tab != nil {
+		if label := tab.bridgeLabel(); label != "" {
+			if status == "" {
+				status = label
+			} else {
+				status = label + " · " + status
+			}
+		}
+	}
 	style := lg.NewStyle().Foreground(tuiMuted)
 	if m.statusErr {
 		style = lg.NewStyle().Foreground(tuiError)

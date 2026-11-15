@@ -173,6 +173,32 @@ type paneTab struct {
 	// composeDraft is the unsent staged input for this tab, restored
 	// when the compose box reopens.
 	composeDraft string
+	// bridge is the latest Pi bridge snapshot pushed for this pane; nil
+	// when the pane never published bridge state.
+	bridge *bridgeSnapshot
+}
+
+// bridgeLabel renders the footer bridge segment for this tab, or "" when
+// the pane has no live Pi bridge state.
+func (t *paneTab) bridgeLabel() string {
+	b := t.bridge
+	if b == nil {
+		return ""
+	}
+	if !b.connected && b.state != "" {
+		return "pi bridge: " + b.state
+	}
+	label := "pi"
+	if b.model != "" {
+		label += " " + b.model
+	}
+	if b.thinkingLevel != "" {
+		label += " · " + b.thinkingLevel
+	}
+	if p := b.contextPercent; p > 0 {
+		label += fmt.Sprintf(" · ctx %.0f%%", p)
+	}
+	return label
 }
 
 func (t *paneTab) label() string {
@@ -1129,6 +1155,9 @@ func (m *tuiModel) handlePaneEvent(ev paneEvent) tea.Cmd {
 		if ev.Title != "" {
 			tab.title = sanitizeMetadata(ev.Title)
 		}
+	case paneBridge:
+		snap := ev.Bridge
+		tab.bridge = &snap
 	}
 	return nil
 }

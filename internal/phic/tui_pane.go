@@ -35,6 +35,7 @@ const (
 	paneExited
 	paneError
 	paneMetadata
+	paneBridge
 )
 
 type paneEvent struct {
@@ -44,7 +45,41 @@ type paneEvent struct {
 	Status     string
 	Code       int
 	Title, PWD string
+	Bridge     bridgeSnapshot
 }
+
+// bridgeSnapshot is one trimmed view of the pane's Pi bridge state. It is
+// the native mirror of what the web header shows: model, thinking level,
+// context fill, and the process stamps compact/reload must echo.
+type bridgeSnapshot struct {
+	state, reason     string
+	generation        uint64
+	telemetryRevision uint64
+	runID             uint64
+	contextRevision   uint64
+	processID         string
+	model             string
+	thinkingLevel     string
+	contextPercent    float64
+	connected         bool
+	compactQueued     bool
+	compactActive     bool
+	reloadQueued      bool
+	reloadActive      bool
+	lastOutcome       string
+}
+
+// stampKey identifies one snapshot revision for change detection.
+func (b bridgeSnapshot) stampKey() string {
+	return fmt.Sprintf("%s|%d|%d|%d|%d|%s|%s|%v", b.state, b.generation, b.telemetryRevision, b.runID, b.contextRevision, b.model, b.thinkingLevel, b.connected)
+}
+
+// hasOrigin reports whether the snapshot carries the stamps a compact or
+// reload request must echo. Zero stamps mean the bridge never published.
+func (b bridgeSnapshot) hasOrigin() bool {
+	return b.processID != "" && b.generation != 0 && b.telemetryRevision != 0
+}
+
 type paneInputKind int
 
 const (
@@ -155,6 +190,77 @@ type paneActor struct {
 	floorOrdinal      uint64
 	headCols          uint16
 	headRows          uint16
+	// Last Pi bridge snapshot and its stamp key; only changes are sent
+	// to the model so state pushes cannot flood the event channel.
+	bridge     bridgeSnapshot
+	bridgeSeen string
+}
+
+// observeBridgeState records one Pi bridge view push for this pane. Frames
+// for other panes never arrive on this socket, but the id is checked so a
+// misrouted push cannot overwrite the local snapshot. Unknown state words
+// and out-of-range context values are dropped, not trusted.
+func (p *paneActor) observeBridgeState(bs *wspb.TerminalBridgeState) error {
+	if bs == nil {
+		return nil
+	}
+	if id := bs.GetPaneId(); id != "" && id != p.spec.Key.ID {
+		return nil
+	}
+	snap := bridgeSnapshot{
+		state:             bs.GetState(),
+		reason:            bs.GetReason(),
+		generation:        bs.GetGeneration(),
+		telemetryRevision: bs.GetTelemetryRevision(),
+		runID:             bs.GetRunId(),
+		contextRevision:   bs.GetContextRevision(),
+		processID:         bs.GetProcessId(),
+		model:             bs.GetModel(),
+		thinkingLevel:     bs.GetThinkingLevel(),
+		contextPercent:    bs.GetContextPercent(),
+		connected:         bs.GetConnected(),
+		compactQueued:     bs.GetCompactQueued(),
+		compactActive:     bs.GetCompactActive(),
+		reloadQueued:      bs.GetReloadQueued(),
+		reloadActive:      bs.GetReloadActive(),
+	}
+	if snap.contextPercent < 0 || snap.contextPercent > 100 {
+		snap.contextPercent = 0
+	}
+	key := snap.stampKey()
+	p.mu.Lock()
+	if key == p.bridgeSeen {
+		p.mu.Unlock()
+		return nil
+	}
+	snap.lastOutcome = p.bridge.lastOutcome
+	p.bridge = snap
+	p.bridgeSeen = key
+	p.mu.Unlock()
+	p.sendEvent(paneEvent{Key: p.spec.Key, Kind: paneBridge, Bridge: snap})
+	return nil
+}
+
+// observeSettlement records one observed Pi run outcome on the snapshot.
+func (p *paneActor) observeSettlement(s *wspb.TerminalSettlement) error {
+	if s == nil {
+		return nil
+	}
+	if id := s.GetPaneId(); id != "" && id != p.spec.Key.ID {
+		return nil
+	}
+	p.mu.Lock()
+	p.bridge.lastOutcome = s.GetOutcome()
+	p.mu.Unlock()
+	p.sendEvent(paneEvent{Key: p.spec.Key, Kind: paneBridge, Bridge: p.bridgeCopy()})
+	return nil
+}
+
+// bridgeCopy returns the current bridge snapshot under the actor lock.
+func (p *paneActor) bridgeCopy() bridgeSnapshot {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.bridge
 }
 
 func newPaneActor(parent context.Context, api *apiClient, spec paneSpec, events chan<- paneEvent, build func(termemu.Options) (termemu.Terminal, error)) (*paneActor, error) {
@@ -946,11 +1052,13 @@ func (p *paneActor) handleFrame(msg []byte) error {
 			return io.EOF
 		}
 		return nil
-	case *wspb.TerminalServerFrame_Title,
-		*wspb.TerminalServerFrame_BridgeState,
-		*wspb.TerminalServerFrame_Settlement:
+	case *wspb.TerminalServerFrame_Title:
 		// Browser UI hints; no terminal output, no sequence impact.
 		return nil
+	case *wspb.TerminalServerFrame_BridgeState:
+		return p.observeBridgeState(payload.BridgeState)
+	case *wspb.TerminalServerFrame_Settlement:
+		return p.observeSettlement(payload.Settlement)
 	default:
 		return fmt.Errorf("%w: unexpected terminal payload", errProtocol)
 	}
