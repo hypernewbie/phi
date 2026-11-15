@@ -72,6 +72,7 @@ interface Observed {
     };
     getSelection(): string;
     hasSelection(): boolean;
+    scrollLines(amount: number): void;
 }
 
 interface Capture {
@@ -444,9 +445,21 @@ test('a long press selects the word and does not copy', async ({
     // The silent auto-copy must stay off while a touch selection exists; the
     // pill is the only copy action.
     expect(await readClipboard(page)).toBe('SENTINEL');
-    await expect(
-        page.locator(`#term-${pane} .terminal-copy-pill`),
-    ).toBeVisible();
+    const pill = page.locator(`#term-${pane} .terminal-copy-pill`);
+    await expect(pill).toBeVisible();
+    // The pill must be reachable and must not cover the word it copies: a
+    // misplaced pill is invisible under the pane's overflow clip.
+    const pillBox = (await pill.boundingBox())!;
+    const paneBox = (await page.locator(`#term-${pane}`).boundingBox())!;
+    expect(pillBox.x).toBeGreaterThanOrEqual(paneBox.x - 1);
+    expect(pillBox.y).toBeGreaterThanOrEqual(paneBox.y - 1);
+    expect(pillBox.x + pillBox.width).toBeLessThanOrEqual(
+        paneBox.x + paneBox.width + 1,
+    );
+    expect(pillBox.y + pillBox.height).toBeLessThanOrEqual(
+        paneBox.y + paneBox.height + 1,
+    );
+    expect(pillBox.y + pillBox.height).toBeLessThan(point.y);
     await context.close();
 });
 
@@ -480,6 +493,52 @@ test('the Copy pill copies the selection and clears it', async ({
     await expect(
         page.locator(`#term-${pane} .terminal-copy-pill`),
     ).toBeHidden();
+    await context.close();
+});
+
+test('the pill hides when the selection scrolls out of view', async ({
+    browser,
+    request,
+}) => {
+    test.setTimeout(120_000);
+    const context = await browser.newContext({
+        viewport: { width: 390, height: 844 },
+        isMobile: true,
+        hasTouch: true,
+    });
+    const page = await context.newPage();
+    await touchPage(context, page);
+    const pane = await openPane(page, request, 'TouchScrollPill');
+    const point = await cellPoint(page, pane, PLAIN_TEXT);
+    await longPress(page, point);
+    const pill = page.locator(`#term-${pane} .terminal-copy-pill`);
+    await expect(pill).toBeVisible();
+    // The pill rides the viewport through the onScroll subscription; a pill
+    // stranded over unrelated output would copy a selection nobody sees.
+    await page.evaluate((id) => {
+        const capture = window as unknown as Capture;
+        capture.terms
+            .filter(
+                (t) =>
+                    t.element?.isConnected &&
+                    t.element.closest('.term-container')?.id === `term-${id}`,
+            )
+            .at(-1)
+            ?.scrollLines(-40);
+    }, pane);
+    await expect(pill).toBeHidden();
+    await page.evaluate((id) => {
+        const capture = window as unknown as Capture;
+        capture.terms
+            .filter(
+                (t) =>
+                    t.element?.isConnected &&
+                    t.element.closest('.term-container')?.id === `term-${id}`,
+            )
+            .at(-1)
+            ?.scrollLines(40);
+    }, pane);
+    await expect(pill).toBeVisible();
     await context.close();
 });
 
