@@ -7,6 +7,19 @@ All notable changes to phi are documented here. Newest versions first.
 ## v0.40.0 — 2026-11-16
 
 ### Added
+## Unreleased
+
+### Added
+- **phic speaks the Pi bridge control surface** (`013b989f`, `721c8b78`, `f86c9794`). The native terminal client consumes `TerminalBridgeState` and `TerminalSettlement` pushes instead of dropping them as browser hints. The footer leads with the same Pi segment as the web header: model, thinking level, and context fill. `Ctrl-] P` opens a Pi controls panel with `[1] Models`, `[2] Thinking`, `[3] Skills`, plus `c` compact and `r` reload. One bounded load fetches all three lists. Enter applies the selected row and echoes the process-origin stamps that the server requires. Compact and reload send only published snapshot stamps. Both refuse locally while the origin is missing. Replies use the server's safe outcome vocabulary. Stale tickets and generations are dropped.
+- **The phic compose box recalls Pi prompt history** (`6f8dfdf1`). Up from an empty staged-input box on a Pi pane walks the pane's Pi prompt history, newest first. Down walks back and restores the saved draft past the newest entry. This matches the web composer's cursor semantics. The fetch is bound to the pane and its bridge generation. Non-Pi panes and unavailable history leave the box as it was. A mid-cycle edit resets the cycle without losing the text.
+- **phic gains a sync board panel** (`2b653465`, `2fc56f29`). `Ctrl-] Y` opens a native reader and writer for the server's addressed key/value messages. It uses the same REST surface as the web Syncboard. The list shows key-sorted one-line previews. Enter reads the full message with scrolling. `n` and `e` write through a two-field editor; the key is locked on edits. `d` pressed twice deletes. Every mutation reloads the ticketed list. Stray replies are dropped.
+
+### Fixed
+- **The legacy phic relay treats a refresh receipt as a hint** (`37b37613`). A `TerminalRefreshResult` on the relay transport is ignored next to title, bridge state, settlement, and notification, instead of faulting the live loop with a protocol error. The relay never requests a repaint, so the receipt can only be a stray browser-style hint.
+
+## v0.40.0 — 2026-11-16
+
+### Added
 - **Custom backends can declare model-switch recipes** (`8d19fce0`). A file in `~/.phi/backends/` can declare a recipe such as `"model_switch": [{"send": "/model {model}\r"}]`. Phi replaces `{model}` with the selected preset. `delay_ms` adds a pause between steps, and `model_switch_disabled` takes precedence. The server and browser reject malformed recipes. A recipe can contain at most 8 steps, 256 bytes per step, and 5 seconds of total delay.
 
   Phi does not guess a `/model` command for an unknown backend.
