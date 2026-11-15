@@ -258,6 +258,8 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.newSession()
 	case 'S':
 		return m, m.spawnForCoder(m.shellCoderID(), false, "")
+	case 'P':
+		return m, m.openBridgePanel()
 	case 'o':
 		return m, m.spawnForCoder("opencode", true, "")
 	case 'm':
@@ -550,6 +552,9 @@ func (m *tuiModel) handleDiffKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *tuiModel) handleModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.modal.kind == modalMarkdown {
 		return m.handleMarkdownModalKey(msg)
+	}
+	if m.modal.kind == modalBridge {
+		return m.handleBridgeModalKey(msg)
 	}
 	if m.modal.kind == modalDiff {
 		return m.handlePrettyDiffKey(msg)

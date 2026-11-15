@@ -45,6 +45,9 @@ const (
 	modalDiff
 	modalDiffSelect
 	modalQuit
+	// modalBridge is the Pi controls panel: models, thinking levels, skills,
+	// compaction, and reload for the active Pi pane.
+	modalBridge
 )
 
 type modalItem struct {
@@ -273,6 +276,9 @@ type tuiModel struct {
 
 	diff     diffState
 	markdown markdownState
+
+	// bridge is the Pi controls panel state (Ctrl-] P).
+	bridge bridgePanelState
 
 	sessionCursor int
 	sessionSearch textField
@@ -836,6 +842,10 @@ func (m *tuiModel) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m.applyConsoleReset(msg)
 	case worktreesMsg:
 		return m.applyWorktrees(msg)
+	case bridgePanelMsg:
+		return m, m.handleBridgePanelMsg(msg)
+	case bridgeActionMsg:
+		return m, m.handleBridgeActionMsg(msg)
 
 	case msgCloseExpired:
 		return m.applyCloseExpired(msg)
@@ -1858,6 +1868,8 @@ func (m *tuiModel) openHelp() {
   Ctrl-] o        new OpenCode Mini session
   Ctrl-] S        new Shell session
   Ctrl-] m        rename server
+  Ctrl-] P        Pi controls (models, thinking, skills,
+                  compact, reload) for the active Pi pane
   Ctrl-] a        add server
   Ctrl-] r        reload servers
   Ctrl-] y        copy diff

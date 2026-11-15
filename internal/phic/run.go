@@ -118,6 +118,7 @@ Console keys:
   Ctrl-] p        project context    Ctrl-] w  worktree context
   Ctrl-] c        coder selector     Ctrl-] n  new session
   Ctrl-] o        OpenCode Mini      Ctrl-] S  Shell session
+  Ctrl-] P        Pi controls (model/thinking/skills/compact/reload)
   Ctrl-] m        rename server      Ctrl-] a  add server
   Ctrl-] r        reload servers     Ctrl-] y  copy text
   Ctrl-] T        launch btop        Ctrl-] B  hide/show Sessions
