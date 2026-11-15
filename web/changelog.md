@@ -4,6 +4,12 @@ All notable changes to phi are documented here. Newest versions first.
 
 ## Unreleased
 
+### Added
+- **Declarative model-switch recipes for custom backends** (`8d19fce0`). A backend file in `~/.phi/backends/` can declare a bounded recipe instead of having Phi guess a command: `"model_switch": [{"send": "/model {model}\r"}]`. The `{model}` token is substituted with the chosen preset, `delay_ms` pauses between steps, and an explicit `model_switch_disabled` still wins. The server and the browser both validate the recipe (at most 8 steps, 256 bytes per step, 5 seconds of total delay) and reject a malformed one instead of sending it, so an unknown backend never gets a guessed `/model`.
+
+### Fixed
+- **The Antigravity (agy) Models button works** (`a5672b51`). The button was disabled with "Model selection not supported for Antigravity" even though the backend already had a verified model catalog and a `/model <slug>` recipe. The button now opens the preset dropup, and a selected preset sends `/model <slug>` to the pane that was clicked.
+
 ## v0.39.0 — 2026-11-15
 
 ### Added
