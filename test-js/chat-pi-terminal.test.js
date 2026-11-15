@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setupDomHarness, mockFetch } from './_dom.js';
+import { providerMarkUrlFor } from '../web/model-icons.js';
 
 vi.mock('../web/chat-pi/controller.js', () => ({
     rpcChatSend: vi.fn(() => true),
@@ -53,10 +54,18 @@ afterEach(() => {
     rpcChatInterrupt.mockImplementation(() => Promise.resolve());
     closePiSubagentViewer.mockImplementation(() => false);
     subscribePiRpcStatus.mockImplementation(() => () => {});
+    setViewportWidth(1024);
 });
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CSS = readFileSync(join(ROOT, 'web/style.css'), 'utf8');
+
+function setViewportWidth(width) {
+    Object.defineProperty(window, 'innerWidth', {
+        configurable: true,
+        value: width,
+    });
+}
 
 function maskCssComments(css) {
     return css.replace(/\/\*[\s\S]*?\*\//g, (comment) =>
@@ -362,6 +371,128 @@ describe('Pi RPC TabManager boundaries', () => {
         expect(row.querySelector('.pi-rpc-thinking-trigger').title).toBe(
             'Change the thinking level',
         );
+    });
+
+    it('paints compact Pi RPC model and thinking marks', async () => {
+        const row = document.createElement('div');
+        document.body.appendChild(row);
+        const tab = {
+            paneId: 'pi-rpc:pills',
+            coder: 'pi-rpc',
+            directMode: false,
+        };
+        getPiRpcControls.mockReturnValue({
+            ready: true,
+            exited: false,
+            busy: false,
+            queueDepth: 0,
+            hasTranscript: false,
+            model: 'DeepSeek V3',
+            thinking: 'max',
+            skills: [],
+        });
+        const tm = Object.create(TabManager.prototype);
+        tm.presetsContainer = row;
+        tm.getActiveTab = vi.fn(() => tab);
+        tm.cancelInputBtn = document.createElement('button');
+        tm.copyInputBtn = document.createElement('button');
+        tm.directModeToggle = document.createElement('button');
+        tm.thinkingVisibilityBtn = document.createElement('button');
+        tm._piRpcResetPending = new Set();
+        tm._piRpcThinkingPending = { paneId: 'another-pane' };
+        const fetchMock = mockFetch(() => undefined);
+        setViewportWidth(390);
+        tm.renderPresets('pi-rpc');
+
+        const model = row.querySelector('.pi-rpc-model-trigger');
+        const thinking = row.querySelector('.pi-rpc-thinking-trigger');
+        expect(model.classList.contains('compact-icon-btn')).toBe(true);
+        expect(model.title).toBe('Change the model for this session');
+        expect(model.disabled).toBe(false);
+        expect(model.dataset.modelMark).toBe('deepseek');
+        expect(model.firstElementChild.className).toBe(
+            'compact-mark-slot model-provider-mark',
+        );
+        expect(
+            model.firstElementChild.querySelector('.compact-model-fallback'),
+        ).toBeNull();
+        expect(
+            model.firstElementChild.style.getPropertyValue('--model-mark'),
+        ).toBe(`url("${providerMarkUrlFor('deepseek')}")`);
+        expect(
+            fetchMock.mock.calls.some(([url]) =>
+                String(url).includes('/vendor/model-icons/'),
+            ),
+        ).toBe(false);
+        expect(model.getAttribute('aria-label')).toBe(
+            'Model: DeepSeek V3. Change the model for this session',
+        );
+        expect(thinking.classList.contains('compact-icon-btn')).toBe(true);
+        expect(thinking.title).toBe('Change the thinking level');
+        expect(thinking.disabled).toBe(false);
+        expect(thinking.getAttribute('aria-label')).toBe(
+            'Thinking: max. Change the thinking level',
+        );
+        const glyph = thinking.querySelector('.thinking-glyph');
+        expect(glyph.textContent).toBe('🌌');
+        expect(glyph.dataset.thinkingTier).toBe('max');
+        expect(glyph.style.fontSize).toBe('16px');
+
+        // Focus survives the unchanged-title repaint.
+        model.focus();
+        expect(document.activeElement).toBe(model);
+
+        tm.renderPresets('pi-rpc');
+        const repainted = row.querySelector('.pi-rpc-model-trigger');
+        expect(repainted).not.toBe(model);
+        expect(document.activeElement).toBe(repainted);
+        expect(repainted.getAttribute('aria-label')).toBe(
+            'Model: DeepSeek V3. Change the model for this session',
+        );
+    });
+
+    it('keeps Pi RPC disabled rules on the compact row', () => {
+        const row = document.createElement('div');
+        const tab = { paneId: 'pi-rpc:disabled', coder: 'pi-rpc' };
+        let controls = {
+            ready: true,
+            exited: false,
+            busy: false,
+            queueDepth: 0,
+            hasTranscript: false,
+            model: 'deepseek-chat',
+            thinking: 'max',
+            skills: [],
+        };
+        getPiRpcControls.mockImplementation(() => controls);
+        const tm = Object.create(TabManager.prototype);
+        tm.presetsContainer = row;
+        tm.getActiveTab = vi.fn(() => tab);
+        tm.cancelInputBtn = document.createElement('button');
+        tm.copyInputBtn = document.createElement('button');
+        tm.directModeToggle = document.createElement('button');
+        tm.thinkingVisibilityBtn = document.createElement('button');
+        tm._piRpcResetPending = new Set();
+        tm._piRpcThinkingPending = { paneId: tab.paneId };
+        mockFetch(() => undefined);
+        setViewportWidth(390);
+        tm.renderPresets('pi-rpc');
+
+        const model = () => row.querySelector('.pi-rpc-model-trigger');
+        const thinking = () => row.querySelector('.pi-rpc-thinking-trigger');
+        const cmds = () =>
+            [...row.querySelectorAll('.model-trigger-btn')].find(
+                (button) => button.textContent === 'Cmds ▾',
+            );
+        expect(model().disabled).toBe(false);
+        expect(thinking().disabled).toBe(true);
+
+        tm._piRpcThinkingPending = null;
+        controls = { ...controls, ready: false, exited: true };
+        tm.renderPresets('pi-rpc');
+        expect(model().disabled).toBe(true);
+        expect(thinking().disabled).toBe(true);
+        expect(cmds().disabled).toBe(true);
     });
 
     it('renders the Context meter with progressbar semantics and color states', () => {

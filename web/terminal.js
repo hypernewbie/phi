@@ -6,6 +6,7 @@ import { normalizePath } from './sessions.js';
 import { projectWorktreeLabel, formatWorkspaceLabel, cpuLevel, worktreeGlyph, getTerminalActivityState, formatTerminalActivityTitle, buildSelfHud, formatHudLine, formatHudCpu, formatDurationMin, escapeHtml, isMacPlatform, tabShortcutDigit, isCoarseViewport, isCompactViewport, prefersInputBarFocus, terminalPreferredFontSize, responsiveTerminalFontSize, TERMINAL_TARGET_COLUMNS, openExternalLink, installTerminalLinkProvider, serverKey, getEmbeddedProfileId, getEmbeddedBackendOrigin, isAbortError, } from './util.js';
 import { SNAPSHOT_SCROLLBACK_ROWS } from './backend-store.js';
 import { ThinkingPresetStore, thinkingPresetTokens, THINKING_PRESET_LEVELS, } from './thinking-presets.js';
+import { providerMarkFor, providerMarkUrlFor, thinkingGlyphFor, } from './model-icons.js';
 import { AttachmentStore, } from './attachment-store.js';
 import { applyBrandCpuTier, applyTerminalActivityIndicator, } from './header-state.js';
 import { formatAttachment, extractImageItems, extractImageFiles, uploadClipboardImage, uploadAttachmentItem, getAttachmentItemStatus, getAttachmentPiContext, sendAttachmentPrompt, getAttachmentSendStatus, browseServerFiles, snapshotServerFile, newAttachmentID, AttachmentRequestError, formatChipName, attachmentRefusalNotice, } from './attachments.js';
@@ -8594,6 +8595,7 @@ export class TabManager {
         this._setPiRpcActionVisibility(activeTab);
         this.presetsContainer.classList.remove('hidden');
         const state = this._piRpcControlsFor(activeTab);
+        const compact = isCompactViewport();
         const paneId = activeTab.paneId;
         const menuDisabled = !state.ready || state.exited;
         const compactButton = document.createElement('button');
@@ -8698,7 +8700,7 @@ export class TabManager {
         modelButton.type = 'button';
         modelButton.className =
             'preset-btn model-trigger-btn pi-rpc-model-trigger';
-        modelButton.textContent = isCompactViewport()
+        modelButton.textContent = compact
             ? '🤖 Models ▾'
             : `Model: ${state.model || '—'} ▾`;
         modelButton.title = 'Change the model for this session';
@@ -8711,7 +8713,7 @@ export class TabManager {
         thinkingButton.type = 'button';
         thinkingButton.className =
             'preset-btn model-trigger-btn pi-rpc-thinking-trigger';
-        thinkingButton.textContent = isCompactViewport()
+        thinkingButton.textContent = compact
             ? '🧠 ▾'
             : `Thinking: ${state.thinking || '—'} ▾`;
         thinkingButton.title = 'Change the thinking level';
@@ -8722,6 +8724,10 @@ export class TabManager {
             event.stopPropagation();
             this._toggleDropup('pi-rpc-thinking-dropup', thinkingButton, () => this._renderPiRpcThinkingDropup());
         });
+        if (compact) {
+            this._applyCompactModelMark(modelButton, state.model);
+            this._applyCompactThinkingMark(thinkingButton, state.thinking);
+        }
         // Same knob the bridge gives the Pi (term) tab: no list, no button,
         // so a session without skills never shows a dead control.
         let skillsButton = null;
@@ -16924,6 +16930,16 @@ export class TabManager {
                 cmds: quickCmdsTriggerBtn,
                 skills: skillsTriggerBtn,
                 keys: keysTriggerBtn,
+                pi: activeTab && modelCoder === 'pi'
+                    ? {
+                        model: this._piBridgeModelsEligible(activeTab)
+                            ? activeTab.piBridge?.model || ''
+                            : '',
+                        thinkingLevel: this._piBridgeThinkingEligible(activeTab)
+                            ? activeTab.piBridge?.thinking_level || ''
+                            : '',
+                    }
+                    : undefined,
             });
         if (isMobile)
             this._placeCompactQuickChips(compactChips);
@@ -16939,17 +16955,72 @@ export class TabManager {
             this._syncDropupOffset(d);
         });
     }
+    // Compact Pi only: one 16 px slot carries the provider mark from the
+    // inlined vendored bytes, or a robot when the provider is unknown. The
+    // mask is set synchronously, so a known provider never shows the robot.
+    _applyCompactModelMark(button, model) {
+        button.classList.add('compact-icon-btn');
+        const slot = document.createElement('span');
+        slot.className = 'compact-mark-slot';
+        slot.setAttribute('aria-hidden', 'true');
+        const title = button.title;
+        const value = typeof model === 'string' ? model.trim() : '';
+        button.setAttribute('aria-label', value ? `Model: ${value}. ${title}` : title || 'Model');
+        const mark = providerMarkFor(value);
+        const url = mark ? providerMarkUrlFor(mark.id) : null;
+        if (mark && url) {
+            slot.classList.add('model-provider-mark');
+            slot.style.setProperty('--model-mark', `url("${url}")`);
+            button.dataset.modelMark = mark.id;
+        }
+        else {
+            const fallback = document.createElement('span');
+            fallback.className = 'compact-model-fallback';
+            fallback.textContent = '🤖';
+            slot.appendChild(fallback);
+            button.dataset.modelMark = 'fallback';
+        }
+        button.replaceChildren(slot);
+    }
+    // Compact Pi only: the brain grows inside the same 16 px slot, and `max`
+    // swaps the glyph without resizing the pill.
+    _applyCompactThinkingMark(button, level) {
+        button.classList.add('compact-icon-btn');
+        const value = typeof level === 'string' ? level.trim() : '';
+        const mark = thinkingGlyphFor(value);
+        const slot = document.createElement('span');
+        slot.className = 'compact-mark-slot';
+        slot.setAttribute('aria-hidden', 'true');
+        const glyph = document.createElement('span');
+        glyph.className = `thinking-glyph thinking-glyph--${mark.tier}`;
+        glyph.textContent = mark.glyph;
+        glyph.dataset.thinkingTier = mark.tier;
+        glyph.style.fontSize = `${mark.size}px`;
+        slot.appendChild(glyph);
+        const title = button.title;
+        button.setAttribute('aria-label', value ? `Thinking: ${value}. ${title}` : title || 'Thinking');
+        button.replaceChildren(slot);
+    }
     // Compact only: the strip is width-bound, so the pickers trade words for
     // icons and sit in the order the phone asks for. Desktop renders keep
     // their labels and their append order.
-    _compactPickerRow({ models, thinking, cmds, skills, keys, }) {
-        models.innerText = '🤖';
-        // The emoji replaces the words, so the name has to move to the
-        // accessibility tree (title alone does not name a button).
-        models.setAttribute('aria-label', models.title || 'Model');
-        if (thinking) {
-            thinking.textContent = '🧠';
-            thinking.setAttribute('aria-label', thinking.title || 'Thinking');
+    _compactPickerRow({ models, thinking, cmds, skills, keys, pi, }) {
+        if (pi) {
+            // Pi knows its active provider, so both controls keep their state
+            // in the icon. Each capability is honored on its own.
+            this._applyCompactModelMark(models, pi.model);
+            if (thinking)
+                this._applyCompactThinkingMark(thinking, pi.thinkingLevel);
+        }
+        else {
+            models.innerText = '🤖';
+            // The emoji replaces the words, so the name has to move to the
+            // accessibility tree (title alone does not name a button).
+            models.setAttribute('aria-label', models.title || 'Model');
+            if (thinking) {
+                thinking.textContent = '🧠';
+                thinking.setAttribute('aria-label', thinking.title || 'Thinking');
+            }
         }
         if (skills) {
             skills.textContent = '📚';

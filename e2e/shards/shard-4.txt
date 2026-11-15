@@ -63,3 +63,8 @@ terminal-ram-recovery.spec.ts › desktop manual recovery › manual refresh ret
 terminal-ram-recovery.spec.ts › mobile › a slow replay leaves a usable touch layout without overflow
 terminal-ram-recovery.spec.ts › touch manual recovery › manual refresh retries history after live-only recovery
 websocket-control.spec.ts › chat control endpoint spawns, streams, reports errors, and rehydrates
+pi-model-picker-mobile.spec.ts › compact Pi model and thinking pills › renders every provider mark synchronously without robot or fetch
+pi-model-picker-mobile.spec.ts › compact Pi model and thinking pills — ladder and viewports › paints every thinking tier and the unknown robot
+pi-model-picker-mobile.spec.ts › compact Pi model and thinking pills — ladder and viewports › keeps pills compact at the boundary and words above it
+pi-model-picker-mobile.spec.ts › compact Pi model and thinking pills — ladder and viewports › compacts a short coarse landscape and a narrow fine desktop
+pi-model-picker-mobile.spec.ts › compact Pi model and thinking pills — ladder and viewports › keeps chip height in step with Cmds at every root size

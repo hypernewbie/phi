@@ -406,6 +406,13 @@ describe('compact presets row', () => {
                 '.model-trigger-btn[aria-label="Select the model for this session"]',
             ),
         ).not.toBeNull();
+        // Only Pi tabs have a known provider: other coders keep the old
+        // robot and receive none of the mark plumbing.
+        const models = tm.presetsContainer.querySelector(
+            '.model-trigger-btn[aria-label="Select the model for this session"]',
+        );
+        expect(models.classList.contains('compact-icon-btn')).toBe(false);
+        expect(models.querySelector('.compact-mark-slot')).toBeNull();
     });
 
     it('keeps the words on a desktop render', () => {

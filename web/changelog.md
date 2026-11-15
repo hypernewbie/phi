@@ -7,6 +7,16 @@ All notable changes to phi are documented here. Newest versions first.
 ### Added
 - **Declarative model-switch recipes for custom backends** (`8d19fce0`). A backend file in `~/.phi/backends/` can declare a bounded recipe instead of having Phi guess a command: `"model_switch": [{"send": "/model {model}\r"}]`. The `{model}` token is substituted with the chosen preset, `delay_ms` pauses between steps, and an explicit `model_switch_disabled` still wins. The server and the browser both validate the recipe (at most 8 steps, 256 bytes per step, 5 seconds of total delay) and reject a malformed one instead of sending it, so an unknown backend never gets a guessed `/model`.
 
+### Changed
+- **Compact Pi tabs show the model provider and thinking level as icons.**
+  On a phone or a narrow window, the model button shows the logo of the
+  active provider, such as the DeepSeek whale or the MiniMax mark. The logo
+  uses the current theme color and appears immediately. High-contrast mode
+  uses the system colors. The robot appears only when the provider is unknown.
+  The thinking button shows a brain that
+  grows with the level, and a galaxy at the highest level. Wide layouts keep
+  their text labels.
+
 ### Fixed
 - **The Antigravity (agy) Models button works** (`a5672b51`). The button was disabled with "Model selection not supported for Antigravity" even though the backend already had a verified model catalog and a `/model <slug>` recipe. The button now opens the preset dropup, and a selected preset sends `/model <slug>` to the pane that was clicked.
 - **Agy presets match the installed CLI** — the verified catalog gains the Gemini 4 Hydrogen family (`gemini-4-hydrogen-high`, `-xhigh`, `-medium`, `-low`) and the orchestrator model, exactly as `agy models` reports them. Hydrogen slugs were previously rejected when saving a preset; they now validate and save.
