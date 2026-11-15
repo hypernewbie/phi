@@ -87,7 +87,27 @@ test('built-in coder controls keep their pre-registry layout before and after bo
                     ].map((n) => Math.round(n * 100) / 100);
                 }),
             );
-        const before = await geometry();
+        // .coder-tab carries `transition: all 0.15s`, so a single sample can
+        // land mid-transition. Read until two frames apart agree.
+        const settledGeometry = async () => {
+            let previous = await geometry();
+            for (let attempt = 0; attempt < 40; attempt += 1) {
+                await page.evaluate(
+                    () =>
+                        new Promise<void>((resolve) =>
+                            requestAnimationFrame(() =>
+                                requestAnimationFrame(() => resolve()),
+                            ),
+                        ),
+                );
+                const next = await geometry();
+                if (JSON.stringify(next) === JSON.stringify(previous))
+                    return next;
+                previous = next;
+            }
+            throw new Error('coder tab geometry did not settle');
+        };
+        const before = await settledGeometry();
         const initialTab = await tabs.first().elementHandle();
         releaseRegistry();
         await page.waitForFunction(
@@ -97,7 +117,7 @@ test('built-in coder controls keep their pre-registry layout before and after bo
         );
         await assertControls();
         await page.evaluate(() => document.fonts.ready);
-        expect(await geometry()).toEqual(before);
+        expect(await settledGeometry()).toEqual(before);
 
         // Collapsed sidebar must keep the logo visible (the label is hidden).
         await page
