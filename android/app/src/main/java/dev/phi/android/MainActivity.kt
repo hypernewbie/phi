@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -64,6 +65,9 @@ class MainActivity : ComponentActivity() {
 
         window.statusBarColor = Color.parseColor("#0D0D10")
         window.navigationBarColor = Color.parseColor("#0D0D10")
+        // A terminal client must not sleep mid-session; rendering stays
+        // low-power via the forced fast-mode + paced rAF, not the screen.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         WindowInsetsControllerCompat(window, window.decorView)
             .isAppearanceLightStatusBars = false
 
