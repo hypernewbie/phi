@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { setupDomHarness } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
+import { rebuildRegistry } from '../web/coders.js';
 
 // Cross-tab input injection regression net.
 //
@@ -490,6 +491,55 @@ describe('agy model preset dropup — bounded recipe executor', () => {
         await vi.advanceTimersByTimeAsync(1000);
         expect(agy.ws.sendInput.mock.calls).toEqual([
             ['/model gemini-3.8-flash-medium\r'],
+        ]);
+        expect(other.ws.sendInput).not.toHaveBeenCalled();
+    });
+});
+
+describe('custom backend with a declared model_switch recipe', () => {
+    it('sends the declared recipe to the pinned pane', async () => {
+        const tm = makeTm();
+        tm.app.tabManager = tm;
+        tm.app.modelPresets.gem = ['gemini-3.1-pro-preview'];
+        rebuildRegistry({
+            gem: {
+                id: 'gem',
+                name: 'Gem',
+                short_label: 'Gem',
+                sidebar_visible: true,
+                is_shell: false,
+                input_mode: 'staged',
+                presets: [],
+                capabilities: {
+                    list: false,
+                    transcript: false,
+                    rename: false,
+                    pi_rpc: false,
+                },
+                model_switch_disabled: false,
+                model_switch: {
+                    steps: [{ send: '/model set {model}\r' }],
+                },
+            },
+        });
+        const gem = makeTab('gem-1', 'gem');
+        gem.term = {};
+        const other = makeTab('other', 'pi');
+        tm.tabs.set(gem.paneId, gem);
+        tm.tabs.set(other.paneId, other);
+        tm.activePaneId = gem.paneId;
+
+        tm.renderModelDropup();
+        const btn = document.querySelector(
+            '#model-presets-dropup .dropup-model-btn',
+        );
+        expect(btn).not.toBeNull();
+        btn.click();
+
+        tm.activePaneId = other.paneId;
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(gem.ws.sendInput.mock.calls).toEqual([
+            ['/model set gemini-3.1-pro-preview\r'],
         ]);
         expect(other.ws.sendInput).not.toHaveBeenCalled();
     });

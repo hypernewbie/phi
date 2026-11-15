@@ -13,6 +13,59 @@ type Preset struct {
 	Value string `json:"value"`
 }
 
+// Model switch recipe bounds. These mirror web-src/coders.ts
+// (MAX_RECIPE_STEPS / MAX_STEP_BYTES / MAX_RECIPE_TOTAL_MS) so a
+// backend file rejected by the server would also be dropped by the
+// browser, and vice versa.
+const (
+	MaxModelSwitchSteps     = 8
+	MaxModelSwitchStepBytes = 256
+	MaxModelSwitchTotalMs   = 5000
+)
+
+// ModelSwitchStep is one bounded send in a declarative model-switch
+// recipe. Send is a PTY payload template where the literal token
+// {model} is substituted client-side with the chosen preset (the
+// executor uses callback replacement, so model names containing $&
+// cannot escape the template). Control bytes (\r, \x1b) are allowed
+// in Send exactly as they are in Preset values; backend files are
+// operator-authored to the same trust level as shell rc files.
+// DelayMs pauses after the send, letting the CLI render one state
+// before the next key arrives.
+type ModelSwitchStep struct {
+	Send    string `json:"send"`
+	DelayMs int    `json:"delay_ms,omitempty"`
+}
+
+// ValidateModelSwitch rejects empty, oversized, or slow recipes.
+// A backend file carrying an invalid recipe is skipped at load
+// with a warning; the resolver never aborts startup on one file.
+func ValidateModelSwitch(steps []ModelSwitchStep) error {
+	if len(steps) == 0 {
+		return PatchError{Field: "model_switch", Msg: "model_switch: at least one step is required"}
+	}
+	if len(steps) > MaxModelSwitchSteps {
+		return PatchError{Field: "model_switch", Msg: "model_switch: too many steps"}
+	}
+	total := 0
+	for _, s := range steps {
+		if s.Send == "" {
+			return PatchError{Field: "model_switch", Msg: "model_switch: empty send is not allowed"}
+		}
+		if len(s.Send) > MaxModelSwitchStepBytes {
+			return PatchError{Field: "model_switch", Msg: "model_switch: step payload exceeds 256 bytes"}
+		}
+		if s.DelayMs < 0 {
+			return PatchError{Field: "model_switch", Msg: "model_switch: negative delay_ms is not allowed"}
+		}
+		total += s.DelayMs
+	}
+	if total > MaxModelSwitchTotalMs {
+		return PatchError{Field: "model_switch", Msg: "model_switch: total delay exceeds 5000ms"}
+	}
+	return nil
+}
+
 // Capabilities describes what session-history and UI actions a backend
 // supports. Set explicitly by the resolver — never inferred from
 // SessionSource string comparisons (R5).
@@ -59,10 +112,15 @@ type Coder struct {
 	WindowsPowerShellWrap *bool             `json:"windows_powershell_wrap,omitempty"`
 	InputMode             string            `json:"input_mode"` // "staged" | "direct"
 	ModelSwitchDisabled   bool              `json:"model_switch_disabled"`
-	OpenCodeMode          string            `json:"opencode_mode,omitempty"` // "tui" / "mini" (v2) | "legacy" (v1)
-	PiMode                string            `json:"pi_mode,omitempty"`       // "psi" | ""
-	PsiCommand            string            `json:"psi_command,omitempty"`
-	Capabilities          Capabilities      `json:"capabilities"`
+	// ModelSwitch is the declarative model-switch recipe served to
+	// the browser (see CoderDescriptor). Nil means the Models
+	// button stays disabled for this backend; the client never
+	// guesses a /model command.
+	ModelSwitch  []ModelSwitchStep `json:"model_switch,omitempty"`
+	OpenCodeMode string            `json:"opencode_mode,omitempty"` // "tui" / "mini" (v2) | "legacy" (v1)
+	PiMode       string            `json:"pi_mode,omitempty"`       // "psi" | ""
+	PsiCommand   string            `json:"psi_command,omitempty"`
+	Capabilities Capabilities      `json:"capabilities"`
 }
 
 // Reserved IDs cannot appear in custom backend files. They name
@@ -280,6 +338,9 @@ func frozenCoder(in Coder) Coder {
 	}
 	if in.Presets != nil {
 		out.Presets = append([]Preset(nil), in.Presets...)
+	}
+	if in.ModelSwitch != nil {
+		out.ModelSwitch = append([]ModelSwitchStep(nil), in.ModelSwitch...)
 	}
 	if in.WindowsPowerShellWrap != nil {
 		b := *in.WindowsPowerShellWrap

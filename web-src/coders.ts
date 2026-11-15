@@ -35,6 +35,11 @@ export interface CoderDescriptor {
     presets?: Array<{ name: string; value: string }>;
     capabilities: CoderCapabilities;
     model_switch_disabled: boolean;
+    // Declarative model-switch recipe served for custom backends
+    // (e.g. a gemini CLI profile). The executor substitutes the
+    // {model} token client-side; built-ins use their hardcoded
+    // recipes instead.
+    model_switch?: Recipe;
     opencode_mode?: 'tui' | 'mini' | 'legacy';
     opencode_mini_presets?: Array<{ name: string; value: string }>;
     pi_mode?: string;
@@ -310,6 +315,7 @@ function coerceDescriptor(id: string, raw: unknown): CoderDescriptor | null {
             : [],
         capabilities: coerceCapabilities(r.capabilities),
         model_switch_disabled: r.model_switch_disabled === true,
+        model_switch: coerceModelSwitch(r.model_switch),
         opencode_mode:
             r.opencode_mode === 'mini' ||
             r.opencode_mode === 'tui' ||
@@ -319,6 +325,47 @@ function coerceDescriptor(id: string, raw: unknown): CoderDescriptor | null {
         opencode_mini_presets: coercePresets(r.opencode_mini_presets),
         pi_mode: typeof r.pi_mode === 'string' ? r.pi_mode : undefined,
     };
+}
+
+// coerceModelSwitch validates a descriptor-supplied model_switch
+// recipe with the same bounds the server enforces (see
+// pkg/coders ValidateModelSwitch) and the executor assumes. Anything
+// malformed is dropped so the Models button stays disabled rather
+// than guessing a command.
+function coerceModelSwitch(raw: unknown): Recipe | undefined {
+    if (!raw || typeof raw !== 'object') return undefined;
+    const steps = (raw as { steps?: unknown }).steps;
+    if (!Array.isArray(steps)) {
+        // Accept the bare-steps array form too: [{send, delay_ms}].
+        if (!Array.isArray(raw)) return undefined;
+        return coerceModelSwitch({ steps: raw });
+    }
+    if (steps.length === 0 || steps.length > MAX_RECIPE_STEPS) {
+        return undefined;
+    }
+    const out: RecipeStep[] = [];
+    let totalMs = 0;
+    for (const s of steps) {
+        if (!s || typeof s !== 'object') return undefined;
+        const send = (s as { send?: unknown }).send;
+        const delay = (s as { delay_ms?: unknown }).delay_ms;
+        if (typeof send !== 'string' || send === '') return undefined;
+        if (new TextEncoder().encode(send).length > MAX_STEP_BYTES) {
+            return undefined;
+        }
+        const delayMs = delay === undefined ? 0 : delay;
+        if (
+            typeof delayMs !== 'number' ||
+            !Number.isSafeInteger(delayMs) ||
+            delayMs < 0
+        ) {
+            return undefined;
+        }
+        totalMs += delayMs;
+        out.push(delayMs > 0 ? { send, delay_ms: delayMs } : { send });
+    }
+    if (totalMs > MAX_RECIPE_TOTAL_MS) return undefined;
+    return { steps: out };
 }
 
 function coercePresets(raw: unknown): Array<{ name: string; value: string }> {
@@ -409,16 +456,22 @@ export function modelSwitchDisabled(id: string): boolean {
 //
 // Returns true for the recipe-backed built-ins (opencode, pi,
 // claude, codex, agy). Custom profiles that declare a model_switch
-// recipe via a patch field also return true — the function reads
-// from the same registry the executor reads from.
+// recipe in their backend file also return true — the function reads
+// from the same registry the executor reads from. An explicit
+// model_switch_disabled wins over a declared recipe.
 export function hasModelSwitch(id: string): boolean {
-    return (
+    if (
         id === 'opencode' ||
         id === 'pi' ||
         id === 'claude' ||
         id === 'codex' ||
         id === 'agy'
-    );
+    ) {
+        return true;
+    }
+    const d = registry.get(id);
+    if (!d || d.model_switch_disabled === true) return false;
+    return !!d.model_switch && d.model_switch.steps.length > 0;
 }
 
 // logoFor returns the favicon URL for a coder ID — the legacy
@@ -687,9 +740,15 @@ export function recipeFor(id: string): Recipe | undefined {
     // codex opens its native picker instead of the preset dropup, so
     // it also returns undefined. agy has no historical chain — its
     // single-send recipe runs through the bounded executor from
-    // renderModelDropup. Custom profiles that declare a model_switch
-    // recipe in their JSON descriptor return the recipe data here
-    // so the bounded executor can drive them.
+    // renderModelDropup.
+    const declared = registry.get(id)?.model_switch;
+    if (
+        declared &&
+        declared.steps.length > 0 &&
+        registry.get(id)?.model_switch_disabled !== true
+    ) {
+        return declared;
+    }
     switch (id) {
         case 'opencode':
             return undefined;

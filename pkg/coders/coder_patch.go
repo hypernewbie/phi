@@ -41,8 +41,14 @@ type CoderPatch struct {
 	WindowsPowerShellWrap *bool              `json:"windows_powershell_wrap,omitempty"`
 	InputMode             *string            `json:"input_mode,omitempty"`
 	ModelSwitchDisabled   *bool              `json:"model_switch_disabled,omitempty"`
-	OpenCodeMode          *string            `json:"opencode_mode,omitempty"`
-	Capabilities          *Capabilities      `json:"capabilities,omitempty"`
+	// ModelSwitch declares the model-switch recipe for a custom
+	// backend (e.g. a gemini CLI profile sending "/model set
+	// {model}\r"). Present replaces the resolved recipe; an empty
+	// array clears it. The {model} token is substituted
+	// client-side by the bounded executor.
+	ModelSwitch  *[]ModelSwitchStep `json:"model_switch,omitempty"`
+	OpenCodeMode *string            `json:"opencode_mode,omitempty"`
+	Capabilities *Capabilities      `json:"capabilities,omitempty"`
 }
 
 // Apply merges p onto a copy of base and returns the result. The base
@@ -140,6 +146,16 @@ func (p *CoderPatch) Apply(base Coder) (Coder, error) {
 	}
 	if p.ModelSwitchDisabled != nil {
 		out.ModelSwitchDisabled = *p.ModelSwitchDisabled
+	}
+	if p.ModelSwitch != nil {
+		if len(*p.ModelSwitch) == 0 {
+			out.ModelSwitch = nil
+		} else {
+			if err := ValidateModelSwitch(*p.ModelSwitch); err != nil {
+				return Coder{}, err
+			}
+			out.ModelSwitch = append([]ModelSwitchStep(nil), *p.ModelSwitch...)
+		}
 	}
 	if p.OpenCodeMode != nil {
 		if *p.OpenCodeMode != "" && *p.OpenCodeMode != "mini" && *p.OpenCodeMode != "tui" && *p.OpenCodeMode != "legacy" {

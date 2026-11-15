@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { setupDomHarness } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
+import { rebuildRegistry } from '../web/coders.js';
 import terminalJsSrc from '../web/terminal.js?raw';
 import indexHtml from '../web/index.html?raw';
 
@@ -262,6 +263,44 @@ describe('presets row', () => {
             expect(models, coder).toBeTruthy();
             expect(models.disabled, coder).toBe(disabled);
         }
+    });
+
+    it('enables the Models button for a custom backend with a declared recipe', () => {
+        // A custom backend file may declare a model_switch recipe.
+        // The Models button must then open the preset dropup instead
+        // of being disabled with "not supported for this coder".
+        rebuildRegistry({
+            gem: {
+                id: 'gem',
+                name: 'Gem',
+                short_label: 'Gem',
+                sidebar_visible: true,
+                is_shell: false,
+                input_mode: 'staged',
+                presets: [],
+                capabilities: {
+                    list: false,
+                    transcript: false,
+                    rename: false,
+                    pi_rpc: false,
+                },
+                model_switch_disabled: false,
+                model_switch: {
+                    steps: [{ send: '/model set {model}\r' }],
+                },
+            },
+        });
+        const tm = makeTm();
+        tm.activePaneId = 'pane';
+        tm.tabs.set('pane', { coder: 'gem' });
+        tm.renderPresets('gem');
+        const models = [
+            ...tm.presetsContainer.querySelectorAll('.model-trigger-btn'),
+        ].filter(
+            (button) => button.title === 'Select the model for this session',
+        );
+        expect(models).toHaveLength(1);
+        expect(models[0].disabled).toBe(false);
     });
 
     it('keeps the Ctrl+Shift+X handler itself wired to sendStagedInput', () => {

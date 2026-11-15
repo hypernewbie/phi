@@ -25,9 +25,14 @@ type CoderDescriptor struct {
 	Presets             []Preset     `json:"presets,omitempty"`
 	Capabilities        Capabilities `json:"capabilities"`
 	ModelSwitchDisabled bool         `json:"model_switch_disabled"`
-	OpenCodeMode        string       `json:"opencode_mode,omitempty"`
-	OpenCodeMiniPresets []Preset     `json:"opencode_mini_presets,omitempty"`
-	PiMode              string       `json:"pi_mode,omitempty"`
+	// ModelSwitch carries the declarative model-switch recipe to
+	// the browser. No command, args, env, or session routing ever
+	// leaves the server (R5); the recipe is an operator-authored
+	// send template at the same trust level as preset values.
+	ModelSwitch         []ModelSwitchStep `json:"model_switch,omitempty"`
+	OpenCodeMode        string            `json:"opencode_mode,omitempty"`
+	OpenCodeMiniPresets []Preset          `json:"opencode_mini_presets,omitempty"`
+	PiMode              string            `json:"pi_mode,omitempty"`
 }
 
 // Descriptor converts a resolved Coder into its public DTO. The
@@ -44,6 +49,7 @@ func (c Coder) Descriptor() CoderDescriptor {
 		InputMode:           c.InputMode,
 		Capabilities:        c.Capabilities,
 		ModelSwitchDisabled: c.ModelSwitchDisabled,
+		ModelSwitch:         append([]ModelSwitchStep(nil), c.ModelSwitch...),
 		OpenCodeMode:        c.OpenCodeMode,
 		PiMode:              c.PiMode,
 	}
