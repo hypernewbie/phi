@@ -235,42 +235,50 @@ const BODY_STATE_SCRIPT = `(() => {
     };
 })()`;
 
-function readHostState(app: ElectronApplication): Promise<HostState> {
-    return app.evaluate(async (api, script: string): Promise<HostState> => {
-        const host = (globalThis as unknown as { __phiMsHost: LooseHost })
-            .__phiMsHost;
-        const views = host?.profileViews ?? null;
-        const controllerState = host?.controller?.state() ?? null;
-        const activeId = controllerState?.activeId ?? null;
-        const activeOrigin =
-            controllerState?.profiles.find((profile) => profile.id === activeId)
-                ?.origin ?? null;
-        const viewActiveId = views ? views.getActive() : null;
-        const view =
-            activeId !== null && views ? views.getView(activeId) : null;
-        const contents = view ? view.webContents : null;
-        const dom = contents
-            ? ((await contents.executeJavaScript(script)) as BodyDomState)
-            : null;
-        const focused = api.webContents.getFocusedWebContents();
-        const win = host?.window() ?? null;
-        return {
-            activeId,
-            activeOrigin,
-            viewActiveId,
-            lowMemoryMode: Boolean(
-                host?.controller?.getLowMemoryMode?.() ?? false,
-            ),
-            singleTab: Boolean(views?.isSingleTab() ?? false),
-            bodyUrl: contents ? contents.getURL() : null,
-            bodyWebContentsId: contents ? contents.id : null,
-            focusedWebContentsId: focused ? focused.id : null,
-            windowFocused: win ? Boolean(win.isFocused()) : false,
-            windowVisible: win ? Boolean(win.isVisible()) : false,
-            windowMinimized: win ? Boolean(win.isMinimized()) : false,
-            dom,
-        };
-    }, BODY_STATE_SCRIPT);
+function readHostState(
+    app: ElectronApplication,
+    label = 'host state read',
+): Promise<HostState> {
+    const read = app.evaluate(
+        async (api, script: string): Promise<HostState> => {
+            const host = (globalThis as unknown as { __phiMsHost: LooseHost })
+                .__phiMsHost;
+            const views = host?.profileViews ?? null;
+            const controllerState = host?.controller?.state() ?? null;
+            const activeId = controllerState?.activeId ?? null;
+            const activeOrigin =
+                controllerState?.profiles.find(
+                    (profile) => profile.id === activeId,
+                )?.origin ?? null;
+            const viewActiveId = views ? views.getActive() : null;
+            const view =
+                activeId !== null && views ? views.getView(activeId) : null;
+            const contents = view ? view.webContents : null;
+            const dom = contents
+                ? ((await contents.executeJavaScript(script)) as BodyDomState)
+                : null;
+            const focused = api.webContents.getFocusedWebContents();
+            const win = host?.window() ?? null;
+            return {
+                activeId,
+                activeOrigin,
+                viewActiveId,
+                lowMemoryMode: Boolean(
+                    host?.controller?.getLowMemoryMode?.() ?? false,
+                ),
+                singleTab: Boolean(views?.isSingleTab() ?? false),
+                bodyUrl: contents ? contents.getURL() : null,
+                bodyWebContentsId: contents ? contents.id : null,
+                focusedWebContentsId: focused ? focused.id : null,
+                windowFocused: win ? Boolean(win.isFocused()) : false,
+                windowVisible: win ? Boolean(win.isVisible()) : false,
+                windowMinimized: win ? Boolean(win.isMinimized()) : false,
+                dom,
+            };
+        },
+        BODY_STATE_SCRIPT,
+    );
+    return withinDeadline(read, label);
 }
 
 /** Empty string means ready; anything else is the polled failure reason. */
@@ -427,6 +435,19 @@ test('workspace manager failure evidence stays byte-bounded', ({}, testInfo) => 
     expect.soft(tail.equals(log.subarray(-LOG_ATTACHMENT_BYTES))).toBe(true);
 });
 
+test('workspace manager host state reads bound a stalled evaluation', async () => {
+    const stalledApp = {
+        evaluate: () => new Promise<never>(() => {}),
+    } as unknown as ElectronApplication;
+    await expect(
+        withinDeadline(
+            readHostState(stalledApp),
+            'regression guard',
+            READ_DEADLINE_MS * 2,
+        ),
+    ).rejects.toThrow(`host state read exceeded ${READ_DEADLINE_MS}ms`);
+});
+
 for (const lowMemory of ['0', '1'] as const) {
     test.describe(`desktop workspace manager (lowMemory=${lowMemory})`, () => {
         let app: ElectronApplication | null = null;
@@ -465,10 +486,7 @@ for (const lowMemory of ['0', '1'] as const) {
             // Evidence first: a failed diagnostic must not block shutdown.
             if (app) {
                 try {
-                    lastState = await withinDeadline(
-                        readHostState(app),
-                        'teardown state read',
-                    );
+                    lastState = await readHostState(app, 'teardown state read');
                 } catch (error) {
                     failures.push(`state evidence: ${String(error)}`);
                 }
@@ -658,10 +676,7 @@ for (const lowMemory of ['0', '1'] as const) {
                             readShellValues(),
                             'shell selector read',
                         );
-                        const state = await withinDeadline(
-                            readHostState(launched),
-                            'host state read',
-                        );
+                        const state = await readHostState(launched);
                         lastState = state;
                         return readyReason(
                             shellValues,
@@ -729,8 +744,8 @@ for (const lowMemory of ['0', '1'] as const) {
             await expect
                 .poll(
                     async () => {
-                        const state = await withinDeadline(
-                            readHostState(launched),
+                        const state = await readHostState(
+                            launched,
                             'dialog read',
                         );
                         lastState = state;
@@ -780,10 +795,7 @@ for (const lowMemory of ['0', '1'] as const) {
             await expect
                 .poll(
                     async () => {
-                        const state = await withinDeadline(
-                            readHostState(launched),
-                            'tab read',
-                        );
+                        const state = await readHostState(launched, 'tab read');
                         lastState = state;
                         return state.dom?.activeElementId ?? '';
                     },
@@ -804,10 +816,7 @@ for (const lowMemory of ['0', '1'] as const) {
             await expect
                 .poll(
                     async () => {
-                        const state = await withinDeadline(
-                            readHostState(launched),
-                            'tab read',
-                        );
+                        const state = await readHostState(launched, 'tab read');
                         lastState = state;
                         return state.dom?.activeElementId ?? '';
                     },
@@ -829,8 +838,8 @@ for (const lowMemory of ['0', '1'] as const) {
             await expect
                 .poll(
                     async () => {
-                        const state = await withinDeadline(
-                            readHostState(launched),
+                        const state = await readHostState(
+                            launched,
                             'type read',
                         );
                         lastState = state;
@@ -848,8 +857,8 @@ for (const lowMemory of ['0', '1'] as const) {
             await expect
                 .poll(
                     async () => {
-                        const state = await withinDeadline(
-                            readHostState(launched),
+                        const state = await readHostState(
+                            launched,
                             'escape read',
                         );
                         lastState = state;
