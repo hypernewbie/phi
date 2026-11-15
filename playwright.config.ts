@@ -18,6 +18,7 @@ export default defineConfig({
         // suite never builds. The desktop config owns them.
         '**/auth-desktop.spec.ts',
         '**/desktop-shell-drawer.spec.ts',
+        '**/desktop-workspace-manager.spec.ts',
     ],
     timeout: 120_000,
     retries: 0,

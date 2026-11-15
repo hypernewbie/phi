@@ -466,6 +466,65 @@ describe('TBAR wedge and race condition prevention', () => {
     resolveConfig?.({ hostname: 'JUPITER', workspaces: [] });
   });
 
+  it.each(['pending', 'rejected'] as const)(
+    'relays the workspace manager button while the active config is %s',
+    async (configState) => {
+      vi.useFakeTimers();
+      const deferred: Array<(value: unknown) => void> = [];
+      fakeBridge.fetchServerConfig = vi.fn(() =>
+        configState === 'rejected'
+          ? Promise.reject(new Error('offline'))
+          : new Promise((resolve) => {
+              deferred.push(resolve);
+            }),
+      );
+      let doc: Document | null = null;
+      try {
+        doc = await loadMainView();
+        const button = doc.getElementById(
+          'ws-manager-btn',
+        ) as HTMLButtonElement;
+
+        // No active profile yet: a profile-less click must not relay.
+        button.click();
+        expect(fakeBridge.postHeaderAction).not.toHaveBeenCalled();
+
+        // A slow or failed config read must not block profile A's click.
+        recordedActiveServer?.({ id: 'a', origin: 'http://a/' });
+        await Promise.resolve();
+        expect(fakeBridge.fetchServerConfig).toHaveBeenCalledWith('a');
+        button.click();
+        expect(fakeBridge.postHeaderAction).toHaveBeenCalledExactlyOnceWith({
+          kind: 'click',
+          id: 'ws-manager-btn',
+          profileId: 'a',
+        });
+
+        // Switching to B must retarget the click, never reuse A's id.
+        recordedActiveServer?.({ id: 'b', origin: 'http://b/' });
+        await Promise.resolve();
+        expect(fakeBridge.fetchServerConfig).toHaveBeenCalledWith('b');
+        vi.mocked(fakeBridge.postHeaderAction).mockClear();
+        button.click();
+        expect(fakeBridge.postHeaderAction).toHaveBeenCalledExactlyOnceWith({
+          kind: 'click',
+          id: 'ws-manager-btn',
+          profileId: 'b',
+        });
+      } finally {
+        // Settle every deferred read (the profile-less initial request too),
+        // then drop this document and its timers.
+        for (let round = 0; round < 10 && deferred.length > 0; round += 1) {
+          for (const resolve of deferred.splice(0)) resolve(null);
+          for (let i = 0; i < 10; i += 1) await Promise.resolve();
+        }
+        doc?.defaultView?.close();
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it('right clicking on TBAR opens the rail menu for the active server', async () => {
     fakeBridge.fetchServerConfig = vi.fn(async () => ({
       hostname: 'CHARON',

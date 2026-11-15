@@ -65,7 +65,8 @@ export type HeaderActionId =
   | 'header-import-btn'
   | 'mobile-sidebar-toggle'
   | 'add-workspace-btn'
-  | 'remove-workspace-btn';
+  | 'remove-workspace-btn'
+  | 'ws-manager-btn';
 
 /** A header interaction relayed to the ACTIVE body view on 'phi:header-action'. */
 export type HeaderAction =

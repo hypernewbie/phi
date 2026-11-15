@@ -337,7 +337,7 @@ import {
   resolveV2BodyAuthTarget,
 } from '../src/desktop.js';
 import { FORWARD_CHANNEL } from '../src/single-instance.js';
-import { WAKE_PAGE_SCRIPT } from '../src/injected.js';
+import { WAKE_PAGE_SCRIPT, headerActionClickScript } from '../src/injected.js';
 
 const flush = async (): Promise<void> => {
   for (let i = 0; i < 12; i++) await Promise.resolve();
@@ -989,6 +989,11 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     const b = ctrl.add('http://beta.example.test:7070/');
     host.profileViews!.addProfile(a.id, a.origin);
     host.profileViews!.addProfile(b.id, b.origin);
+    // Activate A first so its lazy view exists and can be spied on while
+    // inactive; only B may receive the relayed action.
+    ctrl.setActive(a.id);
+    await flush();
+    const inactive = host.profileViews!.getView(a.id)!;
     ctrl.setActive(b.id);
     const view = host.profileViews!.getView(b.id)!;
     const execute = vi
@@ -1058,6 +1063,73 @@ describe('DesktopHost fake-Electron lifecycle', () => {
       profileId: b.id,
     });
     expect(focus).toHaveBeenCalledTimes(2);
+
+    // The shell's workspace-manager button relays to the active body with
+    // native focus handed over before the injected click.
+    const inactiveExecute = vi.spyOn(inactive.webContents, 'executeJavaScript');
+    const inactiveFocus = vi.spyOn(inactive.webContents, 'focus');
+    const managerScript = headerActionClickScript('ws-manager-btn');
+    execute.mockClear();
+    focus.mockClear();
+    headerAction(event, {
+      kind: 'click',
+      id: 'ws-manager-btn',
+      profileId: b.id,
+    });
+    expect(execute).toHaveBeenCalledExactlyOnceWith(managerScript);
+    expect(focus).toHaveBeenCalledOnce();
+    expect(focus.mock.invocationCallOrder[0]).toBeLessThan(
+      execute.mock.invocationCallOrder[0],
+    );
+    expect(inactiveFocus).not.toHaveBeenCalled();
+    expect(inactiveExecute).not.toHaveBeenCalled();
+
+    // Each guard rejects on its own: stale profile, unknown id, body sender.
+    execute.mockClear();
+    focus.mockClear();
+    headerAction(event, {
+      kind: 'click',
+      id: 'ws-manager-btn',
+      profileId: a.id,
+    });
+    headerAction(event, { kind: 'click', id: 'ws-manager-modal' });
+    headerAction(
+      { sender: view.webContents },
+      { kind: 'click', id: 'ws-manager-btn', profileId: b.id },
+    );
+    expect(focus).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    expect(inactiveFocus).not.toHaveBeenCalled();
+    expect(inactiveExecute).not.toHaveBeenCalled();
+
+    // A destroyed target is skipped without focus, dispatch, or throw.
+    const destroyed = vi
+      .spyOn(view.webContents, 'isDestroyed')
+      .mockReturnValue(true);
+    expect(() =>
+      headerAction(event, {
+        kind: 'click',
+        id: 'ws-manager-btn',
+        profileId: b.id,
+      }),
+    ).not.toThrow();
+    expect(focus).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    destroyed.mockRestore();
+
+    // A rejected dispatch stays a one-shot: no retry, no fallback to A.
+    execute.mockRejectedValueOnce(new Error('renderer unavailable'));
+    headerAction(event, {
+      kind: 'click',
+      id: 'ws-manager-btn',
+      profileId: b.id,
+    });
+    await flush();
+    expect(focus).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledExactlyOnceWith(managerScript);
+    expect(inactiveFocus).not.toHaveBeenCalled();
+    expect(inactiveExecute).not.toHaveBeenCalled();
+    execute.mockResolvedValue('/beta/code');
 
     host.pushHeaderState(0, false, '/beta/code');
     expect(

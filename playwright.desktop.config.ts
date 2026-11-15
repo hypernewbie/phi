@@ -13,6 +13,7 @@ export default defineConfig({
         // Real Electron specs that the Chromium suite cannot build for.
         '**/auth-desktop.spec.ts',
         '**/desktop-shell-drawer.spec.ts',
+        '**/desktop-workspace-manager.spec.ts',
     ],
     testIgnore: [],
     workers: 1,
