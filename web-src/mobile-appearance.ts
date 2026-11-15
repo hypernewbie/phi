@@ -1,6 +1,19 @@
 import { BackendScope } from './backend-scope.js';
 import type { AuthContext, FetchLike } from './auth.js';
-import * as v from './vendor/valibot/index.min.mjs';
+import {
+    check,
+    integer,
+    maxBytes,
+    maxValue,
+    minValue,
+    nullable,
+    number,
+    object,
+    pipe,
+    safeInteger,
+    safeParse,
+    string,
+} from './vendor/valibot/index.min.mjs';
 
 export type AppearanceProfile = 'desktop' | 'mobile';
 export type ProfileOverride = 'auto' | AppearanceProfile;
@@ -143,31 +156,27 @@ export function readInheritanceCache(
 // A font family is a CSS value, so a control character is either a corrupt
 // entry or an injection attempt. 512 is a UTF-8 byte cap, not a length cap.
 const noControlChars = (value: string) => !/\p{Cc}/u.test(value);
-const fontFamily = v.nullable(
-    v.pipe(v.string(), v.maxBytes(512), v.check(noControlChars)),
+const fontFamily = nullable(
+    pipe(string(), maxBytes(512), check(noControlChars)),
 );
 // Extra fields are ignored, not fatal: a newer server may add one, and
 // rejecting the whole payload would reset every saved setting. `object()`
 // strips them, `strictObject()` would reject them.
-const MobileAppearanceSchema = v.object({
-    revision: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
-    ui_font_size: v.nullable(
-        v.pipe(v.number(), v.integer(), v.minValue(10), v.maxValue(24)),
+const MobileAppearanceSchema = object({
+    revision: pipe(number(), safeInteger(), minValue(0)),
+    ui_font_size: nullable(
+        pipe(number(), integer(), minValue(10), maxValue(24)),
     ),
-    terminal_font_size: v.nullable(
-        v.pipe(v.number(), v.integer(), v.minValue(8), v.maxValue(32)),
+    terminal_font_size: nullable(
+        pipe(number(), integer(), minValue(8), maxValue(32)),
     ),
     ui_font_family: fontFamily,
     terminal_font_family: fontFamily,
 });
 // Inherited families come from the desktop config and are always set; unlike
 // the appearance payload, a null here is a malformed response.
-const inheritedFamily = v.pipe(
-    v.string(),
-    v.maxBytes(512),
-    v.check(noControlChars),
-);
-const InheritedFamiliesSchema = v.object({
+const inheritedFamily = pipe(string(), maxBytes(512), check(noControlChars));
+const InheritedFamiliesSchema = object({
     ui_font_family: inheritedFamily,
     terminal_font_family: inheritedFamily,
 });
@@ -177,14 +186,14 @@ const InheritedFamiliesSchema = v.object({
  * return type is the interface, so a schema/interface drift fails `tsc`.
  */
 export function parseMobileAppearance(value: unknown): MobileAppearance | null {
-    const parsed = v.safeParse(MobileAppearanceSchema, value);
+    const parsed = safeParse(MobileAppearanceSchema, value);
     return parsed.success ? parsed.output : null;
 }
 /** Validates the inherited-font payload, or null when it is malformed. */
 export function parseInheritedFamilies(
     value: unknown,
 ): InheritedFamilies | null {
-    const parsed = v.safeParse(InheritedFamiliesSchema, value);
+    const parsed = safeParse(InheritedFamiliesSchema, value);
     return parsed.success ? parsed.output : null;
 }
 export function effectiveAppearance(

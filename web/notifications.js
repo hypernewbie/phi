@@ -1,5 +1,5 @@
 import { backendStores, MAX_BACKEND_STORES, } from './backend-store.js';
-import * as v from './vendor/valibot/index.min.mjs';
+import { finite, literal, maxLength, maxValue, minLength, minValue, number, object, picklist, pipe, safeParse, string, unknown, } from './vendor/valibot/index.min.mjs';
 const DEFAULT_DURATION = 6000;
 const MAX_DURATION = 2_147_483_647;
 const MAX_RECORDS = 100;
@@ -23,29 +23,29 @@ const ICONS = {
 const SVG_NS = 'http://www.w3.org/2000/svg';
 // The newest timestamp a JS Date can represent keeps stored history sane.
 const MAX_TIMESTAMP = 8_640_000_000_000_000;
-const DurationSchema = v.pipe(v.number(), v.finite(), v.minValue(0), v.maxValue(MAX_DURATION));
-const ToastTypeSchema = v.picklist(['info', 'success', 'error']);
-const NotificationMetadataSchema = v.object({
-    id: v.pipe(v.string(), v.minLength(1), v.maxLength(64)),
+const DurationSchema = pipe(number(), finite(), minValue(0), maxValue(MAX_DURATION));
+const ToastTypeSchema = picklist(['info', 'success', 'error']);
+const NotificationMetadataSchema = object({
+    id: pipe(string(), minLength(1), maxLength(64)),
     type: ToastTypeSchema,
-    title: v.pipe(v.string(), v.maxLength(MAX_TITLE_PREVIEW)),
-    message: v.pipe(v.string(), v.maxLength(MAX_MESSAGE_PREVIEW)),
-    timestamp: v.pipe(v.number(), v.finite(), v.minValue(-MAX_TIMESTAMP), v.maxValue(MAX_TIMESTAMP)),
+    title: pipe(string(), maxLength(MAX_TITLE_PREVIEW)),
+    message: pipe(string(), maxLength(MAX_MESSAGE_PREVIEW)),
+    timestamp: pipe(number(), finite(), minValue(-MAX_TIMESTAMP), maxValue(MAX_TIMESTAMP)),
 });
-const StoredHistorySchema = v.object({
-    version: v.literal(1),
-    entries: v.unknown(),
+const StoredHistorySchema = object({
+    version: literal(1),
+    entries: unknown(),
 });
 function normalizeType(type) {
-    const parsed = v.safeParse(ToastTypeSchema, type);
+    const parsed = safeParse(ToastTypeSchema, type);
     return parsed.success ? parsed.output : 'info';
 }
 function normalizeDuration(duration) {
-    const parsed = v.safeParse(DurationSchema, duration);
+    const parsed = safeParse(DurationSchema, duration);
     return parsed.success ? parsed.output : DEFAULT_DURATION;
 }
 function normalizeMetadata(value) {
-    const parsed = v.safeParse(NotificationMetadataSchema, value);
+    const parsed = safeParse(NotificationMetadataSchema, value);
     return parsed.success ? parsed.output : null;
 }
 function normalizeMetadataList(value) {
@@ -72,7 +72,7 @@ function parseStoredNotifications(raw) {
     catch {
         return [];
     }
-    const envelope = v.safeParse(StoredHistorySchema, json);
+    const envelope = safeParse(StoredHistorySchema, json);
     if (!envelope.success)
         return [];
     return normalizeMetadataList(envelope.output.entries);

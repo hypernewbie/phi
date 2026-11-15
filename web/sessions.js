@@ -3,7 +3,7 @@ import { escapeHtml, getLastFolderName as getLastFolderNameUtil, formatWorkspace
 import { openPiRpcChatTab } from './chat-pi/tab.js';
 import { createReviewTranscriptView } from './review-transcript.js';
 import { loadCoderRegistry, openCodePaneMode, visibleCoders, getCoder, hasTranscript, hasPiRpc, hasRename, hasSessions, isShell, renderLogo, RESERVED_CODER_IDS, } from './coders.js';
-import * as v from './vendor/valibot/index.min.mjs';
+import { array, boolean, check, finite, literal, maxLength, minLength, minValue, number, object, optional, pipe, safeParse, string, unknown, } from './vendor/valibot/index.min.mjs';
 export function normalizePath(p) {
     if (!p)
         return '';
@@ -102,34 +102,35 @@ function recoverSessionNamespace(identity) {
         recoveredSessionNamespaces.add(identity.namespace);
     unconfirmedSessionRemovals.delete(identity.namespace);
 }
-const SessionEntrySchema = v.object({
-    id: v.pipe(v.string(), v.minLength(1)),
-    title: v.string(),
+const SessionEntrySchema = object({
+    id: pipe(string(), minLength(1)),
+    title: string(),
     // The server always sends a parseable timestamp; a cached page with an
     // unreadable one is stale, not merely odd.
-    time_updated: v.pipe(v.string(), v.check((value) => Number.isFinite(Date.parse(value)))),
-    cwd: v.optional(v.string()),
-    coder: v.optional(v.string()),
-    session_path: v.optional(v.string()),
+    time_updated: pipe(string(), check((value) => Number.isFinite(Date.parse(value)))),
+    cwd: optional(string()),
+    coder: optional(string()),
+    session_path: optional(string()),
 });
-const WorktreeSchema = v.object({
-    path: v.pipe(v.string(), v.minLength(1)),
-    branch: v.optional(v.string()),
-    active: v.optional(v.boolean()),
-    expanded: v.optional(v.boolean()),
+const WorktreeSchema = object({
+    path: pipe(string(), minLength(1)),
+    branch: optional(string()),
+    active: optional(boolean()),
+    expanded: optional(boolean()),
 });
-const WorktreeListSchema = v.array(WorktreeSchema);
+const WorktreeListSchema = array(WorktreeSchema);
 // Only the shape is checked here: the caller keeps the original objects,
 // including fields this module does not know about.
 function isSessionPage(value, limit) {
     if (!Array.isArray(value))
         return false;
-    return v.safeParse(v.pipe(v.array(SessionEntrySchema), v.maxLength(limit)), value).success;
+    return safeParse(pipe(array(SessionEntrySchema), maxLength(limit)), value)
+        .success;
 }
 function normalizeWorktrees(value) {
     if (value === null)
         return [];
-    return v.safeParse(WorktreeListSchema, value).success
+    return safeParse(WorktreeListSchema, value).success
         ? value
         : null;
 }
@@ -139,11 +140,11 @@ function featureKeyNamespace(key) {
         ? `${parts[1]}:${parts[3]}`
         : null;
 }
-const FeatureCacheEnvelopeSchema = v.object({
-    v: v.literal(1),
-    saved_at: v.pipe(v.number(), v.finite(), v.minValue(0)),
+const FeatureCacheEnvelopeSchema = object({
+    v: literal(1),
+    saved_at: pipe(number(), finite(), minValue(0)),
     // The payload is whatever the caller's validator accepts.
-    data: v.unknown(),
+    data: unknown(),
 });
 function parseFeatureCache(raw, validate) {
     if (typeof raw !== 'string')
@@ -155,7 +156,7 @@ function parseFeatureCache(raw, validate) {
     catch {
         return null;
     }
-    const envelope = v.safeParse(FeatureCacheEnvelopeSchema, json);
+    const envelope = safeParse(FeatureCacheEnvelopeSchema, json);
     if (!envelope.success || !validate(envelope.output.data))
         return null;
     return envelope.output.data;

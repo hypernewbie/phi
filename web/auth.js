@@ -14,7 +14,7 @@ import { pbkdf2Async } from './vendor/noble-hashes/pbkdf2.js';
 import { hmac } from './vendor/noble-hashes/hmac.js';
 import { sha256 } from './vendor/noble-hashes/sha2.js';
 import { isAbortError, serverKey } from './util.js';
-import * as v from './vendor/valibot/index.min.mjs';
+import { array, boolean, check, integer, literal, minLength, minValue, number, object, optional, pipe, safeParse, string, unknown, } from './vendor/valibot/index.min.mjs';
 const CREDENTIAL_KEY = 'phi_access_credential_v1';
 // Legacy browser storage for the v2 bearer. Tokens now live only in memory;
 // the refresh handle stays in its HttpOnly cookie.
@@ -97,23 +97,23 @@ function base64URLToBytes(value) {
     const binary = atob(padded);
     return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
-const V1StatusSchema = v.object({
-    enabled: v.literal(true),
-    version: v.literal('v1'),
-    algorithm: v.literal('pbkdf2-sha256'),
-    iterations: v.pipe(v.number(), v.integer(), v.minValue(1)),
-    salt: v.string(),
-    challenge: v.string(),
+const V1StatusSchema = object({
+    enabled: literal(true),
+    version: literal('v1'),
+    algorithm: literal('pbkdf2-sha256'),
+    iterations: pipe(number(), integer(), minValue(1)),
+    salt: string(),
+    challenge: string(),
 });
 function validStatus(status) {
-    return v.safeParse(V1StatusSchema, status).success;
+    return safeParse(V1StatusSchema, status).success;
 }
 function invalidStatusError() {
     return new Error('Phi returned invalid access protection settings');
 }
 // A protocol name list: nonempty, unique, no empty names. The supported
 // subset is picked out afterwards, so one unknown name is tolerated.
-const ProtocolListSchema = v.pipe(v.array(v.pipe(v.string(), v.minLength(1))), v.minLength(1), v.check((list) => new Set(list).size === list.length));
+const ProtocolListSchema = pipe(array(pipe(string(), minLength(1))), minLength(1), check((list) => new Set(list).size === list.length));
 // parseProtocols maps the capability field to the protocols this client can
 // speak. An absent field is the legacy v1-only response. A present field must
 // be a nonempty array of unique nonempty names, and unknown names are only
@@ -121,7 +121,7 @@ const ProtocolListSchema = v.pipe(v.array(v.pipe(v.string(), v.minLength(1))), v
 function parseProtocols(value) {
     if (value === undefined)
         return ['v1'];
-    const parsed = v.safeParse(ProtocolListSchema, value);
+    const parsed = safeParse(ProtocolListSchema, value);
     if (!parsed.success)
         throw invalidStatusError();
     const supported = parsed.output.filter((p) => p === 'v1' || p === 'v2');
@@ -129,19 +129,19 @@ function parseProtocols(value) {
         throw invalidStatusError();
     return supported;
 }
-const AccessStatusSchema = v.pipe(
+const AccessStatusSchema = pipe(
 // `protocols` is parsed separately: it has a legacy default and a
 // tolerance rule that a field schema cannot express.
-v.object({
-    enabled: v.boolean(),
-    authenticated: v.optional(v.boolean()),
+object({
+    enabled: boolean(),
+    authenticated: optional(boolean()),
 }), 
 // Access status without an authentication flag is unusable when enabled.
-v.check((status) => !status.enabled || status.authenticated !== undefined));
+check((status) => !status.enabled || status.authenticated !== undefined));
 // parseAccessStatus validates the status contract shared by both protocols.
 // `raw` stays the original object: the v1 KDF fields are read from it later.
 function parseAccessStatus(payload) {
-    const parsed = v.safeParse(AccessStatusSchema, payload);
+    const parsed = safeParse(AccessStatusSchema, payload);
     if (!parsed.success)
         throw invalidStatusError();
     const raw = payload;
@@ -590,15 +590,15 @@ async function withAuthDeadline(run, timeoutMs = AUTH_TIMEOUT_MS) {
 }
 // A nonpositive `expires_in` is returned as-is; only the deadlines must be
 // usable, and the idle one may not outlive the absolute one.
-const CredentialBundleSchema = v.pipe(v.object({
-    token: v.pipe(v.string(), v.minLength(1)),
-    expires_at: v.pipe(v.number(), v.integer(), v.minValue(1)),
-    expires_in: v.pipe(v.number(), v.integer()),
-    refresh_idle_expires_at: v.pipe(v.number(), v.integer(), v.minValue(1)),
-    refresh_absolute_expires_at: v.pipe(v.number(), v.integer(), v.minValue(1)),
-}), v.check((b) => b.refresh_idle_expires_at <= b.refresh_absolute_expires_at));
+const CredentialBundleSchema = pipe(object({
+    token: pipe(string(), minLength(1)),
+    expires_at: pipe(number(), integer(), minValue(1)),
+    expires_in: pipe(number(), integer()),
+    refresh_idle_expires_at: pipe(number(), integer(), minValue(1)),
+    refresh_absolute_expires_at: pipe(number(), integer(), minValue(1)),
+}), check((b) => b.refresh_idle_expires_at <= b.refresh_absolute_expires_at));
 function parseCredentialBundle(payload) {
-    const parsed = v.safeParse(CredentialBundleSchema, payload);
+    const parsed = safeParse(CredentialBundleSchema, payload);
     if (!parsed.success)
         return null;
     const bundle = parsed.output;
@@ -883,10 +883,10 @@ export function refreshAccessIfDue(context) {
 }
 // A v2 status body always carries both flags; `owned` is only sent by hosts
 // that manage access themselves.
-const V2StatusBodySchema = v.object({
-    enabled: v.boolean(),
-    authenticated: v.boolean(),
-    owned: v.optional(v.unknown()),
+const V2StatusBodySchema = object({
+    enabled: boolean(),
+    authenticated: boolean(),
+    owned: optional(unknown()),
 });
 // checkV2Token reports whether the server still accepts token. A rejected
 // token is 'invalid'; transport errors and 429/5xx throw, so a transient
@@ -914,7 +914,7 @@ async function checkV2Token(token, context) {
         catch {
             throw invalidStatusError();
         }
-        const parsed = v.safeParse(V2StatusBodySchema, payload);
+        const parsed = safeParse(V2StatusBodySchema, payload);
         if (!parsed.success)
             throw invalidStatusError();
         const body = parsed.output;
@@ -980,10 +980,10 @@ function validateV2Password(password) {
 }
 // The password endpoints answer with `enabled: true`; a host that manages
 // access itself also confirms the operation with `ok: true`.
-const PasswordAcceptedSchema = v.object({ enabled: v.literal(true) });
-const HostPasswordAcceptedSchema = v.object({
-    ok: v.literal(true),
-    enabled: v.literal(true),
+const PasswordAcceptedSchema = object({ enabled: literal(true) });
+const HostPasswordAcceptedSchema = object({
+    ok: literal(true),
+    enabled: literal(true),
 });
 async function saveV2Password(password, context) {
     validateV2Password(password);
@@ -1014,7 +1014,7 @@ async function saveV2Password(password, context) {
         }
     });
     if (hostAuthenticatedMode()) {
-        if (!v.safeParse(HostPasswordAcceptedSchema, payload).success)
+        if (!safeParse(HostPasswordAcceptedSchema, payload).success)
             throw new Error('Unable to save access password');
         if (epoch === state.epoch) {
             state.hostSession = true;
@@ -1026,7 +1026,7 @@ async function saveV2Password(password, context) {
         return { enabled: true };
     }
     const bundle = parseCredentialBundle(payload);
-    if (!v.safeParse(PasswordAcceptedSchema, payload).success ||
+    if (!safeParse(PasswordAcceptedSchema, payload).success ||
         !bundle ||
         bundle.expiresIn <= 0)
         throw new Error('Unable to save access password');

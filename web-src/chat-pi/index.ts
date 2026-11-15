@@ -17,7 +17,27 @@ import { renderQueuePanel } from './queue.js';
 import type { QueueItem } from './queue.js';
 import { createPiDialogController } from './dialogs.js';
 import type { DialogCloseReason, DialogRecord } from './dialogs.js';
-import * as v from '../vendor/valibot/index.min.mjs';
+import {
+    array,
+    boolean,
+    exactOptional,
+    fallback,
+    finite,
+    minLength,
+    minValue,
+    null as nullSchema,
+    nullable,
+    number,
+    object,
+    optional,
+    picklist,
+    pipe,
+    safeInteger,
+    safeParse,
+    string,
+    union,
+    unknown,
+} from '../vendor/valibot/index.min.mjs';
 
 export interface PiModel {
     provider: string;
@@ -98,24 +118,24 @@ const stateOptionalFields = ['model', 'thinking', 'sessionPath'] as const;
  */
 // A metric is either a finite number or explicitly null; the key itself is
 // always present in a canonical payload.
-const metric = v.nullable(v.pipe(v.number(), v.finite()));
+const metric = nullable(pipe(number(), finite()));
 // `exactOptional` keeps the old rule that a present-but-undefined optional
 // field is malformed, not merely absent.
-const optionalString = v.exactOptional(v.string());
-const CanonicalStateSchema = v.object({
-    sid: v.string(),
-    title: v.string(),
-    cwd: v.string(),
-    status: v.picklist(['live', 'exited']),
-    busy: v.boolean(),
-    queueDepth: v.pipe(v.number(), v.finite(), v.minValue(0)),
+const optionalString = exactOptional(string());
+const CanonicalStateSchema = object({
+    sid: string(),
+    title: string(),
+    cwd: string(),
+    status: picklist(['live', 'exited']),
+    busy: boolean(),
+    queueDepth: pipe(number(), finite(), minValue(0)),
     inputTokens: metric,
     outputTokens: metric,
     contextUsedTokens: metric,
     contextWindowTokens: metric,
     cacheReadTokens: metric,
     cacheWriteTokens: metric,
-    skills: v.nullable(v.array(v.string())),
+    skills: nullable(array(string())),
     model: optionalString,
     thinking: optionalString,
     sessionPath: optionalString,
@@ -126,7 +146,7 @@ function isCanonicalState(
     sid: string,
 ): state is Record<string, unknown> {
     if (sid === '') return false;
-    const parsed = v.safeParse(CanonicalStateSchema, state);
+    const parsed = safeParse(CanonicalStateSchema, state);
     return parsed.success && parsed.output.sid === sid;
 }
 
@@ -336,35 +356,35 @@ function dialogCloseReason(value: unknown): DialogCloseReason {
     }
 }
 
-const SnapshotSchema = v.object({
-    lastSeq: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
-    messages: v.array(v.unknown()),
+const SnapshotSchema = object({
+    lastSeq: pipe(number(), safeInteger(), minValue(0)),
+    messages: array(unknown()),
 });
 
 function isSnapshot(value: unknown): value is Snapshot {
-    return v.safeParse(SnapshotSchema, value).success;
+    return safeParse(SnapshotSchema, value).success;
 }
 
 function rejected(message: string): Promise<never> {
     return Promise.reject(new Error(message));
 }
 
-const PiModelSchema = v.object({
-    provider: v.pipe(v.string(), v.minLength(1)),
-    id: v.pipe(v.string(), v.minLength(1)),
-    name: v.optional(v.string()),
+const PiModelSchema = object({
+    provider: pipe(string(), minLength(1)),
+    id: pipe(string(), minLength(1)),
+    name: optional(string()),
 });
 
 // One unusable entry is skipped, the rest of the list survives, so each entry
 // falls back to a null sentinel that the caller filters out.
-const PiModelListSchema = v.array(
-    v.fallback(v.union([PiModelSchema, v.null()]), null),
+const PiModelListSchema = array(
+    fallback(union([PiModelSchema, nullSchema()]), null),
 );
 
 function validModels(value: unknown): PiModel[] {
     const models = (value as { models?: unknown } | null)?.models;
     if (!Array.isArray(models)) throw new Error('Pi model list is malformed');
-    const parsed = v.safeParse(PiModelListSchema, models);
+    const parsed = safeParse(PiModelListSchema, models);
     if (!parsed.success) return [];
     return parsed.output
         .filter((model) => model !== null)
@@ -377,7 +397,7 @@ function validModels(value: unknown): PiModel[] {
 
 function validThinkingLevels(value: unknown): string[] {
     const levels = (value as { levels?: unknown } | null)?.levels;
-    const parsed = v.safeParse(v.array(v.string()), levels);
+    const parsed = safeParse(array(string()), levels);
     if (!parsed.success) throw new Error('Pi thinking level list is malformed');
     return [...parsed.output];
 }

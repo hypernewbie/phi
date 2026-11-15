@@ -2,14 +2,14 @@
 import { PTYWebSocket } from './ws.js';
 import { getLastFolderName, worktreeGlyph, isCoarseViewport, isDiffDrawerViewport, terminalPreferredFontSize, responsiveTerminalFontSize, DIFF_TERMINAL_TARGET_COLUMNS, openExternalLink, installTerminalLinkProvider, getEmbeddedBackendOrigin, getEmbeddedProfileId, serverKey, isAbortError, } from './util.js';
 import { buildVSCodeURI, buildVSCodeRemoteURI, normalizeHostname, isVSCodeLaunchUnsupported, } from './vscode.js';
-import * as v from './vendor/valibot/index.min.mjs';
-const GitStatusFileEntrySchema = v.object({
-    path: v.string(),
-    index: v.string(),
-    worktree: v.string(),
+import { boolean, check, literal, number, object, optional, picklist, pipe, safeParse, string, union, } from './vendor/valibot/index.min.mjs';
+const GitStatusFileEntrySchema = object({
+    path: string(),
+    index: string(),
+    worktree: string(),
 });
 function isGitStatusFileEntry(value) {
-    return v.safeParse(GitStatusFileEntrySchema, value).success;
+    return safeParse(GitStatusFileEntrySchema, value).success;
 }
 // A file is stageable unless Git reports it as already handled in the index
 // for that half. "??" entries are untracked and can only be staged.
@@ -36,26 +36,26 @@ const GIT_STAGE_PATH_LIMIT = 200;
 const GIT_ACTION_TIMEOUT_MS = 150_000;
 // A stored view is only reused for the exact root, view and selection it was
 // captured for; those comparisons happen after the shape check.
-const GitViewCacheEntrySchema = v.object({
-    version: v.literal(1),
-    root: v.string(),
-    view: v.string(),
-    selection: v.string(),
-    text: v.string(),
-    head: v.string(),
-    branch: v.string(),
-    updatedAt: v.number(),
+const GitViewCacheEntrySchema = object({
+    version: literal(1),
+    root: string(),
+    view: string(),
+    selection: string(),
+    text: string(),
+    head: string(),
+    branch: string(),
+    updatedAt: number(),
 });
-const GitManageTargetSchema = v.object({
-    root: v.string(),
-    head: v.string(),
-    branch: v.string(),
-    remote: v.string(),
-    remote_ref: v.string(),
-    remote_token: v.string(),
+const GitManageTargetSchema = object({
+    root: string(),
+    head: string(),
+    branch: string(),
+    remote: string(),
+    remote_ref: string(),
+    remote_token: string(),
 });
 function isGitManageTarget(value) {
-    return v.safeParse(GitManageTargetSchema, value).success;
+    return safeParse(GitManageTargetSchema, value).success;
 }
 function sameGitManageTarget(a, b, action) {
     return (a.root === b.root &&
@@ -70,21 +70,21 @@ function gitCommitShapedTarget(target) {
     return { ...target, remote: '', remote_ref: '', remote_token: '' };
 }
 // The sentinel carries no target: it only says this cwd is not a repository.
-const GitManageInfoSchema = v.union([
-    v.object({ notGitRepo: v.literal(true) }),
-    v.object({
-        can_pull_push: v.boolean(),
+const GitManageInfoSchema = union([
+    object({ notGitRepo: literal(true) }),
+    object({
+        can_pull_push: boolean(),
         target: GitManageTargetSchema,
-        reason: v.optional(v.string()),
-        has_staged: v.optional(v.boolean()),
-        index_token: v.optional(v.string()),
-        can_commit: v.optional(v.boolean()),
-        commit_reason: v.optional(v.string()),
-        can_stage: v.optional(v.boolean()),
+        reason: optional(string()),
+        has_staged: optional(boolean()),
+        index_token: optional(string()),
+        can_commit: optional(boolean()),
+        commit_reason: optional(string()),
+        can_stage: optional(boolean()),
     }),
 ]);
 function isGitManageInfo(value) {
-    return v.safeParse(GitManageInfoSchema, value).success;
+    return safeParse(GitManageInfoSchema, value).success;
 }
 function normalizeGitManageInfo(info) {
     if (info.notGitRepo) {
@@ -117,15 +117,15 @@ function gitManagePausedStatus(action) {
 }
 // A commit cannot be replayed without the message and the token of the index
 // state it was built against.
-const GitManageActionRecordSchema = v.pipe(v.object({
-    version: v.literal(1),
-    id: v.string(),
-    owner: v.string(),
-    action: v.picklist(['pull', 'push', 'commit']),
+const GitManageActionRecordSchema = pipe(object({
+    version: literal(1),
+    id: string(),
+    owner: string(),
+    action: picklist(['pull', 'push', 'commit']),
     target: GitManageTargetSchema,
-    message: v.optional(v.string()),
-    indexToken: v.optional(v.string()),
-    phase: v.picklist([
+    message: optional(string()),
+    indexToken: optional(string()),
+    phase: picklist([
         'queued',
         'sent',
         'confirmed',
@@ -135,14 +135,14 @@ const GitManageActionRecordSchema = v.pipe(v.object({
         'paused',
         'dismissed',
     ]),
-    createdAt: v.number(),
-    status: v.string(),
-}), v.check((record) => record.action !== 'commit' ||
+    createdAt: number(),
+    status: string(),
+}), check((record) => record.action !== 'commit' ||
     (typeof record.message === 'string' &&
         typeof record.indexToken === 'string' &&
         /^[0-9a-f]{64}$/i.test(record.indexToken))));
 function isGitManageActionRecord(value) {
-    return v.safeParse(GitManageActionRecordSchema, value).success;
+    return safeParse(GitManageActionRecordSchema, value).success;
 }
 function gitManageActionId() {
     return `g_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -1629,7 +1629,7 @@ export class DiffController {
             return memory;
         try {
             const parsed = JSON.parse(localStorage.getItem(key) || 'null');
-            if (!v.safeParse(GitViewCacheEntrySchema, parsed).success) {
+            if (!safeParse(GitViewCacheEntrySchema, parsed).success) {
                 return null;
             }
             const entry = parsed;

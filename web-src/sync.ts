@@ -8,7 +8,19 @@ import {
     serverKey,
 } from './util.js';
 import { renderMarkdownSafe, highlightCodeIn } from './md-render.js';
-import * as v from './vendor/valibot/index.min.mjs';
+import {
+    array,
+    boolean,
+    finite,
+    maxLength,
+    minLength,
+    number,
+    object,
+    optional,
+    pipe,
+    safeParse,
+    string,
+} from './vendor/valibot/index.min.mjs';
 
 // Sync Board desktop-alert markers: a message whose key or value carries
 // one of these signals the desktop shell via a transient page title
@@ -28,20 +40,20 @@ interface SyncPushMessage {
     truncated?: boolean;
 }
 
-const SyncPushMessageSchema = v.object({
-    message_id: v.pipe(v.string(), v.minLength(1), v.maxLength(128)),
-    sender: v.pipe(v.string(), v.maxLength(128)),
-    recipient: v.pipe(v.string(), v.maxLength(128)),
-    value: v.pipe(v.string(), v.maxLength(4096)),
-    updated_at_unix_ms: v.pipe(v.number(), v.finite()),
-    truncated: v.optional(v.boolean()),
+const SyncPushMessageSchema = object({
+    message_id: pipe(string(), minLength(1), maxLength(128)),
+    sender: pipe(string(), maxLength(128)),
+    recipient: pipe(string(), maxLength(128)),
+    value: pipe(string(), maxLength(4096)),
+    updated_at_unix_ms: pipe(number(), finite()),
+    truncated: optional(boolean()),
 });
-const PushListSchema = v.pipe(v.array(SyncPushMessageSchema), v.maxLength(100));
+const PushListSchema = pipe(array(SyncPushMessageSchema), maxLength(100));
 
 function parsePushMessages(value: unknown): SyncPushMessage[] | null {
     // A gate, not a rewrite: one unusable entry rejects the whole list, and
     // the caller keeps the original objects.
-    return v.safeParse(PushListSchema, value).success
+    return safeParse(PushListSchema, value).success
         ? (value as SyncPushMessage[])
         : null;
 }

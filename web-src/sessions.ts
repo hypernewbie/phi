@@ -31,7 +31,23 @@ import {
     renderLogo,
     RESERVED_CODER_IDS,
 } from './coders.js';
-import * as v from './vendor/valibot/index.min.mjs';
+import {
+    array,
+    boolean,
+    check,
+    finite,
+    literal,
+    maxLength,
+    minLength,
+    minValue,
+    number,
+    object,
+    optional,
+    pipe,
+    safeParse,
+    string,
+    unknown,
+} from './vendor/valibot/index.min.mjs';
 
 export function normalizePath(p: string): string {
     if (!p) return '';
@@ -164,42 +180,40 @@ function recoverSessionNamespace(identity: SessionCacheIdentity): void {
     unconfirmedSessionRemovals.delete(identity.namespace);
 }
 
-const SessionEntrySchema = v.object({
-    id: v.pipe(v.string(), v.minLength(1)),
-    title: v.string(),
+const SessionEntrySchema = object({
+    id: pipe(string(), minLength(1)),
+    title: string(),
     // The server always sends a parseable timestamp; a cached page with an
     // unreadable one is stale, not merely odd.
-    time_updated: v.pipe(
-        v.string(),
-        v.check((value) => Number.isFinite(Date.parse(value))),
+    time_updated: pipe(
+        string(),
+        check((value) => Number.isFinite(Date.parse(value))),
     ),
-    cwd: v.optional(v.string()),
-    coder: v.optional(v.string()),
-    session_path: v.optional(v.string()),
+    cwd: optional(string()),
+    coder: optional(string()),
+    session_path: optional(string()),
 });
 
-const WorktreeSchema = v.object({
-    path: v.pipe(v.string(), v.minLength(1)),
-    branch: v.optional(v.string()),
-    active: v.optional(v.boolean()),
-    expanded: v.optional(v.boolean()),
+const WorktreeSchema = object({
+    path: pipe(string(), minLength(1)),
+    branch: optional(string()),
+    active: optional(boolean()),
+    expanded: optional(boolean()),
 });
 
-const WorktreeListSchema = v.array(WorktreeSchema);
+const WorktreeListSchema = array(WorktreeSchema);
 
 // Only the shape is checked here: the caller keeps the original objects,
 // including fields this module does not know about.
 function isSessionPage(value: unknown, limit: number): value is any[] {
     if (!Array.isArray(value)) return false;
-    return v.safeParse(
-        v.pipe(v.array(SessionEntrySchema), v.maxLength(limit)),
-        value,
-    ).success;
+    return safeParse(pipe(array(SessionEntrySchema), maxLength(limit)), value)
+        .success;
 }
 
 function normalizeWorktrees(value: unknown): any[] | null {
     if (value === null) return [];
-    return v.safeParse(WorktreeListSchema, value).success
+    return safeParse(WorktreeListSchema, value).success
         ? (value as any[])
         : null;
 }
@@ -211,11 +225,11 @@ function featureKeyNamespace(key: string): string | null {
         : null;
 }
 
-const FeatureCacheEnvelopeSchema = v.object({
-    v: v.literal(1),
-    saved_at: v.pipe(v.number(), v.finite(), v.minValue(0)),
+const FeatureCacheEnvelopeSchema = object({
+    v: literal(1),
+    saved_at: pipe(number(), finite(), minValue(0)),
     // The payload is whatever the caller's validator accepts.
-    data: v.unknown(),
+    data: unknown(),
 });
 
 function parseFeatureCache(
@@ -229,7 +243,7 @@ function parseFeatureCache(
     } catch {
         return null;
     }
-    const envelope = v.safeParse(FeatureCacheEnvelopeSchema, json);
+    const envelope = safeParse(FeatureCacheEnvelopeSchema, json);
     if (!envelope.success || !validate(envelope.output.data)) return null;
     return envelope.output.data;
 }

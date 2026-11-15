@@ -14,7 +14,7 @@
  * step count and total duration, recipe validation, and "no recipe →
  * unavailable" (never a /model fallback).
  */
-import * as v from './vendor/valibot/index.min.mjs';
+import { array, boolean, fallback, minLength, minValue, null as nullSchema, number, object, picklist, pipe, safeInteger, safeParse, string, transform, union, } from './vendor/valibot/index.min.mjs';
 // Max wall-clock duration an executor will spend on one recipe. The
 // largest built-in (OpenCode Mini) is 5 steps with ~1.4s of waits; 5s is a
 // generous ceiling that still aborts runaway recipes quickly. R7.
@@ -224,7 +224,7 @@ export function rebuildRegistry(data) {
     registry = out;
 }
 // A field counts as set only when it is literally true.
-const flag = v.fallback(v.boolean(), false);
+const flag = fallback(boolean(), false);
 const NO_CAPABILITIES = {
     list: false,
     transcript: false,
@@ -235,33 +235,33 @@ const NO_CAPABILITIES = {
 // would be shared by every descriptor. Factories keep one entry's mistake out
 // of its neighbours.
 const freshCapabilities = () => ({ ...NO_CAPABILITIES });
-const CoderCapabilitiesSchema = v.object({
+const CoderCapabilitiesSchema = object({
     list: flag,
     transcript: flag,
     rename: flag,
     pi_rpc: flag,
 });
-const CoderPresetSchema = v.object({ name: v.string(), value: v.string() });
+const CoderPresetSchema = object({ name: string(), value: string() });
 // One bad preset is dropped and the rest of the list survives, so each entry
 // falls back to a null sentinel that the transform filters out.
-const PresetListSchema = v.fallback(v.pipe(v.array(v.fallback(v.union([CoderPresetSchema, v.null()]), null)), v.transform((list) => list.filter((item) => item !== null))), () => []);
-const CoderPayloadSchema = v.object({
+const PresetListSchema = fallback(pipe(array(fallback(union([CoderPresetSchema, nullSchema()]), null)), transform((list) => list.filter((item) => item !== null))), () => []);
+const CoderPayloadSchema = object({
     // A usable name is the one thing an entry cannot do without.
-    name: v.pipe(v.string(), v.minLength(1)),
+    name: pipe(string(), minLength(1)),
     // The null sentinel means "unset"; `?? undefined` below restores that.
-    order: v.fallback(v.union([v.pipe(v.number(), v.safeInteger(), v.minValue(0)), v.null()]), null),
+    order: fallback(union([pipe(number(), safeInteger(), minValue(0)), nullSchema()]), null),
     // Derived from `name` below; a schema cannot read a sibling field.
-    short_label: v.fallback(v.union([v.string(), v.null()]), null),
-    logo: v.fallback(v.string(), ''),
+    short_label: fallback(union([string(), nullSchema()]), null),
+    logo: fallback(string(), ''),
     sidebar_visible: flag,
     is_shell: flag,
-    input_mode: v.fallback(v.picklist(['staged', 'direct']), 'staged'),
+    input_mode: fallback(picklist(['staged', 'direct']), 'staged'),
     presets: PresetListSchema,
-    capabilities: v.fallback(CoderCapabilitiesSchema, freshCapabilities),
+    capabilities: fallback(CoderCapabilitiesSchema, freshCapabilities),
     model_switch_disabled: flag,
-    opencode_mode: v.fallback(v.union([v.picklist(['mini', 'tui', 'legacy']), v.null()]), null),
+    opencode_mode: fallback(union([picklist(['mini', 'tui', 'legacy']), nullSchema()]), null),
     opencode_mini_presets: PresetListSchema,
-    pi_mode: v.fallback(v.union([v.string(), v.null()]), null),
+    pi_mode: fallback(union([string(), nullSchema()]), null),
 });
 // coerceDescriptor validates one entry from /api/coders and returns
 // a normalized CoderDescriptor. Unknown fields are dropped silently;
@@ -269,7 +269,7 @@ const CoderPayloadSchema = v.object({
 function coerceDescriptor(id, raw) {
     if (RESERVED_CODER_IDS.has(id))
         return null;
-    const parsed = v.safeParse(CoderPayloadSchema, raw);
+    const parsed = safeParse(CoderPayloadSchema, raw);
     if (!parsed.success)
         return null;
     const r = parsed.output;

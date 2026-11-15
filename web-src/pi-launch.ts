@@ -3,7 +3,14 @@ import {
     appearanceOwner,
     appearanceRequestContext,
 } from './mobile-appearance.js';
-import * as v from './vendor/valibot/index.min.mjs';
+import {
+    maxValue,
+    minValue,
+    number,
+    pipe,
+    safeInteger,
+    safeParse,
+} from './vendor/valibot/index.min.mjs';
 
 export type PiAgent = 'pi' | 'psi';
 export interface PiLaunchState {
@@ -90,14 +97,14 @@ const emptyDraft = (): PiLaunchDraft => ({
     base: null,
     version: 0,
 });
-const RevisionSchema = v.pipe(
-    v.number(),
-    v.safeInteger(),
-    v.minValue(0),
-    v.maxValue(MAX_REVISION),
+const RevisionSchema = pipe(
+    number(),
+    safeInteger(),
+    minValue(0),
+    maxValue(MAX_REVISION),
 );
 const validRevision = (value: unknown): value is number =>
-    v.safeParse(RevisionSchema, value).success;
+    safeParse(RevisionSchema, value).success;
 const object = (value: unknown): value is Record<string, unknown> =>
     !!value && typeof value === 'object' && !Array.isArray(value);
 const validArgs = (value: unknown): value is string[] =>
