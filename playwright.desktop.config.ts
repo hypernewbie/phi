@@ -10,6 +10,9 @@ export default defineConfig({
         '**/terminal-ram-electron.spec.ts',
         '**/desktop-switch-storm.spec.ts',
         '**/desktop-identity-attribution.spec.ts',
+        // Real Electron specs that the Chromium suite cannot build for.
+        '**/auth-desktop.spec.ts',
+        '**/desktop-shell-drawer.spec.ts',
     ],
     testIgnore: [],
     workers: 1,

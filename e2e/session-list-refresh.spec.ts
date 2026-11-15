@@ -9,10 +9,7 @@ import {
     type Request,
     type Route,
 } from '@playwright/test';
-import {
-    isCancelledSessionListRead,
-    isCancelledWorktreeRead,
-} from './_session-requests.js';
+import { isCancelledBackgroundRead } from './_session-requests.js';
 import { startPhi } from './_server.js';
 
 function piProjectDirectory(home: string, cwd: string): string {
@@ -170,8 +167,7 @@ function collectBrowserErrors(
             request.failure()?.errorText === 'net::ERR_ABORTED'
         )
             return;
-        if (isCancelledSessionListRead(request, origin)) return;
-        if (isCancelledWorktreeRead(request, origin)) return;
+        if (isCancelledBackgroundRead(request, origin)) return;
         errors.push(
             `request: ${request.method()} ${request.url()} ${request.failure()?.errorText}`,
         );

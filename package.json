@@ -33,6 +33,7 @@
     "format:check": "biome format .",
     "format": "biome format --write .",
     "check:code": "biome ci .",
+    "check:e2e-shards": "node scripts/e2e-shards.mjs check",
     "check": "pnpm typecheck && pnpm --filter @phi/pi-phi typecheck && pnpm lint:web && pnpm check:code && pnpm check:vendors && pnpm --filter @phi/pi-phi test && pnpm test"
   },
   "devDependencies": {

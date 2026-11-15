@@ -211,11 +211,16 @@ test.describe('mobile', () => {
             name: 'Reload current terminal',
         });
         await reload.click();
+        // paneBody reports '' while a replay is pending, so a single sample
+        // after the reload races the next replay. Poll the counted value: a
+        // real duplicate replay renders 2 and never settles at 1.
         await expect
-            .poll(() => paneBody(page, pane), { timeout: 60_000 })
-            .toContain('TAIL-MARKER-ZZZ');
-        const body = await paneBody(page, pane);
-        expect(countIn(body, 'TAIL-MARKER-ZZZ')).toBe(1);
+            .poll(
+                async () =>
+                    countIn(await paneBody(page, pane), 'TAIL-MARKER-ZZZ'),
+                { timeout: 60_000 },
+            )
+            .toBe(1);
         expect(await atBottom(page, pane)).toBe(true);
 
         // The touch layout must not grow a horizontal scrollbar.

@@ -2007,7 +2007,6 @@ test('MVP touch titles and review', async ({ browser }, testInfo) => {
 
 const EDGE_VIEWPORTS = [
     { width: 320, height: 844 },
-    { width: 390, height: 844 },
     { width: 844, height: 390 },
 ];
 

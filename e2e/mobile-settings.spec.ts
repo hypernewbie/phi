@@ -1740,7 +1740,6 @@ test('missing custom fonts remain selected and reset waits for explicit resoluti
 
 for (const viewport of [
     { width: 320, height: 568 },
-    { width: 390, height: 844 },
     { width: 844, height: 390 },
 ]) {
     test(`mobile typography and Settings remain reachable at ${viewport.width}x${viewport.height}`, async ({

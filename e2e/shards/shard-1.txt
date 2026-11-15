@@ -1,0 +1,68 @@
+attachments-sources.spec.ts › cached server rows survive offline and refresh failure without crossing panes
+attachments-sources.spec.ts › changed, deleted, and unsafe server sources keep a retained error chip
+attachments-sources.spec.ts › desktop server file inside cwd snapshots without browser upload and reaches Pi read
+attachments-sources.spec.ts › mobile source menu supports keyboard, distinct inputs, and cancel drafts
+attachments-sources.spec.ts › multi-file batches preserve order and refuse partial sends
+attachments-sources.spec.ts › server selection outside cwd keeps unsafe names as data and supports keyboard
+attachments-sources.spec.ts › upload races keep typing, chips, and sends consistent
+coder-selector-layout.spec.ts › left coder selector drops labels before wrapping and restores them when widened
+notifications-drawer.spec.ts › M1 notifications drawer caps compact popups and dismisses locally
+notifications-drawer.spec.ts › M2 real bridge settlements group distinct ready panes and open the existing tab list
+notifications-drawer.spec.ts › M3a restores bounded notification previews and keeps local dismissal usable offline
+notifications-drawer.spec.ts › M3b keeps notification actions local and blocked until an explicit route is confirmed
+notifications-drawer.spec.ts › M3c injected Electron errors share the browser notification history and compact popup cap
+panel-resize.spec.ts › closed phone drawer allows the left-edge touch swipe
+panel-resize.spec.ts › desktop 8px resize targets work from both edges without blocking scrollbars
+panel-resize.spec.ts › desktop: both panels resize while offline
+panel-resize.spec.ts › desktop: cached sessions stay usable while refresh is pending
+panel-resize.spec.ts › desktop: resizing preserves terminal, scrolling and nearby controls
+panel-resize.spec.ts › drawer edge touch MVP does not close a tab
+panel-resize.spec.ts › drawer edge touch keeps tab-close targets usable across the handle
+panel-resize.spec.ts › drawer edge touch leaves nearby controls and modes unchanged
+panel-resize.spec.ts › drawer edge touch respects minimum width and keeps tab controls usable
+panel-resize.spec.ts › drawer handles resize with touch and mouse without stealing closed-edge input
+panel-resize.spec.ts › phone touch: both panels resize while offline
+panel-resize.spec.ts › phone touch: cached sessions stay usable while refresh is pending
+panel-resize.spec.ts › phone touch: resizing preserves terminal, scrolling and nearby controls
+panel-resize.spec.ts › responsive 1023x900 mouse
+panel-resize.spec.ts › responsive 1024x900 mouse
+panel-resize.spec.ts › responsive 1279x900 mouse
+panel-resize.spec.ts › responsive 1280x900 mouse
+panel-resize.spec.ts › responsive 1360x500 touch
+panel-resize.spec.ts › responsive 1360x501 touch
+panel-resize.spec.ts › responsive 1400x1539 mouse
+panel-resize.spec.ts › responsive 1400x1540 mouse
+panel-resize.spec.ts › responsive 1400x1541 mouse
+panel-resize.spec.ts › responsive 768x900 mouse
+panel-resize.spec.ts › responsive 769x900 mouse
+panel-resize.spec.ts › same page restores separate docked and drawer width preferences
+panel-resize.spec.ts › touch settings overlay receives input above an open drawer
+pi-compact-peer-loss.spec.ts › bridge-only peer loss: unknown caller, live Pi, no replay on reconnect
+pi-context-compact.spec.ts › native compact pressed during a turn waits for that turn
+pi-context-compact.spec.ts › native desktop compact: known meter, one entry, unknown, recovery
+pi-reload-state.spec.ts › Reload restores status and handles focus refusal and delayed receipts
+pi-syncboard-self-target.spec.ts › unset coordinator keeps real Pi Syncboard CRUD on the owning Phi store
+pi-syncboard-uncertainty.spec.ts › committed upsert reports unknown after bridge loss and is not replayed
+pi-syncboard-uncertainty.spec.ts › remote HTTP deadline settles as unknown within the caller budget and is not replayed
+pi-thinking-presets.spec.ts › mobile and touch: the menu fits and its controls are reachable
+pi-thinking-presets.spec.ts › saved Thinking options drive real Pi from an uninjected pane
+session-list-pagination.spec.ts › mobile › sidebar pages by tap without horizontal overflow
+session-list-pagination.spec.ts › sidebar honours a configured page size of 7
+session-list-pagination.spec.ts › sidebar pages Pi sessions 10 at a time and bounds title reads
+syncboard-addressed.spec.ts › desktop keyboard › reads a real push and preserves it after an offline reload
+syncboard-addressed.spec.ts › mobile touch › reads a real push and preserves it after an offline reload
+terminal-hidden-geometry.spec.ts › hidden bootstrap preserves cursor-addressed output through activation
+terminal-hidden-geometry.spec.ts › hidden font-family preserves cursor-addressed output through activation
+terminal-hidden-geometry.spec.ts › hidden font-size preserves cursor-addressed output through activation
+terminal-hidden-geometry.spec.ts › hidden live-gap preserves cursor-addressed output through activation
+terminal-hidden-geometry.spec.ts › initial background attachment never fits the hidden panel, including its open fallback
+terminal-toolbar.spec.ts › terminal toolbar on desktop › reloads the selected terminal and confirms close-all without closing
+terminal-toolbar.spec.ts › terminal toolbar on mobile › reloads the selected terminal and confirms close-all without closing
+version-badge.spec.ts › source builds show the current version in the sidebar and changelog title
+version-badge.spec.ts › the server release stamp overrides the source UI fallback
+web-assets.spec.ts › browser refresh loads disk edits without restarting Phi or changing its workspace
+websocket-events.spec.ts › watcher-driven markdown change and reconnect refresh the viewer
+workspace-manager.spec.ts › adds and removes projects through a live root folder
+workspace-manager.spec.ts › flushes a change queued in an earlier session when the app loads online
+workspace-manager.spec.ts › keeps an offline change locally and sends it once on reconnect
+workspace-manager.spec.ts › never resends an accepted write after its reply is lost and the page reloads
