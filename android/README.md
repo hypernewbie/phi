@@ -15,7 +15,7 @@ notifications.
 - Android SDK command-line tools under `~/Android/Sdk`
   (`cmdline-tools/latest`, plus `platform-tools`, one `platforms;android-37*`
   and matching `build-tools` via `sdkmanager`)
-- Gradle 9.x on `PATH` (the pinned AGP/Kotlin versions are in the build files)
+- Gradle via the committed wrapper (`./gradlew`) (the pinned AGP/Kotlin versions are in the build files)
 - `node` on `PATH` (vendoring re-runs the desktop script)
 - Either `ANDROID_HOME=~/Android/Sdk` in the environment or a gitignored
   `android/local.properties` containing `sdk.dir=/home/<you>/Android/Sdk`
@@ -23,7 +23,7 @@ notifications.
 ## Build
 
 ```sh
-gradle :app:assembleDebug
+./gradlew :app:assembleDebug
 # -> android/app/build/outputs/apk/debug/app-debug.apk
 ```
 

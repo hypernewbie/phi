@@ -492,4 +492,4 @@ jobs:
 
       - name: Build debug APK
         working-directory: android
-        run: gradle :app:assembleDebug --console=plain
+        run: ./gradlew :app:assembleDebug --console=plain
