@@ -58,6 +58,9 @@ func (m *tuiModel) render() string {
 	if m.modal.kind == modalBridge {
 		return fitScreen(m.renderBridgeModal(), m.width, m.height)
 	}
+	if m.modal.kind == modalSync {
+		return fitScreen(m.renderSyncModal(), m.width, m.height)
+	}
 	if m.modal.kind == modalDiff {
 		return m.renderDiffModal()
 	}

@@ -373,8 +373,11 @@ func (r *Relay) live(ctx context.Context, pane string) error {
 		case *wspb.TerminalServerFrame_Title,
 			*wspb.TerminalServerFrame_BridgeState,
 			*wspb.TerminalServerFrame_Settlement,
-			*wspb.TerminalServerFrame_Notification:
-			// Browser UI hints; no terminal output, no sequence impact.
+			*wspb.TerminalServerFrame_Notification,
+			*wspb.TerminalServerFrame_RefreshResult:
+			// Browser UI hints; no terminal output, no sequence impact. A
+			// refresh receipt can only answer a request this relay never
+			// sends, so it is ignored rather than treated as a fault.
 		default:
 			return errors.New("phic: unexpected terminal payload")
 		}

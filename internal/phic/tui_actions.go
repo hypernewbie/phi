@@ -260,6 +260,8 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.spawnForCoder(m.shellCoderID(), false, "")
 	case 'P':
 		return m, m.openBridgePanel()
+	case 'Y':
+		return m, m.openSyncPanel()
 	case 'o':
 		return m, m.spawnForCoder("opencode", true, "")
 	case 'm':
@@ -555,6 +557,9 @@ func (m *tuiModel) handleModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.modal.kind == modalBridge {
 		return m.handleBridgeModalKey(msg)
+	}
+	if m.modal.kind == modalSync {
+		return m.handleSyncModalKey(msg)
 	}
 	if m.modal.kind == modalDiff {
 		return m.handlePrettyDiffKey(msg)

@@ -48,6 +48,9 @@ const (
 	// modalBridge is the Pi controls panel: models, thinking levels, skills,
 	// compaction, and reload for the active Pi pane.
 	modalBridge
+	// modalSync is the sync board panel: list, read, upsert, and delete the
+	// server's addressed key/value messages.
+	modalSync
 )
 
 type modalItem struct {
@@ -279,6 +282,9 @@ type tuiModel struct {
 
 	// bridge is the Pi controls panel state (Ctrl-] P).
 	bridge bridgePanelState
+
+	// sync is the sync board panel state (Ctrl-] Y).
+	sync syncPanelState
 
 	sessionCursor int
 	sessionSearch textField
@@ -848,6 +854,10 @@ func (m *tuiModel) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m, m.handleBridgeActionMsg(msg)
 	case composeRecallMsg:
 		return m, m.applyRecallMsg(msg)
+	case syncLoadedMsg:
+		return m, m.handleSyncLoadedMsg(msg)
+	case syncMutationMsg:
+		return m, m.handleSyncMutationMsg(msg)
 
 	case msgCloseExpired:
 		return m.applyCloseExpired(msg)
@@ -1872,6 +1882,7 @@ func (m *tuiModel) openHelp() {
   Ctrl-] m        rename server
   Ctrl-] P        Pi controls (models, thinking, skills,
                   compact, reload) for the active Pi pane
+  Ctrl-] Y        sync board (list, read, write, delete)
   Ctrl-] a        add server
   Ctrl-] r        reload servers
   Ctrl-] y        copy diff
