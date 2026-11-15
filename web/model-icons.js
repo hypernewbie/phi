@@ -49,8 +49,6 @@ const PROVIDER_ALIASES = new Map([
     ['openrouter', 'openrouter'],
     ['groq', 'groq'],
 ]);
-// Routers pass their vendor through the remaining path segments.
-const ROUTER_ALIASES = new Set(['openrouter', 'router']);
 // A brand may start a segment, but only at a word boundary or before a
 // version digit: qwen3.8 is Qwen, while gpt-* and xiaomi stay unknown.
 const PREFIX_BOUNDARY = /[\s\-_.:@0-9]/;
@@ -72,34 +70,22 @@ export function providerMarkFor(model) {
     const value = model.trim().toLowerCase();
     if (!value)
         return null;
-    if (!value.includes('/')) {
-        const id = markForSegment(value);
-        return id ? { id } : null;
-    }
-    const segments = value.split('/').map((part) => part.trim());
-    if (segments.some((part) => part === ''))
+    const parts = value.split('/').map((part) => part.trim());
+    if (parts.some((part) => part === ''))
         return null;
-    const first = segments[0];
-    if (ROUTER_ALIASES.has(first)) {
-        // The router itself is the fallback, never the vendor of a model it
-        // only forwards.
-        for (let index = 1; index < segments.length; index += 1) {
-            const id = markForSegment(segments[index]);
-            if (id && id !== 'openrouter')
-                return { id };
-        }
-        return first === 'openrouter' ? { id: 'openrouter' } : null;
-    }
-    const direct = markForSegment(first);
-    if (direct)
-        return { id: direct };
-    // An unknown vendor can still pass a known model vendor.
-    for (let index = 1; index < segments.length; index += 1) {
-        const id = markForSegment(segments[index]);
-        if (id)
-            return { id };
-    }
-    return null;
+    // The provider is the first segment. A known provider wins even when the
+    // model belongs to another vendor (openrouter is OpenRouter, not the
+    // model it forwards). A provider prefix also covers openai-codex and
+    // kimi-coding.
+    const provider = markForSegment(parts[0]);
+    if (provider)
+        return { id: provider };
+    // The provider has no mark: read the model ID from that provider. Only
+    // the first model segment is the vendor; deeper segments are routing.
+    if (parts.length < 2)
+        return null;
+    const id = markForSegment(parts[1]);
+    return id ? { id } : null;
 }
 export function providerMarkUrlFor(id) {
     return Object.hasOwn(PROVIDER_MARK_URLS, id)

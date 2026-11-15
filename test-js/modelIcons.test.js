@@ -9,8 +9,8 @@ import {
 } from '../web/model-icons.js';
 
 // The compact pill has no words to explain a wrong icon, so the mapping is
-// tested directly: explicit providers win, routers defer to the vendor in
-// the path, and unknown names keep the robot.
+// tested directly: a known provider wins, an unknown provider falls through
+// to the model ID, and unknown names keep the robot.
 
 const FAMILIES = {
     deepseek: ['deepseek', 'deepseek-ai'],
@@ -52,7 +52,7 @@ describe('providerMarkFor', () => {
         ['qwen2.5-coder', 'qwen'],
         ['minimax/MiniMax-M3', 'minimax'],
         ['zai/glm-5', 'zhipu'],
-        ['openrouter/deepseek/deepseek-chat', 'deepseek'],
+        ['openrouter/deepseek/deepseek-chat', 'openrouter'],
         ['unknown/deepseek/deepseek-chat', 'deepseek'],
     ])('maps %j to %s', (model, id) => {
         expect(providerMarkFor(model)).toEqual({ id });
@@ -96,17 +96,17 @@ describe('providerMarkFor', () => {
     it.each([
         ['githubcopilot/gpt-5', 'githubcopilot'],
         ['groq/deepseek-r1', 'groq'],
-        ['openrouter/anthropic/claude-sonnet-4', 'anthropic'],
-        ['openrouter/openai/gpt-5', 'openai'],
+        ['openai-codex/gpt-5', 'openai'],
+        ['openrouter/anthropic/claude-sonnet-4', 'openrouter'],
+        ['openrouter/openai/gpt-5', 'openrouter'],
         ['moonshot/kimi-k2', 'kimi'],
         ['meta-llama/llama-4', 'meta'],
-        // A direct provider wins over a model name in its path.
+        // A known provider wins over the model vendor.
         ['google/deepseek', 'gemini'],
         ['amazon/claude', 'anthropic'],
-        // Router paths prefer the vendor, and only then the router.
-        ['openrouter/xai/grok-4', 'xai'],
-        ['openrouter/google/gemini-2.5', 'gemini'],
-        // Unknown paths read left to right.
+        ['openrouter/xai/grok-4', 'openrouter'],
+        ['openrouter/google/gemini-2.5', 'openrouter'],
+        // An unknown provider falls through to the first model segment.
         ['custom/mistral/groq', 'mistral'],
         ['proxy/xai/llama', 'xai'],
         ['openrouter/vendor/model-0', 'openrouter'],
