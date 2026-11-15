@@ -36,6 +36,18 @@ describe('computeKeyboardShift', () => {
         expect(next.visibleHeight).toBe(844);
         expect(next.layoutHeight).toBe(844);
         expect(next.layoutWidth).toBe(390);
+
+        // Browser chrome hiding grows the visible viewport with the layout
+        // unchanged. That is not an occlusion either: it becomes the new
+        // resting height, and only a later drop may capture it.
+        const grown = sample(closed(800), 844, 844, 390);
+        expect(grown.active).toBe(false);
+        expect(grown.shift).toBe(0);
+        expect(grown.visibleHeight).toBe(844);
+        const dropped = sample(grown, 500, 844, 390);
+        expect(dropped.active).toBe(true);
+        expect(dropped.rootHeight).toBe(844);
+        expect(dropped.shift).toBe(344);
     });
 
     it('U2 detects a visible-only drop and captures the pre-drop height', () => {
