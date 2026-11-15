@@ -25,6 +25,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.core.view.GravityCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.drawerlayout.widget.DrawerLayout
@@ -79,7 +80,7 @@ class MainActivity : ComponentActivity() {
         serverList = findViewById(R.id.serverList)
         zoomLabel = findViewById(R.id.zoomLabel)
 
-        edgeHandle.setOnClickListener { drawer.openDrawer(Gravity.START) }
+        edgeHandle.setOnClickListener { drawer.openDrawer(GravityCompat.START) }
         findViewById<Button>(R.id.addServer).setOnClickListener { promptAddServer() }
         findViewById<Button>(R.id.zoomIn).setOnClickListener { nudgeZoom(10) }
         findViewById<Button>(R.id.zoomOut).setOnClickListener { nudgeZoom(-10) }
@@ -122,8 +123,8 @@ class MainActivity : ComponentActivity() {
             this,
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
-                    if (drawer.isDrawerOpen(Gravity.START)) {
-                        drawer.closeDrawer(Gravity.START)
+                    if (drawer.isDrawerOpen(GravityCompat.START)) {
+                        drawer.closeDrawer(GravityCompat.START)
                         return
                     }
                     currentHost()?.view?.let {
@@ -336,7 +337,7 @@ class MainActivity : ComponentActivity() {
             row.addView(texts)
             row.tag = p.id
             row.setOnClickListener {
-                drawer.closeDrawer(Gravity.START)
+                drawer.closeDrawer(GravityCompat.START)
                 showServer(p.id)
             }
             row.setOnLongClickListener { promptEditServer(p); true }
@@ -350,7 +351,7 @@ class MainActivity : ComponentActivity() {
             val row = serverList.getChildAt(i)
             val selected = row.tag == activeId
             row.setBackgroundColor(
-                if (selected) Color.parseColor("#1E1E24") else Color.TRANSPARENT,
+                if (selected) getColor(R.color.obsidian_elevated) else Color.TRANSPARENT,
             )
         }
     }
@@ -496,13 +497,10 @@ class MainActivity : ComponentActivity() {
     // ---------- glass ----------
 
     private fun blurPanel(on: Boolean) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && on) {
-            panel.setRenderEffect(
-                RenderEffect.createBlurEffect(24f, 24f, Shader.TileMode.CLAMP),
-            )
-        } else {
-            panel.setRenderEffect(null)
-        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        panel.setRenderEffect(
+            if (on) RenderEffect.createBlurEffect(24f, 24f, Shader.TileMode.CLAMP) else null,
+        )
     }
 
     companion object {
