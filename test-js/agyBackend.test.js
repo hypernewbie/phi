@@ -8,6 +8,7 @@ import {
     formatAttachment,
     modelSwitchDisabled,
     agyRecipe,
+    recipeFor,
     executeRecipe,
 } from '../web/coders.js';
 import {
@@ -15,6 +16,7 @@ import {
     hasModelSwitch as hasModelSwitchSrc,
     modelSwitchDisabled as modelSwitchDisabledSrc,
     agyRecipe as agyRecipeSrc,
+    recipeFor as recipeForSrc,
 } from '../web-src/coders.js';
 
 setupDomHarness();
@@ -35,6 +37,18 @@ describe('Antigravity (agy) model support', () => {
             expect(formatAttachment('agy', '/project/main.go')).toBe(
                 '@/project/main.go',
             );
+        }
+    });
+
+    it('recipeFor wires agy to the bounded executor (renderModelDropup path)', () => {
+        // renderModelDropup calls recipeFor(backend) before its
+        // legacy opencode/pi/claude chains. agy must resolve to the
+        // single-send recipe; otherwise a preset click silently
+        // no-ops after the dropup closes.
+        for (const rf of [recipeFor, recipeForSrc]) {
+            expect(rf('agy')?.steps.map((s) => s.send)).toEqual([
+                '/model {model}\r',
+            ]);
         }
     });
 

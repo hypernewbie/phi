@@ -243,12 +243,12 @@ describe('presets row', () => {
         expect(button.innerText).toBe('toString');
     });
 
-    it('keeps the legacy Models button state for shells, Agy, and restored unknown tabs', () => {
+    it('keeps the legacy Models button state for shells and restored unknown tabs', () => {
         const tm = makeTm();
         for (const [coder, disabled, title] of [
             ['bash', false, 'Select the model for this session'],
             ['pwsh', false, 'Select the model for this session'],
-            ['agy', true, 'Model selection not supported for Antigravity'],
+            ['agy', false, 'Select the model for this session'],
             ['old-coder', false, 'Select the model for this session'],
         ]) {
             tm.activePaneId = 'pane';

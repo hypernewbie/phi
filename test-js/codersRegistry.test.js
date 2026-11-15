@@ -445,20 +445,26 @@ describe('executeRecipe', () => {
         ]);
     });
 
-    it('recipeFor returns undefined for built-ins (terminal.js owns their sequences) and unknown coders', () => {
-        // The three built-ins run their historical setTimeout chains
+    it('recipeFor returns undefined for chain-owned built-ins, the agy recipe for agy, and undefined for unknown coders', () => {
+        // opencode/pi/claude run their historical setTimeout chains
         // in terminal.js renderModelDropup, so recipeFor returns
-        // undefined for them. Custom profiles opt in by returning
-        // their descriptor-supplied recipe elsewhere; this stub
-        // models the boundary.
+        // undefined for them. codex opens its native picker instead
+        // of the dropup. agy has no historical chain: it returns the
+        // single-send recipe that renderModelDropup executes. Custom
+        // profiles opt in by returning their descriptor-supplied
+        // recipe elsewhere; this stub models the boundary.
         expect(recipeFor('opencode')).toBeUndefined();
         expect(recipeFor('pi')).toBeUndefined();
         expect(recipeFor('claude')).toBeUndefined();
         expect(recipeFor('bash')).toBeUndefined();
-        expect(recipeFor('agy')).toBeUndefined();
+        expect(recipeFor('codex')).toBeUndefined();
+        expect(recipeFor('unknown-coder')).toBeUndefined();
+        expect(recipeFor('agy')?.steps.map((s) => s.send)).toEqual([
+            '/model {model}\r',
+        ]);
     });
 
-    it('hasModelSwitch returns true only for the three built-ins', () => {
+    it('hasModelSwitch returns true for the recipe-backed built-ins', () => {
         // R7: coders without a model-switch recipe must not get a
         // guessed /model fallback. The Models button is hidden when
         // hasModelSwitch returns false.

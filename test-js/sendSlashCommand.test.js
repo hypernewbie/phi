@@ -462,6 +462,39 @@ describe('opencode/pi preset chip (desktop + mobile renderSlashDropup)', () => {
     });
 });
 
+describe('agy model preset dropup — bounded recipe executor', () => {
+    it('click sends canonical /model <slug> to the pinned pane', async () => {
+        const tm = makeTm();
+        tm.app.tabManager = tm;
+        tm.app.modelPresets.agy = [
+            'gemini-4-argon-high',
+            'gemini-3.8-flash-medium',
+        ];
+        const agy = makeTab('agy-1', 'agy');
+        agy.term = {};
+        const other = makeTab('other', 'pi');
+        tm.tabs.set(agy.paneId, agy);
+        tm.tabs.set(other.paneId, other);
+        tm.activePaneId = agy.paneId;
+
+        tm.renderModelDropup();
+        // Sorted: 3.8-flash-medium before 4-argon-high.
+        const btns = document.querySelectorAll(
+            '#model-presets-dropup .dropup-model-btn',
+        );
+        expect(btns.length).toBe(2);
+        btns[0].click();
+
+        // Switch tabs mid-flight: the recipe must stay pinned.
+        tm.activePaneId = other.paneId;
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(agy.ws.sendInput.mock.calls).toEqual([
+            ['/model gemini-3.8-flash-medium\r'],
+        ]);
+        expect(other.ws.sendInput).not.toHaveBeenCalled();
+    });
+});
+
 describe('WS drop mid-chain: toast + no cross-tab fallback', () => {
     it('opencode picker chain, ws.sendInput returns false: toast fires, no exception', () => {
         const tm = makeTm();

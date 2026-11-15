@@ -337,10 +337,10 @@ export function modelSwitchDisabled(id) {
 // do not get a guessed /model fallback. Built-in shells keep their
 // pre-registry Models control for UI parity.
 //
-// v1 returns true for the three built-ins. Custom profiles that
-// declare a model_switch recipe via a future patch field would
-// also return true — the function reads from the same registry the
-// executor reads from.
+// Returns true for the recipe-backed built-ins (opencode, pi,
+// claude, codex, agy). Custom profiles that declare a model_switch
+// recipe via a patch field also return true — the function reads
+// from the same registry the executor reads from.
 export function hasModelSwitch(id) {
     return (id === 'opencode' ||
         id === 'pi' ||
@@ -566,15 +566,16 @@ export function agyRecipe() {
     };
 }
 export function recipeFor(id) {
-    // Built-in three (opencode, pi, claude) intentionally return
-    // undefined here: their model-switch sequences are pinned to
-    // the click-time tab via terminal.js's historical setTimeout
-    // chains, which test-js/sendSlashCommand.test.js exercises
-    // byte-for-byte. Custom profiles that declare a model_switch
+    // opencode/pi/claude intentionally return undefined here: their
+    // model-switch sequences are pinned to the click-time tab via
+    // terminal.js's historical setTimeout chains, which
+    // test-js/sendSlashCommand.test.js exercises byte-for-byte.
+    // codex opens its native picker instead of the preset dropup, so
+    // it also returns undefined. agy has no historical chain — its
+    // single-send recipe runs through the bounded executor from
+    // renderModelDropup. Custom profiles that declare a model_switch
     // recipe in their JSON descriptor return the recipe data here
-    // so the bounded executor can drive them. The four built-in
-    // recipe builders above remain exported for tests and for
-    // future backend-specific custom profiles.
+    // so the bounded executor can drive them.
     switch (id) {
         case 'opencode':
             return undefined;
@@ -582,6 +583,8 @@ export function recipeFor(id) {
             return undefined;
         case 'claude':
             return undefined;
+        case 'agy':
+            return agyRecipe();
         default:
             return undefined;
     }

@@ -16769,14 +16769,11 @@ export class TabManager {
                     this.sendSlashCommand(activeTab, '/model');
             });
         }
-        else if (modelCoder === 'agy' ||
-            (isCustomModelCoder && !hasModelSwitch(modelCoder))) {
+        else if (isCustomModelCoder && !hasModelSwitch(modelCoder)) {
             modelsTriggerBtn.disabled = true;
             modelsTriggerBtn.classList.add('disabled');
             modelsTriggerBtn.title =
-                modelCoder === 'agy'
-                    ? 'Model selection not supported for Antigravity'
-                    : 'Model selection not supported for this coder';
+                'Model selection not supported for this coder';
         }
         else {
             modelsTriggerBtn.addEventListener('click', (e) => {
