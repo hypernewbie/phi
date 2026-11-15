@@ -13500,16 +13500,70 @@ body.fast-mode .logo-glow-wrapper::after {
 
 body.fast-mode .sidebar-panel,
 body.fast-mode .app-header,
-body.fast-mode .input-bar-container {
+body.fast-mode .input-bar-container,
+body.fast-mode .md-modal-content,
+body.fast-mode .self-hud,
+body.fast-mode .tab-hiero-preview,
+body.fast-mode .scroll-to-bottom-btn,
+body.fast-mode .modal-overlay,
+body.fast-mode .access-auth-overlay,
+body.fast-mode .md-modal-overlay,
+body.fast-mode .kanban-detail-overlay,
+body.fast-mode #diff-modal .diff-review-action-bar,
+body.fast-mode .kanban-column,
+body.fast-mode .find-bar,
+body.fast-mode .empty-launch-btn,
+body.fast-mode .header-config-pill:hover {
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
 }
 
-/* Fast mode kills the blur above but the beauty pass left these surfaces
-   translucent — without blur the drawer reads as broken-transparent over
-   terminal text. Restore the opaque panel behind it; blur stays off. */
-body.fast-mode .sidebar-panel {
+/* Fast mode kills backdrop blur (here and in desktop low-power mode) while the
+   beauty pass and floating overlays rely on translucent dark layers + blur for
+   contrast. Restore opaque panel/elevated fills and darker scrims so text
+   stays readable without terminal content bleeding through. */
+body.fast-mode .sidebar-panel,
+body.fast-mode .app-header,
+body.fast-mode .input-bar-container,
+body.fast-mode .md-modal-content,
+body.fast-mode #diff-modal .diff-review-action-bar {
     background-color: var(--bg-panel) !important;
+}
+
+body.fast-mode .self-hud,
+body.fast-mode .tab-hiero-preview,
+body.fast-mode .kanban-column {
+    background-color: var(--bg-elevated) !important;
+}
+
+body.fast-mode .scroll-to-bottom-btn {
+    background-color: var(--bg-panel) !important;
+}
+
+body.fast-mode .scroll-to-bottom-btn:hover {
+    background-color: var(--bg-elevated) !important;
+}
+
+body.fast-mode .empty-launch-btn {
+    background-color: var(--bg-panel) !important;
+}
+
+body.fast-mode .empty-launch-btn:hover,
+body.fast-mode .header-config-pill:hover {
+    background-color: var(--bg-elevated) !important;
+}
+
+body.fast-mode .modal-overlay,
+body.fast-mode .md-modal-overlay {
+    background-color: rgba(0, 0, 0, 0.85) !important;
+}
+
+body.fast-mode .access-auth-overlay {
+    background-color: rgba(5, 7, 13, 0.94) !important;
+}
+
+body.fast-mode .kanban-detail-overlay {
+    background-color: rgba(0, 0, 0, 0.78) !important;
 }
 
 /* ═══════════════════════════════════════════════════════════
