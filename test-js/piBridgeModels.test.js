@@ -19,6 +19,7 @@ vi.mock('../web/chat-pi/controller.js', () => ({
 }));
 
 import { TabManager } from '../web/terminal.js';
+import { providerMarkUrlFor } from '../web/model-icons.js';
 import { getPiRpcControls } from '../web/chat-pi/controller.js';
 import { ModelRequestTimeout } from '../web/model-request.js';
 
@@ -28,7 +29,15 @@ afterEach(() => {
     vi.clearAllMocks();
     // Each test is a fresh browser: no cached model list carries over.
     window.localStorage.clear();
+    setWidth(1024);
 });
+
+function setWidth(width) {
+    Object.defineProperty(window, 'innerWidth', {
+        configurable: true,
+        value: width,
+    });
+}
 
 function bridgeTab(over = {}) {
     const ws = {};
@@ -169,6 +178,135 @@ describe('bridge models trigger', () => {
                 value: innerWidth,
             });
         }
+    });
+
+    it('paints the DeepSeek whale and the galaxy tier in the compact row', () => {
+        const tab = bridgeTab({
+            piBridge: {
+                state: 'managed',
+                connected: true,
+                model: 'deepseek/deepseek-chat',
+                thinking_level: 'max',
+                capabilities: [
+                    'pi.lifecycle.v1',
+                    'pi.models.v1',
+                    'pi.thinking.v1',
+                ],
+            },
+        });
+        const { tm } = harness(tab);
+        const fetchMock = mockFetch(() => undefined);
+        setWidth(390);
+        tm.renderPresets('pi');
+
+        const model = tm.presetsContainer.querySelector(
+            '.pi-rpc-model-trigger',
+        );
+        const thinking = tm.presetsContainer.querySelector(
+            '.pi-rpc-thinking-trigger',
+        );
+        const slot = model.firstElementChild;
+        // The mark is synchronous: no robot pass for a known provider.
+        expect(slot.className).toBe('compact-mark-slot model-provider-mark');
+        expect(slot.getAttribute('aria-hidden')).toBe('true');
+        expect(slot.textContent).toBe('');
+        expect(slot.querySelector('.compact-model-fallback')).toBeNull();
+        expect(model.dataset.modelMark).toBe('deepseek');
+        expect(slot.style.getPropertyValue('--model-mark')).toBe(
+            `url("${providerMarkUrlFor('deepseek')}")`,
+        );
+        expect(
+            fetchMock.mock.calls.some(([url]) =>
+                String(url).includes('/vendor/model-icons/'),
+            ),
+        ).toBe(false);
+        expect(model.title).toBe('Change the model for this session');
+        expect(model.getAttribute('aria-label')).toBe(
+            'Model: deepseek/deepseek-chat. Change the model for this session',
+        );
+
+        const glyph = thinking.querySelector('.thinking-glyph');
+        expect(glyph.textContent).toBe('🌌');
+        expect(glyph.dataset.thinkingTier).toBe('max');
+        expect(glyph.classList.contains('thinking-glyph--max')).toBe(true);
+        expect(glyph.style.fontSize).toBe('16px');
+        expect(thinking.title).toBe('Thinking · max');
+        expect(thinking.getAttribute('aria-label')).toBe(
+            'Thinking: max. Thinking · max',
+        );
+
+        // Row order is unchanged: model, thinking, then Cmds.
+        const row = [...tm.presetsContainer.children];
+        expect(row[0]).toBe(model);
+        expect(row[1]).toBe(thinking);
+        expect(row[2].textContent || row[2].innerText).toBe('Cmds ▾');
+    });
+
+    it('keeps each Pi capability from borrowing the other value', async () => {
+        const modelOnly = bridgeTab({
+            piBridge: {
+                state: 'managed',
+                connected: true,
+                model: 'deepseek/deepseek-chat',
+                // Ineligible leftovers must not become a compact glyph.
+                thinking_level: 'max',
+                capabilities: ['pi.lifecycle.v1', 'pi.models.v1'],
+            },
+        });
+        const { tm } = harness(modelOnly);
+        mockFetch(() => undefined);
+        setWidth(390);
+        tm.renderPresets('pi');
+        expect(
+            tm.presetsContainer
+                .querySelector('.pi-rpc-model-trigger')
+                .getAttribute('data-model-mark'),
+        ).toBe('deepseek');
+        const staleGlyph = tm.presetsContainer.querySelector(
+            '.pi-rpc-thinking-trigger .thinking-glyph',
+        );
+        expect(staleGlyph.textContent).toBe('🧠');
+        expect(staleGlyph.dataset.thinkingTier).toBe('unknown');
+        expect(staleGlyph.style.fontSize).toBe('16px');
+        expect(
+            tm.presetsContainer
+                .querySelector('.pi-rpc-thinking-trigger')
+                .getAttribute('aria-label'),
+        ).toBe('Thinking · saved options');
+
+        const thinkingOnly = bridgeTab({
+            piBridge: {
+                state: 'managed',
+                connected: true,
+                // Ineligible leftovers must not become a provider mark.
+                model: 'deepseek/deepseek-chat',
+                thinking_level: 'max',
+                capabilities: ['pi.lifecycle.v1', 'pi.thinking.v1'],
+            },
+        });
+        const second = harness(thinkingOnly);
+        const fetchMock = mockFetch(() => undefined);
+        setWidth(390);
+        second.tm.renderPresets('pi');
+        const robot = second.tm.presetsContainer.querySelector(
+            '.model-trigger-btn[data-model-mark="fallback"] .compact-model-fallback',
+        );
+        expect(robot.textContent).toBe('🤖');
+        expect(
+            second.tm.presetsContainer.querySelector(
+                '.model-trigger-btn[data-model-mark]',
+            ).dataset.modelMark,
+        ).toBe('fallback');
+        expect(
+            fetchMock.mock.calls.some(([url]) =>
+                String(url).includes('/vendor/model-icons/'),
+            ),
+        ).toBe(false);
+        const liveGlyph = second.tm.presetsContainer.querySelector(
+            '.pi-rpc-thinking-trigger .thinking-glyph',
+        );
+        expect(liveGlyph.textContent).toBe('🌌');
+        expect(liveGlyph.dataset.thinkingTier).toBe('max');
     });
 
     it('keeps the words on a desktop pane without thinking', () => {
@@ -1206,5 +1344,107 @@ describe('bridge state transitions', () => {
             running: false,
         });
         expect(tm.renderPresets).not.toHaveBeenCalled();
+    });
+});
+
+// Compact marks are synchronous now; these cases cover replacement and state.
+describe('compact mark state changes', () => {
+    function plainButton(title) {
+        const button = document.createElement('button');
+        button.title = title;
+        return button;
+    }
+
+    it('replaces the thinking tier instead of accumulating classes', () => {
+        const tm = Object.create(TabManager.prototype);
+        const button = plainButton('Thinking · high');
+        tm._applyCompactThinkingMark(button, 'high');
+        expect(button.className).toBe('compact-icon-btn');
+        tm._applyCompactThinkingMark(button, 'max');
+        expect(button.className).toBe('compact-icon-btn');
+        expect(button.querySelectorAll('.thinking-glyph')).toHaveLength(1);
+        const glyph = button.querySelector('.thinking-glyph');
+        expect(glyph.classList.contains('thinking-glyph--max')).toBe(true);
+        expect(glyph.classList.contains('thinking-glyph--high')).toBe(false);
+        expect(button.title).toBe('Thinking · high');
+        expect(button.getAttribute('aria-label')).toBe(
+            'Thinking: max. Thinking · high',
+        );
+
+        tm._applyCompactThinkingMark(button, '');
+        expect(
+            button.querySelector('.thinking-glyph').dataset.thinkingTier,
+        ).toBe('unknown');
+        expect(button.className).toBe('compact-icon-btn');
+    });
+
+    it('restores focus across an unchanged compact Pi repaint', () => {
+        const tab = bridgeTab();
+        const { tm } = harness(tab);
+        mockFetch(() => undefined);
+        setWidth(390);
+        tm.renderPresets('pi');
+        const before = tm.presetsContainer.querySelector(
+            '.pi-rpc-model-trigger',
+        );
+        before.focus();
+        expect(document.activeElement).toBe(before);
+
+        tm.renderPresets('pi');
+        const after = tm.presetsContainer.querySelector(
+            '.pi-rpc-model-trigger',
+        );
+        expect(after).not.toBe(before);
+        expect(document.activeElement).toBe(after);
+        expect(after.getAttribute('aria-label')).toBe(
+            'Model: a/x. Change the model for this session',
+        );
+    });
+
+    it('does not leak a stale bridge model or level after a reconnect', () => {
+        const tab = bridgeTab({
+            piBridge: {
+                state: 'managed',
+                connected: true,
+                model: 'deepseek/deepseek-chat',
+                thinking_level: 'max',
+                capabilities: [
+                    'pi.lifecycle.v1',
+                    'pi.models.v1',
+                    'pi.thinking.v1',
+                ],
+            },
+        });
+        const { tm } = harness(tab);
+        mockFetch(() => undefined);
+        setWidth(390);
+        tm.renderPresets('pi');
+        const model = () =>
+            tm.presetsContainer.querySelector(
+                '.model-trigger-btn[data-model-mark]',
+            );
+        const glyph = () =>
+            tm.presetsContainer.querySelector(
+                '.pi-rpc-thinking-trigger .thinking-glyph',
+            );
+        expect(model().dataset.modelMark).toBe('deepseek');
+        expect(glyph().dataset.thinkingTier).toBe('max');
+
+        tab.piBridge = { ...tab.piBridge, connected: false };
+        tm.renderPresets('pi');
+        expect(model().dataset.modelMark).toBe('fallback');
+        expect(
+            model().querySelector('.compact-model-fallback').textContent,
+        ).toBe('🤖');
+        expect(model().getAttribute('aria-label')).toBe(
+            'Select the model for this session',
+        );
+        // The saved level stays in the bridge state, not in the pill.
+        expect(glyph().dataset.thinkingTier).toBe('unknown');
+
+        tab.piBridge = { ...tab.piBridge, connected: true };
+        tm.renderPresets('pi');
+        expect(model().dataset.modelMark).toBe('deepseek');
+        expect(glyph().dataset.thinkingTier).toBe('max');
     });
 });

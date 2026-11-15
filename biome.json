@@ -8,6 +8,7 @@
             "e2e/**/*.ts",
             "npm/scripts/**/*.js",
             "web-src/**/*.ts",
+            "!web-src/model-icon-data.ts",
             "test-js/**/*.js",
             "e2e/**/*.ts",
             "playwright.config.ts",

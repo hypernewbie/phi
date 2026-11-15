@@ -3475,6 +3475,45 @@ body.has-terminal-bg
     padding: 0.2143rem 0.5714rem;
 }
 
+/* Compact Pi pills: one fixed 16px slot. Provider marks are theme-colored
+   masks, and the brain ladder grows inside the slot that holds it. */
+.preset-btn.compact-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.compact-mark-slot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 16px;
+    width: 16px;
+    height: 16px;
+    line-height: 1;
+    overflow: visible;
+}
+
+.compact-model-fallback {
+    font-size: 16px;
+}
+
+.model-provider-mark {
+    background-color: currentColor;
+    -webkit-mask-image: var(--model-mark);
+    mask-image: var(--model-mark);
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-position: center;
+    mask-position: center;
+    -webkit-mask-size: contain;
+    mask-size: contain;
+}
+
+.thinking-glyph--off {
+    opacity: 0.55;
+}
+
 .pi-rpc-context-meter {
     position: relative;
     display: inline-flex;
