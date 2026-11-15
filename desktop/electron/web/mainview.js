@@ -240,6 +240,9 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
     'header-diff-toggle-btn',
     'header-export-btn',
     'header-import-btn',
+    // The workspace manager dialog lives in the body page too; relay the
+    // vendored header's `...` button to it.
+    'ws-manager-btn',
     // The sessions/tabs drawer lives in the body page, whose own header is
     // hidden here; relay the vendored header's hamburger to it.
     'mobile-sidebar-toggle',

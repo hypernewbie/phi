@@ -6064,6 +6064,7 @@ export class DesktopHost {
       'mobile-sidebar-toggle',
       'add-workspace-btn',
       'remove-workspace-btn',
+      'ws-manager-btn',
     ]);
     ipcMain.handle('phi:header-action', (event, payload: unknown) => {
       if (!isMainViewSender(event)) return;
@@ -6089,10 +6090,12 @@ export class DesktopHost {
         if (
           action.id === 'header-config-pill' ||
           action.id === 'header-notifications-btn' ||
-          // The drawer opens inside the body view, and clicking the shell
-          // header moved keyboard focus out of it; hand focus back so the
-          // terminal keeps receiving keys once the drawer closes.
-          action.id === 'mobile-sidebar-toggle'
+          // The drawer and the workspace manager open inside the body view,
+          // and clicking the shell header moved keyboard focus out of it;
+          // hand focus back so the terminal or the dialog keeps receiving
+          // keys.
+          action.id === 'mobile-sidebar-toggle' ||
+          action.id === 'ws-manager-btn'
         ) {
           view.webContents.focus();
         }
