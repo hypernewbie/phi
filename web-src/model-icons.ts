@@ -79,9 +79,9 @@ const PROVIDER_ALIASES: ReadonlyMap<string, string> = new Map([
 // Routers pass their vendor through the remaining path segments.
 const ROUTER_ALIASES = new Set(['openrouter', 'router']);
 
-// A brand may start a segment, but only at a word boundary: gpt-* must not
-// become OpenAI, and xiaomi must not become xAI.
-const PREFIX_BOUNDARY = /[\s\-_.:@]/;
+// A brand may start a segment, but only at a word boundary or before a
+// version digit: qwen3.8 is Qwen, while gpt-* and xiaomi stay unknown.
+const PREFIX_BOUNDARY = /[\s\-_.:@0-9]/;
 
 const ALIASES_BY_LENGTH = [...PROVIDER_ALIASES.keys()].sort(
     (a, b) => b.length - a.length,

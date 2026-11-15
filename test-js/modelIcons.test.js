@@ -47,6 +47,9 @@ describe('providerMarkFor', () => {
         ['deepseek-ai/DeepSeek-V3', 'deepseek'],
         ['kimi-coding/k3', 'kimi'],
         ['kimi-coding/kimi-for-coding', 'kimi'],
+        ['opencode-go/qwen3.8-max', 'qwen'],
+        ['qwen3.8-max', 'qwen'],
+        ['qwen2.5-coder', 'qwen'],
         ['minimax/MiniMax-M3', 'minimax'],
         ['zai/glm-5', 'zhipu'],
         ['openrouter/deepseek/deepseek-chat', 'deepseek'],
@@ -149,6 +152,8 @@ describe('providerMarkFor', () => {
             '.chat',
             ':chat',
             '@chat',
+            '3',
+            '3.8-max',
         ])
             expect(providerMarkFor(`deepseek${suffix}`)).toEqual({
                 id: 'deepseek',

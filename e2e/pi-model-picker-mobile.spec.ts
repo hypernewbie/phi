@@ -407,6 +407,54 @@ tm.renderPresets('${mode}');
 // Prove the mask paints instead of trusting a computed URL: hide the slot,
 // capture it twice, then compare normal paint with an unmasked solid square.
 // Same page, same settled background, pointer parked off the chip.
+async function differentPixelCount(page: Page, a: Buffer, b: Buffer) {
+    return page.evaluate(
+        async ({ a, b }) => {
+            const load = async (base64: string) => {
+                const img = new Image();
+                img.src = `data:image/png;base64,${base64}`;
+                await img.decode();
+                return img;
+            };
+            const [left, right] = await Promise.all([load(a), load(b)]);
+            if (left.width !== right.width || left.height !== right.height)
+                return Number.POSITIVE_INFINITY;
+            const canvas = document.createElement('canvas');
+            canvas.width = left.width;
+            canvas.height = left.height;
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            if (!ctx) return 0;
+            ctx.drawImage(left, 0, 0);
+            const leftPixels = ctx.getImageData(
+                0,
+                0,
+                canvas.width,
+                canvas.height,
+            ).data;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(right, 0, 0);
+            const rightPixels = ctx.getImageData(
+                0,
+                0,
+                canvas.width,
+                canvas.height,
+            ).data;
+            let different = 0;
+            for (let i = 0; i < leftPixels.length; i += 4) {
+                if (
+                    Math.abs(leftPixels[i] - rightPixels[i]) > 16 ||
+                    Math.abs(leftPixels[i + 1] - rightPixels[i + 1]) > 16 ||
+                    Math.abs(leftPixels[i + 2] - rightPixels[i + 2]) > 16 ||
+                    Math.abs(leftPixels[i + 3] - rightPixels[i + 3]) > 16
+                )
+                    different += 1;
+            }
+            return different;
+        },
+        { a: a.toString('base64'), b: b.toString('base64') },
+    );
+}
+
 async function expectPainted(
     page: Page,
     selector: string,
@@ -459,6 +507,11 @@ async function expectPainted(
         expect(painted.equals(solid), `${label}: the mask painted solid`).toBe(
             false,
         );
+        const paintedPixels = await differentPixelCount(page, hidden, painted);
+        expect(
+            paintedPixels,
+            `${label}: only ${paintedPixels} pixels painted`,
+        ).toBeGreaterThan(16);
         writeFileSync(testInfo.outputPath(`${label}-painted.png`), painted);
         writeFileSync(testInfo.outputPath(`${label}-hidden.png`), hidden);
         writeFileSync(testInfo.outputPath(`${label}-solid.png`), solid);
@@ -479,6 +532,7 @@ test.describe('compact Pi model and thinking pills', () => {
         ['zhipu', 'zai/glm-5', 'GLM-5'],
         ['openai', 'openai-codex/gpt-5', 'OpenAI GPT-5'],
         ['openrouter', 'openrouter/vendor/model-0', 'OpenRouter'],
+        ['qwen', 'opencode-go/qwen3.8-max', 'Qwen3.8 Max'],
     ] as const;
 
     async function openPills(page: Page, mode: (typeof modes)[number]) {
@@ -580,10 +634,7 @@ test.describe('compact Pi model and thinking pills', () => {
                 ).toBe(0);
                 expect(iconRequests).toEqual([]);
 
-                for (const [id, bridgeModel, rpcModel] of providers.slice(
-                    0,
-                    3,
-                )) {
+                for (const [id, bridgeModel, rpcModel] of providers) {
                     await setModel(
                         page,
                         mode,
