@@ -758,6 +758,70 @@ export function visibleViewportHeight() {
         return visualHeight;
     return validLayout ? layoutHeight : 0;
 }
+function emptyKeyboardShift() {
+    return {
+        active: false,
+        rootHeight: 0,
+        visibleHeight: 0,
+        layoutHeight: 0,
+        layoutWidth: 0,
+        shift: 0,
+    };
+}
+// Return a new state; never mutate the previous one.
+//
+// The captured rootHeight is what keeps the root still while the keyboard
+// animates, so later events may never overwrite it. A layout-height increase
+// is not permission to resize either: iOS may hide chrome while its keyboard
+// animates. Only a real layout change or a full visible restoration clears it.
+export function computeKeyboardShift(state, visibleHeight, layoutHeight, layoutWidth) {
+    // Invalid input cannot seed a later detection.
+    for (const value of [visibleHeight, layoutHeight, layoutWidth]) {
+        if (!Number.isFinite(value) || value <= 0)
+            return emptyKeyboardShift();
+    }
+    const dimensions = { visibleHeight, layoutHeight, layoutWidth };
+    const seeded = {
+        ...emptyKeyboardShift(),
+        ...dimensions,
+    };
+    // No valid previous sample, or a width change: reseed only. A new
+    // occlusion is never detected in the call that resets its baseline.
+    if (!(state.visibleHeight > 0) ||
+        !(state.layoutHeight > 0) ||
+        !(state.layoutWidth > 0) ||
+        state.layoutWidth !== layoutWidth) {
+        return seeded;
+    }
+    // A real layout-height decrease, or a full visible restoration, clears
+    // the capture. Still no re-detection in this call.
+    if (state.active &&
+        (layoutHeight < state.layoutHeight || visibleHeight >= state.rootHeight)) {
+        return seeded;
+    }
+    // Inactive: only a visible drop at an unchanged or growing layout height
+    // is a keyboard-like occlusion. A drop of both heights is a layout resize.
+    if (!state.active) {
+        if (visibleHeight < state.visibleHeight &&
+            layoutHeight >= state.layoutHeight) {
+            return {
+                ...seeded,
+                active: true,
+                rootHeight: state.visibleHeight,
+                shift: Math.max(0, state.visibleHeight - visibleHeight),
+            };
+        }
+        return seeded;
+    }
+    // Active: retain the capture. A partial visible return is a partial
+    // close, not permission to resize the root.
+    return {
+        ...seeded,
+        active: true,
+        rootHeight: state.rootHeight,
+        shift: Math.max(0, state.rootHeight - visibleHeight),
+    };
+}
 // Regex for matching URLs and mailto links in terminal lines.
 // Excludes trailing sentence punctuation (. , ; : ! ? " ' ) while preserving
 // balanced parentheses for Wikipedia-style links.

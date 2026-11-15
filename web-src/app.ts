@@ -17,6 +17,8 @@ import {
     isSidebarDrawerViewport,
     isDiffDrawerViewport,
     visibleViewportHeight,
+    computeKeyboardShift,
+    type KeyboardShiftState,
     COMPACT_VIEWPORT_QUERY,
     SIDEBAR_PANEL_CAP,
     DIFF_PANEL_CAP,
@@ -250,6 +252,15 @@ export class App {
 
     _defaultStore: BackendStore;
     _initializedOnce: boolean;
+    /** Soft-keyboard shift: root height captured before the occlusion. */
+    _kbShiftState: KeyboardShiftState = {
+        active: false,
+        rootHeight: 0,
+        visibleHeight: 0,
+        layoutHeight: 0,
+        layoutWidth: 0,
+        shift: 0,
+    };
     _switchSeq: number;
     _switchChain: Promise<boolean>;
     _isDraggingDrawer: boolean;
@@ -260,7 +271,7 @@ export class App {
     _fleetPollTimer?: ReturnType<typeof setInterval> | null;
     _fleetPollScope?: FleetPollScope;
 
-    /** Installed by initResizers; also drives the mobile viewport fix. */
+    /** Installed by initOnce; also drives the mobile viewport fix. */
     updateLayoutPosition!: (
         shouldFit?: boolean,
         resetDocumentScroll?: boolean,
@@ -889,7 +900,52 @@ export class App {
         //   4. Set the main container height to `var(--vv-height)` and pin it with `position: fixed; top: 0; bottom: auto;`.
         //   5. Correct document scroll only from the input-focus path that
         //      triggered iOS's native focus-scroll — never from generic scroll events.
+        //      --vv-height still drives overlays, drawers and HTML tabs. The
+        //      terminal-only shift rule keeps the captured root height instead,
+        //      so the frozen grid is never fitted on the keyboard path.
         // ==========================================
+        // The shift needs a captured root, a stable scale and a CSS gate on
+        // the live terminal. Without those, every shell keeps today's
+        // layout path instead of guessing a shift.
+        const root = document.documentElement;
+        const emptyShift: KeyboardShiftState = {
+            active: false,
+            rootHeight: 0,
+            visibleHeight: 0,
+            layoutHeight: 0,
+            layoutWidth: 0,
+            shift: 0,
+        };
+        const shiftContent =
+            document.querySelector<HTMLElement>('.terminal-content');
+        let shiftSupported = false;
+        try {
+            shiftSupported =
+                typeof ResizeObserver === 'function' &&
+                typeof CSS !== 'undefined' &&
+                CSS.supports('selector(:has(*))');
+        } catch {
+            shiftSupported = false;
+        }
+        // The content's untransformed origin. The only transform this app
+        // applies to it is our own vertical shift, so adding the CURRENT
+        // --kb-shift back gives the origin the transform started from.
+        const readContentOrigin = (content: HTMLElement) => {
+            const rect = content.getBoundingClientRect();
+            const translated = getComputedStyle(content).transform !== 'none';
+            const shift = translated
+                ? Number.parseFloat(root.style.getPropertyValue('--kb-shift'))
+                : 0;
+            // A missing or malformed var must not poison the sink with NaN:
+            // an invalid calc() silently drops the whole declaration.
+            const appliedShift = Number.isFinite(shift) ? shift : 0;
+            return { left: rect.left, top: rect.top + appliedShift };
+        };
+        const writeStyle = (name: string, value: string) => {
+            if (root.style.getPropertyValue(name) !== value)
+                root.style.setProperty(name, value);
+        };
+
         // Define this even when old Chromium lacks visualViewport. Android
         // Chrome's window.innerHeight is the only usable fallback there;
         // modern Safari/Chromium still take the visualViewport path through
@@ -908,30 +964,98 @@ export class App {
             // their CSS fallback is pixel-identical to a desktop browser.
             const isTouchShell = !isDesktop && isCoarseViewport();
             const height = visibleViewportHeight();
-            if (isTouchShell && height > 0) {
-                document.documentElement.style.setProperty(
-                    '--vv-height',
-                    `${height}px`,
-                );
+            const viewport = window.visualViewport;
+            const visualHeight = viewport?.height ?? 0;
+            const shiftEligible =
+                isTouchShell &&
+                height > 0 &&
+                !!viewport &&
+                Number.isFinite(visualHeight) &&
+                visualHeight > 0 &&
+                viewport.scale === 1 &&
+                shiftSupported &&
+                !!shiftContent;
 
+            let nextState: KeyboardShiftState = { ...emptyShift };
+            let origin: { left: number; top: number } | null = null;
+            if (isTouchShell && height > 0) {
                 // iOS may move the document to reveal a focused input.
                 // Correct that specific focus side effect only; doing this
                 // for every scroll event steals terminal/page scrolling.
+                // Sample only after it: a native focus-scroll would
+                // otherwise contaminate the content origin.
                 if (
                     resetDocumentScroll &&
                     (window.scrollY > 0 || window.scrollX > 0)
                 ) {
                     window.scrollTo(0, 0);
                 }
-
-                if (shouldFit) {
-                    this.tabManager?.fitActiveTerminal();
-                    this.diffController?.fitTerminal();
+                if (shiftEligible) {
+                    // Initialization, orientationchange and pageshow
+                    // invalidate the old viewport baseline; they keep
+                    // their existing fit semantics too.
+                    const previous = shouldFit
+                        ? { ...emptyShift }
+                        : this._kbShiftState;
+                    nextState = computeKeyboardShift(
+                        previous,
+                        height,
+                        root.clientHeight,
+                        root.clientWidth,
+                    );
+                    if (nextState.active && shiftContent) {
+                        origin = readContentOrigin(shiftContent);
+                    }
                 }
+            }
+
+            if (isTouchShell && height > 0) {
+                writeStyle('--vv-height', `${height}px`);
             } else {
-                document.documentElement.style.removeProperty('--vv-height');
+                root.style.removeProperty('--vv-height');
+            }
+
+            this._kbShiftState = nextState;
+            if (nextState.active && shiftContent && origin) {
+                // Publish the intent even when an HTML tab or no xterm is
+                // live: CSS, not a sampled JS query, owns the terminal gate.
+                writeStyle('--kb-content-left', `${origin.left}px`);
+                writeStyle('--kb-content-top', `${origin.top}px`);
+                writeStyle('--kb-root-height', `${nextState.rootHeight}px`);
+                writeStyle('--kb-shift', `${nextState.shift}px`);
+                if (root.getAttribute('data-kb-shift') !== 'terminal')
+                    root.setAttribute('data-kb-shift', 'terminal');
+            } else if (
+                root.hasAttribute('data-kb-shift') ||
+                root.style.getPropertyValue('--kb-root-height') !== ''
+            ) {
+                // Guarded: this runs on every viewport event, and a CSSOM
+                // write on :root invalidates style for the whole document.
+                root.style.removeProperty('--kb-content-left');
+                root.style.removeProperty('--kb-content-top');
+                root.style.removeProperty('--kb-root-height');
+                root.style.removeProperty('--kb-shift');
+                root.removeAttribute('data-kb-shift');
+            }
+
+            if (isTouchShell && height > 0 && shouldFit) {
+                this.tabManager?.fitActiveTerminal();
+                this.diffController?.fitTerminal();
             }
         };
+
+        // Docked sidebar collapse and drag change the content's left edge
+        // without a viewport event. This observer is coordinate-only: it
+        // normalizes the fixed focus sink and never fits, sends or scrolls.
+        if (shiftSupported && shiftContent) {
+            const content = shiftContent;
+            new ResizeObserver(() => {
+                if (!root.hasAttribute('data-kb-shift')) return;
+                const origin = readContentOrigin(content);
+                writeStyle('--kb-content-left', `${origin.left}px`);
+                writeStyle('--kb-content-top', `${origin.top}px`);
+            }).observe(content);
+        }
 
         // Keyboard geometry changes are layout events, so they may correct
         // iOS focus-scroll; visualViewport scroll remains a user gesture and
