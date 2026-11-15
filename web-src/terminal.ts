@@ -7111,6 +7111,13 @@ export class TabManager {
         termContainer.addEventListener(
             'contextmenu',
             (e) => {
+                if (tabInfo.touchSelection?.isSelecting()) {
+                    // A touch selection owns the clipboard until the user
+                    // taps the Copy pill.
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return;
+                }
                 const sel = term.getSelection();
                 if (!sel) return;
                 e.preventDefault();
@@ -7253,6 +7260,7 @@ export class TabManager {
         });
         term.onSelectionChange(() => {
             if (selectingSearchMatch) return;
+            if (tabInfo.touchSelection?.isSelecting()) return;
             const sel = term.getSelection();
             if (sel) {
                 this.copyTextRobustly(sel, true);

@@ -2778,6 +2778,31 @@ body.has-terminal-bg
         0 0 20px var(--accent-glow);
 }
 
+/* Floating Copy pill: shown over a touch selection in the terminal pane. */
+.terminal-copy-pill {
+    position: absolute;
+    left: 12px;
+    top: 12px;
+    z-index: 6;
+    min-height: 2.2857rem;
+    padding: 0 0.9rem;
+    border-radius: 999px;
+    border: 1px solid var(--accent-soft);
+    background-color: rgba(13, 13, 16, 0.85);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    color: var(--accent-bright);
+    font-family: var(--font-ui);
+    font-size: 0.8571rem;
+    line-height: 1;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+.terminal-copy-pill[hidden] {
+    display: none;
+}
+
 /* Force helper textarea to be fixed relative to screen so browser focusing does not scroll the viewport */
 .xterm-helper-textarea {
     position: fixed !important;

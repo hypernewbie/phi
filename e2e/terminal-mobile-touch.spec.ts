@@ -68,6 +68,7 @@ interface Observed {
             ): { translateToString(trim?: boolean): string } | undefined;
         };
     };
+    getSelection(): string;
     hasSelection(): boolean;
 }
 
@@ -225,6 +226,7 @@ async function openPane(
     page: Page,
     request: Page['request'],
     title: string,
+    mobile = true,
 ): Promise<string> {
     const created = await request.post(`${phi.url}/api/terminals`, {
         data: { coder: 'pi', cwd: phi.dir, title },
@@ -232,15 +234,21 @@ async function openPane(
     const pane = ((await created.json()) as { pane_id: string }).pane_id;
     openPanes.push(pane);
     await page.goto(phi.url);
-    // The tab strip sits behind the drawer on a phone, so activate the pane
-    // through the drawer flow the app actually supports.
-    await page.locator('#mobile-sidebar-toggle').click();
-    const row = page.locator(
-        `#drawer-tabs-body .hostname-dropdown-row[data-pane-id="${pane}"]`,
-    );
-    await expect(row).toBeVisible({ timeout: 30_000 });
-    await row.locator('.hostname-dropdown-select-btn').click();
-    await expect(page.locator('#sidebar-panel')).not.toHaveClass(/drawer-open/);
+    if (mobile) {
+        // The tab strip sits behind the drawer on a phone, so activate the
+        // pane through the drawer flow the app actually supports.
+        await page.locator('#mobile-sidebar-toggle').click();
+        const row = page.locator(
+            `#drawer-tabs-body .hostname-dropdown-row[data-pane-id="${pane}"]`,
+        );
+        await expect(row).toBeVisible({ timeout: 30_000 });
+        await row.locator('.hostname-dropdown-select-btn').click();
+        await expect(page.locator('#sidebar-panel')).not.toHaveClass(
+            /drawer-open/,
+        );
+    } else {
+        await page.locator(`.tab[data-pane-id="${pane}"]`).click();
+    }
     await waitForMarker(page, pane, 'READY');
     return pane;
 }
@@ -250,6 +258,72 @@ async function touchPage(context: BrowserContext, page: Page): Promise<void> {
         origin: phi.url,
     });
     await installCapture(page);
+}
+
+function termState(page: Page, pane: string) {
+    return page.evaluate((id) => {
+        const capture = window as unknown as Capture;
+        const term = capture.terms
+            .filter(
+                (t) =>
+                    t.element?.isConnected &&
+                    t.element.closest('.term-container')?.id === `term-${id}`,
+            )
+            .at(-1);
+        return {
+            selection: term?.getSelection() ?? null,
+            hasSelection: term?.hasSelection() ?? false,
+            viewportY: term?.buffer.active.viewportY ?? -1,
+        };
+    }, pane);
+}
+
+function readClipboard(page: Page) {
+    return page.evaluate(() => navigator.clipboard.readText());
+}
+
+// A gesture must always end its touch, even when an assertion throws between
+// press and release, or the next test starts with a finger still down.
+async function gesture(
+    page: Page,
+    points: Array<{ x: number; y: number }>,
+    holdMs = 0,
+) {
+    const cdp = await page.context().newCDPSession(page);
+    let active = false;
+    try {
+        await cdp.send('Input.dispatchTouchEvent', {
+            type: 'touchStart',
+            touchPoints: [{ ...points[0], id: 1 }],
+        });
+        active = true;
+        for (const point of points.slice(1)) {
+            await cdp.send('Input.dispatchTouchEvent', {
+                type: 'touchMove',
+                touchPoints: [{ ...point, id: 1 }],
+            });
+        }
+        if (holdMs > 0) await page.waitForTimeout(holdMs);
+        await cdp.send('Input.dispatchTouchEvent', {
+            type: 'touchEnd',
+            touchPoints: [],
+        });
+        active = false;
+    } finally {
+        if (active) {
+            await cdp
+                .send('Input.dispatchTouchEvent', {
+                    type: 'touchCancel',
+                    touchPoints: [],
+                })
+                .catch(() => {});
+        }
+        await cdp.detach();
+    }
+}
+
+function longPress(page: Page, point: { x: number; y: number }) {
+    return gesture(page, [point], 700);
 }
 
 test('a tap on a URL opens it', async ({ browser, request }) => {
@@ -357,5 +431,117 @@ test('a tap does not scroll the terminal', async ({ browser, request }) => {
             return term?.buffer.active.viewportY ?? -1;
         }, pane),
     ).toBe(viewportY);
+    await context.close();
+});
+
+test('a long press selects the word and does not copy', async ({
+    browser,
+    request,
+}) => {
+    test.setTimeout(120_000);
+    const context = await browser.newContext({
+        viewport: { width: 390, height: 844 },
+        isMobile: true,
+        hasTouch: true,
+    });
+    const page = await context.newPage();
+    await touchPage(context, page);
+    const pane = await openPane(page, request, 'TouchSelect');
+    const point = await cellPoint(page, pane, PLAIN_TEXT);
+    await page.evaluate(() => navigator.clipboard.writeText('SENTINEL'));
+    await longPress(page, point);
+    await expect
+        .poll(async () => (await termState(page, pane)).selection, {
+            timeout: 15_000,
+        })
+        .toBe(PLAIN_TEXT);
+    // The silent auto-copy must stay off while a touch selection exists; the
+    // pill is the only copy action.
+    expect(await readClipboard(page)).toBe('SENTINEL');
+    await expect(
+        page.locator(`#term-${pane} .terminal-copy-pill`),
+    ).toBeVisible();
+    await context.close();
+});
+
+test('the Copy pill copies the selection and clears it', async ({
+    browser,
+    request,
+}) => {
+    test.setTimeout(120_000);
+    const context = await browser.newContext({
+        viewport: { width: 390, height: 844 },
+        isMobile: true,
+        hasTouch: true,
+    });
+    const page = await context.newPage();
+    await touchPage(context, page);
+    const pane = await openPane(page, request, 'TouchCopy');
+    const point = await cellPoint(page, pane, PLAIN_TEXT);
+    await longPress(page, point);
+    await expect
+        .poll(async () => (await termState(page, pane)).selection, {
+            timeout: 15_000,
+        })
+        .toBe(PLAIN_TEXT);
+    await page.locator(`#term-${pane} .terminal-copy-pill`).tap();
+    await expect
+        .poll(() => readClipboard(page), { timeout: 10_000 })
+        .toBe(PLAIN_TEXT);
+    await expect
+        .poll(async () => (await termState(page, pane)).hasSelection)
+        .toBe(false);
+    await expect(
+        page.locator(`#term-${pane} .terminal-copy-pill`),
+    ).toBeHidden();
+    await context.close();
+});
+
+test('a swipe with no selection still scrolls', async ({
+    browser,
+    request,
+}) => {
+    test.setTimeout(120_000);
+    const context = await browser.newContext({
+        viewport: { width: 390, height: 844 },
+        isMobile: true,
+        hasTouch: true,
+    });
+    const page = await context.newPage();
+    await touchPage(context, page);
+    const pane = await openPane(page, request, 'TouchSwipe');
+    const point = await cellPoint(page, pane, PLAIN_TEXT);
+    const before = await termState(page, pane);
+    await gesture(page, [point, { x: point.x, y: point.y + 120 }]);
+    await expect
+        .poll(async () => (await termState(page, pane)).viewportY, {
+            timeout: 10_000,
+        })
+        .not.toBe(before.viewportY);
+    await context.close();
+});
+
+test('the desktop mouse path still auto-copies', async ({
+    browser,
+    request,
+}) => {
+    test.setTimeout(120_000);
+    const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+    });
+    const page = await context.newPage();
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'], {
+        origin: phi.url,
+    });
+    await installCapture(page);
+    const pane = await openPane(page, request, 'TouchMouse', false);
+    const point = await cellPoint(page, pane, PLAIN_TEXT);
+    await page.mouse.move(point.x, point.y);
+    await page.mouse.down();
+    await page.mouse.move(point.x + 90, point.y, { steps: 8 });
+    await page.mouse.up();
+    await expect
+        .poll(() => readClipboard(page), { timeout: 10_000 })
+        .toContain(PLAIN_TEXT);
     await context.close();
 });
