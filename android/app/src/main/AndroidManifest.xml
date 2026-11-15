@@ -11,6 +11,8 @@
     <application
         android:allowBackup="true"
         android:label="Phi"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/Theme.Phi"
         android:usesCleartextTraffic="true">
         <activity

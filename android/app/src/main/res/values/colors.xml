@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Obsidian surfaces shared with the web client's fast-mode fills. -->
+    <color name="obsidian_bg">#0D0D10</color>
+    <color name="obsidian_elevated">#141418</color>
+    <color name="obsidian_glass">#E00F0F13</color>
+    <color name="phi_accent">#4FD1C5</color>
+    <color name="phi_text">#E8E8EA</color>
+    <color name="phi_text_dim">#9A9AA0</color>
+
+    <!-- Deterministic per-server badge palette; slot cached per origin. -->
+    <string-array name="server_palette">
+        <item>#4FD1C5</item>
+        <item>#9D7BFF</item>
+        <item>#FFB454</item>
+        <item>#FF6B81</item>
+        <item>#5AA9FF</item>
+        <item>#9ECE6A</item>
+    </string-array>
+    <string-array name="server_letters">
+        <item>Α</item><item>Β</item><item>Γ</item><item>Δ</item>
+        <item>Ε</item><item>Ζ</item><item>Η</item><item>Θ</item>
+    </string-array>
+</resources>
