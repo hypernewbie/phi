@@ -309,22 +309,24 @@ async function waitForSettledGrid(page: Page, label: string) {
         .poll(
             async () => {
                 const state = await grid(page);
-                return (
-                    !!state &&
+                if (!state) return 'missing terminal';
+                const settled =
                     state.seq > 0 &&
                     state.cols === state.ptyCols &&
                     state.rows === state.ptyRows &&
                     state.proposed?.cols === state.cols &&
                     state.proposed.rows === state.rows &&
-                    state.edge === 'EDGE'
-                );
+                    state.edge === 'EDGE';
+                return settled
+                    ? 'settled'
+                    : `cols ${state.cols}/${state.ptyCols} rows ${state.rows}/${state.ptyRows} proposed ${JSON.stringify(state.proposed)} edge ${state.edge} seq ${state.seq}`;
             },
             {
                 message: `${label}: settled matching real PTY grid`,
                 timeout: 15_000,
             },
         )
-        .toBe(true);
+        .toBe('settled');
     const state = await grid(page);
     if (!state) throw new Error(`${label}: missing terminal`);
     console.log(`${label}: ${JSON.stringify(state)}`);
@@ -813,6 +815,40 @@ function assertShiftCleared(label: string, state: KeyboardState) {
     expect
         .soft(state.contentTransform, `${label}: content transform`)
         .toBe('none');
+}
+
+/**
+ * The PTY and the grid agree on the size. Unlike waitForSettledGrid this does
+ * not require the fit proposal to match: a base that suppresses same-width
+ * height-only fits legitimately leaves the grid frozen after a real layout
+ * change.
+ */
+async function waitForGridHandshake(page: Page, label: string) {
+    await expect
+        .poll(
+            async () => {
+                const state = await grid(page);
+                if (!state) return 'missing terminal';
+                return state.seq > 0 &&
+                    state.cols === state.ptyCols &&
+                    state.rows === state.ptyRows &&
+                    state.edge === 'EDGE'
+                    ? 'ready'
+                    : `cols ${state.cols}/${state.ptyCols} rows ${state.rows}/${state.ptyRows} edge ${state.edge} seq ${state.seq}`;
+            },
+            { message: `${label}: PTY and grid agree`, timeout: 15_000 },
+        )
+        .toBe('ready');
+}
+
+/** I7's bound when a frozen grid may already overhang its composer. */
+function baselineOverhangLimit(baseline: KeyboardState) {
+    const overhang =
+        (baseline.screen?.bottom ?? Number.NaN) -
+        (baseline.composer?.top ?? Number.NaN);
+    return Number.isFinite(overhang)
+        ? Math.max(PIXEL_TOLERANCE, overhang)
+        : PIXEL_TOLERANCE;
 }
 
 async function selectTab(page: Page) {
@@ -1559,11 +1595,6 @@ test('B3 smaller layout baseline', async ({ browser, request }) => {
             // Counters start after the legitimate layout change settled.
             const resizeBase = wire.resize.length;
             const inputBase = wire.input.length;
-            // The frozen grid may already overhang after the legitimate
-            // shrink; the keyboard must not add to it.
-            const baselineOverhang =
-                (shrunken.screen?.bottom ?? Number.NaN) -
-                (shrunken.composer?.top ?? Number.NaN);
             await runKeyboardCycle({
                 label: 'B3 re-capture',
                 page,
@@ -1575,7 +1606,9 @@ test('B3 smaller layout baseline', async ({ browser, request }) => {
                 closeHeight: 780,
                 expectedRoot: 780,
                 samples,
-                overhangLimit: baselineOverhang,
+                // The frozen grid may already overhang after the shrink;
+                // the keyboard must not add to it.
+                overhangLimit: baselineOverhangLimit(shrunken),
             });
             expect(wire.resize.slice(resizeBase), 'B3 resize frames').toEqual(
                 [],
@@ -1681,8 +1714,10 @@ test('B4 width reset and page restore', async ({ browser, request }) => {
                 .toBeCloseTo(390, 3);
             assertShiftCleared('B4 close', closed);
 
-            // Fresh cycle after the explicit pageshow fit settled.
-            await waitForSettledGrid(page, 'B4 fresh');
+            // Fresh cycle after the explicit pageshow fit settled. The grid
+            // may stay frozen relative to the proposal, so require only that
+            // the PTY agrees and the counters stop moving.
+            await waitForGridHandshake(page, 'B4 fresh');
             const fresh = await waitForQuietCounters(page, 'B4 fresh baseline');
             const resizeBase2 = wire.resize.length;
             const inputBase2 = wire.input.length;
@@ -1697,6 +1732,7 @@ test('B4 width reset and page restore', async ({ browser, request }) => {
                 closeHeight: 390,
                 expectedRoot: 390,
                 samples,
+                overhangLimit: baselineOverhangLimit(fresh),
             });
             expect(
                 wire.resize.slice(resizeBase2),
@@ -2295,12 +2331,6 @@ test('B9 offline keyboard', async ({ browser, request }) => {
             const resizeBase = counters.resize.length;
             const inputBase = counters.input.length;
             const socketsBase = routed.sockets;
-            // The offline banner legitimately shrank the panel while the
-            // same-width height-only fit stayed suppressed, so the baseline
-            // grid may already overhang. The keyboard must not add to it.
-            const baselineOverhang =
-                (baseline.screen?.bottom ?? Number.NaN) -
-                (baseline.composer?.top ?? Number.NaN);
 
             await runKeyboardCycle({
                 label: 'B9 offline cycle',
@@ -2313,7 +2343,10 @@ test('B9 offline keyboard', async ({ browser, request }) => {
                 closeHeight: 844,
                 expectedRoot: 844,
                 samples,
-                overhangLimit: baselineOverhang,
+                // The offline banner legitimately shrank the panel while the
+                // same-width height-only fit stayed suppressed, so the
+                // baseline grid may already overhang.
+                overhangLimit: baselineOverhangLimit(baseline),
             });
             expect(
                 routed.sockets,
@@ -2472,9 +2505,10 @@ test('B10 moving content origin', async ({ browser, request }) => {
             assertShiftCleared('B10 close', closed);
             expect(closed.root?.height, 'B10 closed root').toBeCloseTo(1024, 3);
 
-            // Legitimate width-driven fits happened; take a fresh baseline.
-            await waitForGrid(page, 'B10 final grid');
-            await waitForSettledGrid(page, 'B10 final settled');
+            // Legitimate width-driven fits happened; take a fresh baseline
+            // from the PTY handshake plus quiet counters, without demanding
+            // that the frozen grid match the current fit proposal.
+            await waitForGridHandshake(page, 'B10 final grid');
             await settleComposer(page);
             const fresh = await waitForQuietCounters(
                 page,
@@ -2494,6 +2528,7 @@ test('B10 moving content origin', async ({ browser, request }) => {
                 closeHeight: 1024,
                 expectedRoot: 1024,
                 samples,
+                overhangLimit: baselineOverhangLimit(fresh),
             });
             expect(
                 wire.resize.slice(resizeBase),
@@ -2510,6 +2545,72 @@ test('B10 moving content origin', async ({ browser, request }) => {
         }
     } finally {
         await test.info().attach('B10-moving-content-origin', {
+            body: JSON.stringify(samples, null, 2),
+            contentType: 'application/json',
+        });
+        if (phi) await phi.stop();
+    }
+});
+
+test('B11 second terminal sink', async ({ browser, request }) => {
+    test.setTimeout(120_000);
+    let phi: PhiServer | undefined;
+    const samples: Record<string, unknown> = {};
+    try {
+        phi = await startGeometryFixture();
+        expect((await request.get(`${phi.url}/healthz`)).ok()).toBe(true);
+        const harness = await openHarness(
+            browser,
+            phi.url,
+            { viewport: { width: 390, height: 844 }, select: 'mobile' },
+            'B11',
+        );
+        try {
+            const { page, errors } = harness;
+            const diffSink = '#diff-term-container .xterm-helper-textarea';
+            const baseline = await requireState(page, 'B11 baseline');
+            const diffBaseline = await elementBox(page, diffSink);
+            expect(
+                diffBaseline,
+                'B11: diff terminal sink exists',
+            ).not.toBeNull();
+
+            const opened = await keyboardSample(page, 500);
+            expect(opened.kbAttribute, 'B11 intent').toBe('terminal');
+            expectSinkAtBaseline('B11 main sink', baseline, opened);
+            const diffOpened = await elementBox(page, diffSink);
+            // The diff panel's xterm is outside `.terminal-content`, so the
+            // transform never moves it and its fixed sink must not move
+            // either. Same for the four coordinates.
+            for (const axis of ['left', 'top', 'width', 'height'] as const) {
+                expect
+                    .soft(
+                        diffOpened?.[axis],
+                        `B11 second sink ${axis} while shifted`,
+                    )
+                    .toBeCloseTo(diffBaseline?.[axis] ?? Number.NaN, 6);
+            }
+            samples.opened = { baseline, diffBaseline, opened, diffOpened };
+
+            const closed = await keyboardSample(page, 844);
+            assertShiftCleared('B11 close', closed);
+            const diffClosed = await elementBox(page, diffSink);
+            for (const axis of ['left', 'top', 'width', 'height'] as const) {
+                expect
+                    .soft(
+                        diffClosed?.[axis],
+                        `B11 second sink ${axis} after close`,
+                    )
+                    .toBeCloseTo(diffBaseline?.[axis] ?? Number.NaN, 6);
+            }
+            samples.closed = { closed, diffClosed };
+            expect(errors, 'B11 page errors').toEqual([]);
+            expectNoObserverLoop(harness, 'B11');
+        } finally {
+            await harness.context.close();
+        }
+    } finally {
+        await test.info().attach('B11-second-terminal-sink', {
             body: JSON.stringify(samples, null, 2),
             contentType: 'application/json',
         });

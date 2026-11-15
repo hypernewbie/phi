@@ -6799,8 +6799,10 @@ html[data-phi-config-page] .settings-modal {
     }
 
     /* A transformed ancestor becomes the fixed textarea's containing
-       block. Cancel its full screen-origin offset, not just the shift. */
-    html[data-kb-shift="terminal"]:has(#terminals-wrapper > .term-container.active .xterm) .xterm-helper-textarea {
+       block. Cancel its full screen-origin offset, not just the shift.
+       Scoped to the transformed subtree: other xterms (the diff drawer's
+       terminal) keep the viewport as their containing block. */
+    html[data-kb-shift="terminal"]:has(#terminals-wrapper > .term-container.active .xterm) #terminals-wrapper .xterm-helper-textarea {
         top: calc(var(--kb-shift, 0px) - var(--kb-content-top, 0px)) !important;
         left: calc(-1 * var(--kb-content-left, 0px)) !important;
     }
