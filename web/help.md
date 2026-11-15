@@ -51,7 +51,7 @@ The workspace picker in the header controls which project Phi is looking at.
 - **Rest of `<root>`** lists the folders inside a *root* folder. A root groups related projects, such as `~/code`. Roots are read from disk each time the dialog opens, so new folders appear without a rescan step.
 - Select folders and choose **Add selected** to register them as workspaces in one step. Nothing is registered until you select it, and a root folder itself is never a workspace.
 - **Add root** under **Root folders** stores a folder as a root. Removing a root keeps its projects registered.
-- The filter box narrows both sections without asking the server. While filtered, **All** becomes **Select visible**, and the counts match exactly what the buttons will add or remove.
+- The filter box narrows both sections without asking the server. The counts match exactly what the buttons will add or remove, and the checkbox beside a section title selects what is currently visible.
 - Changes apply immediately and are saved to the server. If the browser is offline, one change stays queued and is sent when the connection returns; a change that may have reached the server is never sent twice.
 
 If a workspace contains Git worktrees, Phi shows them in the session/worktree area and tracks dirty states.

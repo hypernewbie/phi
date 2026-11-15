@@ -4768,7 +4768,9 @@ body.has-terminal-bg
 .ws-manager-group-head {
     display: flex;
     align-items: center;
-    gap: 12px;
+    /* Same gap as the rows below, so the title sits exactly over the row
+       names: checkbox column, then the same 10px gutter. */
+    gap: 10px;
     margin-bottom: 10px;
     padding-bottom: 6px;
     border-bottom: 1px solid var(--bg-border);
@@ -4791,21 +4793,14 @@ body.has-terminal-bg
     font-weight: 400;
 }
 
+/* The section checkbox lives left of the title, in the same column as the
+   row checkboxes. Vertical padding keeps a usable touch target without
+   inflating the header line. */
 .ws-manager-all {
     display: inline-flex;
     align-items: center;
-    gap: 10px;
-    color: var(--text-muted);
-    font-size: 0.7857rem;
-    letter-spacing: 0.6px;
-    text-transform: uppercase;
+    padding: 7px 0;
     cursor: pointer;
-}
-
-.ws-manager-all-row {
-    display: flex;
-    align-items: center;
-    min-height: 32px;
 }
 
 .ws-manager-all input {
@@ -4980,7 +4975,9 @@ body.has-terminal-bg
         padding: 6px 0;
     }
 
-    .ws-manager-all {
+    /* The header checkbox keeps its column over the narrow grid: 18px column
+       with the same 8px gutter, so the title stays over the row names. */
+    .ws-manager-group-head {
         gap: 8px;
     }
 
@@ -5002,7 +4999,7 @@ body.has-terminal-bg
 
 /* Touch usability depends on input mode, not the chosen appearance profile. */
 @media (pointer: coarse) {
-    .ws-manager-modal :is(.btn, .modal-close-btn, .ws-manager-row, .ws-manager-all, .ws-manager-all-row, input[type="text"]) {
+    .ws-manager-modal :is(.btn, .modal-close-btn, .ws-manager-row, .ws-manager-all, input[type="text"]) {
         min-height: 44px;
     }
 
@@ -5016,7 +5013,7 @@ body.has-terminal-bg
 }
 
 html[data-appearance-profile="mobile"]
-    :is(.ws-manager-row, .ws-manager-all, .ws-manager-all-row) {
+    :is(.ws-manager-row, .ws-manager-all) {
     min-height: 44px;
 }
 
@@ -5030,7 +5027,6 @@ html[data-appearance-profile="mobile"]
     .ws-manager-modal
     :is(
         .ws-manager-section-title,
-        .ws-manager-all,
         .ws-manager-note,
         .ws-manager-status,
         .ws-manager-path,

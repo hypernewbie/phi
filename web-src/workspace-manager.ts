@@ -598,8 +598,6 @@ export class WorkspaceManager {
             this.projectsAll.indeterminate =
                 selected.length > 0 && selected.length < visible.length;
             this.projectsAll.disabled = visible.length === 0;
-            const text = this.projectsAll.parentElement?.querySelector('span');
-            if (text) text.textContent = this.filter ? 'Select visible' : 'All';
         }
         if (this.removeBtn) {
             this.removeBtn.textContent =
@@ -642,18 +640,18 @@ export class WorkspaceManager {
 
             const head = document.createElement('div');
             head.className = 'ws-manager-group-head';
-            head.appendChild(title);
 
+            // The section checkbox sits left of the title, sharing the row
+            // checkbox column; there is no separate ALL label row.
             const allLabel = document.createElement('label');
             allLabel.className = 'ws-manager-all';
+            allLabel.setAttribute('aria-label', 'Select all in this folder');
             const allBox = document.createElement('input');
             allBox.type = 'checkbox';
             // Chrome warns about form fields without an id or name; the label
-            // already supplies the accessible name.
+            // wraps the checkbox, so no text name is needed.
             allBox.name = 'ws-manager-root-all';
-            const allText = document.createElement('span');
-            allText.textContent = 'All';
-            allLabel.append(allBox, allText);
+            allLabel.appendChild(allBox);
             allBox.addEventListener('change', () => {
                 for (const row of this.visibleRows(section)) {
                     if (allBox.checked) section.selection.add(row);
@@ -661,6 +659,7 @@ export class WorkspaceManager {
                 }
                 this.applySectionControls(section, element);
             });
+            head.append(allLabel, title);
             element.appendChild(head);
 
             const rootPath = document.createElement('div');
@@ -688,11 +687,6 @@ export class WorkspaceManager {
                 note.appendChild(retry);
                 element.appendChild(note);
             }
-
-            const allRow = document.createElement('div');
-            allRow.className = 'ws-manager-all-row';
-            allRow.appendChild(allLabel);
-            element.appendChild(allRow);
 
             const list = document.createElement('div');
             list.className = 'ws-manager-list';
@@ -777,8 +771,6 @@ export class WorkspaceManager {
             allBox.indeterminate =
                 selected.length > 0 && selected.length < visible.length;
             allBox.disabled = visible.length === 0;
-            const text = allBox.parentElement?.querySelector('span');
-            if (text) text.textContent = this.filter ? 'Select visible' : 'All';
         }
         const add = element.querySelector<HTMLButtonElement>(
             '.ws-manager-add-btn',

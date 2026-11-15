@@ -61,10 +61,14 @@ function makeSessions(options = {}) {
                     aria-label="Filter projects and folders"
                 >
                 <div id="ws-manager-projects-section">
-                    <h4 id="ws-manager-projects-title">Projects
-                        <span id="ws-manager-projects-count"></span>
-                    </h4>
-                    <input id="ws-manager-projects-all" type="checkbox">
+                    <div class="ws-manager-group-head">
+                        <label class="ws-manager-all">
+                            <input id="ws-manager-projects-all" type="checkbox">
+                        </label>
+                        <h4 id="ws-manager-projects-title">Projects
+                            <span id="ws-manager-projects-count"></span>
+                        </h4>
+                    </div>
                     <div id="ws-manager-projects"></div>
                     <button id="ws-manager-remove" type="button">Remove</button>
                 </div>
@@ -200,11 +204,6 @@ function setFilter(value) {
     const input = document.getElementById('ws-manager-filter');
     input.value = value;
     input.dispatchEvent(new Event('input', { bubbles: true }));
-}
-
-function allLabel(selector) {
-    return document.querySelector(`${selector} .ws-manager-all span`)
-        .textContent;
 }
 
 function setOnline(online) {
@@ -690,7 +689,6 @@ describe('workspace manager', () => {
         setFilter('theta');
 
         expect(rootRows().map((row) => row.path)).toEqual(['/code/theta']);
-        expect(allLabel('#ws-manager-roots')).toBe('Select visible');
         // The hidden selection is kept, but it is not counted and would not be
         // part of a batch sent now.
         expect(
@@ -715,7 +713,6 @@ describe('workspace manager', () => {
             document.querySelector('#ws-manager-roots .ws-manager-add-btn')
                 .textContent,
         ).toBe('Add selected (1)');
-        expect(allLabel('#ws-manager-roots')).toBe('All');
 
         // A filter that matches nothing shows an empty list, never stale rows.
         setFilter('zzz');
@@ -983,7 +980,41 @@ describe('workspace manager', () => {
         expect(sessions.workspaces).toEqual(['/code/keep']);
     });
 
-    it('keeps hidden selections when Select visible is checked and unchecked in either section', async () => {
+    it('renders the section checkbox inside the group head, left of the title', async () => {
+        installFetch({ browse: () => browseEntries('psi') });
+        const sessions = makeSessions({
+            workspaces: ['/code/psi'],
+            roots: [BROWSE_ROOT],
+        });
+        await openManager(sessions);
+
+        expect(document.querySelectorAll('.ws-manager-all-row')).toHaveLength(
+            0,
+        );
+        expect(document.querySelectorAll('.ws-manager-all span')).toHaveLength(
+            0,
+        );
+
+        const projectsHead = document.querySelector(
+            '#ws-manager-projects-section .ws-manager-group-head',
+        );
+        const projectsAll = document.getElementById('ws-manager-projects-all');
+        expect(projectsHead).toContain(projectsAll);
+        expect(
+            projectsAll.closest('.ws-manager-all').nextElementSibling.id,
+        ).toBe('ws-manager-projects-title');
+
+        const rootHead = document.querySelector(
+            '#ws-manager-roots .ws-manager-group-head',
+        );
+        expect(rootHead.querySelector('.ws-manager-all input')).toBeTruthy();
+        expect(
+            rootHead.querySelector('.ws-manager-all').nextElementSibling
+                .classList,
+        ).toContain('ws-manager-section-title');
+    });
+
+    it('keeps hidden selections when the section checkbox is toggled in either section', async () => {
         installFetch({ browse: () => browseEntries('hidden', 'visible') });
         const sessions = makeSessions({
             workspaces: ['/keep/hidden', '/keep/visible'],

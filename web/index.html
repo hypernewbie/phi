@@ -1565,6 +1565,15 @@ eager to avoid a first-open unstyled flash. -->
                         aria-labelledby="ws-manager-projects-title"
                     >
                         <div class="ws-manager-group-head">
+                            <label
+                                class="ws-manager-all"
+                                aria-label="Select all projects"
+                            >
+                                <input
+                                    id="ws-manager-projects-all"
+                                    type="checkbox"
+                                >
+                            </label>
                             <h4
                                 id="ws-manager-projects-title"
                                 class="ws-manager-section-title"
@@ -1575,15 +1584,6 @@ eager to avoid a first-open unstyled flash. -->
                                     class="ws-manager-count"
                                 ></span>
                             </h4>
-                        </div>
-                        <div class="ws-manager-all-row">
-                            <label class="ws-manager-all">
-                                <input
-                                    id="ws-manager-projects-all"
-                                    type="checkbox"
-                                >
-                                <span>All</span>
-                            </label>
                         </div>
                         <div id="ws-manager-projects" class="ws-manager-list"></div>
                         <div class="ws-manager-group-actions">
