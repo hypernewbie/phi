@@ -846,6 +846,8 @@ func (m *tuiModel) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m, m.handleBridgePanelMsg(msg)
 	case bridgeActionMsg:
 		return m, m.handleBridgeActionMsg(msg)
+	case composeRecallMsg:
+		return m, m.applyRecallMsg(msg)
 
 	case msgCloseExpired:
 		return m.applyCloseExpired(msg)
@@ -1864,7 +1866,7 @@ func (m *tuiModel) openHelp() {
   Ctrl-] w        worktree context
   Ctrl-] c        coder selector
   Ctrl-] n        new session (OpenCode offers Open Mini)
-  Ctrl-] e        compose input box (Enter sends)
+  Ctrl-] e        compose input box (Enter sends, ↑ recalls Pi history)
   Ctrl-] o        new OpenCode Mini session
   Ctrl-] S        new Shell session
   Ctrl-] m        rename server
