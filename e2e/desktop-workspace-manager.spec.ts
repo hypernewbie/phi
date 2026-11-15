@@ -98,18 +98,44 @@ async function withinDeadline<T>(
 }
 
 /** Reads at most `maxBytes` from the end of `file`; the tail holds shutdown. */
-function readTail(file: string, maxBytes: number): string {
+function readTail(file: string, maxBytes: number): Buffer {
     const size = statSync(file).size;
     const length = Math.min(size, maxBytes);
-    if (length === 0) return '';
+    if (length === 0) return Buffer.alloc(0);
     const buffer = Buffer.alloc(length);
     const fd = openSync(file, 'r');
     try {
-        readSync(fd, buffer, 0, length, size - length);
+        const bytesRead = readSync(fd, buffer, 0, length, size - length);
+        return buffer.subarray(0, bytesRead);
     } finally {
         closeSync(fd);
     }
-    return buffer.toString('utf8');
+}
+
+/** Keeps complete JSON and ownership metadata within the attachment bound. */
+function stateAttachment(evidence: Record<string, unknown>): Buffer {
+    const body = Buffer.from(JSON.stringify(evidence, null, 2), 'utf8');
+    if (body.length <= STATE_ATTACHMENT_BYTES) return body;
+    const lastState = evidence.lastState;
+    const summary = Buffer.from(
+        JSON.stringify(
+            {
+                ...evidence,
+                truncated: true,
+                lastState:
+                    lastState !== null && typeof lastState === 'object'
+                        ? { ...lastState, dom: null }
+                        : null,
+            },
+            null,
+            2,
+        ),
+        'utf8',
+    );
+    if (summary.length > STATE_ATTACHMENT_BYTES) {
+        throw new Error('state metadata exceeds attachment byte bound');
+    }
+    return summary;
 }
 
 interface BodyDomState {
@@ -331,6 +357,58 @@ async function sendInput(
     );
 }
 
+// biome-ignore lint/correctness/noEmptyPattern: Playwright requires an object pattern for the fixtures argument.
+test('workspace manager failure evidence stays byte-bounded', ({}, testInfo) => {
+    const evidence = {
+        completedStep: 'focus-window',
+        serverRoot: 'owned-server-root',
+        electronRoot: 'owned-electron-root',
+        serverPid: 123,
+        electronPid: 456,
+        lastState: {
+            activeId: 'fixture-profile',
+            windowFocused: false,
+            dom: { projectValues: ['€'.repeat(3_000)] },
+        },
+    };
+    expect(JSON.stringify(evidence, null, 2).length).toBeLessThan(
+        STATE_ATTACHMENT_BYTES,
+    );
+    const state = stateAttachment(evidence);
+    expect.soft(state.length).toBeLessThanOrEqual(STATE_ATTACHMENT_BYTES);
+    const parsed = JSON.parse(state.toString('utf8'));
+    expect.soft(parsed.truncated).toBe(true);
+    expect.soft(parsed.lastState.dom).toBeNull();
+    expect(parsed).toMatchObject({
+        completedStep: evidence.completedStep,
+        serverRoot: evidence.serverRoot,
+        electronRoot: evidence.electronRoot,
+        serverPid: evidence.serverPid,
+        electronPid: evidence.electronPid,
+        lastState: { activeId: 'fixture-profile', windowFocused: false },
+    });
+    const smallEvidence = {
+        ...evidence,
+        lastState: { ...evidence.lastState, dom: null },
+    };
+    expect(JSON.parse(stateAttachment(smallEvidence).toString('utf8'))).toEqual(
+        smallEvidence,
+    );
+    expect(() =>
+        stateAttachment({
+            ...evidence,
+            serverRoot: 'x'.repeat(STATE_ATTACHMENT_BYTES),
+        }),
+    ).toThrow('state metadata exceeds attachment byte bound');
+
+    const log = Buffer.from('€'.repeat(LOG_ATTACHMENT_BYTES), 'utf8');
+    const logFile = testInfo.outputPath('unicode-server.log');
+    writeFileSync(logFile, log);
+    const tail = readTail(logFile, LOG_ATTACHMENT_BYTES);
+    expect.soft(tail.length).toBeLessThanOrEqual(LOG_ATTACHMENT_BYTES);
+    expect.soft(tail.equals(log.subarray(-LOG_ATTACHMENT_BYTES))).toBe(true);
+});
+
 for (const lowMemory of ['0', '1'] as const) {
     test.describe(`desktop workspace manager (lowMemory=${lowMemory})`, () => {
         let app: ElectronApplication | null = null;
@@ -390,39 +468,9 @@ for (const lowMemory of ['0', '1'] as const) {
                 launchAttempted,
                 lastState,
             };
-            let stateText = JSON.stringify(evidence, null, 2);
-            if (stateText.length > STATE_ATTACHMENT_BYTES) {
-                stateText = JSON.stringify(
-                    {
-                        ...evidence,
-                        truncated: true,
-                        lastState: lastState
-                            ? {
-                                  ...lastState,
-                                  dom: lastState.dom
-                                      ? {
-                                            ...lastState.dom,
-                                            projectValues:
-                                                lastState.dom.projectValues.slice(
-                                                    0,
-                                                    5,
-                                                ),
-                                            workspaceValues: [],
-                                        }
-                                      : null,
-                              }
-                            : null,
-                    },
-                    null,
-                    2,
-                );
-                if (stateText.length > STATE_ATTACHMENT_BYTES) {
-                    stateText = stateText.slice(0, STATE_ATTACHMENT_BYTES);
-                }
-            }
             try {
                 await testInfo.attach('desktop-wm-relay-state.json', {
-                    body: Buffer.from(stateText, 'utf8'),
+                    body: stateAttachment(evidence),
                     contentType: 'application/json',
                 });
             } catch (error) {
@@ -432,7 +480,7 @@ for (const lowMemory of ['0', '1'] as const) {
                 try {
                     const log = readTail(phi.logPath, LOG_ATTACHMENT_BYTES);
                     await testInfo.attach('desktop-wm-relay-server.log', {
-                        body: Buffer.from(log, 'utf8'),
+                        body: log,
                         contentType: 'text/plain',
                     });
                 } catch (error) {
