@@ -54,6 +54,7 @@ class MainActivity : ComponentActivity() {
     private val hosts = mutableMapOf<String, Host>()
     private var activeId: String? = null
     private var keyboardVisible = false
+    private var errorView: LinearLayout? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -155,6 +156,7 @@ class MainActivity : ComponentActivity() {
             hosts[profile.origin] = host
         }
         content.removeAllViews()
+        errorView = null
         content.addView(
             host.view,
             FrameLayout.LayoutParams(
@@ -202,9 +204,11 @@ class MainActivity : ComponentActivity() {
         s.useWideViewPort = true
         s.textZoom = store.zoom()
         web.setBackgroundColor(Color.parseColor("#0D0D10"))
+        web.addJavascriptInterface(PhiBridge(this, origin), "__phiDesktop")
         web.webViewClient =
             object : WebViewClient() {
                 override fun onPageFinished(view: WebView, url: String) {
+                    hideLoadError()
                     // Mirror desktop low-power: page boots full; native
                     // forces the ONLY mode just after load.
                     if (url.startsWith(origin)) {
@@ -233,6 +237,15 @@ class MainActivity : ComponentActivity() {
                     } catch (e: Exception) {
                         null // Not vendored: fall through to the network.
                     }
+                }
+
+                override fun onReceivedError(
+                    view: WebView,
+                    errorCode: Int,
+                    description: String,
+                    failingUrl: String,
+                ) {
+                    if (failingUrl.startsWith(origin)) showLoadError()
                 }
             }
         web.loadUrl(origin)
@@ -273,7 +286,14 @@ class MainActivity : ComponentActivity() {
         profiles.forEachIndexed { index, p ->
             val (colorSlot, letterSlot) =
                 badgeSlot(p.origin, index, palette.size, letters.size)
-            val color = Color.parseColor(palette[colorSlot])
+            val color =
+                store.accentFor(p.origin)?.let {
+                    try {
+                        Color.parseColor(it)
+                    } catch (e: Exception) {
+                        null
+                    }
+                } ?: Color.parseColor(palette[colorSlot])
             val row =
                 LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
@@ -391,6 +411,68 @@ class MainActivity : ComponentActivity() {
                 }
             }
             .show()
+    }
+
+    /** Bridge callback: the web accent changed; cache it and repaint badges live. */
+    fun onThemeColor(origin: String, accent: String) {
+        if (!Regex("^#[0-9a-fA-F]{6}$").matches(accent)) return
+        store.setAccent(origin, accent)
+        runOnUiThread { rebuildServerList() }
+    }
+
+    private fun showLoadError() {
+        runOnUiThread {
+            if (errorView != null) return@runOnUiThread
+            val origin =
+                profiles.firstOrNull { it.id == activeId }?.origin
+                    ?: return@runOnUiThread
+            val layout =
+                LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER
+                    setBackgroundColor(Color.parseColor("#0D0D10"))
+                    setPadding(48, 48, 48, 48)
+                }
+            val title =
+                TextView(this).apply {
+                    text = "Server unreachable"
+                    textSize = 18f
+                    setTextColor(Color.parseColor("#E8E8EA"))
+                    gravity = Gravity.CENTER
+                }
+            val sub =
+                TextView(this).apply {
+                    text = origin
+                    textSize = 13f
+                    setTextColor(Color.parseColor("#9A9AA0"))
+                    gravity = Gravity.CENTER
+                    setPadding(0, 16, 0, 32)
+                }
+            val retry =
+                Button(this).apply {
+                    text = "Retry"
+                    setOnClickListener {
+                        hideLoadError()
+                        currentHost()?.view?.reload()
+                    }
+                }
+            layout.addView(title)
+            layout.addView(sub)
+            layout.addView(retry)
+            content.addView(
+                layout,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
+            )
+            errorView = layout
+        }
+    }
+
+    private fun hideLoadError() {
+        errorView?.let { content.removeView(it) }
+        errorView = null
     }
 
     // ---------- zoom ----------

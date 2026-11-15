@@ -114,6 +114,15 @@ class ServerStore(context: Context) {
         prefs.edit().putString("name:$origin", name).apply()
     }
 
+    fun accentFor(origin: String): String? =
+        prefs.getString("accent:$origin", null)?.takeIf {
+            Regex("^#[0-9a-fA-F]{6}$").matches(it)
+        }
+
+    fun setAccent(origin: String, accent: String) {
+        prefs.edit().putString("accent:$origin", accent).apply()
+    }
+
     fun zoom(): Int = prefs.getInt("zoom", 100).coerceIn(50, 200)
 
     fun setZoom(z: Int) {
