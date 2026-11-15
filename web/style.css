@@ -6783,6 +6783,31 @@ html[data-phi-config-page] .settings-modal {
     }
 }
 
+/* Keep terminal layout unchanged while the software keyboard overlays it.
+   The root keeps the height captured before the occlusion and the terminal
+   content moves up by the overlap, so no fit-observable box changes size.
+   Top-level and after the compact block on purpose: a portrait tablet wider
+   than 768px only matches (pointer: coarse), and source order settles the
+   !important tie inside the compact media query. */
+@media (pointer: coarse) {
+    html[data-kb-shift="terminal"]:has(#terminals-wrapper > .term-container.active .xterm) .app-container {
+        height: var(--kb-root-height, var(--vv-height, 100dvh)) !important;
+    }
+
+    html[data-kb-shift="terminal"]:has(#terminals-wrapper > .term-container.active .xterm) .terminal-content {
+        transform: translate3d(0, calc(-1 * var(--kb-shift, 0px)), 0);
+    }
+
+    /* A transformed ancestor becomes the fixed textarea's containing
+       block. Cancel its full screen-origin offset, not just the shift.
+       Scoped to the transformed subtree: other xterms (the diff drawer's
+       terminal) keep the viewport as their containing block. */
+    html[data-kb-shift="terminal"]:has(#terminals-wrapper > .term-container.active .xterm) #terminals-wrapper .xterm-helper-textarea {
+        top: calc(var(--kb-shift, 0px) - var(--kb-content-top, 0px)) !important;
+        left: calc(-1 * var(--kb-content-left, 0px)) !important;
+    }
+}
+
 /* ── CONSTRAINED SIDE-PANEL TOPOLOGY ───────────────────────────────────
    A full 14px terminal needs roughly 640px for an 80-column working
    grid. Below 1024px the sessions navigation yields into a drawer;

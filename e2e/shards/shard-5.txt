@@ -61,3 +61,16 @@ terminal-reader-geometry.spec.ts › touch › live geometry preserves the readi
 terminal-scroll-anchor.spec.ts › one wheel notch keeps the reading row when a burst follows
 terminal-tab-switch.spec.ts › a warm tab switch paints the GL canvas in the reveal task
 terminal-tab-switch.spec.ts › warm tab switches do not resize either terminal
+mobile-keyboard-shift.spec.ts › keyboard MVP
+mobile-keyboard-shift.spec.ts › B1 animation and repeat
+mobile-keyboard-shift.spec.ts › B2 partial restoration
+mobile-keyboard-shift.spec.ts › B3 smaller layout baseline
+mobile-keyboard-shift.spec.ts › B4 width reset and page restore
+mobile-keyboard-shift.spec.ts › B5 tablets
+mobile-keyboard-shift.spec.ts › B6 live HTML gate and overlays
+mobile-keyboard-shift.spec.ts › B7 shell exclusions
+mobile-keyboard-shift.spec.ts › B8 missing visualViewport
+mobile-keyboard-shift.spec.ts › B9 offline keyboard
+mobile-keyboard-shift.spec.ts › B10 moving content origin
+mobile-keyboard-shift.spec.ts › B11 second terminal sink
+mobile-keyboard-shift.spec.ts › B12 non-unit scale fallback
