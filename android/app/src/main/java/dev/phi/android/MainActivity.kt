@@ -228,6 +228,8 @@ class MainActivity : ComponentActivity() {
         s.loadWithOverviewMode = true
         s.useWideViewPort = true
         s.textZoom = store.zoom()
+        s.userAgentString = "${s.userAgentString} Phi-Android/0.1"
+        WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         web.setBackgroundColor(Color.parseColor("#0D0D10"))
         web.addJavascriptInterface(PhiBridge(this, origin), "__phiDesktop")
         web.webViewClient =
