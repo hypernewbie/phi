@@ -40,6 +40,12 @@
        18px. The floor keeps the strip at its authored height. */
     --app-header-height: max(48px, 3.4286rem);
 
+    /* Both rows of the compact composer use this height. It is rem-based
+       so the controls follow the configured UI font size (and iOS system
+       text scaling); 2rem is 28px at the 14px authored anchor and 34px at
+       the 17px mobile default. The collapsed footer keeps its 48px floor. */
+    --composer-control-size: 2rem;
+
     /* JS replaces this with a measured px value on touch shells. Keeping
        a valid baseline here makes every var(--vv-height, 100dvh) consumer
        safe on old Chromium, which does not parse the dvh fallback unit. */
@@ -698,11 +704,12 @@ html[data-sync="stale"] .brand .logo {
 .workspace-area {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 4px;
     background-color: var(--bg-elevated);
     border: 1px solid var(--bg-border);
-    padding: 4px 10px;
+    padding: 2px 6px;
     border-radius: 6px;
+    height: 28px;
     max-width: 480px;
 }
 
@@ -830,9 +837,10 @@ html[data-sync="stale"] .brand .logo {
     background: transparent;
     border: none;
     color: var(--text-muted);
-    font-size: 1.1429rem;
     cursor: pointer;
-    padding: 0 0.2857rem;
+    width: 22px;
+    height: 22px;
+    padding: 0;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -840,6 +848,16 @@ html[data-sync="stale"] .brand .logo {
     transition:
         color 0.15s,
         background-color 0.15s;
+}
+
+.workspace-area button .icon {
+    width: 12px;
+    height: 12px;
+}
+
+.workspace-area button .icon-dots {
+    fill: currentColor;
+    stroke: none;
 }
 
 .workspace-area button:hover {
@@ -3203,13 +3221,7 @@ body.has-terminal-bg
     max-width: calc(100vw - 24px);
 }
 
-#attach-input-btn.input-quick-chip:not(:hover, :focus-visible, [aria-expanded="true"]) {
-    background: transparent;
-    border-color: transparent;
-}
-
 @media (pointer: coarse) {
-    #attach-input-btn,
     #attachment-source-dropup .dropup-model-btn {
         min-width: 44px;
         min-height: 44px;
@@ -3262,18 +3274,6 @@ body.has-terminal-bg
     box-shadow: 0 0 10px rgba(239, 68, 68, 0.4);
 }
 
-/* Touch entry point for session search. Hidden where the keyboard shortcut
-   is the established opener. */
-.session-search-btn .icon {
-    width: 18px;
-    height: 18px;
-}
-
-.session-search-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-}
-
 .input-bar-container.direct-mode-active {
     display: none !important;
 }
@@ -3283,13 +3283,6 @@ body.has-terminal-bg
     .presets-actions
     > :not(#cancel-input-btn, #direct-mode-toggle, #session-search-btn) {
     display: none !important;
-}
-
-.presets-actions > #cancel-input-btn {
-    width: 24px;
-    height: 24px;
-    margin-left: 0;
-    order: 0;
 }
 
 /* PI RPC STATUS BAR */
@@ -3431,7 +3424,12 @@ body.has-terminal-bg
 }
 
 @media (pointer: coarse) {
-    .presets-actions > button {
+    /* Collapsed footer only: the expanded composer follows the rem-sized
+       control metric so the two rows stay consistent with the UI font. */
+    .input-bar-container.direct-mode-active
+        + .presets-toolbar
+        .presets-actions
+        > button {
         min-width: 48px !important;
         min-height: 48px;
     }
@@ -3571,6 +3569,33 @@ body.has-terminal-bg
     opacity: 0.35;
     cursor: not-allowed !important;
     pointer-events: none;
+}
+
+/* Shared geometry for the controls in the staged composer and the footer
+   action bar. The owning class keeps its colour, hover, and behaviour. */
+.input-actions > button:is(.btn, .direct-mode-btn, .preset-btn) {
+    box-sizing: border-box;
+    height: 2.5714rem;
+}
+
+.input-actions > button .icon,
+.presets-actions > button .icon {
+    width: 15px;
+    height: 15px;
+}
+
+.presets-actions > :is(.preset-btn.btn-icon, .direct-mode-btn, .tab-action-btn) {
+    box-sizing: border-box;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border-radius: 4px;
+}
+
+.input-actions > button:disabled,
+.presets-actions > button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
 }
 
 /* A compact press held for the running turn stays visibly queued,
@@ -4682,6 +4707,332 @@ body.has-terminal-bg
     gap: 8px;
     min-height: 0;
     margin-top: 4px;
+}
+
+/* ── Workspace manager (.ws-manager-*) ────────────────────────────────
+   Reuses .modal-overlay/.modal-content/.modal-header/.modal-body/
+   .modal-footer, .path-input-row and the shared .btn variants. Groups
+   follow the settings grammar — uppercase title, hairline rule, plain
+   list rows — so this dialog reads as one more Phi panel, not a form. */
+.ws-manager-modal {
+    width: min(600px, calc(100vw - 24px));
+    overflow: hidden;
+}
+
+.ws-manager-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.ws-manager-status {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    color: var(--text-muted);
+    font-size: 0.8571rem;
+}
+
+.ws-manager-status[data-tone="error"] {
+    color: var(--red);
+}
+
+.ws-manager-filter {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid var(--bg-border);
+    border-radius: 4px;
+    background-color: var(--bg-elevated);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 1rem;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+.ws-manager-filter::placeholder {
+    color: var(--text-muted);
+}
+
+.ws-manager-filter:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.ws-manager-group {
+    display: flex;
+    flex-direction: column;
+}
+
+.ws-manager-group-head {
+    display: flex;
+    align-items: center;
+    /* Same gap as the rows below, so the title sits exactly over the row
+       names: checkbox column, then the same 10px gutter. */
+    gap: 10px;
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--bg-border);
+}
+
+.ws-manager-section-title {
+    flex: 1 1 auto;
+    margin: 0;
+    color: var(--text-muted);
+    font-family: var(--font-ui);
+    font-size: 0.7857rem;
+    font-weight: 600;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+}
+
+.ws-manager-count {
+    margin-left: 4px;
+    color: var(--text-dim);
+    font-weight: 400;
+}
+
+/* The section checkbox lives left of the title, in the same column as the
+   row checkboxes. Vertical padding keeps a usable touch target without
+   inflating the header line. */
+.ws-manager-all {
+    display: inline-flex;
+    align-items: center;
+    padding: 7px 0;
+    cursor: pointer;
+}
+
+.ws-manager-all input {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+.ws-manager-list {
+    display: flex;
+    flex-direction: column;
+    padding: 6px 0 2px;
+}
+
+.ws-manager-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    /* Negative margin lets the hover fill reach the modal padding edge. */
+    margin: 0 -8px;
+    padding: 7px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.ws-manager-row:hover {
+    background-color: var(--bg-elevated);
+}
+
+.ws-manager-check {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+.ws-manager-name {
+    /* The name is the label; it never shrinks below its own text. The path
+       beside it takes the leftover space and truncates instead. */
+    flex: 0 0 auto;
+    max-width: 50%;
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: 1rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* One line per row, so a deep root path cannot make rows differ in height.
+   The full path stays available as the row's title. */
+.ws-manager-path {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 0.8571rem;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ws-manager-root-path {
+    padding: 6px 0 0;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 0.8571rem;
+    overflow-wrap: anywhere;
+}
+
+.ws-manager-roots {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-top: 16px;
+}
+
+.ws-manager-group-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+/* Both bulk actions are shared buttons: neutral for the destructive action,
+   accent fill for the additive one. */
+.ws-manager-group-actions .btn {
+    width: auto;
+    padding: 0 14px;
+}
+
+/* Destructive actions keep the neutral button face until hover, then take the
+   same red as the Settings remove links. */
+.ws-manager-modal .btn.ws-manager-danger:hover:not(:disabled) {
+    color: var(--red);
+    border-color: var(--red);
+    background-color: rgba(255, 80, 80, 0.08);
+    box-shadow: none;
+}
+
+/* Compact recovery action inside a status line or a note, at the same size as
+   the attachment-status buttons. */
+.ws-manager-inline-btn {
+    display: inline-flex;
+    width: auto;
+    height: 1.8571rem;
+    padding: 0 0.5714rem;
+    font-size: 0.7857rem;
+    vertical-align: middle;
+}
+
+.ws-manager-note .ws-manager-inline-btn {
+    margin-left: 6px;
+}
+
+/* Keep every mutation control visibly disabled while a write is pending. */
+.ws-manager-modal .btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.ws-manager-root-tree {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+    margin-top: 8px;
+}
+
+.ws-manager-note {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 0.7857rem;
+}
+
+.ws-manager-note[data-tone="error"] {
+    color: var(--red);
+}
+
+.ws-manager-root-form {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 10px;
+}
+
+.ws-manager-root-tree .directory-tree-scroll {
+    max-height: 260px;
+}
+
+@media (max-width: 480px) {
+    /* The path input keeps its own row: beside two buttons it is too narrow
+       for the placeholder, and a clipped hint reads as a broken field. */
+    .ws-manager-root-form .path-input-row {
+        flex-wrap: wrap;
+    }
+
+    .ws-manager-root-form .path-input-row .input-autocomplete-wrapper {
+        flex: 1 1 100%;
+    }
+
+    /* Keep the path visible on touch: names alone cannot distinguish projects
+       with the same basename, and a hover title is not available. */
+    .ws-manager-row {
+        display: grid;
+        grid-template-columns: 18px minmax(0, 1fr);
+        gap: 3px 8px;
+        margin: 0;
+        padding: 6px 0;
+    }
+
+    /* The header checkbox keeps its column over the narrow grid: 18px column
+       with the same 8px gutter, so the title stays over the row names. */
+    .ws-manager-group-head {
+        gap: 8px;
+    }
+
+    .ws-manager-check {
+        grid-row: 1 / 3;
+    }
+
+    .ws-manager-name {
+        max-width: 100%;
+    }
+
+    .ws-manager-path {
+        grid-column: 2;
+        text-align: left;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+}
+
+/* Touch usability depends on input mode, not the chosen appearance profile. */
+@media (pointer: coarse) {
+    .ws-manager-modal :is(.btn, .modal-close-btn, .ws-manager-row, .ws-manager-all, input[type="text"]) {
+        min-height: 44px;
+    }
+
+    .ws-manager-modal .modal-close-btn {
+        min-width: 44px;
+    }
+
+    .ws-manager-group-actions .btn {
+        height: 44px;
+    }
+}
+
+html[data-appearance-profile="mobile"]
+    :is(.ws-manager-row, .ws-manager-all) {
+    min-height: 44px;
+}
+
+/* List rows and their metadata follow the same mobile ratio as Settings, so
+   the dialog does not shrink back to desktop sizes on a phone. */
+html[data-appearance-profile="mobile"] .ws-manager-name {
+    font-size: var(--mobile-ui-size, 17px);
+}
+
+html[data-appearance-profile="mobile"]
+    .ws-manager-modal
+    :is(
+        .ws-manager-section-title,
+        .ws-manager-note,
+        .ws-manager-status,
+        .ws-manager-path,
+        .ws-manager-root-path
+    ) {
+    font-size: calc(var(--mobile-ui-size, 17px) * 0.8);
 }
 
 .directory-tree-controls {
@@ -5934,17 +6285,24 @@ html[data-phi-config-page] .settings-modal {
         max-width: 140px;
         min-width: 60px;
         margin: 0 4px;
-        padding: 4px 6px;
+        padding: 2px 6px;
+    }
+    /* The folder glyph is decoration; the label and chevron carry the control
+       once space is this tight. Removing it leaves the two icon buttons their
+       full 22px hit area instead of letting flexbox squeeze them. */
+    .workspace-area > .icon {
+        display: none;
+    }
+    .workspace-area button {
+        flex: 0 0 22px;
     }
     .workspace-area select {
-        width: 100%;
+        flex: 1 1 auto;
+        width: auto;
         min-width: 40px;
         max-width: 120px;
         font-size: 0.8571rem;
         padding-right: 1rem;
-    }
-    .workspace-area button {
-        font-size: 1rem;
     }
 
     /* Hide config backup/restore pill on mobile to save critical screen space */
@@ -6075,27 +6433,28 @@ html[data-phi-config-page] .settings-modal {
         order: 2;
     }
 
-    /* Search is a finger target even though the preset chips beside it keep
-       their 24px row height. Scoped to the staged row: the collapsed footer
-       applies its own 48px coarse-pointer floor.
-       Id selectors: the compact blocks below set the same properties with
-       !important for .direct-mode-btn. */
-    .input-actions > #session-search-btn {
-        order: 0;
-        min-width: 44px !important;
-        min-height: 44px !important;
-        margin-left: 0;
-    }
-
-    .input-actions .btn {
-        padding: 0 0.7143rem;
-        height: 2.5714rem;
-        font-size: 0.8571rem;
+    /* Both composer rows use the shared rem metric so the controls follow
+       the UI font size instead of drifting between fixed px boxes. */
+    .input-actions .btn,
+    .direct-mode-btn {
+        height: var(--composer-control-size) !important;
+        min-width: var(--composer-control-size) !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
     }
 
     .direct-mode-btn {
-        width: 32px;
-        height: 36px;
+        width: var(--composer-control-size) !important;
+    }
+
+    .input-actions .btn {
+        padding: 0 10px !important;
+        font-size: 0.8571rem;
+    }
+
+    .input-actions > :is(.preset-btn, .direct-mode-btn) {
+        border-radius: 4px;
     }
 
     /* Preset buttons container styling for mobile - swipeable capsule pills */
@@ -6118,7 +6477,7 @@ html[data-phi-config-page] .settings-modal {
 
     .preset-btn {
         flex-shrink: 0;
-        height: 2.1429rem;
+        height: var(--composer-control-size) !important;
         padding: 0 0.8571rem;
         font-size: 0.7857rem;
         font-weight: 500;
@@ -6143,12 +6502,41 @@ html[data-phi-config-page] .settings-modal {
         border-color: var(--accent) !important;
         color: var(--accent-bright) !important;
         font-size: 0.8571rem !important;
-        width: 32px !important;
-        height: 2.1429rem !important;
+        width: var(--composer-control-size) !important;
+        height: var(--composer-control-size) !important;
         padding: 0 !important;
         display: inline-flex !important;
         align-items: center !important;
         justify-content: center !important;
+    }
+
+    /* Icon-only controls are square at the shared metric. Text chips keep
+       their content-driven widths. The glyphs scale with the UI font too. */
+    .input-actions > .preset-btn.btn-icon,
+    .presets-container > .preset-btn.btn-icon,
+    .presets-actions > .preset-btn.btn-icon,
+    .presets-container > .keys-trigger-btn {
+        width: var(--composer-control-size) !important;
+        min-width: var(--composer-control-size) !important;
+        padding: 0 !important;
+    }
+
+    .input-mode-toggle {
+        flex: 0 0 var(--composer-control-size) !important;
+        width: var(--composer-control-size) !important;
+        height: var(--composer-control-size) !important;
+    }
+
+    .input-actions > button .icon,
+    .presets-actions > button .icon,
+    .presets-container > .preset-btn.btn-icon .icon {
+        width: 1.0714rem;
+        height: 1.0714rem;
+    }
+
+    .presets-container > .keys-trigger-btn .icon {
+        width: 1rem !important;
+        height: 1rem !important;
     }
 
     /* Compact layout can still use the desktop appearance profile. */
@@ -6328,14 +6716,18 @@ html[data-phi-config-page] .settings-modal {
         overflow-y: auto !important;
     }
 
-    /* Touch friendly input actions, sized like the preset row below */
+    /* Touch friendly input actions, sized like the preset row below. Both
+       use the shared rem metric so the controls follow the UI font size. */
     .input-actions .btn,
     .direct-mode-btn {
-        height: 24px !important;
-        min-width: 24px !important;
+        height: var(--composer-control-size) !important;
+        min-width: var(--composer-control-size) !important;
         display: flex !important;
         align-items: center !important;
         justify-content: center !important;
+    }
+    .direct-mode-btn {
+        width: var(--composer-control-size) !important;
     }
     .input-actions .btn {
         padding: 0 10px !important;
@@ -9024,7 +9416,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 }
 .review-bubble.role-assistant {
     align-self: flex-start;
-    background-color: rgba(255, 255, 255, 0.03);
+    background-color: var(--bg-elevated);
     border: 1px solid var(--bg-border);
     border-bottom-left-radius: 2px;
     color: var(--text-primary);
@@ -9704,8 +10096,8 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     }
 
     .input-actions .direct-mode-btn {
-        width: 28px !important;
-        min-width: 28px !important;
+        width: var(--composer-control-size) !important;
+        min-width: var(--composer-control-size) !important;
     }
 
     /* Keep the whole picker row on screen at 320px. Id selectors: the
@@ -9740,8 +10132,8 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     .preset-btn {
         font-size: 0.7143rem !important;
         padding: 0 0.5714rem !important;
-        height: 1.7143rem !important;
-        line-height: 1.5714rem !important;
+        height: var(--composer-control-size) !important;
+        line-height: 1.2 !important;
         border-radius: 4px !important;
     }
 
@@ -9751,21 +10143,21 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     .presets-container > .pi-rpc-compact-btn,
     .presets-container > .pi-rpc-reset-btn {
         font-size: 0.7143rem !important;
-        min-height: 1.7143rem;
-        height: 1.7143rem !important;
-        line-height: 1.5714rem !important;
+        min-height: var(--composer-control-size);
+        height: var(--composer-control-size) !important;
+        line-height: 1.2 !important;
     }
 
     .presets-container > .pi-rpc-context-meter {
         font-size: inherit !important;
-        min-height: 24px;
+        min-height: var(--composer-control-size);
         height: auto !important;
         line-height: normal !important;
     }
 
     .preset-btn.mobile-nav-btn {
-        width: 28px !important;
-        height: 1.7143rem !important;
+        width: var(--composer-control-size) !important;
+        height: var(--composer-control-size) !important;
         font-size: 0.7857rem !important;
     }
 }

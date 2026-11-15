@@ -217,18 +217,30 @@ describe('negative guard — desktop rules unchanged', () => {
 // plan/20261028-0045-mobile-input-row.md. Source-contract only — the
 // real geometry is verified in a browser, not here.
 describe('mobile input bar — staged row wraps compact-only', () => {
-    it('keeps wrapping, the textarea minimum and the 24px controls', () => {
+    it('keeps wrapping, the textarea minimum and the rem-sized controls', () => {
         expect(MOBILE).toMatch(/\.input-bar-row\s*\{[^}]*flex-wrap:\s*wrap/);
         expect(MOBILE).toMatch(
             /\.input-bar-container textarea\s*\{[^}]*min-width:\s*200px/,
         );
-        // Stay inside the action-control rule: a loose match would accept a
-        // 40px control and find the 24px in the neighbouring preset rule.
+        // Both rows share one rem metric so the controls follow the root
+        // font size instead of drifting between fixed 24/44/48px boxes.
+        expect(CSS).toMatch(/--composer-control-size:\s*2rem/);
+        // Stay inside the action-control rule: a loose match would accept
+        // the metric in a neighbouring preset rule.
         const actionRule = MOBILE.match(
             /\.input-actions \.btn,[^{]*\{[^}]*\}/,
         )?.[0];
-        expect(actionRule).toMatch(/height:\s*24px\s*!important/);
-        expect(actionRule).toMatch(/min-width:\s*24px\s*!important/);
+        expect(actionRule).toMatch(
+            /height:\s*var\(--composer-control-size\)\s*!important/,
+        );
+        expect(actionRule).toMatch(
+            /min-width:\s*var\(--composer-control-size\)\s*!important/,
+        );
+        // The 48px touch floor belongs to the collapsed footer, not the
+        // expanded two-row composer where it would tower over the chips.
+        expect(CSS).toMatch(
+            /\.input-bar-container\.direct-mode-active\s*\+\s*\.presets-toolbar\s*\.presets-actions\s*>\s*button\s*\{[^}]*min-width:\s*48px\s*!important/,
+        );
         // Desktop stays one row at full control size.
         expect(extractRule(CSS, '.input-bar-row')).not.toMatch(
             /flex-wrap:\s*wrap/,

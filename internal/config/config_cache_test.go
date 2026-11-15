@@ -150,6 +150,7 @@ workspaces = ["/repo/a", "/repo/b"]
 thinking_presets = ["low", "high"]
 markdown_dirs = ["docs"]
 replay_buffer_bytes = 123
+workspace_roots = ["/repo/root"]
 mobile_ui_font_family = "MUI"
 mobile_ui_font_size = 21
 mobile_terminal_font_family = "MTF"
@@ -187,6 +188,8 @@ pi = ["m1", "m2"]
 		first.ThemeColor = "MUT"
 		first.Workspaces[0] = "MUT"
 		first.Workspaces = append(first.Workspaces, "MUT")
+		first.WorkspaceRoots[0] = "MUT"
+		first.WorkspaceRoots = append(first.WorkspaceRoots, "MUT")
 		first.ThinkingPresets[0] = "MUT"
 		first.MarkdownDirs[0] = "MUT"
 		first.QuickCommands[0].Name = "MUT"
@@ -213,6 +216,7 @@ pi = ["m1", "m2"]
 			t.Fatalf("pristine reread cost a real read: total %d", n)
 		}
 		if second.ThemeColor != "amber" || second.Workspaces[0] != "/repo/a" || len(second.Workspaces) != 2 ||
+			len(second.WorkspaceRoots) != 1 || second.WorkspaceRoots[0] != "/repo/root" ||
 			second.ThinkingPresets[0] != "low" || second.MarkdownDirs[0] != "docs" ||
 			second.QuickCommands[0].Name != "q" || second.TerminalCommands[0].Command != "echo t" ||
 			second.Peers[0].URL != "http://p.test" || !second.ExpandedWorktrees["/repo/a"] ||
@@ -242,7 +246,7 @@ pi = ["m1", "m2"]
 	if !ok {
 		t.Fatal("minimal read did not populate the cache")
 	}
-	if raw.Workspaces != nil || raw.ExpandedWorktrees != nil || raw.ActiveWorktrees != nil ||
+	if raw.Workspaces != nil || raw.WorkspaceRoots != nil || raw.ExpandedWorktrees != nil || raw.ActiveWorktrees != nil ||
 		raw.ModelPresets != nil || raw.ThinkingPresets != nil || raw.QuickCommands != nil ||
 		raw.TerminalCommands != nil || raw.MarkdownDirs != nil || raw.Peers != nil ||
 		raw.MobileUIFontFamily != nil || raw.MobileUIFontSize != nil ||

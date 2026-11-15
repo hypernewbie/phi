@@ -15,6 +15,15 @@ All notable changes to phi are documented here. Newest versions first.
   `--session <id>`. A pane whose bridge never connects still accepts input, but
   Phi cannot resume it by ID until Psi reports one.
 
+### Fixed
+- **Mobile composer rows use one font-relative control height.** The two
+  bottom rows mixed fixed 24px actions with 44px and 48px touch targets while
+  the preset chips scaled with the UI font, so the rows drifted out of
+  alignment. Both rows now share a 2rem metric (34px at the 17px mobile
+  default), icon-only controls are square at that size, and the collapsed
+  footer keeps its 48px touch floor. The two rows are shorter overall even
+  though each control is larger.
+
 ## v0.38.3 — 2026-11-10
 
 ### Fixed

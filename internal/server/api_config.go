@@ -11,6 +11,9 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -46,6 +49,7 @@ func (app *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"workspaces":                          cfg.Workspaces,
+		"workspace_roots":                     cfg.WorkspaceRoots,
 		"active_cwd":                          app.activeCWD,
 		"theme_color":                         cfg.ThemeColor,
 		"hostname":                            hName,
@@ -75,7 +79,81 @@ func (app *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// workspaceMutationPaths decodes the two accepted request forms: the legacy
+// single {path} and the manager's batch {paths}. Mixing both is ambiguous, so
+// it is rejected rather than guessed. Blank elements fail the whole request.
+// Preserve nonblank paths exactly: trailing spaces can be part of a directory name.
+func workspaceMutationPaths(body io.Reader) ([]string, error) {
+	var req struct {
+		Path  *string   `json:"path"`
+		Paths *[]string `json:"paths"`
+	}
+	if err := json.NewDecoder(body).Decode(&req); err != nil {
+		return nil, err
+	}
+	if req.Path != nil && req.Paths != nil {
+		return nil, errors.New("Provide path or paths, not both")
+	}
+	var raw []string
+	if req.Paths != nil {
+		raw = *req.Paths
+	} else if req.Path != nil {
+		raw = []string{*req.Path}
+	}
+	if len(raw) == 0 {
+		return nil, errors.New("Missing path")
+	}
+	paths := make([]string, 0, len(raw))
+	for _, candidate := range raw {
+		expanded := expandHome(candidate)
+		if strings.TrimSpace(expanded) == "" {
+			return nil, errors.New("Missing path")
+		}
+		paths = append(paths, expanded)
+	}
+	return paths, nil
+}
+
+// handleWorkspaceToggle owns the registered workspace list. One request is one
+// locked read-modify-write of the latest on-disk config, so a concurrent writer
+// cannot drop entries and a failed save is reported instead of swallowed.
 func (app *Server) handleWorkspaceToggle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	paths, err := workspaceMutationPaths(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if _, err := app.configStore().Update(func(cfg *config.Config) error {
+		if r.Method == http.MethodPost {
+			for _, path := range paths {
+				if !slices.Contains(cfg.Workspaces, path) {
+					cfg.Workspaces = append(cfg.Workspaces, path)
+				}
+			}
+			return nil
+		}
+		cfg.Workspaces = slices.DeleteFunc(cfg.Workspaces, func(ws string) bool {
+			return slices.Contains(paths, ws)
+		})
+		return nil
+	}); err != nil {
+		http.Error(w, "Failed to save config", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleWorkspaceRoots owns the manager's root directory list. Roots are
+// configuration only: they never change the registered workspace list, and
+// POST refuses a path that is not an existing directory. DELETE still works
+// for a directory that has since disappeared, so a stale root stays removable.
+func (app *Server) handleWorkspaceRoots(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -86,35 +164,41 @@ func (app *Server) handleWorkspaceToggle(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	path := expandHome(req["path"])
-	if path == "" {
+	expanded := expandHome(strings.TrimSpace(req["path"]))
+	if expanded == "" {
 		http.Error(w, "Missing path", http.StatusBadRequest)
 		return
 	}
-
-	cfg := app.loadConfig()
-
+	path := filepath.Clean(expanded)
+	if !filepath.IsAbs(path) {
+		http.Error(w, "Path must be absolute", http.StatusBadRequest)
+		return
+	}
 	if r.Method == http.MethodPost {
-		found := false
-		for _, wsPath := range cfg.Workspaces {
-			if wsPath == path {
-				found = true
-				break
+		// Any existing absolute directory is a valid root, symlinks included.
+		// That grants no visibility beyond the existing /api/fs/browse rules
+		// (same auth gate, non-recursive, direct child directories only).
+		info, err := os.Stat(path)
+		if err != nil || !info.IsDir() {
+			http.Error(w, "Not a directory", http.StatusBadRequest)
+			return
+		}
+	}
+
+	if _, err := app.configStore().Update(func(cfg *config.Config) error {
+		if r.Method == http.MethodPost {
+			if !slices.Contains(cfg.WorkspaceRoots, path) {
+				cfg.WorkspaceRoots = append(cfg.WorkspaceRoots, path)
 			}
+			return nil
 		}
-		if !found {
-			cfg.Workspaces = append(cfg.Workspaces, path)
-			app.saveConfig(cfg)
-		}
-	} else if r.Method == http.MethodDelete {
-		newWS := []string{}
-		for _, wsPath := range cfg.Workspaces {
-			if wsPath != path {
-				newWS = append(newWS, wsPath)
-			}
-		}
-		cfg.Workspaces = newWS
-		app.saveConfig(cfg)
+		cfg.WorkspaceRoots = slices.DeleteFunc(cfg.WorkspaceRoots, func(root string) bool {
+			return root == path
+		})
+		return nil
+	}); err != nil {
+		http.Error(w, "Failed to save config", http.StatusInternalServerError)
+		return
 	}
 
 	w.WriteHeader(http.StatusOK)
