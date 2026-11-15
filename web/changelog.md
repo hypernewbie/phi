@@ -4,25 +4,18 @@ All notable changes to phi are documented here. Newest versions first.
 
 ## Unreleased
 
+## v0.39.0 — 2026-11-15
+
+### Added
+- **Workspace manager with live root folders and batch add/remove** (`c3339049`). A new `…` control opens one dialog for every workspace while the header's `-` keeps its one-click remove of the active workspace. **Projects** lists the registered workspaces and removes them in one batch, and each **Rest of `<root>`** section lists the immediate child folders of a configured root read live from disk. Roots are configuration only: `workspace_roots` never expands into `workspaces`, a root child becomes a project only when it is selected, and removing a root keeps its projects. Batch writes send one `{paths:[...]}` request to the existing endpoint (the single `{path}` form is unchanged), every mutation is one locked read-modify-write of the latest on-disk config, and a failed save reports 500 instead of a partial write. Writes apply locally first, roll back on an HTTP error, queue exactly one never-sent change while offline, and never resend a request that may already have reached the server. A local filter narrows both sections without network calls.
+
 ### Changed
-- **A fresh Psi pane no longer gets a forced session ID.** Phi used to pass
-  `--session-id <uuid>` to every fresh Psi launch, which made Psi look the ID up
-  in its session store and scan every session file in the workspace before it
-  could start. A fresh Psi pane now launches as `psi` plus its configured
-  arguments only, Psi picks its own ID, and the ID Phi saves is the one Psi
-  reports on its built-in bridge, so a restart still resumes the same
-  conversation. Psi's explicit resume is unchanged and still uses
-  `--session <id>`. A pane whose bridge never connects still accepts input, but
-  Phi cannot resume it by ID until Psi reports one.
+- **A fresh Psi pane no longer gets a forced session ID** (`cc924ddd`). Phi used to pass `--session-id <uuid>` to every fresh Psi launch, which made Psi look the ID up in its session store and scan every session file in the workspace before it could start. A fresh Psi pane now launches as `psi` plus its configured arguments only, Psi picks its own ID, and the ID Phi saves is the one Psi reports on its built-in bridge, so a restart still resumes the same conversation. Psi's explicit resume is unchanged and still uses `--session <id>`. A pane whose bridge never connects still accepts input, but Phi cannot resume it by ID until Psi reports one.
 
 ### Fixed
-- **Mobile composer rows use one font-relative control height.** The two
-  bottom rows mixed fixed 24px actions with 44px and 48px touch targets while
-  the preset chips scaled with the UI font, so the rows drifted out of
-  alignment. Both rows now share a 2rem metric (34px at the 17px mobile
-  default), icon-only controls are square at that size, and the collapsed
-  footer keeps its 48px touch floor. The two rows are shorter overall even
-  though each control is larger.
+- **The terminal composer keeps its height when sending** (`386a0a31`). Draft autosizing is replaced by a fixed, manually resizable composer: the chosen height persists, is clamped to the available terminal rows, and scroll anchoring survives each resize. Keyboard-only viewport changes no longer force a panel fit, ordinary observations queue without a forced repaint, and live pane frames are held until delta replay completes on same-epoch reconnects so replay bytes stay ordered before new output.
+- **A server can no longer poison another server's sidebar identity** (`48bc8718`). Profile names were inferred from whatever hostname the live server reported, so switching servers could rename the wrong profile, duplicate a name across servers, or lock a user rename out of the discovery path for good. Custom names now persist in their own sidecar, discovery never overwrites one, and the shell clears the previous server's hostname and theme before a cold profile paints so no name or color leaks across servers.
+- **Mobile composer rows use one font-relative control height** (`c3339049`). The two bottom rows mixed fixed 24px actions with 44px and 48px touch targets while the preset chips scaled with the UI font, so the rows drifted out of alignment. Both rows now share a 2rem metric (34px at the 17px mobile default), icon-only controls are square at that size, and the collapsed footer keeps its 48px touch floor. The two rows are shorter overall even though each control is larger.
 
 ## v0.38.3 — 2026-11-10
 
