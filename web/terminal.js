@@ -4,6 +4,7 @@ import { modelRequestJson } from './model-request.js';
 import { terminalSnapshot, resetTerminalState } from './terminal-state.js';
 import { normalizePath } from './sessions.js';
 import { projectWorktreeLabel, formatWorkspaceLabel, cpuLevel, worktreeGlyph, getTerminalActivityState, formatTerminalActivityTitle, buildSelfHud, formatHudLine, formatHudCpu, formatDurationMin, escapeHtml, isMacPlatform, tabShortcutDigit, isCoarseViewport, isCompactViewport, prefersInputBarFocus, terminalPreferredFontSize, responsiveTerminalFontSize, TERMINAL_TARGET_COLUMNS, openExternalLink, installTerminalLinkProvider, serverKey, getEmbeddedProfileId, getEmbeddedBackendOrigin, isAbortError, } from './util.js';
+import { installTerminalTouch, } from './terminal-touch.js';
 import { SNAPSHOT_SCROLLBACK_ROWS } from './backend-store.js';
 import { ThinkingPresetStore, thinkingPresetTokens, THINKING_PRESET_LEVELS, } from './thinking-presets.js';
 import { AttachmentStore, } from './attachment-store.js';
@@ -4458,6 +4459,12 @@ export class TabManager {
         surface?.addEventListener('touchcancel', () => {
             tap = null;
         }, { passive: true });
+        tabInfo.touchSelection = installTerminalTouch({
+            term: tabInfo.term,
+            container: tabInfo.termContainer,
+            openLink: (url) => openExternalLink(url),
+            copyText: (text) => this.copyTextRobustly(text),
+        });
         // Hooks that need the open terminal's DOM (xterm viewport etc.).
         for (const hook of tabInfo._postOpenHooks || []) {
             try {

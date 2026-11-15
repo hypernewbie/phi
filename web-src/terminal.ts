@@ -38,6 +38,10 @@ import {
     getEmbeddedBackendOrigin,
     isAbortError,
 } from './util.js';
+import {
+    installTerminalTouch,
+    type TouchTerminalController,
+} from './terminal-touch.js';
 import { SNAPSHOT_SCROLLBACK_ROWS } from './backend-store.js';
 import {
     ThinkingPresetStore,
@@ -1413,6 +1417,7 @@ export interface TabInfo {
     _pendingViewport: (() => void) | null;
     /** Deferred xterm-viewport wiring: the viewport only exists post-open. */
     _postOpenHooks?: Array<(term: Terminal) => void>;
+    touchSelection?: TouchTerminalController | null;
     /** True while a client-side repaint emits buffer changes of its own. */
     _ownBufferReset?: boolean;
     /** Window key (epoch:head:cols x rows) of the last completed repaint. */
@@ -5956,6 +5961,12 @@ export class TabManager {
             },
             { passive: true },
         );
+        tabInfo.touchSelection = installTerminalTouch({
+            term: tabInfo.term,
+            container: tabInfo.termContainer,
+            openLink: (url) => openExternalLink(url),
+            copyText: (text) => this.copyTextRobustly(text),
+        });
         // Hooks that need the open terminal's DOM (xterm viewport etc.).
         for (const hook of tabInfo._postOpenHooks || []) {
             try {
