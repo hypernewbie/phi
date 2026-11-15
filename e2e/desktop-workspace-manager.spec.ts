@@ -142,10 +142,16 @@ interface BodyDomState {
     activeElementId: string;
     activeElementTag: string;
     activeElementClass: string;
+    activeElementFocusVisible: boolean;
+    activeElementOutlineStyle: string;
+    activeElementBoxShadow: string;
     modalPresent: boolean;
     modalHidden: boolean;
     dialogWidth: number;
     dialogHeight: number;
+    dialogOutlineStyle: string;
+    dialogOutlineWidth: string;
+    dialogBorderTopWidth: string;
     projectValues: string[];
     filterValue: string;
     workspaceValues: string[];
@@ -197,16 +203,28 @@ const BODY_STATE_SCRIPT = `(() => {
     const modal = document.getElementById('ws-manager-modal');
     const dialog = modal ? modal.querySelector('.modal-content') : null;
     const rect = dialog ? dialog.getBoundingClientRect() : null;
+    const dialogStyle = dialog ? getComputedStyle(dialog) : null;
+    const activeStyle = active ? getComputedStyle(active) : null;
     const filter = document.getElementById('ws-manager-filter');
     const select = document.getElementById('workspace-select');
     return {
         activeElementId: active ? String(active.id || '') : '',
         activeElementTag: active ? String(active.tagName || '') : '',
         activeElementClass: active ? String(active.className || '') : '',
+        activeElementFocusVisible: active
+            ? active.matches(':focus-visible')
+            : false,
+        activeElementOutlineStyle: activeStyle
+            ? activeStyle.outlineStyle
+            : '',
+        activeElementBoxShadow: activeStyle ? activeStyle.boxShadow : '',
         modalPresent: modal !== null,
         modalHidden: modal ? modal.classList.contains('hidden') : true,
         dialogWidth: rect ? Math.round(rect.width) : 0,
         dialogHeight: rect ? Math.round(rect.height) : 0,
+        dialogOutlineStyle: dialogStyle ? dialogStyle.outlineStyle : '',
+        dialogOutlineWidth: dialogStyle ? dialogStyle.outlineWidth : '',
+        dialogBorderTopWidth: dialogStyle ? dialogStyle.borderTopWidth : '',
         projectValues: Array.from(
             document.querySelectorAll('#ws-manager-projects .ws-manager-check'),
         ).map((el) => String(el.value)),
@@ -748,6 +766,9 @@ for (const lowMemory of ['0', '1'] as const) {
             ).toEqual([projectPath]);
             expect(opened.dom?.activeElementTag).toBe('DIV');
             expect(opened.dom?.activeElementClass).toContain('modal-content');
+            // Chromium keeps outline-width at 3px when outline-style is none.
+            expect(opened.dom?.dialogOutlineStyle).toBe('none');
+            expect(opened.dom?.dialogBorderTopWidth).toBe('1px');
             const bodyId = opened.bodyWebContentsId as number;
             completedStep = 'opened';
 
@@ -769,6 +790,11 @@ for (const lowMemory of ['0', '1'] as const) {
                     { timeout: 15_000 },
                 )
                 .toBe('ws-manager-close');
+            const closeFocused = await readHostState(launched);
+            lastState = closeFocused;
+            expect(closeFocused.dom?.activeElementFocusVisible).toBe(true);
+            expect(closeFocused.dom?.activeElementOutlineStyle).toBe('none');
+            expect(closeFocused.dom?.activeElementBoxShadow).not.toBe('none');
 
             completedStep = 'tab-filter';
             await sendInput(launched, bodyId, [
@@ -788,6 +814,11 @@ for (const lowMemory of ['0', '1'] as const) {
                     { timeout: 15_000 },
                 )
                 .toBe('ws-manager-filter');
+            const filterFocused = await readHostState(launched);
+            lastState = filterFocused;
+            expect(filterFocused.dom?.activeElementFocusVisible).toBe(true);
+            expect(filterFocused.dom?.activeElementOutlineStyle).toBe('none');
+            expect(filterFocused.dom?.activeElementBoxShadow).not.toBe('none');
 
             completedStep = 'type';
             await sendInput(launched, bodyId, [

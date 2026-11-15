@@ -4763,6 +4763,7 @@ body.has-terminal-bg
 .ws-manager-modal {
     width: min(600px, calc(100vw - 24px));
     overflow: hidden;
+    outline: none;
 }
 
 .ws-manager-body {
