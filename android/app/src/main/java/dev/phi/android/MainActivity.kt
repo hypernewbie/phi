@@ -276,7 +276,6 @@ class MainActivity : ComponentActivity() {
         s.displayZoomControls = false
         s.loadWithOverviewMode = true
         s.useWideViewPort = true
-        s.textZoom = store.zoom()
         s.userAgentString = "${s.userAgentString} Phi-Android/0.1"
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         web.setBackgroundColor(getColor(R.color.bg))
@@ -287,6 +286,7 @@ class MainActivity : ComponentActivity() {
                     hideLoadError()
                     runOnUiThread {
                         if (offline.remove(origin)) rebuildServerList()
+                        applyZoomToViews()
                     }
                     // Mirror desktop low-power: page boots full; native
                     // forces the ONLY mode just after load.
@@ -988,10 +988,24 @@ class MainActivity : ComponentActivity() {
 
     // ---------- zoom ----------
 
+    /** Zoom drives phi's own mobile appearance (terminal + ui font), so
+     *  xterm re-measures its cells and the grid reflows - textZoom only
+     *  rescaled pixels and left the terminal at stale cols/rows. 100% is
+     *  phi's fallback 14px; the page clamps to its own 8..32 bounds. */
     private fun setZoom(z: Int) {
         store.setZoom(z)
-        for (h in hosts.values) h.view.settings.textZoom = store.zoom()
+        applyZoomToViews()
         refreshZoomLabel()
+    }
+
+    private fun applyZoomToViews() {
+        val px = Math.round(14f * store.zoom() / 100f)
+        for (h in hosts.values) {
+            h.view.evaluateJavascript(
+                "try{window.__phiSetFontSize&&window.__phiSetFontSize($px)}catch(e){}",
+                null,
+            )
+        }
     }
 
     private fun nudgeZoom(delta: Int) = setZoom(store.zoom() + delta)
