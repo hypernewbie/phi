@@ -21,8 +21,15 @@ for d, px in DENS.items():
     os.makedirs(p, exist_ok=True)
     g = glyph.resize((px, px), Image.LANCZOS)
 
-    # foreground / monochrome layers: the glyph alone
-    g.save(os.path.join(p, "ic_launcher_fg.png"))
+    # foreground / monochrome: the glyph inset to ~70% so the adaptive
+    # canvas's safe zone (66% center circle) frames it at launcher scale
+    fg = Image.new("RGBA", (px, px), (0, 0, 0, 0))
+    inner = int(px * 0.7)
+    fg.alpha_composite(
+        glyph.resize((inner, inner), Image.LANCZOS),
+        ((px - inner) // 2, (px - inner) // 2),
+    )
+    fg.save(os.path.join(p, "ic_launcher_fg.png"))
 
     # legacy + round: glyph over solid bg, square and circle framed
     tile = Image.new("RGBA", (px, px), BG)
