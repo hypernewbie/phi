@@ -203,7 +203,6 @@ class MainActivity : ComponentActivity() {
             ),
         )
         refreshActiveRow()
-        refreshDisplayName(profile)
     }
 
     private fun showEmpty() {
@@ -349,32 +348,6 @@ class MainActivity : ComponentActivity() {
     }
 
     /** Server-reported hostname via /api/config; cached, silent on failure. */
-    private fun refreshDisplayName(profile: ServerProfile) {
-        thread(isDaemon = true) {
-            try {
-                val conn = URL("${profile.origin}/api/config").openConnection()
-                    as HttpURLConnection
-                conn.connectTimeout = 4000
-                conn.readTimeout = 4000
-                CookieManager.getInstance()
-                    ?.getCookie(profile.origin)
-                    ?.let { conn.setRequestProperty("Cookie", it) }
-                if (conn.responseCode != 200) return@thread
-                val body = conn.inputStream.bufferedReader().readText()
-                val name =
-                    Regex("\"hostname\"\\s*:\\s*\"([^\"]+)\"")
-                        .find(body)?.groupValues?.get(1)
-                        ?.takeIf { it.isNotBlank() } ?: return@thread
-                runOnUiThread {
-                    store.setDisplayName(profile.origin, name)
-                    rebuildServerList()
-                }
-            } catch (e: Exception) {
-                // Offline / auth / unknown shape: pretty host stands in.
-            }
-        }
-    }
-
     /** Glyph + accent for a server: renderer.ts parity — the glyph hashes
      * the canonical hostname, the accent is the page-reported one (else null:
      * the rail carries no default color). */
@@ -874,6 +847,17 @@ class MainActivity : ComponentActivity() {
             }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    /** Bridge callback: the server-reported hostname — the identity the
+     *  glyphs hash. Repaints rows, shortcuts and the edge glyph. */
+    fun onHostname(origin: String, name: String) {
+        if (name.isEmpty()) return
+        if (store.displayNameFor(origin) == name) return
+        store.setDisplayName(origin, name)
+        runOnUiThread {
+            rebuildServerList()
+        }
     }
 
     /** Bridge callback: the web accent changed; cache it and repaint badges live. */

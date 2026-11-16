@@ -18,6 +18,13 @@ class PhiBridge(
         activity.onThemeColor(origin, accent)
     }
 
+    /** The server-reported hostname (loadConfig): the identity the rail
+     * hashes glyphs from — not the typed URL. */
+    @JavascriptInterface
+    fun reportHostname(name: String) {
+        activity.onHostname(origin, name.trim())
+    }
+
     /** The shell runs low-power ONLY; the page seeds it on load. */
     @JavascriptInterface
     fun lowPowerMode(): Boolean = true
