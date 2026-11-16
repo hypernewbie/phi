@@ -2771,21 +2771,39 @@ export class App {
                 this.applyAppearanceProfile();
         });
         this.applyAppearanceProfile();
-        // Android shell hook: the shell's zoom drives phi's own mobile
-        // appearance (store.edit -> applyAppearanceProfile re-fits every
-        // terminal with fresh cell metrics). textZoom cannot do this - it
-        // rescales text without re-measuring xterm, leaving stale cols.
+        // Android shell hook: the shell's zoom drives phi's own desktop
+        // appearance (the LS cache the Settings UI reads back), then
+        // re-applies the profile so every terminal re-measures and
+        // re-fits. The tablet viewport is desktop-width, so the mobile
+        // store is ignored here - textZoom rescales pixels but never
+        // re-measures xterm cells, leaving stale cols/rows.
         (
             window as unknown as {
                 __phiSetFontSize?: (px: number) => void;
             }
         ).__phiSetFontSize = (px: number) => {
             const n = Math.round(px);
-            if (n >= 8 && n <= 32)
-                store.edit({
-                    terminal_font_size: n,
-                    ui_font_size: n,
-                });
+            if (!(n >= 10 && n <= 24)) return;
+            try {
+                const scope = this.scope || captureAppearanceScope();
+                const ls = readDesktopAppearance(scope);
+                ls.ui_font_size = n;
+                ls.terminal_font_size = n;
+                localStorage.setItem(
+                    legacyAppearanceKey(scope),
+                    JSON.stringify(ls),
+                );
+            } catch {
+                /* storage blocked: the in-memory apply still runs */
+            }
+            this.desktopAppearance = {
+                ui_font_family: this.desktopAppearance?.ui_font_family ?? '',
+                terminal_font_family:
+                    this.desktopAppearance?.terminal_font_family ?? '',
+                ui_font_size: n,
+                terminal_font_size: n,
+            };
+            this.applyAppearanceProfile();
         };
         void store.start();
     }

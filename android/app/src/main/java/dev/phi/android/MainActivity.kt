@@ -999,7 +999,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun applyZoomToViews() {
-        val px = Math.round(14f * store.zoom() / 100f)
+        val px = Math.round(14f * store.zoom() / 100f).coerceIn(10, 24)
         for (h in hosts.values) {
             h.view.evaluateJavascript(
                 "try{window.__phiSetFontSize&&window.__phiSetFontSize($px)}catch(e){}",
