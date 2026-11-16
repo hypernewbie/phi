@@ -33,6 +33,7 @@ import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.core.view.GravityCompat
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.drawerlayout.widget.DrawerLayout
@@ -47,6 +48,7 @@ import kotlin.concurrent.thread
  */
 class MainActivity : ComponentActivity() {
     private lateinit var drawer: DrawerLayout
+    private lateinit var stage: FrameLayout
     private lateinit var content: FrameLayout
     private lateinit var panel: LinearLayout
     private lateinit var edgeHandle: View
@@ -81,7 +83,6 @@ class MainActivity : ComponentActivity() {
         profiles = store.load()
         activeId = store.activeId()
 
-        window.statusBarColor = getColor(R.color.panel)
         window.navigationBarColor = getColor(R.color.panel)
         // A terminal client must not sleep mid-session; rendering stays
         // low-power via the forced fast-mode + paced rAF, not the screen.
@@ -91,12 +92,25 @@ class MainActivity : ComponentActivity() {
 
         setContentView(R.layout.activity_main)
         drawer = findViewById(R.id.drawer)
+        stage = findViewById(R.id.stage)
         content = findViewById(R.id.content)
         panel = findViewById(R.id.drawerPanel)
         edgeHandle = findViewById(R.id.edgeHandle)
         serverList = findViewById(R.id.serverList)
         edgeChevron = findViewById(R.id.edgeChevron)
         zoomLabel = findViewById(R.id.zoomLabel)
+
+        // Edge-to-edge is enforced at targetSdk 35+; the guideline is to
+        // consume insets, not draw under the bars. One listener pads the
+        // drawer panel below the status bar and the stage above the nav
+        // bar + IME (adjustResize alone no longer moves the window).
+        ViewCompat.setOnApplyWindowInsetsListener(drawer) { v, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            panel.setPadding(0, bars.top, 0, 0)
+            stage.setPadding(0, 0, 0, maxOf(bars.bottom, ime.bottom))
+            WindowInsetsCompat.CONSUMED
+        }
 
         edgeHandle.setOnClickListener { drawer.openDrawer(GravityCompat.START) }
         findViewById<Button>(R.id.addServer).setOnClickListener { promptAddServer() }

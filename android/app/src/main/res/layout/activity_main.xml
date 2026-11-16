@@ -47,7 +47,7 @@
         android:layout_gravity="start"
         android:orientation="vertical"
         android:background="@drawable/drawer_field"
-        android:paddingTop="48dp">
+        android:paddingTop="0dp">
 
         <LinearLayout
             android:layout_width="match_parent"
