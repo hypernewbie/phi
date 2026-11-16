@@ -20,7 +20,7 @@ glyph and form comes from the repo's own sources.
 | Brand row | `Φ` in JetBrains Mono at the live accent + lowercase `phi` (web `index.html`) |
 | Empty state | `Φ / Phi / "Terminal Multiplexer for AI Coding Agents"` (`.empty-state`) |
 | Add-server form | `picker.html` verbatim: `:7070` autofill, whitespace bulk paste, per-server errors, indigo `#4f46e5` Add |
-| Launcher icons | `theme.ts applyPrepaintFavicon`: gradient tile + white Φ |
+| Launcher icons | `desktop/electron/assets/icon.png` verbatim (gen-icon.mjs brand raster) over solid `--bg` |
 | Fonts | the same vendored woff2 subsets the page serves (Inter greek/latin, JetBrains Mono), decompressed to static TTFs |
 
 ## What works
