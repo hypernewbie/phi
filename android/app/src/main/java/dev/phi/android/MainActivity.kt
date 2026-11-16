@@ -21,6 +21,7 @@ import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
+import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
@@ -63,6 +64,12 @@ class MainActivity : ComponentActivity() {
     /** Origins whose last main-frame load failed (diegetic health, rail.css
      * .offline: the chip reads as a disabled tile, not a status block). */
     private val offline = mutableSetOf<String>()
+
+    /** Origins with activity while not active — the rail's attention
+     * marker: a lozenge in that server's own accent. phi announces
+     * itself through the document title, so a background title change
+     * is the "terminal done" signal (WebChromeClient.onReceivedTitle). */
+    private val attention = mutableSetOf<String>()
     private var activeId: String? = null
     private var keyboardVisible = false
     private var errorView: LinearLayout? = null
@@ -176,6 +183,7 @@ class MainActivity : ComponentActivity() {
 
     private fun showServer(id: String) {
         val profile = profiles.firstOrNull { it.id == id } ?: return
+        attention.remove(profile.origin)
         activeId = id
         store.setActiveId(id)
         var host = hosts[profile.origin]
@@ -320,6 +328,17 @@ class MainActivity : ComponentActivity() {
                             if (offline.add(origin)) rebuildServerList()
                         }
                         showLoadError()
+                    }
+                }
+            }
+        web.webChromeClient =
+            object : WebChromeClient() {
+                override fun onReceivedTitle(view: WebView, title: String?) {
+                    val activeOrigin = profiles.firstOrNull { it.id == activeId }?.origin
+                    if (origin != activeOrigin && !title.isNullOrBlank()) {
+                        runOnUiThread {
+                            if (attention.add(origin)) rebuildServerList()
+                        }
                     }
                 }
             }
@@ -481,6 +500,22 @@ class MainActivity : ComponentActivity() {
             texts.addView(name)
             texts.addView(url)
             row.addView(chip)
+            if (p.origin in attention && p.id != activeId) {
+                val lozenge =
+                    android.view.View(this).apply {
+                        background =
+                            GradientDrawable().apply {
+                                setColor(accent ?: getColor(R.color.text_primary))
+                                cornerRadius = dp(1).toFloat()
+                            }
+                        rotation = 45f
+                    }
+                val lp = LinearLayout.LayoutParams(dp(8), dp(8))
+                lp.leftMargin = -dp(8)
+                lp.topMargin = dp(6)
+                lp.gravity = Gravity.TOP
+                row.addView(lozenge, lp)
+            }
             row.addView(texts)
             row.tag = p.id
             row.alpha = if (p.origin in offline) 0.55f else 1f
