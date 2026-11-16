@@ -25,6 +25,13 @@ class PhiBridge(
         activity.onHostname(origin, name.trim())
     }
 
+    /** The shell's zoom in phi font px (desktop anchor 14). 0 = default,
+     *  so a 100% shell never touches the page. Called by the page exactly
+     *  when its font hook comes alive - the one moment immune to the
+     *  load race. */
+    @JavascriptInterface
+    fun zoomFontPx(): Int = activity.shellZoomFontPx()
+
     /** The shell runs low-power ONLY; the page seeds it on load. */
     @JavascriptInterface
     fun lowPowerMode(): Boolean = true

@@ -863,6 +863,14 @@ class MainActivity : ComponentActivity() {
             .show()
     }
 
+    /** The shell zoom in phi font px; 0 at 100% so the page stays untouched. */
+    fun shellZoomFontPx(): Int =
+        if (store.zoom() == 100) {
+            0
+        } else {
+            Math.round(14f * store.zoom() / 100f).coerceIn(10, 24)
+        }
+
     /** Bridge callback: the server-reported hostname — the identity the
      *  glyphs hash. Repaints rows, shortcuts and the edge glyph. */
     fun onHostname(origin: String, name: String) {
