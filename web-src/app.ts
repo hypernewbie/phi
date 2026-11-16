@@ -2771,6 +2771,22 @@ export class App {
                 this.applyAppearanceProfile();
         });
         this.applyAppearanceProfile();
+        // Android shell hook: the shell's zoom drives phi's own mobile
+        // appearance (store.edit -> applyAppearanceProfile re-fits every
+        // terminal with fresh cell metrics). textZoom cannot do this - it
+        // rescales text without re-measuring xterm, leaving stale cols.
+        (
+            window as unknown as {
+                __phiSetFontSize?: (px: number) => void;
+            }
+        ).__phiSetFontSize = (px: number) => {
+            const n = Math.round(px);
+            if (n >= 8 && n <= 32)
+                store.edit({
+                    terminal_font_size: n,
+                    ui_font_size: n,
+                });
+        };
         void store.start();
     }
 
