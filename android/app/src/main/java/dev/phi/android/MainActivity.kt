@@ -7,6 +7,8 @@ import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.graphics.Color
 import android.graphics.drawable.Icon
 import android.os.Build
@@ -303,46 +305,108 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Glyph + accent for a server: renderer.ts parity — the glyph hashes
+     * the canonical hostname, the accent is the page-reported one (else null:
+     * the rail carries no default color). */
+    private fun glyphFor(profile: ServerProfile): Pair<String, Int?> {
+        val glyph = GreekGlyph.forHostname(
+            GreekGlyph.canonicalHostname(store.displayNameFor(profile.origin))
+                .ifEmpty { profile.label },
+        )
+        val accent =
+            store.accentFor(profile.origin)?.let {
+                try {
+                    Color.parseColor(it)
+                } catch (e: Exception) {
+                    null
+                }
+            }
+        return Pair(glyph, accent)
+    }
+
+    /** rail-item material (rail.css): elevated tile, 6dp radius, 1dp border.
+     * Active + observed accent: accent-glow fill, accent stroke and glyph —
+     * no-accent mode keeps the neutral material (rail.css .no-accent). */
+    private fun chipBackground(active: Boolean, accent: Int?): GradientDrawable {
+        val fill =
+            if (active && accent != null) {
+                (accent and 0x00FFFFFF) or (0x26 shl 24) // accent @ 15% (glow)
+            } else {
+                getColor(R.color.bg_elevated)
+            }
+        val stroke = if (active && accent != null) accent else getColor(R.color.bg_border)
+        return GradientDrawable().apply {
+            setColor(fill)
+            setStroke(dp(1), stroke)
+            cornerRadius = dp(6).toFloat()
+        }
+    }
+
+    private fun dp(v: Int): Int =
+        (v * resources.displayMetrics.density).toInt()
+
+    private fun styleChip(
+        chip: TextView,
+        glyph: String,
+        active: Boolean,
+        accent: Int?,
+    ) {
+        chip.text = glyph
+        chip.background = chipBackground(active, accent)
+        chip.setTextColor(
+            if (active && accent != null) accent else getColor(R.color.text_primary),
+        )
+        chip.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD)) // rail glyphs are 600
+    }
+
     private fun rebuildServerList() {
         serverList.removeAllViews()
-        profiles.forEachIndexed { index, p ->
-            val (color, letter) = badgeFor(p, index)
-            val rowTitle = p.label.takeIf { it != defaultLabelFor(p.origin) }
+        for (p in profiles) {
+            val (glyph, accent) = glyphFor(p)
+            // renderer.ts identityLabel: canonical hostname when observed,
+            // else the profile name.
+            val identity =
+                GreekGlyph.canonicalHostname(store.displayNameFor(p.origin))
+                    .ifEmpty { p.label }
             val row =
                 LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = android.view.Gravity.CENTER_VERTICAL
-                    setPadding(24, 20, 24, 20)
+                    setPadding(dp(16), dp(8), dp(16), dp(8))
                     isClickable = true
                     isFocusable = true
+                    foreground = obtainStyledAttributes(intArrayOf(android.R.attr.selectableItemBackground))
+                        .getDrawable(0)
                 }
-            val badge =
-                ImageView(this).apply {
-                    setImageDrawable(BadgeDrawable(letter, color))
-                    layoutParams = LinearLayout.LayoutParams(96, 96)
+            val chip =
+                TextView(this).apply {
+                    gravity = Gravity.CENTER
+                    textSize = 14f
+                    layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
+                    tag = "chip"
                 }
             val texts =
                 LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
-                    setPadding(32, 0, 0, 0)
+                    setPadding(dp(16), 0, 0, 0)
                     layoutParams =
                         LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                 }
             val name =
                 TextView(this).apply {
-                    text = rowTitle ?: store.displayNameFor(p.origin)
-                    textSize = 16f
+                    text = identity
+                    textSize = 15f
                     setTextColor(getColor(R.color.text_primary))
                 }
             val url =
                 TextView(this).apply {
                     text = p.origin
                     textSize = 12f
-                    setTextColor(color)
+                    setTextColor(getColor(R.color.text_muted))
                 }
             texts.addView(name)
             texts.addView(url)
-            row.addView(badge)
+            row.addView(chip)
             row.addView(texts)
             row.tag = p.id
             row.setOnClickListener {
@@ -358,11 +422,11 @@ class MainActivity : ComponentActivity() {
 
     private fun refreshActiveRow() {
         for (i in 0 until serverList.childCount) {
-            val row = serverList.getChildAt(i)
-            val selected = row.tag == activeId
-            row.setBackgroundColor(
-                if (selected) getColor(R.color.bg_elevated) else Color.TRANSPARENT,
-            )
+            val row = serverList.getChildAt(i) as LinearLayout
+            val profile = profiles.firstOrNull { it.id == row.tag } ?: continue
+            val chip = row.findViewWithTag<TextView>("chip") ?: continue
+            val (glyph, accent) = glyphFor(profile)
+            styleChip(chip, glyph, row.tag == activeId, accent)
         }
     }
 
@@ -490,30 +554,24 @@ class MainActivity : ComponentActivity() {
         errorView = null
     }
 
-    /** Badge color/letter for a server: live web accent wins, else cached slot. */
-    private fun badgeFor(profile: ServerProfile, index: Int): Pair<Int, String> {
-        val palette = resources.getStringArray(R.array.server_palette)
-        val letters = resources.getStringArray(R.array.server_letters)
-        val (colorSlot, letterSlot) =
-            badgeSlot(profile.origin, index, palette.size, letters.size)
-        val color =
-            store.accentFor(profile.origin)?.let {
-                try {
-                    Color.parseColor(it)
-                } catch (e: Exception) {
-                    null
-                }
-            } ?: Color.parseColor(palette[colorSlot])
-        return Pair(color, letters[letterSlot])
-    }
-
-    private fun badgeBitmap(letter: String, color: Int): Bitmap {
-        val px = 96
+    /** Shortcut icon: a rail chip rendered to bitmap (elevated tile, glyph). */
+    private fun chipBitmap(glyph: String): Bitmap {
+        val px = 192
         val bmp = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888)
-        BadgeDrawable(letter, color).apply {
+        val canvas = Canvas(bmp)
+        chipBackground(active = false, accent = null).apply {
             setBounds(0, 0, px, px)
-            draw(Canvas(bmp))
+            draw(canvas)
         }
+        val paint =
+            android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = getColor(R.color.text_primary)
+                textAlign = android.graphics.Paint.Align.CENTER
+                textSize = px * 14f / 40f
+                isFakeBoldText = true
+            }
+        val cy = px / 2f - (paint.descent() + paint.ascent()) / 2f
+        canvas.drawText(glyph, px / 2f, cy, paint)
         return bmp
     }
 
@@ -522,12 +580,15 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N_MR1) return
         val sm = getSystemService(ShortcutManager::class.java) ?: return
         sm.dynamicShortcuts =
-            profiles.take(4).mapIndexed { index, p ->
-                val (color, letter) = badgeFor(p, index)
+            profiles.take(4).map { p ->
+                val (glyph, _) = glyphFor(p)
                 ShortcutInfo.Builder(this, "server:${p.id}")
-                    .setShortLabel(store.displayNameFor(p.origin).take(12))
+                    .setShortLabel(
+                        GreekGlyph.canonicalHostname(store.displayNameFor(p.origin))
+                            .ifEmpty { p.label }.take(12),
+                    )
                     .setLongLabel(p.origin)
-                    .setIcon(Icon.createWithBitmap(badgeBitmap(letter, color)))
+                    .setIcon(Icon.createWithBitmap(chipBitmap(glyph)))
                     .setIntent(
                         Intent(this, MainActivity::class.java)
                             .setAction("phi.OPEN")

@@ -61,10 +61,6 @@ fun prettyHost(origin: String): String {
 
 /** Deterministic badge slot per origin; stable across restarts, no storage.
  * Letters follow drawer order (caller passes the index); colors hash the URL. */
-fun badgeSlot(origin: String, index: Int, paletteSize: Int, letterCount: Int): Pair<Int, Int> {
-    val color = (origin.hashCode() and 0x7fffffff) % paletteSize
-    return Pair(color, index % letterCount)
-}
 
 /** SharedPreferences-backed profile list. Synchronous; lists are tiny.
  * Also caches per-origin display names (server-reported hostnames) and the
