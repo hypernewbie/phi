@@ -21,8 +21,10 @@ for d, px in DENS.items():
     os.makedirs(p, exist_ok=True)
     g = glyph.resize((px, px), Image.LANCZOS)
 
-    # foreground / monochrome: the glyph inset to ~70% so the adaptive
-    # canvas's safe zone (66% center circle) frames it at launcher scale
+    # foreground: the glyph inset to ~70% so the adaptive canvas's safe
+    # zone (66% center circle) frames it at launcher scale. No monochrome
+    # layer: Samsung's themed icons swap it in wholesale and rendered a
+    # blank tile; without it launchers use the fg+bg composite.
     fg = Image.new("RGBA", (px, px), (0, 0, 0, 0))
     inner = int(px * 0.7)
     fg.alpha_composite(
@@ -48,8 +50,7 @@ with open(os.path.join(RES, "mipmap-anydpi", "ic_launcher.xml"), "w") as f:
         "<adaptive-icon "
         'xmlns:android="http://schemas.android.com/apk/res/android">\n'
         '    <background android:drawable="@color/bg"/>\n'
-        '    <foreground android:drawable="@mipmap/ic_launcher_fg"/>\n'
-        '    <monochrome android:drawable="@mipmap/ic_launcher_fg"/>\n'
+        '    <foreground android:drawable="@mipmap/ic_launcher_fg"/>'
         "</adaptive-icon>\n"
     )
 print("brand-raster icons written")

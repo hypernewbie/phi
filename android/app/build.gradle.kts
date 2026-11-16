@@ -10,7 +10,7 @@ android {
         applicationId = "dev.phi.android"
         minSdk = 29
         targetSdk = 37
-        versionCode = 2
+        versionCode = 3
         versionName = "0.6"
     }
 

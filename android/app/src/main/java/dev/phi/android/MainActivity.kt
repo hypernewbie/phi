@@ -108,7 +108,7 @@ class MainActivity : ComponentActivity() {
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
             panel.setPadding(0, bars.top, 0, 0)
-            stage.setPadding(0, 0, 0, maxOf(bars.bottom, ime.bottom))
+            stage.setPadding(0, bars.top, 0, maxOf(bars.bottom, ime.bottom))
             WindowInsetsCompat.CONSUMED
         }
 

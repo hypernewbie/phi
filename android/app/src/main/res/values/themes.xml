@@ -2,6 +2,7 @@
 <resources>
     <style name="Theme.Phi" parent="Theme.Material3.Dark.NoActionBar">
         <item name="android:statusBarColor">@color/bg</item>
+        <item name="android:windowBackground">@color/bg</item>
         <item name="android:navigationBarColor">@color/bg</item>
     </style>
 </resources>
