@@ -367,7 +367,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun promptAddServer() {
-        val input = EditText(this).apply { hint = "https://pluto:7070" }
+        val input = EditText(this).apply { hint = "https://server.example.com" }
         AlertDialog.Builder(this)
             .setTitle("Add server")
             .setView(input)
