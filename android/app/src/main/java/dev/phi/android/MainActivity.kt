@@ -214,8 +214,7 @@ class MainActivity : ComponentActivity() {
             TextView(this).apply {
                 text = "Φ"
                 textSize = 64f // 4.5714rem
-                val typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
-                setTypeface(typeface)
+                typeface = interGreek
                 setTextColor(accent)
                 setShadowLayer(30f, 0f, 0f, (accent and 0x00FFFFFF) or (0x26 shl 24))
             }
@@ -223,7 +222,7 @@ class MainActivity : ComponentActivity() {
             TextView(this).apply {
                 text = "Phi"
                 textSize = 26f // 1.8571rem
-                setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD))
+                typeface = interGreek
                 setTextColor(getColor(R.color.text_primary))
                 letterSpacing = -0.01f
                 setPadding(0, dp(8), 0, 0)
@@ -231,6 +230,7 @@ class MainActivity : ComponentActivity() {
         val subtitle =
             TextView(this).apply {
                 text = "Terminal Multiplexer for AI Coding Agents"
+                typeface = interLatin
                 textSize = 14f
                 setTextColor(getColor(R.color.text_muted))
                 setPadding(0, dp(4), 0, dp(16))
@@ -394,6 +394,22 @@ class MainActivity : ComponentActivity() {
     private fun dp(v: Int): Int =
         (v * resources.displayMetrics.density).toInt()
 
+    // The rail renders its Greek glyphs in the page's UI font; the brand
+    // glyph is JetBrains Mono (web/style.css --font-mono). Static
+    // instances of the vendored variable fonts, decompressed from the
+    // same woff2 the web client ships.
+    private val interGreek: Typeface by lazy {
+        Typeface.createFromAsset(assets, "fonts/inter-greek-600.ttf")
+    }
+
+    private val interLatin: Typeface by lazy {
+        Typeface.createFromAsset(assets, "fonts/inter-latin-400.ttf")
+    }
+
+    private val jetbrains: Typeface by lazy {
+        Typeface.createFromAsset(assets, "fonts/jetbrains-600.ttf")
+    }
+
     private fun styleChip(
         chip: TextView,
         glyph: String,
@@ -412,7 +428,7 @@ class MainActivity : ComponentActivity() {
                 else -> getColor(R.color.text_primary)
             },
         )
-        chip.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD)) // 600
+        chip.typeface = interGreek
     }
 
     private fun rebuildServerList() {
@@ -452,12 +468,14 @@ class MainActivity : ComponentActivity() {
                 TextView(this).apply {
                     text = identity
                     textSize = 15f
+                    typeface = interGreek
                     setTextColor(getColor(R.color.text_primary))
                 }
             val url =
                 TextView(this).apply {
                     text = p.origin
                     textSize = 12f
+                    typeface = interLatin
                     setTextColor(getColor(R.color.text_muted))
                 }
             texts.addView(name)
@@ -507,7 +525,7 @@ class MainActivity : ComponentActivity() {
             TextView(this).apply {
                 text = "Add Phi server"
                 textSize = 15f
-                setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD))
+                typeface = interGreek
                 setTextColor(getColor(R.color.text_primary))
                 setPadding(0, 0, 0, dp(12))
             }
@@ -520,6 +538,7 @@ class MainActivity : ComponentActivity() {
         val input =
             EditText(this).apply {
                 hint = "https://server.example.com"
+                typeface = interLatin
                 textSize = 13f
                 setTextColor(getColor(R.color.text_primary))
                 setHintTextColor(getColor(R.color.text_muted))
@@ -716,7 +735,7 @@ class MainActivity : ComponentActivity() {
             TextView(this).apply {
                 text = identity
                 textSize = 15f
-                setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD))
+                typeface = interGreek
                 setTextColor(getColor(R.color.text_primary))
                 setPadding(0, 0, 0, dp(4))
             },
@@ -725,6 +744,7 @@ class MainActivity : ComponentActivity() {
             TextView(this).apply {
                 text = profile.origin
                 textSize = 12f
+                typeface = interLatin
                 setTextColor(getColor(R.color.text_muted))
                 setPadding(0, 0, 0, dp(12))
             },
@@ -825,6 +845,7 @@ class MainActivity : ComponentActivity() {
                     null
                 }
             } ?: getColor(R.color.accent_default)
+        glyph.typeface = jetbrains
         glyph.setTextColor(accent)
         glyph.setShadowLayer(10f, 0f, 0f, (accent and 0x00FFFFFF) or 0x26 shl 24)
     }
