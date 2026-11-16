@@ -747,6 +747,15 @@ export class SessionsManager {
         }
         if (data.hostname && this.app) {
             this.app.hostname = data.hostname;
+            // Android shell hook: the rail glyphs hash the server-REPORTED
+            // hostname, not whatever URL the user typed. Guarded no-op
+            // everywhere but the thin shell.
+            try {
+                window.__phiDesktop?.reportHostname?.(data.hostname);
+            }
+            catch {
+                /* not android */
+            }
             const shown = displayHostname(data.hostname);
             const hostEl = document.getElementById('hostname-display');
             if (hostEl) {
