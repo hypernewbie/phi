@@ -5,28 +5,38 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
+    <!-- Content stage: everything the user sees when the drawer is shut.
+         Must NOT be a direct child with drawer-edge gravity — DrawerLayout
+         treats any start/end-gravity child as a drawer, and two drawers on
+         one edge crash onMeasure (IllegalStateException). -->
     <FrameLayout
-        android:id="@+id/content"
+        android:id="@+id/stage"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent">
 
-    <!-- Edge affordance: glass chevron riding the drawer edge. -->
-    <FrameLayout
-        android:id="@+id/edgeHandle"
-        android:layout_width="28dp"
-        android:layout_height="56dp"
-        android:layout_gravity="start|center_vertical"
-        android:clickable="true"
-        android:focusable="true">
-        <TextView
-            android:id="@+id/edgeChevron"
+        <FrameLayout
+            android:id="@+id/content"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <!-- Edge affordance: glass chevron riding the drawer edge. -->
+        <FrameLayout
+            android:id="@+id/edgeHandle"
             android:layout_width="28dp"
             android:layout_height="56dp"
-            android:gravity="center"
-            android:text="❮"
-            android:textSize="18sp"
-            android:textColor="@color/phi_accent"
-            android:background="@drawable/edge_handle_bg" />
+            android:layout_gravity="start|center_vertical"
+            android:clickable="true"
+            android:focusable="true">
+            <TextView
+                android:id="@+id/edgeChevron"
+                android:layout_width="28dp"
+                android:layout_height="56dp"
+                android:gravity="center"
+                android:text="❮"
+                android:textSize="18sp"
+                android:textColor="@color/phi_accent"
+                android:background="@drawable/edge_handle_bg" />
+        </FrameLayout>
     </FrameLayout>
 
     <!-- Native server drawer: obsidian glass, Greek badges, zoom. -->
