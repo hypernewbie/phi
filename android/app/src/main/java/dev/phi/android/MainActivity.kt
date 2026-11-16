@@ -468,29 +468,213 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** picker.html parity — the add-server form: field scale, live "Add N
+     * servers" label, :7070 autofill, bulk add with per-server errors,
+     * paste flattening, Enter submits. */
     private fun promptAddServer() {
-        val input = EditText(this).apply { hint = "https://server.example.com" }
-        AlertDialog.Builder(this)
-            .setTitle("Add server")
-            .setView(input)
-            .setPositiveButton("Add") { _, _ ->
-                val res = normalizeServerUrl(input.text.toString())
-                res.onSuccess { origin ->
-                    val profile =
-                        ServerProfile(store.newId(), defaultLabelFor(origin), origin)
-                    profiles.add(profile)
-                    store.save(profiles)
-                    rebuildServerList()
-                    showServer(profile.id)
-                }.onFailure { e ->
-                    AlertDialog.Builder(this)
-                        .setMessage(e.message)
-                        .setPositiveButton("OK", null)
-                        .show()
+        val pad = dp(16)
+        val content =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(pad, dp(12), pad, dp(8))
+            }
+        val title =
+            TextView(this).apply {
+                text = "Add Phi server"
+                textSize = 15f
+                setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD))
+                setTextColor(getColor(R.color.text_primary))
+                setPadding(0, 0, 0, dp(12))
+            }
+        val fieldBg =
+            GradientDrawable().apply {
+                setColor(getColor(R.color.picker_field))
+                setStroke(dp(1), getColor(R.color.picker_border))
+                cornerRadius = dp(4).toFloat()
+            }
+        val input =
+            EditText(this).apply {
+                hint = "https://server.example.com"
+                textSize = 13f
+                setTextColor(getColor(R.color.text_primary))
+                setHintTextColor(getColor(R.color.text_muted))
+                background = fieldBg
+                setPadding(dp(10), dp(8), dp(10), dp(8))
+                inputType =
+                    android.text.InputType.TYPE_CLASS_TEXT or
+                        android.text.InputType.TYPE_TEXT_VARIATION_URI
+                imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+                setSingleLine()
+            }
+        input.onFocusChangeListener =
+            View.OnFocusChangeListener { _, has ->
+                fieldBg.setStroke(
+                    dp(1),
+                    getColor(
+                        if (has) R.color.picker_accent else R.color.picker_border,
+                    ),
+                )
+            }
+        val error =
+            TextView(this).apply {
+                textSize = 12f
+                setTextColor(getColor(R.color.picker_error))
+                setPadding(0, dp(8), 0, 0)
+                visibility = View.GONE
+            }
+        content.addView(title)
+        content.addView(input)
+        content.addView(error)
+
+        fun btn(label: String, accent: Boolean, onClick: () -> Unit) =
+            android.widget.Button(this).apply {
+                text = label
+                textSize = 13f
+                setTextColor(getColor(R.color.text_primary))
+                background =
+                    GradientDrawable().apply {
+                        setColor(
+                            getColor(
+                                if (accent) R.color.picker_accent else R.color.picker_btn_bg,
+                            ),
+                        )
+                        setStroke(
+                            dp(1),
+                            getColor(
+                                if (accent) R.color.picker_accent else R.color.picker_border,
+                            ),
+                        )
+                        cornerRadius = dp(4).toFloat()
+                    }
+                setPadding(dp(16), dp(6), dp(16), dp(6))
+                minHeight = 0
+                minimumHeight = 0
+                setOnClickListener { onClick() }
+            }
+
+        val dialog =
+            AlertDialog.Builder(this)
+                .setView(content)
+                .create()
+
+        fun urls() = ServerInput.parseUrls(input.text.toString())
+
+        val add = btn("Add", accent = true) {}
+        fun submit() {
+            val parsed = urls()
+            if (parsed.isEmpty()) {
+                error.text = "Invalid server URL"
+                error.visibility = View.VISIBLE
+                return
+            }
+            val errors = mutableListOf<String>()
+            var added: ServerProfile? = null
+            for (url in parsed) {
+                normalizeServerUrl(url)
+                    .onSuccess { origin ->
+                        if (profiles.none { it.origin == origin }) {
+                            val profile =
+                                ServerProfile(store.newId(), defaultLabelFor(origin), origin)
+                            profiles.add(profile)
+                            added = profile
+                        }
+                    }
+                    .onFailure { e -> errors.add("$url: ${e.message}") }
+            }
+            store.save(profiles)
+            rebuildServerList()
+            if (errors.isNotEmpty()) {
+                error.text = errors.joinToString("; ")
+                error.visibility = View.VISIBLE
+                add.text = if (urls().size > 1) "Add ${urls().size} servers" else "Add"
+                return
+            }
+            dialog.dismiss()
+            (added ?: profiles.lastOrNull())?.let { showServer(it.id) }
+        }
+        add.setOnClickListener { submit() }
+        input.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
+                submit()
+                true
+            } else {
+                false
+            }
+        }
+        // picker.html paste flattening: newlines become spaces.
+        input.addTextChangedListener(
+            object : android.text.TextWatcher {
+                override fun beforeTextChanged(
+                    s: CharSequence?,
+                    a: Int,
+                    b: Int,
+                    c: Int,
+                ) {}
+
+                override fun onTextChanged(
+                    s: CharSequence?,
+                    a: Int,
+                    b: Int,
+                    c: Int,
+                ) {}
+
+                override fun afterTextChanged(s: android.text.Editable?) {
+                    val t = s?.toString().orEmpty()
+                    if (Regex("[\r\n]").containsMatchIn(t)) {
+                        val flat = t.replace(Regex("[\r\n]+"), " ").trim()
+                        input.setText(flat)
+                        input.setSelection(flat.length)
+                        return
+                    }
+                    val n = ServerInput.parseUrls(t).size
+                    add.text = if (n > 1) "Add $n servers" else "Add"
+                }
+            },
+        )
+
+        val footer =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.END or Gravity.CENTER_VERTICAL
+                setPadding(0, dp(12), 0, 0)
+            }
+        val copyAll =
+            TextView(this).apply {
+                text = "Copy all server URLs"
+                textSize = 12f
+                setTextColor(getColor(R.color.text_muted))
+                setPadding(0, 0, dp(16), 0)
+                setOnClickListener {
+                    val clip =
+                        android.content.ClipData.newPlainText(
+                            "phi servers",
+                            profiles.joinToString("\n") { it.origin },
+                        )
+                    val cm = getSystemService(android.content.ClipboardManager::class.java)
+                    cm?.setPrimaryClip(clip)
                 }
             }
-            .setNegativeButton("Cancel", null)
-            .show()
+        footer.addView(
+            copyAll,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        footer.addView(
+            btn("Cancel", accent = false) { dialog.dismiss() },
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+        (dp(8)).let { footer.addView(android.view.View(this), LinearLayout.LayoutParams(it, 1)) }
+        footer.addView(
+            add,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+        content.addView(footer)
+        dialog.show()
     }
 
     private fun promptEditServer(profile: ServerProfile) {
