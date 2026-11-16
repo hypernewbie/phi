@@ -50,6 +50,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var content: FrameLayout
     private lateinit var panel: LinearLayout
     private lateinit var edgeHandle: View
+    private lateinit var edgeChevron: TextView
     private lateinit var serverList: LinearLayout
     private lateinit var zoomLabel: TextView
     private lateinit var store: ServerStore
@@ -94,6 +95,7 @@ class MainActivity : ComponentActivity() {
         panel = findViewById(R.id.drawerPanel)
         edgeHandle = findViewById(R.id.edgeHandle)
         serverList = findViewById(R.id.serverList)
+        edgeChevron = findViewById(R.id.edgeChevron)
         zoomLabel = findViewById(R.id.zoomLabel)
 
         edgeHandle.setOnClickListener { drawer.openDrawer(GravityCompat.START) }
@@ -528,6 +530,22 @@ class MainActivity : ComponentActivity() {
         }
         refreshActiveRow()
         refreshShortcuts()
+        restyleEdge()
+    }
+
+    /** The edge affordance carries the active server's glyph in its own
+     * accent — rail identity at a glance while the drawer is shut. */
+    private fun restyleEdge() {
+        val active = profiles.firstOrNull { it.id == activeId }
+        if (active == null) {
+            edgeChevron.text = "❮"
+            edgeChevron.setTextColor(getColor(R.color.text_muted))
+            return
+        }
+        val (glyph, accent) = glyphFor(active)
+        edgeChevron.text = glyph
+        edgeChevron.typeface = interGreek
+        edgeChevron.setTextColor(accent ?: getColor(R.color.text_primary))
     }
 
     private fun refreshActiveRow() {
