@@ -1,24 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Obsidian surfaces shared with the web client's fast-mode fills. -->
-    <color name="obsidian_bg">#0D0D10</color>
-    <color name="obsidian_elevated">#141418</color>
-    <color name="obsidian_glass">#E00F0F13</color>
-    <color name="phi_accent">#4FD1C5</color>
-    <color name="phi_text">#E8E8EA</color>
-    <color name="phi_text_dim">#9A9AA0</color>
+    <!-- Phi dark-theme tokens, verbatim from web/style.css via
+         desktop/electron/src/rail.css (:root mirror). Same names as the
+         web CSS vars, values byte-identical. Do not invent colors here.
+         bg = bg-base, panel = bg-panel. -->
+    <color name="bg">#08080A</color>          <!-- bg-base -->
+    <color name="panel">#0D0D10</color>       <!-- bg-panel -->
+    <color name="bg_elevated">#141418</color>
+    <color name="bg_border">#1F1F26</color>
+    <color name="text_primary">#E4E3E9</color>
+    <color name="text_muted">#78768A</color>
 
-    <!-- Deterministic per-server badge palette; slot cached per origin. -->
-    <string-array name="server_palette">
-        <item>#4FD1C5</item>
-        <item>#9D7BFF</item>
-        <item>#FFB454</item>
-        <item>#FF6B81</item>
-        <item>#5AA9FF</item>
-        <item>#9ECE6A</item>
-    </string-array>
-    <string-array name="server_letters">
-        <item>Α</item><item>Β</item><item>Γ</item><item>Δ</item>
-        <item>Ε</item><item>Ζ</item><item>Η</item><item>Θ</item>
-    </string-array>
+    <!-- The obsidian field behind the rail (web body background). -->
+    <color name="field_gradient_top">#16161C</color>
+
+    <!-- picker.html (the add-server reference) carries its own input
+         scale; copied verbatim, including its indigo Add button. -->
+    <color name="picker_field">#141416</color>
+    <color name="picker_border">#333333</color>
+    <color name="picker_accent">#4F46E5</color>
+    <color name="picker_error">#F87171</color>
+    <color name="picker_btn_bg">#1C1C1F</color>
 </resources>

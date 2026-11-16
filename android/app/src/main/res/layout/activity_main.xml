@@ -34,7 +34,7 @@
                 android:gravity="center"
                 android:text="❮"
                 android:textSize="18sp"
-                android:textColor="@color/phi_accent"
+                android:textColor="@color/text_muted"
                 android:background="@drawable/edge_handle_bg" />
         </FrameLayout>
     </FrameLayout>
@@ -46,7 +46,7 @@
         android:layout_height="match_parent"
         android:layout_gravity="start"
         android:orientation="vertical"
-        android:background="@color/obsidian_glass"
+        android:background="@color/panel"
         android:paddingTop="48dp">
 
         <LinearLayout
@@ -69,7 +69,7 @@
                 android:textSize="20sp"
                 android:textStyle="bold"
                 android:letterSpacing="0.25"
-                android:textColor="@color/phi_text" />
+                android:textColor="@color/text_primary" />
         </LinearLayout>
 
         <View
@@ -100,7 +100,7 @@
             android:text="VIEW"
             android:textSize="11sp"
             android:letterSpacing="0.2"
-            android:textColor="@color/phi_text_dim" />
+            android:textColor="@color/text_muted" />
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -122,7 +122,7 @@
                 android:gravity="center"
                 android:text="100%"
                 android:textSize="15sp"
-                android:textColor="@color/phi_text" />
+                android:textColor="@color/text_primary" />
             <Button
                 android:id="@+id/zoomIn"
                 android:layout_width="48dp"

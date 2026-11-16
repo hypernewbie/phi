@@ -68,8 +68,8 @@ class MainActivity : ComponentActivity() {
         profiles = store.load()
         activeId = store.activeId()
 
-        window.statusBarColor = Color.parseColor("#0D0D10")
-        window.navigationBarColor = Color.parseColor("#0D0D10")
+        window.statusBarColor = getColor(R.color.panel)
+        window.navigationBarColor = getColor(R.color.panel)
         // A terminal client must not sleep mid-session; rendering stays
         // low-power via the forced fast-mode + paced rAF, not the screen.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -197,7 +197,7 @@ class MainActivity : ComponentActivity() {
         val hint =
             TextView(this).apply {
                 text = "Add a Phi server from the drawer to begin."
-                setTextColor(Color.parseColor("#9A9AA0"))
+                setTextColor(getColor(R.color.text_muted))
                 textSize = 16f
                 gravity = Gravity.CENTER
                 setPadding(48, 48, 48, 48)
@@ -227,7 +227,7 @@ class MainActivity : ComponentActivity() {
         s.textZoom = store.zoom()
         s.userAgentString = "${s.userAgentString} Phi-Android/0.1"
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
-        web.setBackgroundColor(Color.parseColor("#0D0D10"))
+        web.setBackgroundColor(getColor(R.color.panel))
         web.addJavascriptInterface(PhiBridge(this, origin), "__phiDesktop")
         web.webViewClient =
             object : WebViewClient() {
@@ -332,7 +332,7 @@ class MainActivity : ComponentActivity() {
                 TextView(this).apply {
                     text = rowTitle ?: store.displayNameFor(p.origin)
                     textSize = 16f
-                    setTextColor(Color.parseColor("#E8E8EA"))
+                    setTextColor(getColor(R.color.text_primary))
                 }
             val url =
                 TextView(this).apply {
@@ -361,7 +361,7 @@ class MainActivity : ComponentActivity() {
             val row = serverList.getChildAt(i)
             val selected = row.tag == activeId
             row.setBackgroundColor(
-                if (selected) getColor(R.color.obsidian_elevated) else Color.TRANSPARENT,
+                if (selected) getColor(R.color.bg_elevated) else Color.TRANSPARENT,
             )
         }
     }
@@ -445,21 +445,21 @@ class MainActivity : ComponentActivity() {
                 LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
                     gravity = Gravity.CENTER
-                    setBackgroundColor(Color.parseColor("#0D0D10"))
+                    setBackgroundColor(getColor(R.color.panel))
                     setPadding(48, 48, 48, 48)
                 }
             val title =
                 TextView(this).apply {
                     text = "Server unreachable"
                     textSize = 18f
-                    setTextColor(Color.parseColor("#E8E8EA"))
+                    setTextColor(getColor(R.color.text_primary))
                     gravity = Gravity.CENTER
                 }
             val sub =
                 TextView(this).apply {
                     text = origin
                     textSize = 13f
-                    setTextColor(Color.parseColor("#9A9AA0"))
+                    setTextColor(getColor(R.color.text_muted))
                     gravity = Gravity.CENTER
                     setPadding(0, 16, 0, 32)
                 }
