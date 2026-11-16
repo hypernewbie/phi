@@ -3,68 +3,68 @@
 Native shell around the existing Phi web UI in a WebView — the same
 architecture as the desktop Electron client. The APK owns server profiles
 and view retention; the web client owns everything the user sees. No UI
-code is rewritten here.
+code is rewritten here, and **no design is invented here**: every color,
+glyph and form comes from the repo's own sources.
+
+## Design provenance
+
+| Shell surface | Source of truth |
+| --- | --- |
+| Palette (`values/colors.xml`) | `web/style.css` tokens via `desktop/electron/src/rail.css :root` |
+| Drawer field | radial obsidian gradient (`#16161c → #08080a`), web body background |
+| Server chips | `.rail-item` material: 40dp elevated tile, 1px hairline, 6dp radius |
+| Greek glyphs | `renderer.ts`: FNV-1a over the canonical hostname, 47-letter pool (both cases + ς), **Φ/φ excluded**; collisions case-swap, then numeral marks. Golden-value unit tests generated from the TS algorithm |
+| Active state | observed accent at 15% glow fill + accent stroke; neutral material until a server reports its color (`no-accent` mode) |
+| Offline | `.offline`: dimmed tile, muted glyph — health is diegetic |
+| Attention | `.attention` lozenge in the server's accent on background title activity |
+| Brand row | `Φ` in JetBrains Mono at the live accent + lowercase `phi` (web `index.html`) |
+| Empty state | `Φ / Phi / "Terminal Multiplexer for AI Coding Agents"` (`.empty-state`) |
+| Add-server form | `picker.html` verbatim: `:7070` autofill, whitespace bulk paste, per-server errors, indigo `#4f46e5` Add |
+| Launcher icons | `theme.ts applyPrepaintFavicon`: gradient tile + white Φ |
+| Fonts | the same vendored woff2 subsets the page serves (Inter greek/latin, JetBrains Mono), decompressed to static TTFs |
 
 ## What works
 
-- **Drawer**: obsidian glass panel (blur while open, API 31+), chevron
-  edge handle, Phi header, per-server rows, offline retry.
-- **Server identity**: Greek-letter badges (Α, Β, Γ…) in deterministic
-  cached colors; display names from the server-reported
-  `/api/config` hostname (pretty-host fallback); accent follows the web
-  theme live via the `__phiDesktop` bridge.
-- **Profiles**: add (URL-validated like the desktop controller),
-  tap-to-switch with one retained WebView per origin, long-press to
-  rename/remove. Active profile + names + zoom persist in app prefs.
-- **Power**: low-power ONLY — every page seeds `phi_low_power='1'` after
-  load, same key/class/CSS as desktop low-power mode.
-- **Zoom**: in-drawer −/%/+ (tap % resets), persisted, applied to all
-  retained views; pinch-zoom enabled in-page.
-- **Sessions**: screen stays on while the app is foreground; rotation and
-  process death reload the active server fresh.
-- **Assets**: web files ship in the APK (same desktop `vendor-web.mjs`
-  sidecar, re-run every build); only `/api` and live sockets hit the
-  network. Offline servers get a native retry screen, not a WebView error.
-
-## Prerequisites (Linux build host, no sudo)
-
-- JDK 17, Android SDK (`~/Android/Sdk` or `ANDROID_HOME`), `node` on PATH.
-- Either `ANDROID_HOME` in the environment or a gitignored
-  `android/local.properties` with `sdk.dir=/home/<you>/Android/Sdk`.
+- Drawer with rail-parity chips, live accent sync (`__phiDesktop.reportThemeColor`),
+  offline tiles, attention lozenges; edge handle carries the active glyph.
+- Add server (picker parity), rename/remove (themed sheet), launcher
+  long-press shortcuts with chip icons.
+- One retained WebView per origin; web assets ship in the APK from the
+  desktop `vendor-web.mjs` sidecar (re-vendored every build); only `/api`
+  and live sockets hit the network.
+- Low power ONLY: `phi_low_power='1'` seeded per origin after load.
+- Zoom (−/%/+ persisted), keep-awake, offline retry overlay, splash.
 
 ## Build
 
 ```sh
-./android/gradlew -p android :app:assembleDebug
-# -> android/app/build/outputs/apk/debug/app-debug.apk
+./android/gradlew -p android :app:assembleDebug     # APK
+./android/gradlew -p android :app:testDebugUnitTest # glyph + parser parity tests
+./android/gradlew -p android :app:lintDebug         # Android lint (zero errors)
 ```
 
-CI builds the same APK on every push (`.github/workflows/test.yml`,
-`test-android` job). `./gradlew :app:lintDebug` runs Android lint.
+CI builds the APK on every push (`test-android` job). JDK 17, an Android
+SDK (`ANDROID_HOME` or gitignored `local.properties`), and `node` for
+vendoring are the only host requirements.
 
 ## Layout
 
 ```text
 android/
-  settings.gradle.kts / build.gradle.kts / gradle.properties
-  gradlew* gradle/       # committed wrapper (pins Gradle 9.9.1)
-  gen-icons.py           # one-off: launcher icons from desktop brand glyph
-  app/
-    build.gradle.kts     # AGP pin, vendorWeb + syncWebAssets tasks
-    src/main/
-      AndroidManifest.xml
-      java/dev/phi/android/
-        MainActivity.kt  # drawer, retained WebViews, zoom, retry overlay
-        ServerStore.kt   # profiles, names, accents, zoom (prefs)
-        PhiBridge.kt     # window.__phiDesktop contract
-        BadgeDrawable.kt # Greek-letter server badge
-      res/values/        # obsidian colors, server palette, Theme.Phi+splash
-      res/layout/ res/drawable/ res/mipmap-*/
+  gen-icons.py           # favicon-formula launcher icons
+  app/src/main/java/dev/phi/android/
+    MainActivity.kt      # drawer, retained views, picker, sheets
+    GreekGlyph.kt        # renderer.ts glyph engine (tested)
+    ServerInput.kt       # picker.html parseUrls (tested)
+    ServerStore.kt       # profiles, names, accents, zoom
+    PhiBridge.kt         # window.__phiDesktop contract
+  app/src/main/res/      # tokens, rail drawables, layout, mipmaps
+  app/src/test/          # golden parity tests
+  app/src/main/assets/fonts/  # vendored Inter/JBM static instances
 ```
 
-## Privacy notes (why this is safe to commit)
+## Privacy
 
-- No server URLs, IPs, hostnames, or credentials anywhere in this tree —
-  servers are user-entered at runtime and stored in app-private prefs.
-- `local.properties` (machine-specific SDK path) is gitignored, as are all
-  build outputs and APKs.
+No server URLs, IPs, hostnames, or credentials anywhere in this tree —
+servers are user-entered at runtime, stored in app-private prefs.
+`local.properties`, build outputs and APKs are gitignored.
