@@ -8,9 +8,7 @@ import android.content.pm.ShortcutManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.RenderEffect
 import android.graphics.drawable.Icon
-import android.graphics.Shader
 import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
@@ -103,11 +101,10 @@ class MainActivity : ComponentActivity() {
                 }
 
                 override fun onDrawerOpened(drawerView: View) {
-                    blurPanel(true)
+                    // intentionally no blur (see note above)
                 }
 
                 override fun onDrawerClosed(drawerView: View) {
-                    blurPanel(false)
                 }
             },
         )
@@ -556,12 +553,10 @@ class MainActivity : ComponentActivity() {
 
     // ---------- glass ----------
 
-    private fun blurPanel(on: Boolean) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
-        panel.setRenderEffect(
-            if (on) RenderEffect.createBlurEffect(24f, 24f, Shader.TileMode.CLAMP) else null,
-        )
-    }
+    // No live blur: RenderEffect on the panel blurs the panel's own
+    // contents (unreadable rows), and blurring the WebView behind the
+    // drawer costs real GPU on a phone chip. The obsidian glass fill +
+    // hairline does the job at zero cost.
 
     companion object {
         private fun mimeFor(path: String): String =
