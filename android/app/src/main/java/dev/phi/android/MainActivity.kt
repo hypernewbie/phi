@@ -267,7 +267,7 @@ class MainActivity : ComponentActivity() {
         s.textZoom = store.zoom()
         s.userAgentString = "${s.userAgentString} Phi-Android/0.1"
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
-        web.setBackgroundColor(getColor(R.color.panel))
+        web.setBackgroundColor(getColor(R.color.bg))
         web.addJavascriptInterface(PhiBridge(this, origin), "__phiDesktop")
         web.webViewClient =
             object : WebViewClient() {
