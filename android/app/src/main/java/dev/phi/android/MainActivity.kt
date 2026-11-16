@@ -60,6 +60,9 @@ class MainActivity : ComponentActivity() {
     )
 
     private val hosts = mutableMapOf<String, Host>()
+    /** Origins whose last main-frame load failed (diegetic health, rail.css
+     * .offline: the chip reads as a disabled tile, not a status block). */
+    private val offline = mutableSetOf<String>()
     private var activeId: String? = null
     private var keyboardVisible = false
     private var errorView: LinearLayout? = null
@@ -273,6 +276,9 @@ class MainActivity : ComponentActivity() {
             object : WebViewClient() {
                 override fun onPageFinished(view: WebView, url: String) {
                     hideLoadError()
+                    runOnUiThread {
+                        if (offline.remove(origin)) rebuildServerList()
+                    }
                     // Mirror desktop low-power: page boots full; native
                     // forces the ONLY mode just after load.
                     if (url.startsWith(origin)) {
@@ -309,7 +315,12 @@ class MainActivity : ComponentActivity() {
                     description: String,
                     failingUrl: String,
                 ) {
-                    if (failingUrl.startsWith(origin)) showLoadError()
+                    if (failingUrl.startsWith(origin)) {
+                        runOnUiThread {
+                            if (offline.add(origin)) rebuildServerList()
+                        }
+                        showLoadError()
+                    }
                 }
             }
         web.loadUrl(origin)
@@ -388,13 +399,20 @@ class MainActivity : ComponentActivity() {
         glyph: String,
         active: Boolean,
         accent: Int?,
+        offlineChip: Boolean = false,
     ) {
         chip.text = glyph
-        chip.background = chipBackground(active, accent)
+        // rail.css .offline (also .offline.active): muted, neutral, no glow.
+        val lit = active && accent != null && !offlineChip
+        chip.background = chipBackground(lit, if (lit) accent else null)
         chip.setTextColor(
-            if (active && accent != null) accent else getColor(R.color.text_primary),
+            when {
+                offlineChip -> getColor(R.color.text_muted)
+                lit -> accent!!
+                else -> getColor(R.color.text_primary)
+            },
         )
-        chip.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD)) // rail glyphs are 600
+        chip.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD)) // 600
     }
 
     private fun rebuildServerList() {
@@ -447,6 +465,7 @@ class MainActivity : ComponentActivity() {
             row.addView(chip)
             row.addView(texts)
             row.tag = p.id
+            row.alpha = if (p.origin in offline) 0.55f else 1f
             row.setOnClickListener {
                 drawer.closeDrawer(GravityCompat.START)
                 showServer(p.id)
@@ -464,7 +483,13 @@ class MainActivity : ComponentActivity() {
             val profile = profiles.firstOrNull { it.id == row.tag } ?: continue
             val chip = row.findViewWithTag<TextView>("chip") ?: continue
             val (glyph, accent) = glyphFor(profile)
-            styleChip(chip, glyph, row.tag == activeId, accent)
+            styleChip(
+                chip,
+                glyph,
+                row.tag == activeId,
+                accent,
+                profile.origin in offline,
+            )
         }
     }
 
