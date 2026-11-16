@@ -2271,6 +2271,21 @@ export class App {
             };
             this.applyAppearanceProfile();
         };
+        // Startup convergence: the shell's saved zoom applied at the exact
+        // moment this hook exists - onPageFinished fires before app.js
+        // defines the hook, so a native-side call would silently no-op.
+        try {
+            const bridge = window.__phiDesktop;
+            const px = typeof bridge?.zoomFontPx === 'function'
+                ? Number(bridge.zoomFontPx())
+                : 0;
+            if (px >= 10 && px <= 24)
+                window.__phiSetFontSize?.(px);
+        }
+        catch {
+            /* not android */
+        }
+        ;
         void store.start();
     }
     ingestAppearance(data) {
