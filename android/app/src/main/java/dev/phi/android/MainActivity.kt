@@ -703,39 +703,103 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun promptEditServer(profile: ServerProfile) {
-        AlertDialog.Builder(this)
-            .setTitle(store.displayNameFor(profile.origin))
-            .setItems(arrayOf("Rename", "Remove")) { _, which ->
-                when (which) {
-                    0 -> {
-                        val input = EditText(this).apply { setText(profile.label) }
-                        AlertDialog.Builder(this)
-                            .setTitle("Rename server")
-                            .setView(input)
-                            .setPositiveButton("Save") { _, _ ->
-                                val label = input.text.toString().trim()
-                                if (label.isNotEmpty()) {
-                                    profiles.replaceAll {
-                                        if (it.id == profile.id) it.copy(label = label) else it
-                                    }
-                                    store.save(profiles)
-                                    rebuildServerList()
-                                }
-                            }
-                            .setNegativeButton("Cancel", null)
-                            .show()
+        val identity =
+            GreekGlyph.canonicalHostname(store.displayNameFor(profile.origin))
+                .ifEmpty { profile.label }
+        val pad = dp(16)
+        val sheet =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(pad, dp(12), pad, dp(8))
+            }
+        sheet.addView(
+            TextView(this).apply {
+                text = identity
+                textSize = 15f
+                setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD))
+                setTextColor(getColor(R.color.text_primary))
+                setPadding(0, 0, 0, dp(4))
+            },
+        )
+        sheet.addView(
+            TextView(this).apply {
+                text = profile.origin
+                textSize = 12f
+                setTextColor(getColor(R.color.text_muted))
+                setPadding(0, 0, 0, dp(12))
+            },
+        )
+        val dialog = AlertDialog.Builder(this).setView(sheet).create()
+        fun row(label: String, onClick: () -> Unit) =
+            TextView(this).apply {
+                text = label
+                textSize = 14f
+                setTextColor(getColor(R.color.text_primary))
+                background =
+                    GradientDrawable().apply {
+                        setColor(getColor(R.color.bg_elevated))
+                        setStroke(dp(1), getColor(R.color.bg_border))
+                        cornerRadius = dp(6).toFloat()
                     }
-                    1 -> {
-                        hosts.remove(profile.origin)?.view?.destroy()
-                        profiles.removeAll { it.id == profile.id }
-                        store.save(profiles)
-                        rebuildServerList()
-                        if (activeId == profile.id) {
-                            profiles.firstOrNull()?.let { showServer(it.id) } ?: showEmpty()
-                        }
-                    }
+                setPadding(dp(12), dp(12), dp(12), dp(12))
+                gravity = Gravity.CENTER
+                setOnClickListener {
+                    dialog.dismiss()
+                    onClick()
                 }
             }
+        val actions =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+        actions.addView(row("Rename") { promptRename(profile) })
+        actions.addView(android.view.View(this), LinearLayout.LayoutParams(1, dp(8)))
+        actions.addView(
+            row("Remove") {
+                hosts.remove(profile.origin)?.view?.destroy()
+                profiles.removeAll { it.id == profile.id }
+                store.save(profiles)
+                rebuildServerList()
+                if (activeId == profile.id) {
+                    profiles.firstOrNull()?.let { showServer(it.id) } ?: showEmpty()
+                }
+            },
+        )
+        sheet.addView(actions)
+        dialog.show()
+    }
+
+    private fun promptRename(profile: ServerProfile) {
+        val input =
+            EditText(this).apply {
+                setText(profile.label)
+                textSize = 13f
+                setTextColor(getColor(R.color.text_primary))
+                background =
+                    GradientDrawable().apply {
+                        setColor(getColor(R.color.picker_field))
+                        setStroke(dp(1), getColor(R.color.picker_border))
+                        cornerRadius = dp(4).toFloat()
+                    }
+                setPadding(dp(10), dp(8), dp(10), dp(8))
+                setSingleLine()
+            }
+        val wrap = LinearLayout(this).apply { setPadding(dp(16), dp(8), dp(16), dp(4)) }
+        wrap.addView(input)
+        AlertDialog.Builder(this)
+            .setTitle("Rename server")
+            .setView(wrap)
+            .setPositiveButton("Save") { _, _ ->
+                val label = input.text.toString().trim()
+                if (label.isNotEmpty()) {
+                    profiles.replaceAll {
+                        if (it.id == profile.id) it.copy(label = label) else it
+                    }
+                    store.save(profiles)
+                    rebuildServerList()
+                }
+            }
+            .setNegativeButton("Cancel", null)
             .show()
     }
 
