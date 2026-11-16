@@ -197,16 +197,53 @@ class MainActivity : ComponentActivity() {
         activeId = null
         store.setActiveId(null)
         content.removeAllViews()
-        val hint =
-            TextView(this).apply {
-                text = "Add a Phi server from the drawer to begin."
-                setTextColor(getColor(R.color.text_muted))
-                textSize = 16f
+        // web/style.css .empty-state: the Φ mark, "Phi", and the one-line
+        // identity — same type scale, no invented copy.
+        val layout =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
-                setPadding(48, 48, 48, 48)
+                setBackgroundColor(getColor(R.color.bg))
+                setPadding(dp(32), dp(32), dp(32), dp(32))
             }
+        val accent = getColor(R.color.accent_default)
+        val mark =
+            TextView(this).apply {
+                text = "Φ"
+                textSize = 64f // 4.5714rem
+                val typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+                setTypeface(typeface)
+                setTextColor(accent)
+                setShadowLayer(30f, 0f, 0f, (accent and 0x00FFFFFF) or (0x26 shl 24))
+            }
+        val title =
+            TextView(this).apply {
+                text = "Phi"
+                textSize = 26f // 1.8571rem
+                setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD))
+                setTextColor(getColor(R.color.text_primary))
+                letterSpacing = -0.01f
+                setPadding(0, dp(8), 0, 0)
+            }
+        val subtitle =
+            TextView(this).apply {
+                text = "Terminal Multiplexer for AI Coding Agents"
+                textSize = 14f
+                setTextColor(getColor(R.color.text_muted))
+                setPadding(0, dp(4), 0, dp(16))
+            }
+        layout.addView(mark)
+        layout.addView(title)
+        layout.addView(subtitle)
+        layout.addView(
+            TextView(this).apply {
+                text = "Add a server from the drawer"
+                textSize = 12f
+                setTextColor(getColor(R.color.text_muted))
+            },
+        )
         content.addView(
-            hint,
+            layout,
             FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
