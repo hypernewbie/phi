@@ -992,20 +992,6 @@ class MainActivity : ComponentActivity() {
         store.setZoom(z)
         for (h in hosts.values) h.view.settings.textZoom = store.zoom()
         refreshZoomLabel()
-        // textZoom rescales text but fires no window resize, so xterm
-        // keeps its stale cols/rows. The desktop's zoom changes the frame
-        // and the page re-fits on the resize event; send the same signal.
-        content.postDelayed(
-            {
-                for (h in hosts.values) {
-                    h.view.evaluateJavascript(
-                        "try{window.dispatchEvent(new Event('resize'));}catch(e){}",
-                        null,
-                    )
-                }
-            },
-            120,
-        )
     }
 
     private fun nudgeZoom(delta: Int) = setZoom(store.zoom() + delta)
