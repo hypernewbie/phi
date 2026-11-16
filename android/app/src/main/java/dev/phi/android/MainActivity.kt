@@ -145,6 +145,7 @@ class MainActivity : ComponentActivity() {
         )
 
         rebuildServerList()
+        restyleBrand()
         refreshShortcuts()
         val start =
             intent?.getStringExtra("phi_server_id")?.let { id ->
@@ -496,7 +497,26 @@ class MainActivity : ComponentActivity() {
     fun onThemeColor(origin: String, accent: String) {
         if (!Regex("^#[0-9a-fA-F]{6}$").matches(accent)) return
         store.setAccent(origin, accent)
-        runOnUiThread { rebuildServerList() }
+        runOnUiThread {
+            rebuildServerList()
+            restyleBrand()
+        }
+    }
+
+    /** .brand .logo: the Φ rides the active accent with a soft glow. */
+    private fun restyleBrand() {
+        val glyph = findViewById<TextView>(R.id.brandGlyph) ?: return
+        val active = profiles.firstOrNull { it.id == activeId }
+        val accent =
+            active?.origin?.let { store.accentFor(it) }?.let {
+                try {
+                    Color.parseColor(it)
+                } catch (e: Exception) {
+                    null
+                }
+            } ?: getColor(R.color.accent_default)
+        glyph.setTextColor(accent)
+        glyph.setShadowLayer(10f, 0f, 0f, (accent and 0x00FFFFFF) or 0x26 shl 24)
     }
 
     private fun showLoadError() {

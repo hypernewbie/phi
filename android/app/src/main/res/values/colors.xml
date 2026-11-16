@@ -14,6 +14,11 @@
     <!-- The obsidian field behind the rail (web body background). -->
     <color name="field_gradient_top">#16161C</color>
 
+    <!-- theme.ts ACCENT_COLORS.purple.accent — the web client's default
+         accent ('purple'); the shell's resting accent until a server
+         reports its own. -->
+    <color name="accent_default">#7C6AF7</color>
+
     <!-- picker.html (the add-server reference) carries its own input
          scale; copied verbatim, including its indigo Add button. -->
     <color name="picker_field">#141416</color>

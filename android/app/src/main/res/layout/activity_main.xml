@@ -57,18 +57,23 @@
             android:paddingStart="20dp"
             android:paddingEnd="16dp"
             android:paddingBottom="12dp">
-            <ImageView
-                android:layout_width="36dp"
-                android:layout_height="36dp"
-                android:src="@mipmap/ic_launcher" />
+            <!-- web/index.html brand row: Φ (mono, accent, glow) + phi. -->
+            <TextView
+                android:id="@+id/brandGlyph"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Φ"
+                android:textSize="22sp"
+                android:textStyle="bold"
+                android:fontFamily="monospace"
+                android:textColor="@color/accent_default" />
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="12dp"
-                android:text="PHI"
-                android:textSize="20sp"
-                android:textStyle="bold"
-                android:letterSpacing="0.25"
+                android:text="phi"
+                android:textSize="16sp"
+                android:letterSpacing="0.03"
                 android:textColor="@color/text_primary" />
         </LinearLayout>
 
@@ -78,7 +83,7 @@
             android:layout_marginStart="20dp"
             android:layout_marginEnd="20dp"
             android:layout_marginBottom="8dp"
-            android:background="#28FFFFFF" />
+            android:background="@color/bg_border" />
 
         <ScrollView
             android:layout_width="match_parent"
