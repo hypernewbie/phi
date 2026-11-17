@@ -478,11 +478,11 @@ jobs:
       # runner image ships cmdline-tools; android-actions/setup-android@v3
       # fails installing the deprecated `tools` package
       - name: Accept Android SDK licenses
-        run: yes | sdkmanager --licenses >/dev/null || true
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
 
       - name: Install platform + build-tools (compileSdk 37)
         run: |
-          sdkmanager "platforms;android-37" "build-tools;37.0.0"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37" "build-tools;37.0.0"
 
       - name: Set up Node.js (desktop vendor script)
         uses: actions/setup-node@v5
