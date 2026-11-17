@@ -94,6 +94,18 @@ class MainActivity : ComponentActivity() {
         drawer = findViewById(R.id.drawer)
         stage = findViewById(R.id.stage)
         content = findViewById(R.id.content)
+        // The zoomed WebView lays out at content/zoom and must re-fill on
+        // every content-box change: rotation, IME insets, first measure
+        // (content.width is 0 during onCreate).
+        var zoomedW = -1
+        var zoomedH = -1
+        content.viewTreeObserver.addOnGlobalLayoutListener {
+            if (content.width != zoomedW || content.height != zoomedH) {
+                zoomedW = content.width
+                zoomedH = content.height
+                if (zoomedW > 0) applyZoomToViews()
+            }
+        }
         panel = findViewById(R.id.drawerPanel)
         edgeHandle = findViewById(R.id.edgeHandle)
         serverList = findViewById(R.id.serverList)
@@ -1032,20 +1044,27 @@ class MainActivity : ComponentActivity() {
     }
 
     /** Desktop parity (electron/src/zoom.ts applyContentZoom): zoom is a
-     * page scale factor, never a font-size change. CSS zoom on the root
-     * element is the browser-zoom model: everything scales, the layout
-     * viewport re-flows in CSS pixels, and xterm re-measures its cells
-     * like any webpage under browser zoom. 100% clears the property. */
+     * page scale factor, never a font-size change. The WebView lays out
+     * at content/zoom CSS pixels and the view is counter-scaled back to
+     * full bleed - the browser-zoom model done for real: the layout
+     * viewport genuinely changes, the page reflows, and xterm
+     * re-measures its cells and refits cols/rows. CSS zoom on the root
+     * cannot do this (it scales the painted box without reflow - a
+     * shrunken "box" with dead margins). */
     private fun applyZoomToViews() {
-        val factor = store.zoom() / 100.0
-        val js =
-            if (store.zoom() == 100) {
-                "document.documentElement.style.removeProperty('zoom')"
-            } else {
-                "document.documentElement.style.zoom='$factor'"
-            }
-        for (h in hosts.values) {
-            h.view.evaluateJavascript("try{$js}catch(e){}", null)
+        val z = store.zoom() / 100f
+        val w = content.width.coerceAtLeast(1)
+        val h = content.height.coerceAtLeast(1)
+        for (host in hosts.values) {
+            val v = host.view
+            val lp = v.layoutParams as FrameLayout.LayoutParams
+            lp.width = Math.round(w / z)
+            lp.height = Math.round(h / z)
+            v.layoutParams = lp
+            v.pivotX = 0f
+            v.pivotY = 0f
+            v.scaleX = z
+            v.scaleY = z
         }
     }
 
