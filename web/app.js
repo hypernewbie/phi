@@ -22,6 +22,20 @@ export { ACCENT_COLORS };
 function byId(id) {
     return document.getElementById(id);
 }
+/** The Android shell's zoom in phi font px (desktop anchor 14), or 0 when
+ * absent / at 100% — the one place the shell's word on sizes is read, so
+ * convergence and appearance ingestion can never disagree. */
+function shellZoomFontPx() {
+    try {
+        const bridge = window.__phiDesktop;
+        return typeof bridge?.zoomFontPx === 'function'
+            ? Number(bridge.zoomFontPx()) || 0
+            : 0;
+    }
+    catch {
+        return 0;
+    }
+}
 function inertBodyExceptNotifications() {
     const body = document.body;
     if (!body)
@@ -2274,17 +2288,9 @@ export class App {
         // Startup convergence: the shell's saved zoom applied at the exact
         // moment this hook exists - onPageFinished fires before app.js
         // defines the hook, so a native-side call would silently no-op.
-        try {
-            const bridge = window.__phiDesktop;
-            const px = typeof bridge?.zoomFontPx === 'function'
-                ? Number(bridge.zoomFontPx())
-                : 0;
-            if (px >= 10 && px <= 24)
-                window.__phiSetFontSize?.(px);
-        }
-        catch {
-            /* not android */
-        }
+        const px = shellZoomFontPx();
+        if (px >= 10 && px <= 24)
+            window.__phiSetFontSize?.(px);
         void store.start();
     }
     ingestAppearance(data) {
@@ -2299,11 +2305,19 @@ export class App {
         // key the stale record lacks) keeps the configured size. Families
         // keep cache precedence: they carry no size contract and the
         // Settings surface always displays the effective value.
+        // The Android shell outranks them all for SIZES: the drawer zoom is
+        // the user's explicit per-device override, so a server naming a
+        // size must not stomp it on config arrival (a race that pinned
+        // the page back to the server default after convergence). No
+        // shell (desktop/browsers) keeps the exact precedence above.
+        const shellPx = shellZoomFontPx();
         this.desktopAppearance = {
             ui_font_family: ls.ui_font_family ?? data.ui_font_family ?? '',
-            ui_font_size: Number(data.ui_font_size ?? ls.ui_font_size) || 0,
+            ui_font_size: shellPx || Number(data.ui_font_size ?? ls.ui_font_size) || 0,
             terminal_font_family: ls.terminal_font_family ?? data.terminal_font_family ?? '',
-            terminal_font_size: Number(data.terminal_font_size ?? ls.terminal_font_size) || 0,
+            terminal_font_size: shellPx ||
+                Number(data.terminal_font_size ?? ls.terminal_font_size) ||
+                0,
         };
         this.mobileScrollbackRows =
             Number(ls.mobile_scrollback_rows ?? data.mobile_scrollback_rows) ||
