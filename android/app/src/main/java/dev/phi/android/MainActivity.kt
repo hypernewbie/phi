@@ -216,6 +216,11 @@ class MainActivity : ComponentActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
             ),
         )
+        // Re-assert the shell zoom on every attach: a retained page may
+        // have missed the last zoom write (detached views can drop or
+        // delay evaluateJavascript), and pages that booted before the
+        // zoom was saved never converged. Idempotent on the page side.
+        applyZoomToViews()
         refreshActiveRow()
     }
 
