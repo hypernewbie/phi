@@ -429,10 +429,13 @@ class MainActivity : ComponentActivity() {
         // rail.css .offline (also .offline.active): muted, neutral, no glow.
         val lit = active && accent != null && !offlineChip
         chip.background = chipBackground(lit, if (lit) accent else null)
+        // Per-entry accent: every chip that knows its server's colour
+        // paints its glyph in it (rail.css --entry-accent on
+        // .shortcut-hint, fallback --text); offline chips stay muted.
         chip.setTextColor(
             when {
                 offlineChip -> getColor(R.color.text_muted)
-                lit -> accent!!
+                accent != null -> accent
                 else -> getColor(R.color.text_primary)
             },
         )
