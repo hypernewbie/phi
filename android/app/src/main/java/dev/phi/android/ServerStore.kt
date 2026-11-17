@@ -122,9 +122,9 @@ class ServerStore(context: Context) {
         prefs.edit().putString("accent:$origin", accent).apply()
     }
 
-    fun zoom(): Int = prefs.getInt("zoom", 100).coerceIn(50, 200)
+    fun zoom(): Int = prefs.getInt("zoom", 100).coerceIn(50, 300)
 
     fun setZoom(z: Int) {
-        prefs.edit().putInt("zoom", z.coerceIn(50, 200)).apply()
+        prefs.edit().putInt("zoom", z.coerceIn(50, 300)).apply()
     }
 }

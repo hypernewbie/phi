@@ -76,24 +76,6 @@ function byId<T extends HTMLElement>(id: string): T | null {
     return document.getElementById(id) as T | null;
 }
 
-/** The Android shell's zoom in phi font px (desktop anchor 14), or 0 when
- * absent / at 100% — the one place the shell's word on sizes is read, so
- * convergence and appearance ingestion can never disagree. */
-function shellZoomFontPx(): number {
-    try {
-        const bridge = (
-            window as unknown as {
-                __phiDesktop?: { zoomFontPx?: () => number };
-            }
-        ).__phiDesktop;
-        return typeof bridge?.zoomFontPx === 'function'
-            ? Number(bridge.zoomFontPx()) || 0
-            : 0;
-    } catch {
-        return 0;
-    }
-}
-
 function inertBodyExceptNotifications() {
     const body = document.body;
     if (!body) return () => {};
@@ -2789,50 +2771,6 @@ export class App {
                 this.applyAppearanceProfile();
         });
         this.applyAppearanceProfile();
-        // Android shell hook: the shell's zoom drives phi's own desktop
-        // appearance (the LS cache the Settings UI reads back), then
-        // re-applies the profile so every terminal re-measures and
-        // re-fits. The tablet viewport is desktop-width, so the mobile
-        // store is ignored here - textZoom rescales pixels but never
-        // re-measures xterm cells, leaving stale cols/rows.
-        (
-            window as unknown as {
-                __phiSetFontSize?: (px: number) => void;
-            }
-        ).__phiSetFontSize = (px: number) => {
-            const n = Math.round(px);
-            if (!(n >= 10 && n <= 24)) return;
-            try {
-                const scope = this.scope || captureAppearanceScope();
-                const ls = readDesktopAppearance(scope);
-                ls.ui_font_size = n;
-                ls.terminal_font_size = n;
-                localStorage.setItem(
-                    legacyAppearanceKey(scope),
-                    JSON.stringify(ls),
-                );
-            } catch {
-                /* storage blocked: the in-memory apply still runs */
-            }
-            this.desktopAppearance = {
-                ui_font_family: this.desktopAppearance?.ui_font_family ?? '',
-                terminal_font_family:
-                    this.desktopAppearance?.terminal_font_family ?? '',
-                ui_font_size: n,
-                terminal_font_size: n,
-            };
-            this.applyAppearanceProfile();
-        };
-        // Startup convergence: the shell's saved zoom applied at the exact
-        // moment this hook exists - onPageFinished fires before app.js
-        // defines the hook, so a native-side call would silently no-op.
-        const px = shellZoomFontPx();
-        if (px >= 10 && px <= 24)
-            (
-                window as unknown as {
-                    __phiSetFontSize?: (px: number) => void;
-                }
-            ).__phiSetFontSize?.(px);
         void store.start();
     }
 
@@ -2850,22 +2788,13 @@ export class App {
         // key the stale record lacks) keeps the configured size. Families
         // keep cache precedence: they carry no size contract and the
         // Settings surface always displays the effective value.
-        // The Android shell outranks them all for SIZES: the drawer zoom is
-        // the user's explicit per-device override, so a server naming a
-        // size must not stomp it on config arrival (a race that pinned
-        // the page back to the server default after convergence). No
-        // shell (desktop/browsers) keeps the exact precedence above.
-        const shellPx = shellZoomFontPx();
         this.desktopAppearance = {
             ui_font_family: ls.ui_font_family ?? data.ui_font_family ?? '',
-            ui_font_size:
-                shellPx || Number(data.ui_font_size ?? ls.ui_font_size) || 0,
+            ui_font_size: Number(data.ui_font_size ?? ls.ui_font_size) || 0,
             terminal_font_family:
                 ls.terminal_font_family ?? data.terminal_font_family ?? '',
             terminal_font_size:
-                shellPx ||
-                Number(data.terminal_font_size ?? ls.terminal_font_size) ||
-                0,
+                Number(data.terminal_font_size ?? ls.terminal_font_size) || 0,
         };
         this.mobileScrollbackRows =
             Number(ls.mobile_scrollback_rows ?? data.mobile_scrollback_rows) ||

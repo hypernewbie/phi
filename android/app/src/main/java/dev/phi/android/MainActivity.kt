@@ -114,8 +114,8 @@ class MainActivity : ComponentActivity() {
 
         edgeHandle.setOnClickListener { drawer.openDrawer(GravityCompat.START) }
         findViewById<Button>(R.id.addServer).setOnClickListener { promptAddServer() }
-        findViewById<Button>(R.id.zoomIn).setOnClickListener { nudgeZoom(10) }
-        findViewById<Button>(R.id.zoomOut).setOnClickListener { nudgeZoom(-10) }
+        findViewById<Button>(R.id.zoomIn).setOnClickListener { nudgeZoom(true) }
+        findViewById<Button>(R.id.zoomOut).setOnClickListener { nudgeZoom(false) }
         zoomLabel.setOnClickListener { setZoom(100) }
         refreshZoomLabel()
 
@@ -882,14 +882,6 @@ class MainActivity : ComponentActivity() {
             .show()
     }
 
-    /** The shell zoom in phi font px; 0 at 100% so the page stays untouched. */
-    fun shellZoomFontPx(): Int =
-        if (store.zoom() == 100) {
-            0
-        } else {
-            Math.round(14f * store.zoom() / 100f).coerceIn(10, 24)
-        }
-
     /** Bridge callback: the server-reported hostname — the identity the
      *  glyphs hash. Repaints rows, shortcuts and the edge glyph. */
     fun onHostname(origin: String, name: String) {
@@ -1039,17 +1031,43 @@ class MainActivity : ComponentActivity() {
         refreshZoomLabel()
     }
 
+    /** Desktop parity (electron/src/zoom.ts applyContentZoom): zoom is a
+     * page scale factor, never a font-size change. CSS zoom on the root
+     * element is the browser-zoom model: everything scales, the layout
+     * viewport re-flows in CSS pixels, and xterm re-measures its cells
+     * like any webpage under browser zoom. 100% clears the property. */
     private fun applyZoomToViews() {
-        val px = Math.round(14f * store.zoom() / 100f).coerceIn(10, 24)
+        val factor = store.zoom() / 100.0
+        val js =
+            if (store.zoom() == 100) {
+                "document.documentElement.style.removeProperty('zoom')"
+            } else {
+                "document.documentElement.style.zoom='$factor'"
+            }
         for (h in hosts.values) {
-            h.view.evaluateJavascript(
-                "try{window.__phiSetFontSize&&window.__phiSetFontSize($px)}catch(e){}",
-                null,
-            )
+            h.view.evaluateJavascript("try{$js}catch(e){}", null)
         }
     }
 
-    private fun nudgeZoom(delta: Int) = setZoom(store.zoom() + delta)
+    /** CONTENT_ZOOM_LEVELS parity: 50 67 75 80 90 100 110 125 150 175 200
+     * 250 300 - the desktop ladder, walked by nextContentZoomPercent. */
+    private fun nextZoom(current: Int, up: Boolean): Int {
+        val levels = intArrayOf(50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300)
+        val exact = levels.indexOfFirst { it == current }
+        val i =
+            when {
+                exact >= 0 -> (exact + if (up) 1 else -1).coerceIn(0, levels.size - 1)
+                else -> {
+                    val hi = levels.indexOfFirst { it > current }
+                    if (hi < 0) levels.size - 1
+                    else if (up) hi
+                    else (hi - 1).coerceIn(0, levels.size - 1)
+                }
+            }
+        return levels[i]
+    }
+
+    private fun nudgeZoom(up: Boolean) = setZoom(nextZoom(store.zoom(), up))
 
     private fun refreshZoomLabel() {
         zoomLabel.text = "${store.zoom()}%"
