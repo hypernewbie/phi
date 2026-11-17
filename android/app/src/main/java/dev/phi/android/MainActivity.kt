@@ -517,7 +517,6 @@ class MainActivity : ComponentActivity() {
         }
         refreshActiveRow()
         refreshShortcuts()
-        restyleEdge()
     }
 
     /** The edge affordance carries the active server's glyph in its own
@@ -549,6 +548,9 @@ class MainActivity : ComponentActivity() {
                 profile.origin in offline,
             )
         }
+        // Runs on every switch too, not just full rebuilds - the edge
+        // glyph is the active server's identity at a glance.
+        restyleEdge()
     }
 
     /** picker.html parity — the add-server form: field scale, live "Add N
