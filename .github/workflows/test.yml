@@ -475,8 +475,10 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # runner image ships cmdline-tools; android-actions/setup-android@v3
+      # fails installing the deprecated `tools` package
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses >/dev/null || true
 
       - name: Install platform + build-tools (compileSdk 37)
         run: |
