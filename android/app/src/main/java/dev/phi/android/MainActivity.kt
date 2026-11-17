@@ -316,7 +316,7 @@ class MainActivity : ComponentActivity() {
         s.setSupportZoom(false)
         s.builtInZoomControls = false
         s.displayZoomControls = false
-        s.loadWithOverviewMode = true
+        s.loadWithOverviewMode = false
         s.useWideViewPort = true
         s.userAgentString = "${s.userAgentString} Phi-Android/0.1"
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
