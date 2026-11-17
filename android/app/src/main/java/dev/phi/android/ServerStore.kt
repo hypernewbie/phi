@@ -52,11 +52,14 @@ fun defaultLabelFor(origin: String): String {
     return "$host$port"
 }
 
-/** Display name shown in the drawer: cached server-reported hostname, else pretty host. */
+/** Display name shown in the drawer: cached server-reported hostname, else pretty host.
+ * A hostname keeps only its first segment (pluto.tailnet -> PLUTO); an IP
+ * stays whole — chopping at the first dot turned 198.51.100.40 into "100". */
 fun prettyHost(origin: String): String {
     val host = android.net.Uri.parse(origin).host ?: return origin
-    val first = host.split(".").firstOrNull().orEmpty()
-    return first.uppercase().ifEmpty { host.uppercase() }
+    val isIp = host.contains(':') || host.split('.').all { it.toIntOrNull() != null }
+    val display = if (isIp) host else host.split('.').firstOrNull().orEmpty()
+    return display.uppercase().ifEmpty { host.uppercase() }
 }
 
 /** Deterministic badge slot per origin; stable across restarts, no storage.
