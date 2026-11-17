@@ -484,10 +484,14 @@ jobs:
         run: |
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0"
 
+      - name: Set up pnpm (desktop vendor script)
+        uses: pnpm/action-setup@v4
+
       - name: Set up Node.js (desktop vendor script)
         uses: actions/setup-node@v5
         with:
           node-version: '24'
+          cache: pnpm
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
