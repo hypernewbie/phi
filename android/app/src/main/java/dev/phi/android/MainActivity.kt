@@ -437,6 +437,15 @@ class MainActivity : ComponentActivity() {
             },
         )
         chip.typeface = interGreek
+        // rail.css .rail-item.active: the glyph carries an accent-glow
+        // text-shadow (0 0 8px); it is what makes the active server read
+        // as lit in that server's own color.
+        if (lit) {
+            val a = accent!!
+            chip.setShadowLayer(dp(8).toFloat(), 0f, 0f, (a and 0x00FFFFFF) or (0x40 shl 24))
+        } else {
+            chip.setShadowLayer(0f, 0f, 0f, 0)
+        }
     }
 
     private fun rebuildServerList() {
