@@ -58,6 +58,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var store: ServerStore
     private lateinit var profiles: MutableList<ServerProfile>
 
+    /** Cached viewport zoom script (assets/zoom.js). */
+    private var zoomScriptCache: String? = null
+
     private data class Host(
         val view: WebView,
         var lowPowerSeeded: Boolean = false,
@@ -94,16 +97,17 @@ class MainActivity : ComponentActivity() {
         drawer = findViewById(R.id.drawer)
         stage = findViewById(R.id.stage)
         content = findViewById(R.id.content)
-        // The zoomed WebView lays out at content/zoom and must re-fill on
-        // every content-box change: rotation, IME insets, first measure
-        // (content.width is 0 during onCreate).
-        var zoomedW = -1
-        var zoomedH = -1
+        // The zoom is expressed as a viewport width, derived from the
+        // content box, so every content-box change must re-derive it:
+        // rotation, IME insets, first measure (content.width is 0
+        // during onCreate).
+        var laidOutW = -1
+        var laidOutH = -1
         content.viewTreeObserver.addOnGlobalLayoutListener {
-            if (content.width != zoomedW || content.height != zoomedH) {
-                zoomedW = content.width
-                zoomedH = content.height
-                if (zoomedW > 0) applyZoomToViews()
+            if (content.width != laidOutW || content.height != laidOutH) {
+                laidOutW = content.width
+                laidOutH = content.height
+                if (laidOutW > 0) applyZoomToViews()
             }
         }
         panel = findViewById(R.id.drawerPanel)
@@ -303,7 +307,14 @@ class MainActivity : ComponentActivity() {
         s.domStorageEnabled = true
         s.databaseEnabled = true
         s.mediaPlaybackRequiresUserGesture = false
-        s.builtInZoomControls = true
+        // The shell's zoom is the single zoom axis (desktop parity: a
+        // zoom factor, nothing else). The WebView's own page scale -
+        // pinch zoom and the on-screen zoom buttons - would be a second,
+        // multiplicative axis that compounds with the viewport zoom, so
+        // it stays off. The layout scale the viewport produces is
+        // untouched by this.
+        s.setSupportZoom(false)
+        s.builtInZoomControls = false
         s.displayZoomControls = false
         s.loadWithOverviewMode = true
         s.useWideViewPort = true
@@ -1044,28 +1055,47 @@ class MainActivity : ComponentActivity() {
     }
 
     /** Desktop parity (electron/src/zoom.ts applyContentZoom): zoom is a
-     * page scale factor, never a font-size change. The WebView lays out
-     * at content/zoom CSS pixels and the view is counter-scaled back to
-     * full bleed - the browser-zoom model done for real: the layout
-     * viewport genuinely changes, the page reflows, and xterm
-     * re-measures its cells and refits cols/rows. CSS zoom on the root
-     * cannot do this (it scales the painted box without reflow - a
-     * shrunken "box" with dead margins). */
+     * layout scale factor, never a font-size change.
+     *
+     * It is applied through the page's own viewport, which is the axis
+     * browsers zoom on: `width=base/zoom` makes the layout viewport
+     * exactly the css-pixel width a browser shows at that zoom, and
+     * Chromium re-rasterizes at the resulting page scale before fitting
+     * it to the screen - the same crisp path pinch-zoom uses. Electron's
+     * setZoomFactor(1.25) on a 1280-css window yields a 1024-css
+     * layout viewport; so does this. No view resizing, no render
+     * transforms, no font sizes.
+     *
+     * At 100% the page's original viewport is restored byte for byte
+     * (and an injected one is removed), so a server that never had a
+     * viewport keeps its desktop layout. */
     private fun applyZoomToViews() {
-        val z = store.zoom() / 100f
-        val w = content.width.coerceAtLeast(1)
-        val h = content.height.coerceAtLeast(1)
+        val widthCss =
+            ZoomViewport.widthCss(
+                content.width,
+                resources.displayMetrics.density,
+                store.zoom(),
+            )
+        val script = zoomScript()
+        if (script.isEmpty()) return
         for (host in hosts.values) {
-            val v = host.view
-            val lp = v.layoutParams as FrameLayout.LayoutParams
-            lp.width = Math.round(w / z)
-            lp.height = Math.round(h / z)
-            v.layoutParams = lp
-            v.pivotX = 0f
-            v.pivotY = 0f
-            v.scaleX = z
-            v.scaleY = z
+            host.view.evaluateJavascript("$script\n__phiZoomViewport($widthCss);", null)
         }
+    }
+
+    /** The viewport zoom script (android/app/src/main/assets/zoom.js). It is
+     * injected into every page the shell shows, including servers the user
+     * added, so the zoom semantics live in one tested file. */
+    private fun zoomScript(): String {
+        zoomScriptCache?.let { return it }
+        val script =
+            try {
+                assets.open("zoom.js").bufferedReader().readText()
+            } catch (e: Exception) {
+                ""
+            }
+        zoomScriptCache = script
+        return script
     }
 
     /** CONTENT_ZOOM_LEVELS parity: 50 67 75 80 90 100 110 125 150 175 200

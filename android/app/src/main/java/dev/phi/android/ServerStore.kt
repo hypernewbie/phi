@@ -67,7 +67,7 @@ fun prettyHost(origin: String): String {
 
 /** SharedPreferences-backed profile list. Synchronous; lists are tiny.
  * Also caches per-origin display names (server-reported hostnames) and the
- * app-wide text zoom. */
+ * app-wide page zoom (a layout scale factor, never font sizes). */
 class ServerStore(context: Context) {
     private val prefs: SharedPreferences =
         context.getSharedPreferences("phi_servers", Context.MODE_PRIVATE)
