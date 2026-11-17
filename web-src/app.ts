@@ -2826,7 +2826,7 @@ export class App {
                 ).__phiSetFontSize?.(px);
         } catch {
             /* not android */
-        };
+        }
         void store.start();
     }
 

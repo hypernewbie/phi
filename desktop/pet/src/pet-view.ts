@@ -184,7 +184,7 @@ export const pickNext = (
   const pickFromIdle = (): string | null => {
     const idle = config.animations.idle.filter((n) => n !== exclude(lastAct));
     if (idle.length === 0) return null;
-    return idle[Math.floor(rng() * idle.length)]!;
+    return idle[Math.floor(rng() * idle.length)] ?? null;
   };
   const pickFromCat = (): string | null => {
     const cat = pickWeightedCategory(config.animations.categories, facing, rng);
@@ -192,7 +192,7 @@ export const pickNext = (
     const eligible =
       lastAct === null ? cat.actions : cat.actions.filter((n) => n !== lastAct);
     if (eligible.length === 0) return null;
-    return eligible[Math.floor(rng() * eligible.length)]!;
+    return eligible[Math.floor(rng() * eligible.length)] ?? null;
   };
 
   if (roll < idleWeight) {

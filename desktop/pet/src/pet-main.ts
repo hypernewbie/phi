@@ -344,7 +344,7 @@ export function createPet(deps: PetDeps): PetHandle {
   });
 
   if (
-    typeof (ipcMain as unknown as { handle?: Function }).handle === "function"
+    typeof (ipcMain as unknown as { handle?: unknown }).handle === "function"
   ) {
     ipcMain.handle(
       "phi:pet-settings-idle-dwell-request",

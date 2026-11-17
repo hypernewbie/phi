@@ -2285,7 +2285,6 @@ export class App {
         catch {
             /* not android */
         }
-        ;
         void store.start();
     }
     ingestAppearance(data) {

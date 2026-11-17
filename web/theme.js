@@ -194,8 +194,7 @@ export function applyThemeTokens(colorKey) {
     try {
         // Android shell hook: badges follow the live accent. Guarded so
         // desktop and browsers (no bridge) are unaffected.
-        window
-            .__phiDesktop?.reportThemeColor?.(key, theme.accent);
+        window.__phiDesktop?.reportThemeColor?.(key, theme.accent);
     }
     catch {
         /* not android */
