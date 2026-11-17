@@ -4,12 +4,12 @@ plugins {
 
 android {
     namespace = "dev.phi.android"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "dev.phi.android"
         minSdk = 29
-        targetSdk = 37
+        targetSdk = 36
         versionCode = 3
         versionName = "0.6"
     }
