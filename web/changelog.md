@@ -4,6 +4,11 @@ All notable changes to phi are documented here. Newest versions first.
 
 ## Unreleased
 
+## v0.41.2 — 2026-11-18
+
+### Changed
+- **The release history no longer carries a private hostname** (`4ba64245`). A comment in the phi-cmd regression test, and two commit messages, named a real backend from the author's own tailnet. The comment reads "one server" now, and the commit messages use the same neutral names the repository already uses elsewhere. The published binaries are unchanged: every rewritten commit has an identical tree.
+
 ## v0.41.1 — 2026-11-18
 
 ### Fixed
