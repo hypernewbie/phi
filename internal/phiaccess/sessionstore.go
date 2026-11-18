@@ -15,7 +15,9 @@ import (
 	"time"
 )
 
-const accessSessionCookieName = "phi_access_session"
+// AccessSessionCookieName is the server-issued access-session cookie.
+// phic and phi-cmd both store and replay exactly this cookie.
+const AccessSessionCookieName = "phi_access_session"
 
 // SessionStore persists the server-issued access-session cookie next to
 // the profiles document (phic-access-sessions/). Only the server-issued
@@ -85,7 +87,7 @@ func ValidRememberedCookie(origin string, c http.Cookie) bool {
 	if err != nil {
 		return false
 	}
-	return c.Name == accessSessionCookieName && c.Value != "" && len(c.Value) <= 4096 && c.HttpOnly && c.Path == "/" && c.Domain == "" && c.MaxAge >= 0 && (!c.Secure || u.Scheme == "https") && sessionExpiry(c).After(time.Now())
+	return c.Name == AccessSessionCookieName && c.Value != "" && len(c.Value) <= 4096 && c.HttpOnly && c.Path == "/" && c.Domain == "" && c.MaxAge >= 0 && (!c.Secure || u.Scheme == "https") && sessionExpiry(c).After(time.Now())
 }
 
 // Save persists a server-issued session atomically (temp file + rename).

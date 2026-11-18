@@ -2,10 +2,12 @@ package phicmd
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -45,8 +47,9 @@ type fakeBackend struct {
 	paneEcho    bool
 	paneHead    uint64
 	paneInput   []byte
-	paneInputOK *sync.Cond // signals a pane input arrival
-	controlDown bool       // refuse the control socket (auth)
+	paneInputOK *sync.Cond    // signals a pane input arrival
+	controlDown bool          // refuse the control socket (auth)
+	configDelay time.Duration // slow /api/config answers
 }
 
 // waitForPaneInput blocks until the fake's pane handler has observed
@@ -115,8 +118,12 @@ func newFakeBackend(t *testing.T) *fakeBackend {
 			http.Error(w, "Invalid password", http.StatusUnauthorized)
 			return
 		}
-		http.SetCookie(w, &http.Cookie{Name: "phi_session", Value: "granted", Path: "/", HttpOnly: true})
-		b.cookies["granted"] = true
+		// The real server's access-session cookie: HttpOnly, path "/",
+		// and a value that carries its own expiry (nonce.expiry.signature),
+		// which is what the shared store persists.
+		value := fmt.Sprintf("granted.%d.sig", time.Now().Add(time.Hour).Unix())
+		http.SetCookie(w, &http.Cookie{Name: phiaccess.AccessSessionCookieName, Value: value, Path: "/", HttpOnly: true})
+		b.cookies[value] = true
 		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 	})
 	gated := func(path string, fn func(w http.ResponseWriter)) http.HandlerFunc {
@@ -133,6 +140,13 @@ func newFakeBackend(t *testing.T) *fakeBackend {
 		}
 	}
 	mux.HandleFunc("/api/config", gated("/api/config", func(w http.ResponseWriter) {
+		b.mu.Lock()
+		delay := b.configDelay
+		b.mu.Unlock()
+		if delay > 0 {
+			// Slow answers make probes complete out of profile order.
+			time.Sleep(delay)
+		}
 		b.mu.Lock()
 		defer b.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(b.ident)
@@ -342,7 +356,7 @@ func (b *fakeBackend) url() string { return b.ts.URL }
 
 func (b *fakeBackend) cookieOK(r *http.Request) bool {
 	for _, c := range r.Cookies() {
-		if c.Name == "phi_session" && b.cookies[c.Value] {
+		if c.Name == phiaccess.AccessSessionCookieName && b.cookies[c.Value] {
 			return true
 		}
 	}
@@ -451,6 +465,27 @@ func profileEnv(t *testing.T, b *fakeBackend) []string {
 		t.Fatal(err)
 	}
 	return []string{"--profiles", path}
+}
+
+// multiProfileEnv writes a profiles document with several servers and
+// an isolated phi-cmd state dir, returning the CLI argv prefix.
+func multiProfileEnv(t *testing.T, servers ...[2]string) ([]string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	entries := make([]string, 0, len(servers))
+	for _, s := range servers {
+		entries = append(entries, fmt.Sprintf(`{"id":%q,"name":%q,"origin":%q}`, s[0], s[0], s[1]))
+	}
+	path := filepath.Join(dir, "config", "phi-client", "profiles.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	doc := `{"profiles":[` + strings.Join(entries, ",") + `]}`
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return []string{"--profiles", path}, path
 }
 
 // captureRun runs the CLI in-process and returns (stdout, exitCode).

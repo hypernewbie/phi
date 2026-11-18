@@ -57,6 +57,36 @@ type HTTP struct {
 	sessions *phiaccess.SessionStore
 	loginMu  sync.Mutex
 	tried    bool
+
+	// The access-session cookie as the server sent it. The cookie jar
+	// cannot be used for this: it drops HttpOnly and the path, and the
+	// store (like phic) refuses to persist a cookie without them.
+	sessionMu   sync.Mutex
+	lastSession *http.Cookie
+}
+
+// rememberSessionCookie keeps the newest server-issued access session.
+func (h *HTTP) rememberSessionCookie(cookies []*http.Cookie) {
+	for _, c := range cookies {
+		if c.Name == phiaccess.AccessSessionCookieName && c.Value != "" {
+			cp := *c
+			h.sessionMu.Lock()
+			h.lastSession = &cp
+			h.sessionMu.Unlock()
+			return
+		}
+	}
+}
+
+// sessionCookie returns the newest server-issued access session.
+func (h *HTTP) sessionCookie() *http.Cookie {
+	h.sessionMu.Lock()
+	defer h.sessionMu.Unlock()
+	if h.lastSession == nil {
+		return nil
+	}
+	c := *h.lastSession
+	return &c
 }
 
 // RememberSessions makes the client reuse and refresh phic's saved
@@ -70,19 +100,6 @@ func (h *HTTP) RememberSessions(profilesPath string) {
 	if c, err := h.sessions.Load(h.Base.String()); err == nil && c != nil {
 		h.Client.Jar.SetCookies(h.Base, []*http.Cookie{c})
 	}
-}
-
-// sessionCookie returns the current access-session cookie, if any.
-func (h *HTTP) sessionCookie() *http.Cookie {
-	u := *h.Base
-	u.Path = ""
-	for _, c := range h.Client.Jar.Cookies(&u) {
-		if c.Name == "phi_access_session" && c.Value != "" {
-			cp := *c
-			return &cp
-		}
-	}
-	return nil
 }
 
 // NewHTTP builds a client for one origin. The origin must be the server
@@ -198,6 +215,7 @@ func (h *HTTP) once(ctx context.Context, method, path string, body []byte) (int,
 		return 0, nil, err
 	}
 	defer resp.Body.Close()
+	h.rememberSessionCookie(resp.Cookies())
 	limit := h.MaxBytes
 	if limit <= 0 {
 		limit = defaultMaxOut
@@ -275,7 +293,7 @@ func (h *HTTP) login(ctx context.Context) error {
 	}
 	if h.sessions != nil {
 		if c := h.sessionCookie(); c != nil {
-			// Best-effort: a failed save only costs re-login next time.
+			// Best-effort: a failed save only costs a re-login next time.
 			_ = h.sessions.Save(h.Base.String(), *c)
 		}
 	}

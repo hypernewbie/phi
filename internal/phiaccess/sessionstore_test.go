@@ -14,7 +14,7 @@ import (
 )
 
 func rememberCookie() http.Cookie {
-	return http.Cookie{Name: accessSessionCookieName, Value: fmt.Sprintf("nonce.%d.signature", time.Now().Add(time.Hour).Unix()), HttpOnly: true, Path: "/", Expires: time.Now().Add(time.Hour)}
+	return http.Cookie{Name: AccessSessionCookieName, Value: fmt.Sprintf("nonce.%d.signature", time.Now().Add(time.Hour).Unix()), HttpOnly: true, Path: "/", Expires: time.Now().Add(time.Hour)}
 }
 
 func storeFile(p *SessionStore, origin string) string {
