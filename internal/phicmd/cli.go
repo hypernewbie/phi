@@ -67,6 +67,10 @@ func Run(argv []string) int {
 		fmt.Print(usageBanner())
 		return ExitOK
 	}
+	if argv[0] == "--version" || argv[0] == "version" {
+		fmt.Println(Version())
+		return ExitOK
+	}
 	globals, rest, err := parseGlobals(argv)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "phi-cmd:", err)

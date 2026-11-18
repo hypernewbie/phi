@@ -225,6 +225,19 @@ func TestPhiCmdSavesTheSessionAfterALogin(t *testing.T) {
 	}
 }
 
+// A released binary must say which release it is. The first release
+// shipped "dev": the build set main.Version but the command declared a
+// lowercase variable the linker cannot reach.
+func TestVersionFlagPrintsTheRelease(t *testing.T) {
+	out, code := captureRun(t, "--version")
+	if code != ExitOK {
+		t.Fatalf("exit=%d out=%s", code, out)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(out), "phi-cmd ") {
+		t.Fatalf("version banner: %q", out)
+	}
+}
+
 // The coder roster is an object keyed by coder id, not an array. The
 // unit fake once answered an array, so only the real-server
 // integration test caught the mismatch.

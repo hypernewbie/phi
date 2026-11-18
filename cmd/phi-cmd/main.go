@@ -13,12 +13,14 @@ import (
 	"github.com/hypernewbie/phi/internal/phicmd"
 )
 
+// Version and Commit are set by the release build (-X main.Version,
+// -X main.Commit). The names are exported so the linker can reach them.
 var (
-	version = "dev"
-	commit  = "unreleased"
+	Version = "dev"
+	Commit  = "unreleased"
 )
 
 func main() {
-	phicmd.SetVersion(version, commit)
+	phicmd.SetVersion(Version, Commit)
 	os.Exit(phicmd.Run(os.Args[1:]))
 }
