@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
@@ -44,7 +45,24 @@ type fakeBackend struct {
 	paneEcho    bool
 	paneHead    uint64
 	paneInput   []byte
-	controlDown bool // refuse the control socket (auth)
+	paneInputOK *sync.Cond // signals a pane input arrival
+	controlDown bool       // refuse the control socket (auth)
+}
+
+// waitForPaneInput blocks until the fake's pane handler has observed
+// want bytes. The command exits when its frame is written, not when the
+// server goroutine has read it, so assertions must wait.
+func (b *fakeBackend) waitForPaneInput(t *testing.T, want string) {
+	t.Helper()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	deadline := time.Now().Add(5 * time.Second)
+	for string(b.paneInput) != want && time.Now().Before(deadline) {
+		b.paneInputOK.Wait()
+	}
+	if string(b.paneInput) != want {
+		t.Fatalf("input bytes: %q (want %q)", b.paneInput, want)
+	}
 }
 
 func newFakeBackend(t *testing.T) *fakeBackend {
@@ -58,6 +76,7 @@ func newFakeBackend(t *testing.T) *fakeBackend {
 		},
 		turnScript: defaultTurnScript,
 	}
+	b.paneInputOK = sync.NewCond(&b.mu)
 	mux := http.NewServeMux()
 
 	// --- REST ---
@@ -301,6 +320,7 @@ func newFakeBackend(t *testing.T) *fakeBackend {
 			if input := frame.GetInput(); input != nil {
 				b.mu.Lock()
 				b.paneInput = append(b.paneInput, input...)
+				b.paneInputOK.Broadcast()
 				b.mu.Unlock()
 				if echo {
 					out, _ := wireproto.EncodeOutputFrame(offset, input)

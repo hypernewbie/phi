@@ -267,11 +267,7 @@ func TestCmdInputSendsVerbatim(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit=%d", code)
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if string(b.paneInput) != "ls -la\r" {
-		t.Fatalf("input bytes: %q", b.paneInput)
-	}
+	b.waitForPaneInput(t, "ls -la\r")
 }
 
 func TestCmdInputHex(t *testing.T) {
@@ -284,11 +280,7 @@ func TestCmdInputHex(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit=%d", code)
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if string(b.paneInput) != "\x1b[A~" {
-		t.Fatalf("hex bytes: %q", b.paneInput)
-	}
+	b.waitForPaneInput(t, "\x1b[A~")
 }
 
 func TestCmdInputNoPaneIsNotFound(t *testing.T) {
@@ -369,12 +361,8 @@ func TestCmdModelSetRecipeTypesIntoPane(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit=%d", code)
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
 	// Literal substitution: $& must not expand.
-	if string(b.paneInput) != "/model set gemini-pro$&x\r" {
-		t.Fatalf("recipe input: %q", b.paneInput)
-	}
+	b.waitForPaneInput(t, "/model set gemini-pro$&x\r")
 }
 
 func TestCmdModelSetNoRecipeIsHonest(t *testing.T) {
