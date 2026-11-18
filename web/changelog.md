@@ -4,13 +4,27 @@ All notable changes to phi are documented here. Newest versions first.
 
 ## Unreleased
 
+## v0.41.0 — 2026-11-18
+
 ### Added
+- **phi-cmd: a command client for driving Phi from scripts and agents** (`bb66ee67`, `1cafe492`, `8f3d5365`, `dc98fe8f`, `59dedfeb`, `252e4294`). A new binary ships in this npm package as `phi-cmd`. It lists the configured backends, reports what each is doing, prompts a chat session, types into a live pane, switches models, reads diffs, and runs a command on a backend — with no second UI and no server changes.
+
+  It links no terminal emulation, so it stays a pure Go binary everywhere the server builds, and every answer it renders is bounded.
+
+  `phi-cmd servers` shows every configured backend with its health, reported hostname, live session count, and whether it needs a password. `phi-cmd status` and `phi-cmd tabs` show live sessions, panes, and the coder roster. `phi-cmd send "…"` prompts a session and streams the turn as NDJSON, including the assistant's tool calls. `phi-cmd input` types raw bytes into a pane. `phi-cmd model set` switches a model through the control surface, the Pi bridge, or a backend's own recipe, with the browser executor's exact bounds. `phi-cmd git`, `run`, and `raw` cover the read-only surfaces.
+
+  Every command takes `--json` for one stable document, and the exit codes are a contract: `0` success, `1` error, `2` usage, `3` not found, `4` authentication, `5` timeout. `--max-bytes` and `--tail` bound the output.
+
+  It reads the same saved servers as the desktop client, and a login is shared: phic's remembered access session is replayed, and a password login in either client is remembered by both.
+
 - **phic speaks the Pi bridge control surface** (`013b989f`, `721c8b78`, `f86c9794`). The native terminal client consumes `TerminalBridgeState` and `TerminalSettlement` pushes instead of dropping them as browser hints. The footer leads with the same Pi segment as the web header: model, thinking level, and context fill. `Ctrl-] P` opens a Pi controls panel with `[1] Models`, `[2] Thinking`, `[3] Skills`, plus `c` compact and `r` reload. One bounded load fetches all three lists. Enter applies the selected row and echoes the process-origin stamps that the server requires. Compact and reload send only published snapshot stamps. Both refuse locally while the origin is missing. Replies use the server's safe outcome vocabulary. Stale tickets and generations are dropped.
 - **The phic compose box recalls Pi prompt history** (`6f8dfdf1`). Up from an empty staged-input box on a Pi pane walks the pane's Pi prompt history, newest first. Down walks back and restores the saved draft past the newest entry. This matches the web composer's cursor semantics. The fetch is bound to the pane and its bridge generation. Non-Pi panes and unavailable history leave the box as it was. A mid-cycle edit resets the cycle without losing the text.
 - **phic gains a sync board panel** (`2b653465`, `2fc56f29`). `Ctrl-] Y` opens a native reader and writer for the server's addressed key/value messages. It uses the same REST surface as the web Syncboard. The list shows key-sorted one-line previews. Enter reads the full message with scrolling. `n` and `e` write through a two-field editor; the key is locked on edits. `d` pressed twice deletes. Every mutation reloads the ticketed list. Stray replies are dropped.
 
 ### Fixed
 - **The legacy phic relay treats a refresh receipt as a hint** (`37b37613`). A `TerminalRefreshResult` on the relay transport is ignored next to title, bridge state, settlement, and notification, instead of faulting the live loop with a protocol error. The relay never requests a repaint, so the receipt can only be a stray browser-style hint.
+- **The phi-cmd roster shows each server's own authentication state** (`59dedfeb`). The backend probes finish in any order, and the authentication column was spliced onto the rows in the wrong order: one server's requirement could appear on another's row. Each row now carries its own answer.
+- **A mid-turn repaint no longer fails the browser test** (`59dedfeb`). The streaming screen is read once after a poll succeeds, but the spinner keeps painting, so the read could land mid-parse and report nothing. The read now waits for a moment between spinner writes.
 
 ## v0.40.0 — 2026-11-16
 
