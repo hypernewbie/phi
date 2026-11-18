@@ -118,6 +118,37 @@ async function installClient() {
   }
 }
 
+// phi-cmd is the pure-Go command client: it links no terminal
+// emulation, so it ships for Windows as well as macOS and Linux.
+async function installCommandClient() {
+  const dir = fs.mkdtempSync(path.join(tmpdir(), 'phi-cmd-install-'));
+  const cmdExt = isWindows ? '.zip' : '.tar.gz';
+  const asset = `phi_${version}_${os}_${arch}_phi-cmd${cmdExt}`;
+  const archive = path.join(dir, asset);
+  try {
+    const url = `https://github.com/${repo}/releases/download/v${version}/${asset}`;
+    console.log(`Downloading precompiled phi-cmd binary from ${url}...`);
+    await download(url, archive);
+    const target = isWindows
+      ? path.join(binDir, 'phi-cmd-native.exe')
+      : path.join(binDir, 'phi-cmd-native');
+    if (isWindows) {
+      execSync(
+        `powershell -Command "Expand-Archive -Path '${archive}' -DestinationPath '${dir}' -Force"`,
+      );
+      fs.copyFileSync(path.join(dir, 'phi-cmd.exe'), target);
+    } else {
+      execFileSync('tar', ['-xzf', archive, '-C', dir, 'phi-cmd']);
+      fs.chmodSync(path.join(dir, 'phi-cmd'), 0o755);
+      fs.copyFileSync(path.join(dir, 'phi-cmd'), target);
+    }
+    fs.chmodSync(target, 0o755);
+    console.log('phi-cmd binary successfully installed!');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 download(downloadUrl, tempFile)
   .then(() => {
     console.log('Extracting archive...');
@@ -134,7 +165,7 @@ download(downloadUrl, tempFile)
 
     fs.unlinkSync(tempFile);
     console.log('Phi binary successfully installed!');
-    return installClient();
+    return installClient().then(() => installCommandClient());
   })
   .catch((err) => {
     console.error('Failed to install Phi binary:', err);

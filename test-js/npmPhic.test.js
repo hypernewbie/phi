@@ -96,6 +96,7 @@ describe('npm native Phi client distribution', () => {
             expect(calls.urls.map((url) => url.split('/').at(-1))).toEqual([
                 `phi_${pkg.version}_${os}_${goarch}.tar.gz`,
                 `phi_${pkg.version}_${os}_${goarch}_phic.tar.gz`,
+                `phi_${pkg.version}_${os}_${goarch}_phi-cmd.tar.gz`,
             ]);
             expect(calls.exec).toEqual([
                 [
@@ -108,22 +109,46 @@ describe('npm native Phi client distribution', () => {
                         'phic',
                     ],
                 ],
+                [
+                    'tar',
+                    [
+                        '-xzf',
+                        `/tmp/phic-staging/phi_${pkg.version}_${os}_${goarch}_phi-cmd.tar.gz`,
+                        '-C',
+                        '/tmp/phic-staging',
+                        'phi-cmd',
+                    ],
+                ],
             ]);
             expect(calls.copied).toEqual([
                 ['/tmp/phic-staging/phic', '/package/bin/phic-native'],
+                ['/tmp/phic-staging/phi-cmd', '/package/bin/phi-cmd-native'],
             ]);
             expect(calls.removed).toContain('/tmp/phic-staging');
             expect(calls.exit).toEqual([]);
-            expect(pkg.bin).toEqual({ phi: './bin/phi', phic: './bin/phic' });
+            expect(pkg.bin).toEqual({
+                phi: './bin/phi',
+                phic: './bin/phic',
+                'phi-cmd': './bin/phi-cmd',
+            });
         },
     );
 
     it('does not request a nonexistent Windows client or alter the server asset', async () => {
         const calls = await install('win32', 'x64');
-        expect(calls.urls).toHaveLength(1);
-        expect(calls.urls[0]).toContain(`phi_${pkg.version}_windows_amd64.zip`);
+        // The server archive and the command client ship on Windows; the
+        // native console client does not.
+        expect(calls.urls.map((url) => url.split('/').at(-1))).toEqual([
+            `phi_${pkg.version}_windows_amd64.zip`,
+            `phi_${pkg.version}_windows_amd64_phi-cmd.zip`,
+        ]);
         expect(calls.exec).toEqual([]);
-        expect(calls.copied).toEqual([]);
+        expect(calls.copied).toEqual([
+            [
+                '/tmp/phic-staging/phi-cmd.exe',
+                '/package/bin/phi-cmd-native.exe',
+            ],
+        ]);
         expect(calls.exit).toEqual([]);
     });
 
