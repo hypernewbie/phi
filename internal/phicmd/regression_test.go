@@ -18,8 +18,8 @@ import (
 
 // The auth column belongs to the server it describes. The roster
 // collects probes concurrently, so a flag indexed by profile order
-// lands on whatever row finished i-th: venus reported "no auth" while
-// demanding a password, and another server's flag moved with it.
+// lands on whatever row finished i-th: one server reported "no auth"
+// while demanding a password, and another server's flag moved with it.
 func TestCmdServersAuthFlagMapsToItsOwnRow(t *testing.T) {
 	// "zz" answers fast, "aa" is slow and needs auth. The roster sorts
 	// by id, so the slow server's row comes first while its probe
