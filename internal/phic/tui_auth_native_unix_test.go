@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/hypernewbie/phi/internal/phiaccess"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -46,7 +47,7 @@ func TestConsoleRelaunchKeepsLoginWithoutKeychainOrPasswordFile(t *testing.T) {
 	file := filepath.Join(home, "profiles.json")
 	password := "not-stored-password"
 	salt := []byte("0123456789abcdef")
-	verifier, _ := deriveVerifier(password, salt, "pbkdf2-sha256", 1000)
+	verifier, _ := phiaccess.Verifier(password, phiaccess.Status{Algorithm: "pbkdf2-sha256", Iterations: 1000, Salt: base64.RawURLEncoding.EncodeToString(salt)})
 	mac := hmac.New(sha256.New, verifier)
 	mac.Write([]byte("single-challenge"))
 	proof := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))

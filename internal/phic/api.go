@@ -2,9 +2,6 @@ package phic
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,19 +12,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hypernewbie/phi/internal/phiaccess"
 	"github.com/hypernewbie/phi/pkg/obs"
 )
 
-// authStatus mirrors GET /api/auth/status.
-type authStatus struct {
-	Enabled       bool   `json:"enabled"`
-	Authenticated bool   `json:"authenticated"`
-	Version       string `json:"version,omitempty"`
-	Algorithm     string `json:"algorithm,omitempty"`
-	Iterations    int    `json:"iterations,omitempty"`
-	Salt          string `json:"salt,omitempty"`
-	Challenge     string `json:"challenge,omitempty"`
-}
+// authStatus is phiaccess.Status: one shared mirror of GET
+// /api/auth/status and one shared client-side proof.
+type authStatus = phiaccess.Status
 
 // loginResponse mirrors POST /api/auth/login.
 type loginResponse struct {
@@ -102,21 +93,13 @@ func (a *apiClient) Login(ctx context.Context, status authStatus, password strin
 	if !status.Enabled {
 		return nil
 	}
-	if status.Version != "v1" || len(status.Salt) > 128 || len(status.Challenge) == 0 || len(status.Challenge) > 4096 {
-		return fmt.Errorf("phic: unsupported or malformed login challenge")
+	if err := phiaccess.ValidateChallenge(status); err != nil {
+		return err
 	}
-	salt, err := base64.RawURLEncoding.DecodeString(status.Salt)
-	if err != nil {
-		return fmt.Errorf("phic: bad salt: %w", err)
-	}
-	verifier, err := deriveVerifier(password, salt, status.Algorithm, status.Iterations)
+	proof, err := phiaccess.Proof(password, status)
 	if err != nil {
 		return err
 	}
-	defer clear(verifier)
-	mac := hmac.New(sha256.New, verifier)
-	mac.Write([]byte(status.Challenge))
-	proof := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 
 	body, _ := json.Marshal(map[string]string{
 		"challenge": status.Challenge,
@@ -131,16 +114,6 @@ func (a *apiClient) Login(ctx context.Context, status authStatus, password strin
 	}
 	a.saveRememberedSession()
 	return nil
-}
-
-func deriveVerifier(password string, salt []byte, algo string, iters int) ([]byte, error) {
-	if algo != "pbkdf2-sha256" {
-		return nil, fmt.Errorf("phic: unsupported KDF %q", algo)
-	}
-	if iters <= 0 || iters > 1_000_000 {
-		return nil, fmt.Errorf("phic: bad iteration count %d", iters)
-	}
-	return pbkdf2SHA256(password, salt, iters, 32)
 }
 
 func (a *apiClient) getJSON(ctx context.Context, path string, out any) error {

@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/hypernewbie/phi/internal/phiaccess"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -34,7 +35,7 @@ func TestCLIDesktopProfilesColoredServerSwitchOriginIsolationAndRememberedPane(t
 	makeServer := func(name, theme, dir string, fail bool) *httptest.Server {
 		salt := []byte("0123456789abcdef")
 		password := " password-" + name + " "
-		key, _ := deriveVerifier(password, salt, "pbkdf2-sha256", 1000)
+		key, _ := phiaccess.Verifier(password, phiaccess.Status{Algorithm: "pbkdf2-sha256", Iterations: 1000, Salt: base64.RawURLEncoding.EncodeToString(salt)})
 		mac := hmac.New(sha256.New, key)
 		_, _ = mac.Write([]byte(name))
 		proof := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"github.com/hypernewbie/phi/internal/phiaccess"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -115,19 +116,19 @@ func TestAPIClientLoginSendsProof(t *testing.T) {
 }
 
 // TestDeriveVerifierMatchesPBKDF2 is the unit-level proof
-// that deriveVerifier uses the advertised KDF.
+// that phiaccess.Verifier uses the advertised KDF.
 func TestDeriveVerifierMatchesPBKDF2(t *testing.T) {
 	pw := "x"
 	salt := []byte("y")
-	got, err := deriveVerifier(pw, salt, "pbkdf2-sha256", 10)
+	got, err := phiaccess.Verifier(pw, phiaccess.Status{Algorithm: "pbkdf2-sha256", Iterations: 10, Salt: base64.RawURLEncoding.EncodeToString(salt)})
 	if err != nil {
-		t.Fatalf("deriveVerifier: %v", err)
+		t.Fatalf("Verifier: %v", err)
 	}
 	want := pbkdf2.Key([]byte(pw), salt, 10, 32, sha256.New)
 	if !bytes.Equal(got, want) {
 		t.Fatalf("verifier mismatch")
 	}
-	if _, err := deriveVerifier(pw, salt, "scrypt", 1); err == nil {
+	if _, err := phiaccess.Verifier(pw, phiaccess.Status{Algorithm: "scrypt", Iterations: 1, Salt: base64.RawURLEncoding.EncodeToString(salt)}); err == nil {
 		t.Fatalf("expected error on bad algorithm")
 	}
 }

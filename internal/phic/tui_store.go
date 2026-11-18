@@ -36,7 +36,7 @@ func (s *desktopStore) readUI() (*uiIntent, error) {
 	if err != nil {
 		return nil, err
 	}
-	raw, ok := d.fields[uiIntentKey]
+	raw, ok := d.Fields()[uiIntentKey]
 	if !ok || len(raw) == 0 {
 		return &uiIntent{Version: 1, Servers: map[string]uiServerIntent{}}, nil
 	}
@@ -69,7 +69,7 @@ func (s *desktopStore) saveUI(ui *uiIntent) error {
 	if err != nil {
 		return err
 	}
-	d.fields[uiIntentKey] = raw
+	d.Fields()[uiIntentKey] = raw
 	return s.save(d)
 }
 

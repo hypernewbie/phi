@@ -3,18 +3,14 @@ package phic
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
+
+	"github.com/hypernewbie/phi/internal/phiprofiles"
 )
 
-// desktopProfile is the same non-secret row read and written by desktop.
-// IDs, names, origins and rail order are preserved, including legacy aliases.
-type desktopProfile struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Origin   string `json:"origin"`
-	LastUsed string `json:"lastUsed,omitempty"`
-}
+// desktopProfile is phiprofiles.Profile: the same non-secret row read and
+// written by desktop, parsed by the one shared parser.
+type desktopProfile = phiprofiles.Profile
 
 type serverState struct {
 	profile   desktopProfile
@@ -38,20 +34,16 @@ func (id serverIdentity) present() bool {
 	return id.Theme != "" || id.Hostname != ""
 }
 
-func desktopProfilePaths(configDir string) []string {
-	return []string{filepath.Join(configDir, "phi-client", "profiles.json"), filepath.Join(configDir, "phi-desktop-electron", "profiles.json"), filepath.Join(configDir, "Phi", "profiles.json")}
-}
-
 func readDesktopProfiles(file string) ([]desktopProfile, error) {
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return nil, err
 	}
-	d, err := parseDesktopDocument(data)
+	d, err := phiprofiles.Parse(data)
 	if err != nil {
 		return nil, err
 	}
-	return d.profiles(), nil
+	return d.Profiles(), nil
 }
 
 func loadServerProfiles(cfg config) ([]desktopProfile, int, error) {
@@ -63,7 +55,7 @@ func loadServerProfiles(cfg config) ([]desktopProfile, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	profiles := d.profiles()
+	profiles := d.Profiles()
 	selected := 0
 	if cfg.ServerExplicit {
 		urls := parseServerURLs(cfg.Server)
@@ -111,7 +103,7 @@ func (c *client) reloadServerProfiles() error {
 	}
 	var next []*serverState
 	selected := -1
-	for _, p := range d.profiles() {
+	for _, p := range d.Profiles() {
 		api, _ := newAPIClient(p.Origin)
 		var state *serverState
 		for _, prev := range old {

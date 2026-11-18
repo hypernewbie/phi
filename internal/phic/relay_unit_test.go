@@ -3,7 +3,9 @@ package phic
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
+	"github.com/hypernewbie/phi/internal/phiaccess"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -82,7 +84,7 @@ func TestConnectCancellationClosesSocketBeforeAttachTimeout(t *testing.T) {
 	}
 }
 func TestLoginRejectsUnboundedKDFWork(t *testing.T) {
-	if _, err := deriveVerifier("secret", []byte("salt"), "pbkdf2-sha256", 1<<30); err == nil {
+	if _, err := phiaccess.Verifier("secret", phiaccess.Status{Algorithm: "pbkdf2-sha256", Iterations: 1 << 30, Salt: base64.RawURLEncoding.EncodeToString([]byte("salt"))}); err == nil {
 		t.Fatal("unbounded advertised KDF accepted")
 	}
 }

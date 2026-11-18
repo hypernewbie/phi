@@ -3,6 +3,7 @@ package phic
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/hypernewbie/phi/internal/phiprofiles"
 	"os"
 	"path/filepath"
 	"testing"
@@ -76,7 +77,7 @@ func TestExplicitServerSharesDesktopConfigurationAndFlagBindsProfiles(t *testing
 	if err != nil || len(saved) != 1 || saved[0].ID != profiles[0].ID {
 		t.Fatal("explicit connection not saved for desktop")
 	}
-	paths := desktopProfilePaths("/config")
+	paths := phiprofiles.Paths("/config")
 	if paths[0] != filepath.Join("/config", "phi-client", "profiles.json") || paths[1] != filepath.Join("/config", "phi-desktop-electron", "profiles.json") {
 		t.Fatalf("unexpected desktop paths: %q", paths)
 	}

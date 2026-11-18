@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/hypernewbie/phi/internal/phiaccess"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -87,7 +88,7 @@ func TestCLIAuthenticatedFreshPaneRawReplayAndDetach(t *testing.T) {
 			}
 			salt := []byte("0123456789abcdef")
 			password := "  private-password  "
-			verifier, err := deriveVerifier(password, salt, "pbkdf2-sha256", 1000)
+			verifier, err := phiaccess.Verifier(password, phiaccess.Status{Algorithm: "pbkdf2-sha256", Iterations: 1000, Salt: base64.RawURLEncoding.EncodeToString(salt)})
 			if err != nil {
 				t.Fatal(err)
 			}

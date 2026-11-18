@@ -55,7 +55,7 @@ func TestDesktopProfileInteropHelper(t *testing.T) {
 	data, err := json.Marshal(struct {
 		Path     string
 		Profiles []desktopProfile
-	}{store.path, d.profiles()})
+	}{store.path, d.Profiles()})
 	if err != nil {
 		t.Fatal(err)
 	}

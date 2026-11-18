@@ -16,6 +16,8 @@ import (
 	"unicode/utf8"
 
 	whatwg "github.com/nlnwa/whatwg-url/url"
+
+	"github.com/hypernewbie/phi/internal/phiprofiles"
 )
 
 // desktopStore edits the desktop's actual document, not a second native-client
@@ -33,10 +35,10 @@ func (s *desktopStore) lockMutation() func() {
 	return mu.Unlock
 }
 
-type desktopDocument struct {
-	fields map[string]json.RawMessage
-	rows   []map[string]json.RawMessage
-}
+// desktopDocument is phiprofiles.Document: one parser shared with the
+// desktop path and phi-cmd. phic mutates it through the exported
+// accessors below.
+type desktopDocument = phiprofiles.Document
 
 func jsonString(value json.RawMessage) string {
 	var s string
@@ -44,47 +46,12 @@ func jsonString(value json.RawMessage) string {
 	return s
 }
 
-func (d *desktopDocument) profiles() []desktopProfile {
-	out := make([]desktopProfile, 0, len(d.rows))
-	for _, row := range d.rows {
-		p := desktopProfile{ID: jsonString(row["id"]), Name: jsonString(row["name"]), Origin: jsonString(row["origin"]), LastUsed: jsonString(row["lastUsed"])}
-		if p.Name == "" {
-			p.Name = p.Origin
-		}
-		out = append(out, p)
-	}
-	return out
-}
-
 func parseDesktopDocument(data []byte) (*desktopDocument, error) {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil || fields == nil {
-		return nil, fmt.Errorf("invalid desktop profile document")
-	}
-	var entries []json.RawMessage
-	if err := json.Unmarshal(fields["profiles"], &entries); err != nil || entries == nil {
-		return nil, fmt.Errorf("invalid desktop profile list")
-	}
-	d := &desktopDocument{fields: fields, rows: make([]map[string]json.RawMessage, 0, len(entries))}
-	seen := map[string]bool{}
-	for _, entry := range entries {
-		var row map[string]json.RawMessage
-		if json.Unmarshal(entry, &row) != nil {
-			continue
-		}
-		id, origin := jsonString(row["id"]), jsonString(row["origin"])
-		if id == "" || origin == "" || seen[id] {
-			continue
-		}
-		seen[id] = true
-		d.rows = append(d.rows, row)
-	}
-	return d, nil
+	return phiprofiles.Parse(data)
 }
 
 func emptyDesktopDocument() *desktopDocument {
-	d, _ := parseDesktopDocument([]byte(`{"profiles":[],"closeToTray":true,"syncAlerts":true,"lowMemoryMode":false,"petEnabled":false,"petZoomPercent":100,"contentZoomPercent":100,"petIdleDwellSeconds":10}`))
-	return d
+	return phiprofiles.Empty()
 }
 
 func (s *desktopStore) read() (*desktopDocument, error) {
@@ -125,12 +92,12 @@ func (s *desktopStore) save(d *desktopDocument) error {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-	rows, err := json.Marshal(d.rows)
+	rows, err := json.Marshal(d.Rows())
 	if err != nil {
 		return err
 	}
-	d.fields["profiles"] = rows
-	data, err := json.MarshalIndent(d.fields, "", "  ")
+	d.Fields()["profiles"] = rows
+	data, err := json.MarshalIndent(d.Fields(), "", "  ")
 	if err != nil {
 		return err
 	}
@@ -237,7 +204,7 @@ func (s *desktopStore) add(raw string) (desktopProfile, error) {
 	if err != nil {
 		return desktopProfile{}, err
 	}
-	for _, p := range d.profiles() {
+	for _, p := range d.Profiles() {
 		if p.Origin == origin {
 			return p, nil
 		}
@@ -246,7 +213,7 @@ func (s *desktopStore) add(raw string) (desktopProfile, error) {
 	if id == "" {
 		id = "server"
 	}
-	for _, p := range d.profiles() {
+	for _, p := range d.Profiles() {
 		if p.ID == id {
 			digest := fmt.Sprintf("%x", sha256.Sum256([]byte(origin)))
 			id += "-" + digest[:6]
@@ -257,7 +224,7 @@ func (s *desktopStore) add(raw string) (desktopProfile, error) {
 	data, _ := json.Marshal(p)
 	var row map[string]json.RawMessage
 	_ = json.Unmarshal(data, &row)
-	d.rows = append(d.rows, row)
+	d.AppendRow(row)
 	if err := s.save(d); err != nil {
 		return desktopProfile{}, err
 	}
@@ -288,13 +255,12 @@ func (s *desktopStore) rename(id, name string) error {
 	if err != nil {
 		return err
 	}
-	for _, row := range d.rows {
-		if jsonString(row["id"]) == id {
-			row["name"], _ = json.Marshal(name)
-			return s.save(d)
-		}
+	row, ok := d.Row(id)
+	if !ok {
+		return fmt.Errorf("phic: unknown saved server")
 	}
-	return fmt.Errorf("phic: unknown saved server")
+	row["name"], _ = json.Marshal(name)
+	return s.save(d)
 }
 
 func (s *desktopStore) remove(id string) error {
@@ -303,13 +269,10 @@ func (s *desktopStore) remove(id string) error {
 	if err != nil {
 		return err
 	}
-	for i, row := range d.rows {
-		if jsonString(row["id"]) == id {
-			d.rows = append(d.rows[:i], d.rows[i+1:]...)
-			return s.save(d)
-		}
+	if !d.RemoveRowByID(id) {
+		return fmt.Errorf("phic: unknown saved server")
 	}
-	return fmt.Errorf("phic: unknown saved server")
+	return s.save(d)
 }
 
 // Same rail semantics as desktop: move immediately before beforeID, or to
@@ -320,29 +283,10 @@ func (s *desktopStore) reorder(id, beforeID string) error {
 	if err != nil {
 		return err
 	}
-	from, to := -1, len(d.rows)
-	for i, row := range d.rows {
-		if jsonString(row["id"]) == id {
-			from = i
-		}
-		if beforeID != "" && jsonString(row["id"]) == beforeID {
-			to = i
-		}
-	}
-	if from < 0 || (beforeID != "" && to == len(d.rows)) {
+	found, beforeFound := d.MoveRowBefore(id, beforeID)
+	if !found || (beforeID != "" && !beforeFound) {
 		return fmt.Errorf("phic: unknown saved server")
 	}
-	if from == to || from+1 == to {
-		return nil
-	}
-	row := d.rows[from]
-	d.rows = append(d.rows[:from], d.rows[from+1:]...)
-	if from < to {
-		to--
-	}
-	d.rows = append(d.rows, nil)
-	copy(d.rows[to+1:], d.rows[to:])
-	d.rows[to] = row
 	return s.save(d)
 }
 
@@ -352,11 +296,9 @@ func (s *desktopStore) setLastUsed(id string) error {
 	if err != nil {
 		return err
 	}
-	for _, row := range d.rows {
-		if jsonString(row["id"]) == id {
-			row["lastUsed"], _ = json.Marshal(time.Now().UTC().Format("2006-01-02T15:04:05.000Z"))
-			return s.save(d)
-		}
+	if row, ok := d.Row(id); ok {
+		row["lastUsed"], _ = json.Marshal(time.Now().UTC().Format("2006-01-02T15:04:05.000Z"))
+		return s.save(d)
 	}
 	// Another client may have removed this profile. Never resurrect it just
 	// because an already attached pane is still running.
@@ -371,7 +313,7 @@ func desktopStoreFor(cfg config) (*desktopStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	paths := desktopProfilePaths(dir)
+	paths := phiprofiles.Paths(dir)
 	store := &desktopStore{path: paths[0]}
 	if _, err := os.Stat(store.path); err == nil {
 		return store, nil
