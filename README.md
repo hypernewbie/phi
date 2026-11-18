@@ -110,6 +110,22 @@ go build -o phic ./cmd/phic
 
 In `phic`, `Ctrl-] PgUp` loads one older terminal history book. `Ctrl-] End` returns to live output. Wheel scrolling does not load older books.
 
+### phi-cmd — drive Phi from scripts and agents
+
+`phi-cmd` is a one-shot command client for the same servers: list them, see what each is doing, send prompts, type into panes, switch models, read diffs. It links no terminal emulation (unlike `phic`), builds pure Go everywhere `phi` does, and adds no server endpoints — every command rides the existing HTTP and WebSocket APIs.
+
+```bash
+phi-cmd servers --json                       # configured backends, health, live counts
+phi-cmd status                               # live sessions, panes, coders
+phi-cmd use pi --cwd /repo                   # remember the target
+phi-cmd send "add a test for X" --json       # prompt a chat session, stream NDJSON
+phi-cmd input --pane p1 "make test\r"        # type into a live pane
+phi-cmd model set anthropic/claude-3         # chat / pi-bridge / recipe switch
+phi-cmd git diff | run "make check" | raw GET /api/version
+```
+
+`--json` on every command emits one stable document; exit codes are a contract (`0` ok, `1` error, `2` usage, `3` not found, `4` auth, `5` timeout); output is byte-bounded (`--max-bytes`, `--tail`). It reads the same desktop profile document as `phic` and writes only its own state file. Access-protected servers log in with `PHI_CMD_PASSWORD`, `--password-file`, or a TTY prompt. `phi-cmd help` lists everything.
+
 ### Frontend development (disk assets)
 
 From the checkout, install the development tools and start Phi:

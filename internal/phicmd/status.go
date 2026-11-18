@@ -3,6 +3,7 @@ package phicmd
 import (
 	"context"
 	"fmt"
+	"sort"
 )
 
 // StatusRow is one live chat session in a `status` answer.
@@ -47,6 +48,7 @@ type terminalSnapshot struct {
 
 type coderDescriptor struct {
 	ID                  string          `json:"id"`
+	Order               int             `json:"order"`
 	Name                string          `json:"name"`
 	SidebarVisible      bool            `json:"sidebar_visible"`
 	IsShell             bool            `json:"is_shell"`
@@ -54,6 +56,24 @@ type coderDescriptor struct {
 	ModelSwitchDisabled bool            `json:"model_switch_disabled"`
 	Presets             []preset        `json:"presets,omitempty"`
 	ModelSwitch         []recipeStep    `json:"model_switch,omitempty"`
+}
+
+// fetchCoders decodes GET /api/coders - a JSON object keyed by coder id
+// (pkg/coders.DescriptorsFor) - into an ordered slice.
+func fetchCoders(ctx context.Context, h *HTTP) ([]coderDescriptor, error) {
+	var byID map[string]coderDescriptor
+	if err := h.Do(ctx, "GET", "/api/coders", nil, &byID); err != nil {
+		return nil, err
+	}
+	out := make([]coderDescriptor, 0, len(byID))
+	for id, d := range byID {
+		if d.ID == "" {
+			d.ID = id
+		}
+		out = append(out, d)
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a].Order < out[b].Order })
+	return out, nil
 }
 
 type preset struct {
@@ -73,8 +93,8 @@ func cmdStatus(ctx context.Context, env *Env, args []string) error {
 	if err != nil {
 		return err
 	}
-	var coders []coderDescriptor
-	if err := h.Do(ctx, "GET", "/api/coders", nil, &coders); err != nil {
+	coders, err := fetchCoders(ctx, h)
+	if err != nil {
 		return err
 	}
 	var terminals []terminalSnapshot

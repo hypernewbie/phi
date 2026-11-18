@@ -64,7 +64,36 @@ builds:
         -s -w -X main.Version={{.Version}} -X main.Commit={{.Commit}}
         -X main.Date={{.Date}}
 
+  # Agent-facing command client: pure Go like the server, so it
+  # cross-compiles from any host with the plain toolchain and needs no
+  # zig cc and no macOS runner.
+  - id: phi-cmd
+    main: ./cmd/phi-cmd
+    binary: phi-cmd
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - >-
+        -s -w -X main.Version={{.Version}} -X main.Commit={{.Commit}}
+
 archives:
+  - id: phi-cmd
+    ids: [phi-cmd]
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}_phi-cmd
   - id: phi
     ids: [phi]
     formats: [tar.gz]

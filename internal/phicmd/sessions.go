@@ -39,8 +39,8 @@ func cmdTabs(ctx context.Context, env *Env, args []string) error {
 	if err != nil {
 		return err
 	}
-	var coders []coderDescriptor
-	if err := h.Do(ctx, "GET", "/api/coders", nil, &coders); err != nil {
+	coders, err := fetchCoders(ctx, h)
+	if err != nil {
 		return err
 	}
 	var live map[string][]liveSessionSummary

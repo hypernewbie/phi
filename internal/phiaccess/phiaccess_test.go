@@ -4,9 +4,9 @@ import (
 	"encoding/base64"
 	"testing"
 
-	"golang.org/x/crypto/pbkdf2"
-	"crypto/sha256"
 	"crypto/hmac"
+	"crypto/sha256"
+	"golang.org/x/crypto/pbkdf2"
 )
 
 // The construction is fixed by the server: pbkdf2-sha256, 32-byte

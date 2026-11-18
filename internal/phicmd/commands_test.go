@@ -319,8 +319,8 @@ func TestCmdModelsLiveSession(t *testing.T) {
 func TestCmdModelsRecipeCoder(t *testing.T) {
 	b := newFakeBackend(t)
 	b.mu.Lock()
-	b.coders = []map[string]any{
-		{"id": "gemini", "name": "Gemini", "sidebar_visible": true,
+	b.coders = map[string]any{
+		"gemini": map[string]any{"id": "gemini", "order": 0, "name": "Gemini", "sidebar_visible": true,
 			"capabilities": map[string]bool{"list": true},
 			"presets":      []map[string]string{{"name": "pro", "value": "gemini-pro"}},
 			"model_switch": []map[string]any{{"send": "/model set {model}\r", "delay_ms": 100}}},
@@ -356,8 +356,8 @@ func TestCmdModelSetLiveSession(t *testing.T) {
 func TestCmdModelSetRecipeTypesIntoPane(t *testing.T) {
 	b := newFakeBackend(t)
 	b.mu.Lock()
-	b.coders = []map[string]any{
-		{"id": "gemini", "name": "Gemini", "sidebar_visible": true,
+	b.coders = map[string]any{
+		"gemini": map[string]any{"id": "gemini", "order": 0, "name": "Gemini", "sidebar_visible": true,
 			"capabilities": map[string]bool{"list": true},
 			"model_switch": []map[string]any{{"send": "/model set {model}\r"}}},
 	}

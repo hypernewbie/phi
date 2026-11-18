@@ -30,7 +30,7 @@ type fakeBackend struct {
 	password    string
 	cookies     map[string]bool
 	ident       map[string]any
-	coders      []map[string]any
+	coders      any
 	sessions    []map[string]any
 	terminals   []map[string]any
 	rawDiff     string
@@ -123,11 +123,11 @@ func newFakeBackend(t *testing.T) *fakeBackend {
 		defer b.mu.Unlock()
 		coders := b.coders
 		if coders == nil {
-			coders = []map[string]any{
-				{"id": "pi", "name": "Pi (term)", "sidebar_visible": true,
-					"capabilities": map[string]bool{"list": true, "transcript": true, "pi_rpc": true}},
-				{"id": "bash", "name": "Shell", "sidebar_visible": true, "is_shell": true,
-					"capabilities": map[string]bool{"list": true}},
+			// The real endpoint is an object keyed by coder id with an
+			// order field (pkg/coders.DescriptorsFor).
+			coders = map[string]any{
+				"pi":   map[string]any{"id": "pi", "order": 0, "name": "Pi (term)", "sidebar_visible": true, "capabilities": map[string]bool{"list": true, "transcript": true, "pi_rpc": true}},
+				"bash": map[string]any{"id": "bash", "order": 1, "name": "Shell", "sidebar_visible": true, "is_shell": true, "capabilities": map[string]bool{"list": true}},
 			}
 		}
 		_ = json.NewEncoder(w).Encode(coders)

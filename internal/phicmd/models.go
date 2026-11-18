@@ -64,8 +64,8 @@ func cmdModels(ctx context.Context, env *Env, args []string) error {
 
 	// Coder path: presets and the declarative recipe.
 	coder := env.resolveCoder()
-	var coders []coderDescriptor
-	if err := h.Do(ctx, "GET", "/api/coders", nil, &coders); err != nil {
+	coders, err := fetchCoders(ctx, h)
+	if err != nil {
 		return err
 	}
 	for _, cd := range coders {
@@ -183,8 +183,8 @@ func cmdModelSet(ctx context.Context, env *Env, args []string) error {
 
 	// 3. Coder recipe typed into the pane.
 	coder := env.resolveCoder()
-	var coders []coderDescriptor
-	if err := h.Do(ctx, "GET", "/api/coders", nil, &coders); err != nil {
+	coders, err := fetchCoders(ctx, h)
+	if err != nil {
 		return err
 	}
 	for _, cd := range coders {

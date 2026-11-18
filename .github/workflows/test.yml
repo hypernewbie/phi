@@ -63,6 +63,16 @@ jobs:
       - name: Native phic Shell views and reattachment
         run: python3 scripts/test-phic-native.py --coders bash
 
+      # phi-cmd against a real phi server: REST, panes, git, run, exit
+      # codes. Same isolation rules as the phic native test.
+      - name: Build phi and phi-cmd for the integration test
+        run: |
+          mkdir -p temp/phi-cmd-bin temp/phi-cmd-it
+          CGO_ENABLED=0 go build -o temp/phi-cmd-bin/phi-cmd ./cmd/phi-cmd/
+          CGO_ENABLED=0 go build -o temp/phi-cmd-it/phi .
+      - name: phi-cmd integration against a real server
+        run: python3 scripts/test-phi-cmd.py
+
       # Release builds embed precompressed assets behind -tags=embedassets
       # (see embed_release.go). static_assets_release_test.go is the only root
       # test file gated on the tag, so run just those tests: running the whole
