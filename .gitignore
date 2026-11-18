@@ -62,3 +62,4 @@ test/e2e/.manual-review-home/
 # Local profiling build diagnostics dir (make dev-server-profile)
 .phi-profile/
 .git-commit-msg
+__pycache__/
