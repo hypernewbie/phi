@@ -4,6 +4,11 @@ All notable changes to phi are documented here. Newest versions first.
 
 ## Unreleased
 
+## v0.41.1 — 2026-11-18
+
+### Fixed
+- **A published phi-cmd reports its release** (`cbc1f0e7`). The command client had no version flag, and the release build set a variable the linker could not reach, so every published copy answered `dev`. `phi-cmd --version` now prints the release and its commit, like `phi` and `phic` do.
+
 ## v0.41.0 — 2026-11-18
 
 ### Added
