@@ -902,6 +902,101 @@ func TestHandleMarkdownFiles_FindsMDFiles(t *testing.T) {
 	}
 }
 
+func TestHandleMarkdownFiles_ModTimeTracksChanges(t *testing.T) {
+	withTempConfig(t)
+	dir := t.TempDir()
+	alphaPath := filepath.Join(dir, "alpha.md")
+	betaPath := filepath.Join(dir, "beta.md")
+	if err := os.WriteFile(alphaPath, []byte("# Alpha"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(betaPath, []byte("# Beta"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "skip.txt"), []byte("not md"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	alphaTime := time.Date(2024, 5, 1, 12, 0, 0, 0, time.UTC)
+	betaTime := time.Date(2024, 5, 1, 13, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(alphaPath, alphaTime, alphaTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(betaPath, betaTime, betaTime); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := testServer.loadConfig()
+	cfg.MarkdownDirs = []string{dir}
+	testServer.saveConfig(cfg)
+
+	list := func() []MDFileEntry {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/markdown/files?cwd="+dir, nil)
+		w := httptest.NewRecorder()
+		testServer.handleMarkdownFiles(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status: %d", w.Code)
+		}
+		var files []MDFileEntry
+		if err := json.NewDecoder(w.Body).Decode(&files); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return files
+	}
+	statModTime := func(path string) string {
+		t.Helper()
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info.ModTime().UTC().Format(time.RFC3339Nano)
+	}
+
+	first := list()
+	if len(first) != 2 {
+		t.Fatalf("expected 2 markdown entries, got %d: %v", len(first), first)
+	}
+	if first[0].Name != "alpha.md" || first[1].Name != "beta.md" {
+		t.Fatalf("want filename order [alpha.md beta.md], got [%s %s]", first[0].Name, first[1].Name)
+	}
+	if first[0].ModTime != statModTime(alphaPath) {
+		t.Errorf("alpha mod_time = %q, want %q", first[0].ModTime, statModTime(alphaPath))
+	}
+	if first[1].ModTime != statModTime(betaPath) {
+		t.Errorf("beta mod_time = %q, want %q", first[1].ModTime, statModTime(betaPath))
+	}
+	for _, f := range first {
+		if strings.HasSuffix(f.Name, ".txt") {
+			t.Errorf("non-markdown file in results: %s", f.Name)
+		}
+	}
+
+	if err := os.WriteFile(alphaPath, []byte("# Alpha changed"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	newAlphaTime := alphaTime.Add(2 * time.Hour)
+	if err := os.Chtimes(alphaPath, newAlphaTime, newAlphaTime); err != nil {
+		t.Fatal(err)
+	}
+
+	second := list()
+	if len(second) != 2 {
+		t.Fatalf("expected 2 markdown entries after update, got %d", len(second))
+	}
+	if second[0].Path != first[0].Path || second[1].Path != first[1].Path {
+		t.Errorf("paths changed: before %v after %v", first, second)
+	}
+	if second[0].Name != "alpha.md" || second[1].Name != "beta.md" {
+		t.Errorf("order changed: got [%s %s]", second[0].Name, second[1].Name)
+	}
+	if second[0].ModTime != statModTime(alphaPath) {
+		t.Errorf("alpha mod_time after edit = %q, want %q", second[0].ModTime, statModTime(alphaPath))
+	}
+	if second[1].ModTime != first[1].ModTime {
+		t.Errorf("beta mod_time changed unexpectedly: got %q, want %q", second[1].ModTime, first[1].ModTime)
+	}
+}
+
 func TestHandleMarkdownFiles_NonExistentDirSkipped(t *testing.T) {
 	withTempConfig(t)
 	dir := t.TempDir()
