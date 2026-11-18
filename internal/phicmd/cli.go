@@ -97,8 +97,8 @@ func Run(argv []string) int {
 	}()
 
 	var runErr error
-	with := func(fn func(context.Context, *Env, []string) error) error {
-		env, err := resolveEnv(globals)
+	withMode := func(fn func(context.Context, *Env, []string) error, allServers bool) error {
+		env, err := resolveEnvMode(globals, allServers)
 		if err != nil {
 			return err
 		}
@@ -108,15 +108,18 @@ func Run(argv []string) int {
 		}
 		return fn(ctx, env, args)
 	}
+	with := func(fn func(context.Context, *Env, []string) error) error {
+		return withMode(fn, false)
+	}
 	switch cmd {
 	case "servers":
-		runErr = with(cmdServers)
+		runErr = withMode(cmdServers, true)
 	case "status":
 		runErr = with(cmdStatus)
 	case "tabs":
 		runErr = with(cmdTabs)
 	case "use":
-		runErr = with(cmdUse)
+		runErr = withMode(cmdUse, true)
 	case "sessions":
 		runErr = with(cmdSessions)
 	case "transcript":

@@ -84,16 +84,20 @@ func cmdServers(ctx context.Context, env *Env, args []string) error {
 			results <- result{i, row, authRequired}
 		}(i, p)
 	}
-	authFlags := make([]bool, len(env.Profiles))
+	// Collect into profile-indexed slots: goroutines complete in any
+	// order, and splicing a completion-ordered row list against
+	// index-ordered flags put one server's auth column on another
+	// server's row.
 	for range env.Profiles {
 		r := <-results
-		authFlags[r.idx] = r.auth
-		rows = append(rows, r.row)
+		if r.idx >= len(rows) {
+			rows = append(rows, make([]ServerRow, r.idx+1-len(rows))...)
+		}
+		r.row.Auth = r.auth
+		rows[r.idx] = r.row
 	}
+	rows = rows[:len(env.Profiles)]
 	sort.Slice(rows, func(a, b int) bool { return rows[a].ID < rows[b].ID })
-	for i := range rows {
-		rows[i].Auth = authFlags[i]
-	}
 	if env.JSON {
 		return printJSON(map[string]any{"servers": rows})
 	}

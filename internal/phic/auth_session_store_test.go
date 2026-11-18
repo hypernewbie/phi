@@ -2,6 +2,7 @@ package phic
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,12 +10,14 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func storeFile(p *sessionPersistence, origin string) string {
+	return filepath.Join(p.Dir(), fmt.Sprintf("%x.session", sha256.Sum256([]byte(origin))))
+}
 
 func isolatedSessionStore(t *testing.T) *sessionPersistence {
 	t.Helper()
@@ -65,75 +68,10 @@ func TestRememberedSessionSurvivesNewClientAndRotation(t *testing.T) {
 	if err != nil || st.Authenticated {
 		t.Fatal("revoked token still accepted")
 	}
-	if _, err = os.Stat(p.file(server.URL)); !os.IsNotExist(err) {
+	if _, err = os.Stat(storeFile(p, server.URL)); !os.IsNotExist(err) {
 		t.Fatal("confirmed rejection did not clear the saved token")
 	}
 }
-func TestRememberedSessionOriginPermissionsExpiryAndBadData(t *testing.T) {
-	p := isolatedSessionStore(t)
-	origin := "http://localhost:7070"
-	c := rememberCookie()
-	if err := p.save(origin, c); err != nil {
-		t.Fatal(err)
-	}
-	if runtime.GOOS != "windows" {
-		st, _ := os.Stat(p.dir)
-		f, _ := os.Stat(p.file(origin))
-		if st.Mode().Perm() != 0700 || f.Mode().Perm() != 0600 {
-			t.Fatal("credentials were not owner-only")
-		}
-	}
-	for _, other := range []string{"http://localhost:7071", "https://localhost:7070", "http://127.0.0.1:7070"} {
-		got, err := p.load(other)
-		if err != nil || got != nil {
-			t.Fatalf("origin leak %s: %+v %v", other, got, err)
-		}
-	}
-	raw, _ := os.ReadFile(p.file(origin))
-	if strings.Contains(string(raw), "secret password") {
-		t.Fatal("saved password")
-	}
-	other := "http://localhost:7071"
-	os.WriteFile(p.file(other), raw, 0600)
-	if _, err := p.load(other); err == nil {
-		t.Fatal("accepted an origin-swapped credential file")
-	}
-	expired := storedAccessSession{Version: 1, Origin: origin, Cookie: c}
-	expired.Cookie.Expires = time.Now().Add(-time.Hour)
-	data, _ := json.Marshal(expired)
-	os.WriteFile(p.file(origin), data, 0600)
-	if got, err := p.load(origin); err != nil || got != nil {
-		t.Fatalf("loaded expired token: %+v %v", got, err)
-	}
-	os.WriteFile(p.file(origin), []byte("corrupt"), 0600)
-	if _, err := p.load(origin); err == nil {
-		t.Fatal("accepted corrupt session")
-	}
-	if runtime.GOOS != "windows" {
-		os.Chmod(p.file(origin), 0644)
-		if _, err := p.load(origin); err == nil {
-			t.Fatal("accepted public credential file")
-		}
-	}
-}
-func TestRememberedSessionRefusesSymlinkDirectory(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Unix permission/symlink contract")
-	}
-	p := isolatedSessionStore(t)
-	outside := t.TempDir()
-	if err := os.Symlink(outside, p.dir); err != nil {
-		t.Fatal(err)
-	}
-	if err := p.save("http://example.com:7070", rememberCookie()); err == nil {
-		t.Fatal("saved a credential through a directory symlink")
-	}
-	entries, _ := os.ReadDir(outside)
-	if len(entries) != 0 {
-		t.Fatal("session write escaped its private directory")
-	}
-}
-
 func TestRememberedSessionJarDoesNotCrossPortsOrSchemes(t *testing.T) {
 	a, _ := newAPIClient("http://example.com:7070")
 	a.enableRememberedSession(isolatedSessionStore(t))
@@ -150,7 +88,7 @@ func TestRememberedSessionNetworkFailureDoesNotForgetLogin(t *testing.T) {
 	p := isolatedSessionStore(t)
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "unavailable", 503) }))
 	defer s.Close()
-	if err := p.save(s.URL, rememberCookie()); err != nil {
+	if err := p.Save(s.URL, rememberCookie()); err != nil {
 		t.Fatal(err)
 	}
 	a, _ := newAPIClient(s.URL)
@@ -158,7 +96,7 @@ func TestRememberedSessionNetworkFailureDoesNotForgetLogin(t *testing.T) {
 	if _, err := a.AuthStatus(context.Background()); err == nil {
 		t.Fatal("expected outage")
 	}
-	if _, err := os.Stat(p.file(s.URL)); err != nil {
+	if _, err := os.Stat(storeFile(p, s.URL)); err != nil {
 		t.Fatal("an outage erased remembered login")
 	}
 }

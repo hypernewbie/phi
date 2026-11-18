@@ -105,16 +105,24 @@ func usagef(format string, args ...any) error {
 // global definitions and mutate this env in place.
 type Env struct {
 	Globals
-	State      State
-	Profiles   []phiprofiles.Profile
-	ProfileIdx int // -1 when --server was a raw URL
-	Origin     string
-	globalFS   *flag.FlagSet
+	State        State
+	Profiles     []phiprofiles.Profile
+	ProfileIdx   int // -1 when --server was a raw URL
+	Origin       string
+	ProfilesPath string // profiles document the roster came from
+	globalFS     *flag.FlagSet
 }
 
 // resolveEnv loads state, merges flags, and resolves the target server:
 // flag (profile name/id/URL) > state file > the only configured profile.
+// resolveEnv resolves the desktop profile document and the selected
+// server. allServers lifts the single-server requirement for `servers`,
+// which is the roster command.
 func resolveEnv(g Globals) (*Env, error) {
+	return resolveEnvMode(g, false)
+}
+
+func resolveEnvMode(g Globals, allServers bool) (*Env, error) {
 	state, warn := LoadState()
 	if warn != nil {
 		fmt.Fprintln(os.Stderr, "phi-cmd:", warn)
@@ -133,6 +141,7 @@ func resolveEnv(g Globals) (*Env, error) {
 			return nil, fmt.Errorf("phi-cmd: %s: %w", path, err)
 		}
 		env.Profiles = doc.Profiles()
+		env.ProfilesPath = path
 	} else if !os.IsNotExist(readErr) {
 		return nil, readErr
 	}
@@ -147,7 +156,12 @@ func resolveEnv(g Globals) (*Env, error) {
 		if len(env.Profiles) == 0 {
 			return nil, usagef("no servers configured (run `phi-cmd use --server URL` or pass --server)")
 		}
-		return nil, usagef("multiple servers configured; pass --server NAME or run `phi-cmd use`")
+		if !allServers {
+			return nil, usagef("multiple servers configured; pass --server NAME or run `phi-cmd use`")
+		}
+		// `servers` is the roster: it iterates every profile itself and
+		// needs no single origin.
+		return env, nil
 	}
 	if isURL(want) {
 		env.Origin = strings.TrimRight(want, "/")
@@ -252,6 +266,9 @@ func (e *Env) connect() (*HTTP, error) {
 	if e.MaxBytes > 0 {
 		h.MaxBytes = e.MaxBytes
 	}
+	// Reuse phic's saved access sessions: a login in phic is a login
+	// here, and a login here is one in phic.
+	h.RememberSessions(e.ProfilesPath)
 	return h, nil
 }
 

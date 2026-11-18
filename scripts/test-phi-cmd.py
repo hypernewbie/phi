@@ -49,7 +49,7 @@ def wait_ready(url, timeout=30):
 
 
 def run(argv, expect=0):
-    proc = subprocess.run([str(PHI_CMD)] + argv, capture_output=True, text=True, timeout=120)
+    proc = subprocess.run([str(PHI_CMD)] + argv, capture_output=True, text=True, timeout=120, env=env)
     check(
         f"exit {expect}: phi-cmd {' '.join(argv[:3])}…",
         proc.returncode == expect,
@@ -59,6 +59,7 @@ def run(argv, expect=0):
 
 
 def main():
+    global env
     if not PHI_CMD.exists():
         print(f"phi-cmd binary missing: {PHI_CMD} (build it first)", file=sys.stderr)
         return 1

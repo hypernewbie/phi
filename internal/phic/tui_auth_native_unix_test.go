@@ -149,7 +149,7 @@ func TestConsoleRelaunchKeepsLoginWithoutKeychainOrPasswordFile(t *testing.T) {
 		t.Fatalf("relaunch re-authenticated %d times", logins.Load())
 	}
 	p := newSessionPersistence(file)
-	data, err := os.ReadFile(p.file(server.URL))
+	data, err := os.ReadFile(storeFile(p, server.URL))
 	if err != nil {
 		t.Fatal(err)
 	}

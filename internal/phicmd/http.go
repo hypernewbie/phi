@@ -54,8 +54,35 @@ type HTTP struct {
 	MaxBytes int64
 
 	password PasswordSource
+	sessions *phiaccess.SessionStore
 	loginMu  sync.Mutex
 	tried    bool
+}
+
+// RememberSessions makes the client reuse and refresh phic's saved
+// access sessions beside the profiles document. A login in phic or in
+// phi-cmd is then a login in both; the password itself is never stored.
+func (h *HTTP) RememberSessions(profilesPath string) {
+	if profilesPath == "" {
+		return
+	}
+	h.sessions = phiaccess.NewSessionStore(profilesPath)
+	if c, err := h.sessions.Load(h.Base.String()); err == nil && c != nil {
+		h.Client.Jar.SetCookies(h.Base, []*http.Cookie{c})
+	}
+}
+
+// sessionCookie returns the current access-session cookie, if any.
+func (h *HTTP) sessionCookie() *http.Cookie {
+	u := *h.Base
+	u.Path = ""
+	for _, c := range h.Client.Jar.Cookies(&u) {
+		if c.Name == "phi_access_session" && c.Value != "" {
+			cp := *c
+			return &cp
+		}
+	}
+	return nil
 }
 
 // NewHTTP builds a client for one origin. The origin must be the server
@@ -245,6 +272,12 @@ func (h *HTTP) login(ctx context.Context) error {
 	}
 	if err := json.Unmarshal(body, &ok); err != nil || !ok.OK {
 		return fmt.Errorf("%w: login refused", ErrUnauthorized)
+	}
+	if h.sessions != nil {
+		if c := h.sessionCookie(); c != nil {
+			// Best-effort: a failed save only costs re-login next time.
+			_ = h.sessions.Save(h.Base.String(), *c)
+		}
 	}
 	return nil
 }

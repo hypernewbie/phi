@@ -671,7 +671,13 @@ test('a repaint mid-turn neither resubmits nor duplicates the turn', async ({
                 timeout: 30_000,
             })
             .toContain('REFRESH MID TURN');
-        const midTurn = await screenState(page, pane);
+        // The spinner keeps painting between reads, so a single read can
+        // land while a write is still parsing (trackedPending !== 0) and
+        // read back null moments after the poll above succeeded. Retry
+        // until one read lands between spinner writes.
+        let midTurn: ScreenState | null = null;
+        for (let i = 0; i < 600 && !midTurn; i++)
+            midTurn = await screenState(page, pane);
         if (!midTurn) throw new Error('streaming screen unreadable');
         expect(midTurn.text.split('REFRESH MID TURN').length - 1).toBe(1);
         expect(viewer.attaches).toHaveLength(2);
