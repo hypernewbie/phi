@@ -42,6 +42,8 @@ function makeMm({
 afterEach(() => {
     for (const mm of managers) {
         window.removeEventListener('online', mm._onOnline);
+        window.removeEventListener('resize', mm._onSortMenuLayout);
+        mm.fileListEl.removeEventListener('scroll', mm._onSortMenuLayout);
         document.removeEventListener('visibilitychange', mm._onVisibility);
         mm._abortListing();
         mm._abortPreview();
@@ -262,6 +264,34 @@ describe('markdown sort menu', () => {
         expect(rowNames(mm)).toEqual(['new.md', 'old.md']);
     });
 
+    it.each([
+        '.md-sort-btn',
+        '.md-dir-del-btn',
+        '.md-file-item',
+        '.md-file-action-btn',
+        '#md-paste-btn',
+        '.md-manage-row > button:last-child',
+    ])(
+        'preserves keyboard focus on %s through a changed silent listing',
+        async (selector) => {
+            const first = [file('a.md', './docs', '2024-01-01T00:00:00Z')];
+            routeFetch({ list: first });
+            const { mm } = makeMm();
+            await mm.refreshFiles();
+            mm.fileListEl.querySelector(selector).focus();
+            routeFetch({
+                list: [
+                    ...first,
+                    file('b.md', './docs', '2024-02-01T00:00:00Z'),
+                ],
+            });
+            await mm.refreshFiles({ silent: true });
+            expect(document.activeElement).toBe(
+                mm.fileListEl.querySelector(selector),
+            );
+        },
+    );
+
     it('opens with the keyboard, changes the radio choice, and restores focus', async () => {
         const raw = [
             file('a.md', './docs', '2024-01-01T00:00:00Z'),
@@ -378,6 +408,50 @@ describe('markdown scoped reads', () => {
             );
             expect(mm.currentRawContent).toBe('');
             expect(attentionPaths(mm)).toEqual(['./docs/a.md']);
+        },
+    );
+
+    it.each(['headers', 'body'])(
+        'times out a stalled preview %s without clearing attention and allows retry',
+        async (stage) => {
+            vi.useFakeTimers();
+            const scope = new BackendScope('backend-a');
+            const base = [file('a.md', './docs', '2024-01-01T00:00:00Z')];
+            const changed = [file('a.md', './docs', '2024-02-01T00:00:00Z')];
+            routeFetch({ list: base });
+            const { mm } = makeMm({ scope });
+            await mm.refreshFiles();
+            routeFetch({ list: changed });
+            await mm.refreshFiles({ silent: true });
+
+            const fetchMock = routeFetch({
+                file: (_url, options) => {
+                    const stalled = new Promise((_resolve, reject) => {
+                        options.signal.addEventListener('abort', () => {
+                            reject(new DOMException('Aborted', 'AbortError'));
+                        });
+                    });
+                    return stage === 'headers'
+                        ? stalled
+                        : { ok: true, text: () => stalled };
+                },
+            });
+            const pending = mm.openFile({ name: 'a.md', path: './docs/a.md' });
+            await vi.advanceTimersByTimeAsync(10_000);
+            await pending;
+            expect(fetchMock.mock.calls[0][1].headers).toEqual({
+                'X-Phi-Backend': 'backend-a',
+            });
+            expect(mm.modalBody.textContent).toContain(
+                'Preview request timed out',
+            );
+            expect(mm.currentRawContent).toBe('');
+            expect(attentionPaths(mm)).toEqual(['./docs/a.md']);
+
+            routeFetch({ file: { ok: true, text: async () => '# retried' } });
+            await mm.openFile({ name: 'a.md', path: './docs/a.md' });
+            expect(mm.modalBody.textContent).toContain('retried');
+            expect(attentionPaths(mm)).toEqual([]);
         },
     );
 

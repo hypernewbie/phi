@@ -652,9 +652,17 @@ test('visual acceptance: desktop, mobile, and appearance extremes', async ({
     });
 
     await page.setViewportSize({ width: 420, height: 850 });
-    await page.locator('.md-sort-btn').click();
-    await page.locator('.md-sort-btn').click();
     await waitForSortMenu(page);
+    // setViewportSize can resolve before the browser dispatches resize.
+    await expect
+        .poll(async () => {
+            const box = await page.locator('.md-sort-menu').boundingBox();
+            return box ? box.x + box.width : Number.POSITIVE_INFINITY;
+        })
+        .toBeLessThanOrEqual(421);
+    await expect(
+        page.locator('.md-sort-option[data-sort="modified"]'),
+    ).toBeFocused();
     const touchBox = await page.locator('.md-sort-btn').boundingBox();
     expect(touchBox).not.toBeNull();
     expect(touchBox!.width).toBeGreaterThanOrEqual(40);
@@ -743,6 +751,69 @@ test('visual acceptance: desktop, mobile, and appearance extremes', async ({
     }
     await page.screenshot({
         path: testInfo.outputPath('md-sort-420-24px-green-menu.png'),
+        fullPage: true,
+    });
+});
+
+test('live refresh preserves the focused action and list scroll after a reorder', async ({
+    page,
+}, testInfo) => {
+    test.setTimeout(120_000);
+    const fixtureCwd = realpathSync(phi.dir);
+    const early = new Date('2024-01-01T00:00:00Z');
+    for (let i = 0; i < 35; i++) {
+        const path = join(
+            fixtureCwd,
+            'first',
+            `many-${String(i).padStart(2, '0')}.md`,
+        );
+        writeFileSync(path, '# scroll fixture\n');
+        utimesSync(path, early, early);
+    }
+    const spawned = await page.request.post(`${phi.url}/api/terminals`, {
+        data: { coder: 'bash', cwd: fixtureCwd, title: 'Markdown focus' },
+    });
+    expect(spawned.ok()).toBe(true);
+    const paneId = ((await spawned.json()) as { pane_id: string }).pane_id;
+    await page.setViewportSize({ width: 1400, height: 850 });
+    await page.goto(phi.url);
+    await selectPane(page, paneId);
+    await openMarkdownPanel(page);
+    await expect(fileRow(page, 'many-34.md')).toBeAttached({ timeout: 20_000 });
+    await page.locator('.md-sort-btn').click();
+    await page.locator('.md-sort-option[data-sort="modified"]').click();
+
+    // A menu cannot remain detached when its toolbar scrolls out of view.
+    await page.locator('.md-sort-btn').click();
+    await waitForSortMenu(page);
+    const list = page.locator('#markdown-file-list');
+    await list.evaluate((element) => {
+        element.scrollTop = 300;
+    });
+    await expect(page.locator('.md-sort-menu')).toBeHidden();
+    expect(
+        await list.evaluate((element) => element.scrollTop),
+    ).toBeGreaterThanOrEqual(300);
+
+    const target = fileRow(page, 'many-24.md');
+    await target.locator('.md-file-action-btn').focus();
+    await expect(target.locator('.md-file-action-btn')).toBeFocused();
+    const beforeScroll = await list.evaluate((element) => element.scrollTop);
+    expect(beforeScroll).toBeGreaterThan(0);
+    writeFileSync(
+        join(fixtureCwd, 'first', 'many-24.md'),
+        '# moved to the top\n',
+    );
+    await expect(target).toHaveClass(/has-attention/, { timeout: 20_000 });
+    await expect(
+        page.locator('#markdown-file-list .md-file-name').first(),
+    ).toHaveText('many-24.md');
+    await expect(target.locator('.md-file-action-btn')).toBeFocused();
+    expect(await list.evaluate((element) => element.scrollTop)).toBe(
+        beforeScroll,
+    );
+    await page.screenshot({
+        path: testInfo.outputPath('md-sort-retained-scroll-focus.png'),
         fullPage: true,
     });
 });

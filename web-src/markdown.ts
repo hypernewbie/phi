@@ -117,6 +117,7 @@ export class MarkdownManager {
     _versionCounter: number;
     _onOnline: () => void;
     _onVisibility: () => void;
+    _onSortMenuLayout: () => void;
 
     constructor(app: AppLike) {
         this.app = app;
@@ -197,6 +198,7 @@ export class MarkdownManager {
         this._onVisibility = () => {
             if (!document.hidden) this.onExternalChange({});
         };
+        this._onSortMenuLayout = () => this._positionSortMenu();
 
         this._setupEventListeners();
     }
@@ -434,6 +436,8 @@ export class MarkdownManager {
         // persistent manager, never per backend scope.
         window.addEventListener('online', this._onOnline);
         document.addEventListener('visibilitychange', this._onVisibility);
+        window.addEventListener('resize', this._onSortMenuLayout);
+        this.fileListEl.addEventListener('scroll', this._onSortMenuLayout);
     }
 
     // refreshFiles re-scans the markdown dirs for the active cwd.
@@ -1051,20 +1055,7 @@ export class MarkdownManager {
         this._renderSortMenu();
         this._sortMenuEl.classList.remove('hidden');
         anchor.setAttribute('aria-expanded', 'true');
-
-        const menuRect = this._sortMenuEl.getBoundingClientRect();
-        const anchorRect = anchor.getBoundingClientRect();
-        const left = Math.max(
-            8,
-            Math.min(anchorRect.left, window.innerWidth - menuRect.width - 8),
-        );
-        const below = anchorRect.bottom + 6;
-        const top =
-            below + menuRect.height <= window.innerHeight - 8
-                ? below
-                : Math.max(8, anchorRect.top - menuRect.height - 6);
-        this._sortMenuEl.style.left = `${left}px`;
-        this._sortMenuEl.style.top = `${top}px`;
+        this._positionSortMenu();
 
         const items = this._sortMenuItems();
         if (items.length === 0) return;
@@ -1078,6 +1069,38 @@ export class MarkdownManager {
         target.focus();
     }
 
+    _positionSortMenu(): void {
+        const anchor = this._sortButton;
+        if (
+            !anchor?.isConnected ||
+            this._sortMenuEl.classList.contains('hidden')
+        )
+            return;
+        const anchorRect = anchor.getBoundingClientRect();
+        const listRect = this.fileListEl.getBoundingClientRect();
+        if (
+            anchorRect.bottom < listRect.top ||
+            anchorRect.top > listRect.bottom
+        ) {
+            this._hideSortMenu(true);
+            return;
+        }
+        const menuRect = this._sortMenuEl.getBoundingClientRect();
+        const left = Math.max(
+            8,
+            Math.min(anchorRect.left, window.innerWidth - menuRect.width - 8),
+        );
+        const below = anchorRect.bottom + 6;
+        const top = Math.max(
+            8,
+            below + menuRect.height <= window.innerHeight - 8
+                ? below
+                : anchorRect.top - menuRect.height - 6,
+        );
+        this._sortMenuEl.style.left = `${left}px`;
+        this._sortMenuEl.style.top = `${top}px`;
+    }
+
     _hideSortMenu(returnFocus: boolean): void {
         if (!this._sortMenuEl) return;
         const wasOpen = !this._sortMenuEl.classList.contains('hidden');
@@ -1086,7 +1109,7 @@ export class MarkdownManager {
             this._sortButton.setAttribute('aria-expanded', 'false');
         }
         if (wasOpen && returnFocus && this._sortButton?.isConnected) {
-            this._sortButton.focus();
+            this._sortButton.focus({ preventScroll: true });
         }
     }
 
@@ -1150,6 +1173,7 @@ export class MarkdownManager {
             status.appendChild(retryBtn);
         }
         this.fileListEl.appendChild(status);
+        this._positionSortMenu();
     }
 
     _renderFileList(files: MDFileEntry[], opts: { error?: string } = {}): void {
@@ -1161,7 +1185,9 @@ export class MarkdownManager {
                       .closest('.md-file-row')
                       ?.getAttribute('data-path') ?? null)
                 : null;
-        const keepSortFocus = activeEl === this._sortButton;
+        const restoreFocus =
+            activeEl?.tagName === 'BUTTON' &&
+            this.fileListEl.contains(activeEl);
 
         this.fileListEl.innerHTML = '';
         this.fileListEl.appendChild(this._renderToolbar());
@@ -1331,14 +1357,21 @@ export class MarkdownManager {
         this.fileListEl.appendChild(manageRow);
 
         this.fileListEl.scrollTop = previousScroll;
-        if (keepSortFocus && this._sortButton) {
-            this._sortButton.focus();
-        } else if (activePath) {
-            const row = Array.from(
-                this.fileListEl.querySelectorAll<HTMLElement>('.md-file-row'),
-            ).find((candidate) => candidate.dataset.path === activePath);
-            row?.querySelector<HTMLElement>('.md-file-item')?.focus();
+        if (restoreFocus && activeEl) {
+            const replacement = Array.from(
+                this.fileListEl.querySelectorAll<HTMLButtonElement>('button'),
+            ).find(
+                (button) =>
+                    button.id === activeEl.id &&
+                    button.className === activeEl.className &&
+                    button.title === activeEl.title &&
+                    (button
+                        .closest('.md-file-row')
+                        ?.getAttribute('data-path') ?? null) === activePath,
+            );
+            replacement?.focus({ preventScroll: true });
         }
+        this._positionSortMenu();
     }
 
     // _setModalTitle renders the modal title with a stylized papyrus-scroll
