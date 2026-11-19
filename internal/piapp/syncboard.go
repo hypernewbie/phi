@@ -426,6 +426,15 @@ func (b *Bridge) SetSyncboardTopicSubscriber(fn func(pibridge.SyncboardOwner, st
 	b.mu.Unlock()
 }
 
+// WithSyncboardTopicOwners pins native identities through a local admission
+// commit. The caller holds admission; commit must not call out or do I/O.
+func (b *Bridge) WithSyncboardTopicOwners(owners []pibridge.SyncboardOwner, epoch string, commit func([]pibridge.SyncboardOwner) error) error {
+	if b == nil || b.server == nil {
+		return pibridge.ErrTopicUnavailable
+	}
+	return b.server.WithSyncboardTopicOwners(owners, epoch, commit)
+}
+
 // SendSyncboardTopic delivers one immutable batch to a checked owner.
 func (b *Bridge) SendSyncboardTopic(push pibridge.SyncboardTopicPush) error {
 	if b == nil {
@@ -448,7 +457,8 @@ func (b *Bridge) handleSyncboardSubscribe(ctx context.Context, processID string,
 	if topic == "" || len(topic) > 256 || !utf8.ValidString(topic) || len(req.GetValueJson()) != 0 {
 		return refuse(pibridge.SyncboardReasonInvalidRequest, pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_INVALID, 400)
 	}
-	owner, seq, err := b.server.BindSyncboardTopic(processID, b.server.SyncboardTopicEpoch())
+	epoch := b.server.SyncboardTopicEpoch()
+	owner, seq, err := b.server.BindSyncboardTopic(processID, epoch)
 	if err != nil {
 		if errors.Is(err, pibridge.ErrTopicBacklogFull) {
 			return refuse(pibridge.SyncboardReasonCapacity, pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_CAPACITY, 503)
@@ -463,6 +473,8 @@ func (b *Bridge) handleSyncboardSubscribe(ctx context.Context, processID string,
 	}
 	if err := subscribe(owner, topic); err != nil {
 		switch {
+		case errors.Is(err, pibridge.ErrTopicUnavailable):
+			return refuse(pibridge.SyncboardReasonUnavailable, pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_UNSPECIFIED, 0)
 		case errors.Is(err, ErrSyncTopicInvalid):
 			return refuse(pibridge.SyncboardReasonInvalidRequest, pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_INVALID, 400)
 		case errors.Is(err, ErrSyncTopicTooLarge):
@@ -474,6 +486,6 @@ func (b *Bridge) handleSyncboardSubscribe(ctx context.Context, processID string,
 	body, _ := json.Marshal(map[string]string{"topic": topic})
 	return &pibridgepb.SyncboardResponse{
 		RequestId: req.GetRequestId(), Outcome: pibridgepb.SyncboardOutcome_SYNCBOARD_OUTCOME_HTTP_RESPONSE,
-		HttpStatus: 200, BodyJson: body, CoordinatorEpoch: b.server.SyncboardTopicEpoch(), TopicBindingSeq: seq,
+		HttpStatus: 200, BodyJson: body, CoordinatorEpoch: epoch, TopicBindingSeq: seq,
 	}
 }

@@ -3,6 +3,7 @@ package server
 import (
 	"time"
 
+	"github.com/hypernewbie/phi/internal/piapp"
 	"github.com/hypernewbie/phi/internal/pibridge"
 )
 
@@ -25,17 +26,21 @@ func (app *Server) wireSyncTopics() {
 		}
 		app.syncMu.Lock()
 		defer app.syncMu.Unlock()
-		err := app.syncTopics.subscribeLocked(syncTopicOwnerFromBridge(owner), topic)
-		switch {
-		case err == nil:
-			return nil
-		case err == errSyncTopicInvalid:
-			return errSyncTopicInvalid
-		case err == errSyncTopicTooLarge:
-			return errSyncTopicTooLarge
-		default:
-			return errSyncTopicCapacity
-		}
+		return app.bridge.WithSyncboardTopicOwners([]pibridge.SyncboardOwner{owner}, app.syncTopics.epoch, func(valid []pibridge.SyncboardOwner) error {
+			if len(valid) != 1 {
+				return pibridge.ErrTopicUnavailable
+			}
+			switch app.syncTopics.subscribeLocked(syncTopicOwnerFromBridge(owner), topic) {
+			case nil:
+				return nil
+			case errSyncTopicInvalid:
+				return piapp.ErrSyncTopicInvalid
+			case errSyncTopicTooLarge:
+				return piapp.ErrSyncTopicTooLarge
+			default:
+				return piapp.ErrSyncTopicCapacity
+			}
+		})
 	})
 	app.bridge.SetSyncboardTopicAckHandler(func(owner pibridge.SyncboardOwner, epoch string, seq uint64, batchID string) {
 		if app.syncTopicPeer != nil && app.syncTopicPeer.Ack(owner, epoch, seq, batchID) {
@@ -47,6 +52,40 @@ func (app *Server) wireSyncTopics() {
 		if ok {
 			app.pumpSyncTopics(time.Now())
 		}
+	})
+}
+
+// withSyncTopicOwnersLocked keeps every selected local identity current
+// through the board/topic commit. Stale owners are retired before capacity is
+// evaluated. Remote owners are ordered by cohort controls under syncMu.
+func (app *Server) withSyncTopicOwnersLocked(topic string, commit func() error) error {
+	if app.bridge == nil {
+		return commit()
+	}
+	var owners []pibridge.SyncboardOwner
+	for key := range app.syncTopics.byTopic[topic] {
+		owner := app.syncTopics.owners[key]
+		if owner != nil && !owner.remote {
+			owners = append(owners, pibridge.SyncboardOwner{
+				PaneID: owner.paneID, ProcessID: owner.processID, Generation: owner.generation,
+				RuntimeID: owner.runtimeID, SessionID: owner.sessionID,
+			})
+		}
+	}
+	if len(owners) == 0 {
+		return commit()
+	}
+	return app.bridge.WithSyncboardTopicOwners(owners, app.syncTopics.epoch, func(valid []pibridge.SyncboardOwner) error {
+		current := make(map[pibridge.SyncboardOwner]bool, len(valid))
+		for _, owner := range valid {
+			current[owner] = true
+		}
+		for _, owner := range owners {
+			if !current[owner] {
+				app.syncTopics.retireGenerationLocked(syncTopicOwnerFromBridge(owner))
+			}
+		}
+		return commit()
 	})
 }
 

@@ -208,29 +208,38 @@ func (app *Server) handleSyncMessages(w http.ResponseWriter, r *http.Request) {
 		}
 
 		app.syncMu.Lock()
-		now := time.Now()
-		admitted, err := app.syncTopics.admitPostLocked(req.Key, valStr, now)
+		var now time.Time
+		var admitted bool
+		var msg SyncMessage
+		err = app.withSyncTopicOwnersLocked(req.Key, func() error {
+			now = time.Now()
+			var admissionErr error
+			admitted, admissionErr = app.syncTopics.admitPostLocked(req.Key, valStr, now)
+			if admissionErr != nil {
+				return admissionErr
+			}
+			row := &SyncMessage{Key: req.Key, Value: valStr, CreatedAt: now, UpdatedAt: now}
+			if existing, exists := app.syncStore[req.Key]; exists {
+				row.CreatedAt = existing.CreatedAt
+			}
+			// Published rows are immutable: a GET may still encode a previously
+			// selected row after releasing syncMu.
+			app.syncStore[req.Key] = row
+			msg = *row
+			return nil
+		})
+		app.syncMu.Unlock()
 		if err != nil {
-			app.syncMu.Unlock()
 			switch {
 			case errors.Is(err, errSyncTopicTooLarge):
 				writeSyncboardAdmissionRefusal(w, http.StatusRequestEntityTooLarge, "too-large")
-			case errors.Is(err, errSyncTopicCapacity):
+			case errors.Is(err, errSyncTopicCapacity), errors.Is(err, pibridge.ErrTopicUnavailable):
 				writeSyncboardAdmissionRefusal(w, http.StatusServiceUnavailable, "capacity")
 			default:
 				writeSyncboardAdmissionRefusal(w, http.StatusBadRequest, "invalid")
 			}
 			return
 		}
-		row := &SyncMessage{Key: req.Key, Value: valStr, CreatedAt: now, UpdatedAt: now}
-		if existing, exists := app.syncStore[req.Key]; exists {
-			row.CreatedAt = existing.CreatedAt
-		}
-		// Published rows are immutable: a GET may still encode a previously
-		// selected row after releasing syncMu.
-		app.syncStore[req.Key] = row
-		msg := *row
-		app.syncMu.Unlock()
 		app.triggerSaveSyncStore()
 		if admitted {
 			app.pumpSyncTopics(now)

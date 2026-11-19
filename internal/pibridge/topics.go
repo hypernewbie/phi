@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"sort"
 
 	pibridgepb "github.com/hypernewbie/phi/internal/pibridge/pb"
 )
@@ -67,15 +68,13 @@ func (s *Server) EnableSyncboardTopics(enabled bool) {
 }
 
 // SetSyncboardTopicAckHandler installs the host callback for checked topic
-// acknowledgements. It runs outside every bridge lock and must not call back
-// into the Server.
+// acknowledgements. It runs after all bridge locks are released.
 func (s *Server) SetSyncboardTopicAckHandler(fn func(SyncboardOwner, string, uint64, string)) {
 	s.onTopicAck = fn
 }
 
 // SetSyncboardTopicRetireHandler installs the native generation fence
-// callback. It runs under the lease lock and must only enqueue work; it must
-// not call back into the bridge.
+// callback. It runs after all bridge locks are released.
 func (s *Server) SetSyncboardTopicRetireHandler(fn func(SyncboardTopicRetirement)) {
 	s.onTopicRetired = fn
 }
@@ -86,16 +85,23 @@ func (s *Server) SetSyncboardTopicEpoch(epoch string) {
 	s.topicEpochMu.Lock()
 	previous := s.syncboardTopicEpoch
 	s.syncboardTopicEpoch = epoch
+	var retirements []SyncboardTopicRetirement
 	if previous != "" && previous != epoch {
-		s.fenceSyncboardTopicEpoch(previous, "coordinator-replaced", false)
+		retirements = s.fenceSyncboardTopicEpoch(previous, "coordinator-replaced", false)
 	}
 	s.topicEpochMu.Unlock()
+	for _, retirement := range retirements {
+		if s.onTopicRetired != nil {
+			s.onTopicRetired(retirement)
+		}
+	}
 }
 
 // fenceSyncboardTopicEpoch retires every binding created under a replaced
 // coordinator epoch. The cumulative marker is retained for replay. A
 // permanent fence also blocks the current native generation from rebinding.
-func (s *Server) fenceSyncboardTopicEpoch(epoch, reason string, permanent bool) {
+func (s *Server) fenceSyncboardTopicEpoch(epoch, reason string, permanent bool) []SyncboardTopicRetirement {
+	var retirements []SyncboardTopicRetirement
 	s.reg.mu.Lock()
 	leases := make([]*lease, 0, len(s.reg.byProcess))
 	seen := make(map[*lease]struct{})
@@ -115,14 +121,15 @@ func (s *Server) fenceSyncboardTopicEpoch(epoch, reason string, permanent bool) 
 		}
 		retirement := l.fenceTopicGeneration(reason, permanent)
 		p := l.peer
-		if retirement != nil && s.onTopicRetired != nil {
-			s.onTopicRetired(*retirement)
+		if retirement != nil {
+			retirements = append(retirements, *retirement)
 		}
 		l.mu.Unlock()
 		if p != nil {
 			l.flushPendingTopics(p)
 		}
 	}
+	return retirements
 }
 
 // RetireSyncboardTopicBindings fences all bindings under the current epoch.
@@ -131,10 +138,16 @@ func (s *Server) fenceSyncboardTopicEpoch(epoch, reason string, permanent bool) 
 func (s *Server) RetireSyncboardTopicBindings(reason string) {
 	s.topicEpochMu.Lock()
 	epoch := s.syncboardTopicEpoch
+	var retirements []SyncboardTopicRetirement
 	if epoch != "" {
-		s.fenceSyncboardTopicEpoch(epoch, reason, true)
+		retirements = s.fenceSyncboardTopicEpoch(epoch, reason, true)
 	}
 	s.topicEpochMu.Unlock()
+	for _, retirement := range retirements {
+		if s.onTopicRetired != nil {
+			s.onTopicRetired(retirement)
+		}
+	}
 }
 
 // SyncboardTopicEpoch returns the current coordinator RAM instance identity.
@@ -157,9 +170,9 @@ func (s *Server) BindSyncboardTopic(processID, epoch string) (SyncboardOwner, ui
 		return SyncboardOwner{}, 0, ErrTopicUnavailable
 	}
 	s.reg.mu.Lock()
+	defer s.reg.mu.Unlock()
 	l := s.reg.byProcess[processID]
-	s.reg.mu.Unlock()
-	if l == nil {
+	if l == nil || s.reg.byPane[l.paneID] != l {
 		return SyncboardOwner{}, 0, ErrTopicUnavailable
 	}
 	l.mu.Lock()
@@ -186,6 +199,55 @@ func (s *Server) BindSyncboardTopic(processID, epoch string) (SyncboardOwner, ui
 		return SyncboardOwner{}, 0, ErrTopicUnavailable
 	}
 	return owner, l.topicBinding, nil
+}
+
+// WithSyncboardTopicOwners pins the current registry mappings and native
+// identities through an admission commit. Only still-bound owners are passed
+// to commit; a disconnected same owner remains eligible. The caller holds its
+// admission lock. commit must not reenter the bridge, perform I/O, or call out.
+func (s *Server) WithSyncboardTopicOwners(owners []SyncboardOwner, epoch string, commit func([]SyncboardOwner) error) error {
+	if s == nil || epoch == "" {
+		return ErrTopicUnavailable
+	}
+	s.topicEpochMu.RLock()
+	defer s.topicEpochMu.RUnlock()
+	if s.syncboardTopicEpoch != epoch {
+		return ErrTopicUnavailable
+	}
+	s.reg.mu.Lock()
+	defer s.reg.mu.Unlock()
+	leases := make([]*lease, 0, len(owners))
+	seen := make(map[*lease]bool, len(owners))
+	for _, owner := range owners {
+		l := s.reg.byProcess[owner.ProcessID]
+		if l != nil && s.reg.byPane[owner.PaneID] == l && !seen[l] {
+			seen[l] = true
+			leases = append(leases, l)
+		}
+	}
+	sort.Slice(leases, func(i, j int) bool { return leases[i].processID < leases[j].processID })
+	for _, l := range leases {
+		l.mu.Lock()
+	}
+	defer func() {
+		for i := len(leases) - 1; i >= 0; i-- {
+			leases[i].mu.Unlock()
+		}
+	}()
+	valid := make([]SyncboardOwner, 0, len(owners))
+	for _, owner := range owners {
+		l := s.reg.byProcess[owner.ProcessID]
+		if l == nil || !seen[l] || s.reg.byPane[owner.PaneID] != l {
+			continue
+		}
+		if l.state == leaseLive && l.paneID == owner.PaneID && l.maxGen == owner.Generation &&
+			l.runtimeID == owner.RuntimeID && l.sessionID == owner.SessionID &&
+			slices.Contains(l.caps, CapabilitySyncboardTopics) && l.topicEpoch == epoch &&
+			l.topicBinding > l.topicRetiredThrough && l.topicWithdrawnGen != l.maxGen {
+			valid = append(valid, owner)
+		}
+	}
+	return commit(valid)
 }
 
 // SendSyncboardTopic retains one immutable batch for the current runtime.

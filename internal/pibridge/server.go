@@ -218,7 +218,9 @@ func (s *Server) Complete(processID string) {
 
 // Revoke removes a lease and closes its peer.
 func (s *Server) Revoke(processID string) {
-	s.reg.revoke(processID)
+	if retirement := s.reg.revoke(processID); retirement != nil && s.onTopicRetired != nil {
+		s.onTopicRetired(*retirement)
+	}
 }
 
 // Stats reports active streams and leases for tests.
@@ -562,6 +564,10 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 	caps := negotiateCapabilities(hello.GetCapabilities(), s.syncboardHandler != nil, s.syncboardPush, s.syncboardTopics)
 
 	l.mu.Lock()
+	if l.state == leaseRevoked {
+		l.mu.Unlock()
+		return status.Error(codes.Canceled, "lease revoked")
+	}
 	gen := first.GetRuntimeGeneration()
 	if gen < l.maxGen {
 		l.mu.Unlock()
@@ -583,8 +589,9 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 			return status.Error(codes.InvalidArgument, err.Error())
 		}
 	}
+	var retirement *SyncboardTopicRetirement
 	if !sameGen {
-		retirement := l.fenceTopicGeneration("generation-replaced", false)
+		retirement = l.fenceTopicGeneration("generation-replaced", false)
 		l.maxGen = gen
 		l.runtimeID = hello.GetRuntimeId()
 		l.sessionID = hello.GetSessionId()
@@ -595,18 +602,13 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 		// reports through the fresh authoritative readiness.
 		l.compact = nil
 		l.attachment = nil
-		if retirement != nil && s.onTopicRetired != nil {
-			s.onTopicRetired(*retirement)
-		}
 		// A new generation never clears an unresolved Reload:
 		// the native callback outlives its runtime. The fresh
 		// Hello readiness below retires it on release evidence.
 	} else if slices.Contains(l.caps, CapabilitySyncboardTopics) && !caps[CapabilitySyncboardTopics] {
 		// A same-generation withdrawal is permanent for this runtime. A
 		// reconnect that restores the capability cannot revive bindings.
-		if retirement := l.fenceTopicGeneration("capability-withdrawn", true); retirement != nil && s.onTopicRetired != nil {
-			s.onTopicRetired(*retirement)
-		}
+		retirement = l.fenceTopicGeneration("capability-withdrawn", true)
 	}
 	type pendingSettlement struct {
 		runID   uint64
@@ -637,10 +639,6 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 	} else if !sameGen {
 		l.lastState = nil
 	}
-	if l.state == leaseRevoked {
-		l.mu.Unlock()
-		return status.Error(codes.Canceled, "lease revoked")
-	}
 	oldPeer := l.peer
 	p := newPeer(gen, hello.GetSessionId(), stream)
 	p.onWritable = func() { l.flushPendingPushes(p); l.flushPendingTopics(p) }
@@ -665,6 +663,9 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 	// re-reads the lease.
 	publishCaps := append([]string{}, l.caps...)
 	l.mu.Unlock()
+	if retirement != nil && s.onTopicRetired != nil {
+		s.onTopicRetired(*retirement)
+	}
 
 	if oldPeer != nil {
 		oldPeer.closeWith(codes.Canceled, "replaced by reconnect")

@@ -152,20 +152,19 @@ func (r *registry) complete(processID string) {
 }
 
 // revoke removes a lease and closes its active peer. Idempotent.
-func (r *registry) revoke(processID string) {
+func (r *registry) revoke(processID string) *SyncboardTopicRetirement {
 	r.mu.Lock()
 	l, ok := r.byProcess[processID]
 	if !ok {
 		r.mu.Unlock()
-		return
+		return nil
 	}
+	l.mu.Lock()
 	delete(r.byProcess, processID)
 	if cur, paneOK := r.byPane[l.paneID]; paneOK && cur == l {
 		delete(r.byPane, l.paneID)
 	}
-	r.mu.Unlock()
-
-	l.mu.Lock()
+	retirement := l.fenceTopicGeneration("process-revoked", true)
 	l.state = leaseRevoked
 	peer := l.peer
 	l.peer = nil
@@ -174,10 +173,12 @@ func (r *registry) revoke(processID string) {
 	l.reload = nil
 	l.attachment = nil
 	l.mu.Unlock()
+	r.mu.Unlock()
 
 	if peer != nil {
 		peer.closeWith(codes.Canceled, "lease revoked")
 	}
+	return retirement
 }
 
 // lookupByProcess returns the lease for a process identity.
