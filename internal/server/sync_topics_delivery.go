@@ -14,8 +14,6 @@ func (app *Server) wireSyncTopics() {
 	if app.bridge == nil || app.syncTopics == nil {
 		return
 	}
-	app.startSyncTopicsPeer()
-	go app.peerRegistry().sweepLoop(app)
 	app.bridge.SetSyncboardTopicEpoch(app.syncTopics.epoch)
 	app.bridge.SetSyncboardTopicRetireHandler(func(retirement pibridge.SyncboardTopicRetirement) {
 		app.retireSyncTopicOwner(retirement)
@@ -53,6 +51,9 @@ func (app *Server) wireSyncTopics() {
 			app.pumpSyncTopics(time.Now())
 		}
 	})
+	// Install the bridge epoch and callbacks before a follower can connect.
+	app.startSyncTopicsPeer()
+	go app.peerRegistry().sweepLoop(app)
 }
 
 // withSyncTopicOwnersLocked keeps every selected local identity current

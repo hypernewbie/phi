@@ -32,9 +32,9 @@ type syncTopicPeerPending struct {
 	owner       syncTopicWireOwn
 	topic       string
 	fingerprint string
-	done        chan error
-	stop        chan struct{}
-	stopOnce    sync.Once
+	done        chan struct{}
+	result      error
+	retired     bool
 }
 
 type syncTopicPeerClient struct {
@@ -374,18 +374,13 @@ func (c *syncTopicPeerClient) handleResult(frame *syncTopicPeerFrame) {
 		c.writer.confirmControl(frame.Control)
 	}
 	c.pending = nil
-	pending.stopOnce.Do(func() { close(pending.stop) })
-	if frame.Result == "ok" && pending.action == "register" {
+	if frame.Result == "ok" && pending.action == "register" && !pending.retired {
 		c.intents[pending.ownerKey()] = syncTopicPeerIntent{owner: pending.owner, topic: pending.topic}
 	}
-	var err error
-	if frame.Result != "ok" {
-		err = errSyncTopicPeerNotReady
+	if frame.Result != "ok" || pending.retired {
+		pending.result = errSyncTopicPeerNotReady
 	}
-	select {
-	case pending.done <- err:
-	default:
-	}
+	close(pending.done)
 	c.pumpControlLocked()
 	c.mu.Unlock()
 }
@@ -397,71 +392,89 @@ func (p *syncTopicPeerPending) ownerKey() string {
 func (c *syncTopicPeerClient) Register(owner pibridge.SyncboardOwner, topic string) error {
 	wire := *wireOwnerFromPibridge(owner)
 	c.mu.Lock()
-	if c.blocked || !c.active || !c.ready || c.terminal {
-		c.mu.Unlock()
-		return errSyncTopicPeerNotReady
-	}
-	key := wire.Pane + "\x00" + wire.Process + "\x00" + topic
-	if intent, ok := c.intents[key]; ok {
-		c.mu.Unlock()
-		if intent.owner != wire {
+	var pending *syncTopicPeerPending
+	var fresh, exhausted bool
+	prepare := func() error {
+		if c.blocked || !c.active || !c.ready || c.terminal {
 			return errSyncTopicPeerNotReady
 		}
+		key := wire.Pane + "\x00" + wire.Process + "\x00" + topic
+		if intent, ok := c.intents[key]; ok {
+			if intent.owner != wire {
+				return errSyncTopicPeerNotReady
+			}
+			return nil
+		}
+		if len(c.intents) >= maxSyncTopicPeerIntents || len(c.dirtyRetire) > 0 {
+			return errSyncTopicPeerNotReady
+		}
+		if c.pending != nil {
+			if c.pending.action != "register" || c.pending.ownerKey() != key || c.pending.owner != wire {
+				return errSyncTopicPeerNotReady
+			}
+			pending = c.pending
+			return nil
+		}
+		if c.control >= math.MaxUint64-1 {
+			exhausted = true
+			return errSyncTopicPeerNotReady
+		}
+		pending = &syncTopicPeerPending{
+			seq: c.control + 1, action: "register", owner: wire, topic: topic,
+			done: make(chan struct{}),
+		}
+		pending.fingerprint = peerControlFingerprint(&syncTopicPeerFrame{
+			Action: pending.action, Owner: &pending.owner, Topic: pending.topic,
+		})
+		c.pending = pending
+		c.readySent = false
+		fresh = true
 		return nil
 	}
-	if len(c.intents) >= maxSyncTopicPeerIntents {
-		c.mu.Unlock()
-		return errSyncTopicPeerNotReady
+	var err error
+	if c.app.bridge == nil {
+		err = prepare()
+	} else {
+		// Pin the native binding through intent selection or control staging.
+		// Enqueue frames only after the bridge releases its admission locks.
+		err = c.app.bridge.WithSyncboardTopicOwners([]pibridge.SyncboardOwner{owner}, c.epoch, func(valid []pibridge.SyncboardOwner) error {
+			if len(valid) != 1 {
+				return pibridge.ErrTopicUnavailable
+			}
+			return prepare()
+		})
 	}
-	if len(c.dirtyRetire) > 0 {
-		c.mu.Unlock()
-		return errSyncTopicPeerNotReady
-	}
-	if c.pending != nil {
-		if c.pending.action == "register" && c.pending.ownerKey() == key && c.pending.owner == wire {
-			done := c.pending.done
-			c.mu.Unlock()
-			return waitPeerResult(done)
-		}
-		c.mu.Unlock()
-		return errSyncTopicPeerNotReady
-	}
-	if c.control >= math.MaxUint64-1 {
+	if exhausted {
 		c.exhaustControlLocked()
+	}
+	if err != nil || pending == nil {
 		c.mu.Unlock()
-		return errSyncTopicPeerNotReady
+		return err
 	}
-	pending := &syncTopicPeerPending{
-		seq: c.control + 1, action: "register", owner: wire, topic: topic,
-		done: make(chan error, 1), stop: make(chan struct{}),
+	if !fresh {
+		c.mu.Unlock()
+		return waitPeerResult(pending)
 	}
-	pending.fingerprint = peerControlFingerprint(&syncTopicPeerFrame{
-		Action: pending.action, Owner: &pending.owner, Topic: pending.topic,
-	})
-	c.pending = pending
-	c.readySent = false
-	err := c.writeLocked(syncTopicPeerFrame{
+	err = c.writeLocked(syncTopicPeerFrame{
 		Type: "control", Epoch: c.epoch, Fence: c.fence, Stream: c.stream,
 		Control: canonicalCounter(pending.seq), Action: pending.action,
 		Owner: &pending.owner, Topic: pending.topic,
 	})
+	if err != nil {
+		c.pending = nil
+	}
 	c.mu.Unlock()
 	if err != nil {
-		c.mu.Lock()
-		if c.pending == pending {
-			c.pending = nil
-		}
-		c.mu.Unlock()
 		return errSyncTopicPeerNotReady
 	}
 	go c.retryPending(pending)
-	return waitPeerResult(pending.done)
+	return waitPeerResult(pending)
 }
 
-func waitPeerResult(done <-chan error) error {
+func waitPeerResult(pending *syncTopicPeerPending) error {
 	select {
-	case err := <-done:
-		return err
+	case <-pending.done:
+		return pending.result
 	case <-time.After(syncTopicsPeerControlTimeout):
 		return errSyncTopicPeerNotReady
 	}
@@ -471,7 +484,7 @@ func (c *syncTopicPeerClient) retryPending(pending *syncTopicPeerPending) {
 	timer := time.NewTimer(syncTopicsPeerControlTimeout)
 	defer timer.Stop()
 	select {
-	case <-pending.stop:
+	case <-pending.done:
 		return
 	case <-timer.C:
 	}
@@ -490,7 +503,7 @@ func (c *syncTopicPeerClient) retryPending(pending *syncTopicPeerPending) {
 		})
 		c.mu.Unlock()
 		select {
-		case <-pending.stop:
+		case <-pending.done:
 			return
 		case <-ticker.C:
 		}
@@ -504,6 +517,9 @@ func (c *syncTopicPeerClient) RetireOwner(owner pibridge.SyncboardOwner, epoch s
 	defer c.mu.Unlock()
 	if c.epoch == "" || epoch != c.epoch || c.terminal {
 		return
+	}
+	if c.pending != nil && c.pending.action == "register" && c.pending.owner == wire {
+		c.pending.retired = true
 	}
 	for intentKey, intent := range c.intents {
 		if intent.owner == wire {
@@ -543,7 +559,7 @@ func (c *syncTopicPeerClient) pumpControlLocked() {
 	}
 	pending := &syncTopicPeerPending{
 		seq: c.control + 1, action: "retire_owner", owner: item.owner,
-		done: make(chan error, 1), stop: make(chan struct{}),
+		done: make(chan struct{}),
 	}
 	c.pending = pending
 	c.readySent = false
