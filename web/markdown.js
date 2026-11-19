@@ -342,7 +342,7 @@ export class MarkdownManager {
         window.addEventListener('online', this._onOnline);
         document.addEventListener('visibilitychange', this._onVisibility);
         window.addEventListener('resize', this._onSortMenuLayout);
-        this.fileListEl.addEventListener('scroll', this._onSortMenuLayout);
+        this.fileListEl?.addEventListener('scroll', this._onSortMenuLayout);
     }
     // refreshFiles re-scans the markdown dirs for the active cwd.
     //   force  (default true): bypass the panel-visibility gate.
@@ -916,7 +916,7 @@ export class MarkdownManager {
                 items.find((item) => item.dataset.sort === this.sortMode) ??
                     items[0];
         }
-        target.focus();
+        target.focus({ preventScroll: true });
     }
     _positionSortMenu() {
         const anchor = this._sortButton;
@@ -963,19 +963,23 @@ export class MarkdownManager {
         const index = active ? items.indexOf(active) : -1;
         if (e.key === 'ArrowDown') {
             e.preventDefault();
-            items[(index + 1 + items.length) % items.length].focus();
+            items[(index + 1 + items.length) % items.length].focus({
+                preventScroll: true,
+            });
         }
         else if (e.key === 'ArrowUp') {
             e.preventDefault();
-            items[(index - 1 + items.length) % items.length].focus();
+            items[(index - 1 + items.length) % items.length].focus({
+                preventScroll: true,
+            });
         }
         else if (e.key === 'Home') {
             e.preventDefault();
-            items[0].focus();
+            items[0].focus({ preventScroll: true });
         }
         else if (e.key === 'End') {
             e.preventDefault();
-            items[items.length - 1].focus();
+            items[items.length - 1].focus({ preventScroll: true });
         }
         else if (e.key === 'Escape') {
             e.preventDefault();

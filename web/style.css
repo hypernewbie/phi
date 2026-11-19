@@ -7708,7 +7708,8 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     border-color: var(--accent);
 }
 
-@media (max-width: 768px) {
+@media (max-width: 768px),
+    (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
     .md-sort-btn {
         min-width: 40px;
         min-height: 40px;
