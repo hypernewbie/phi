@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/hypernewbie/phi/internal/pibridge"
 	pibridgepb "github.com/hypernewbie/phi/internal/pibridge/pb"
@@ -25,6 +26,9 @@ func (b *Bridge) handleSyncboard(ctx context.Context, processID string, req *pib
 	// server span, so the trace shows handler time separately from HTTP routing.
 	ctx, endSpan := obs.Span(ctx, "syncboard.handle", "op", req.GetOperation().String())
 	defer endSpan(nil)
+	if req.GetOperation() == pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_SUBSCRIBE {
+		return b.handleSyncboardSubscribe(ctx, processID, req)
+	}
 	refuse := func(reason string) *pibridgepb.SyncboardResponse {
 		return &pibridgepb.SyncboardResponse{Outcome: pibridgepb.SyncboardOutcome_SYNCBOARD_OUTCOME_NOT_SENT, Reason: reason}
 	}
@@ -187,7 +191,14 @@ func parseSyncboardBase(raw string) (*url.URL, error) {
 	return u, nil
 }
 
-var errInvalidSyncboardConfig = errors.New("invalid syncboard config")
+var (
+	errInvalidSyncboardConfig = errors.New("invalid syncboard config")
+	// ErrSyncTopicInvalid and ErrSyncTopicTooLarge let the server engine
+	// report definite local refusals without leaking its internals.
+	ErrSyncTopicInvalid  = errors.New("sync topic invalid")
+	ErrSyncTopicTooLarge = errors.New("sync topic too large")
+	ErrSyncTopicCapacity = errors.New("sync topic capacity")
+)
 
 func syncboardURL(base *url.URL) (*url.URL, error) {
 	u := *base
@@ -378,4 +389,91 @@ func validSyncboardMessage(raw json.RawMessage, expectedKey string) bool {
 	_, createdErr := time.Parse(time.RFC3339Nano, created)
 	_, updatedErr := time.Parse(time.RFC3339Nano, updated)
 	return createdErr == nil && updatedErr == nil
+}
+
+// SetSyncboardTopicEpoch publishes this coordinator RAM instance identity.
+func (b *Bridge) SetSyncboardTopicEpoch(epoch string) {
+	if b != nil && b.server != nil {
+		b.server.SetSyncboardTopicEpoch(epoch)
+	}
+}
+
+// SetSyncboardTopicAckHandler installs the checked host-ACK callback.
+func (b *Bridge) SetSyncboardTopicAckHandler(fn func(pibridge.SyncboardOwner, string, uint64, string)) {
+	if b != nil && b.server != nil {
+		b.server.SetSyncboardTopicAckHandler(fn)
+	}
+}
+
+// RetireSyncboardTopicBindings fences all current native topic bindings.
+func (b *Bridge) RetireSyncboardTopicBindings(reason string) {
+	if b != nil && b.server != nil {
+		b.server.RetireSyncboardTopicBindings(reason)
+	}
+}
+
+// SetSyncboardTopicRetireHandler installs the native generation fence callback.
+func (b *Bridge) SetSyncboardTopicRetireHandler(fn func(pibridge.SyncboardTopicRetirement)) {
+	if b != nil && b.server != nil {
+		b.server.SetSyncboardTopicRetireHandler(fn)
+	}
+}
+
+// SetSyncboardTopicSubscriber installs the local subscription registrar.
+func (b *Bridge) SetSyncboardTopicSubscriber(fn func(pibridge.SyncboardOwner, string) error) {
+	b.mu.Lock()
+	b.subscribeSyncboardTopic = fn
+	b.mu.Unlock()
+}
+
+// SendSyncboardTopic delivers one immutable batch to a checked owner.
+func (b *Bridge) SendSyncboardTopic(push pibridge.SyncboardTopicPush) error {
+	if b == nil {
+		return pibridge.ErrTopicUnavailable
+	}
+	return b.server.SendSyncboardTopic(push)
+}
+
+func (b *Bridge) handleSyncboardSubscribe(ctx context.Context, processID string, req *pibridgepb.SyncboardRequest) *pibridgepb.SyncboardResponse {
+	refuse := func(reason string, refusal pibridgepb.SyncboardRefusal, status uint32) *pibridgepb.SyncboardResponse {
+		return &pibridgepb.SyncboardResponse{
+			RequestId: req.GetRequestId(), Outcome: pibridgepb.SyncboardOutcome_SYNCBOARD_OUTCOME_NOT_SENT,
+			HttpStatus: status, Reason: reason, Refusal: refusal,
+		}
+	}
+	if ctx.Err() != nil {
+		return refuse(pibridge.SyncboardReasonCancelled, pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_UNSPECIFIED, 0)
+	}
+	topic := strings.TrimSpace(req.GetKey())
+	if topic == "" || len(topic) > 256 || !utf8.ValidString(topic) || len(req.GetValueJson()) != 0 {
+		return refuse(pibridge.SyncboardReasonInvalidRequest, pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_INVALID, 400)
+	}
+	owner, seq, err := b.server.BindSyncboardTopic(processID, b.server.SyncboardTopicEpoch())
+	if err != nil {
+		if errors.Is(err, pibridge.ErrTopicBacklogFull) {
+			return refuse(pibridge.SyncboardReasonCapacity, pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_CAPACITY, 503)
+		}
+		return refuse(pibridge.SyncboardReasonUnavailable, pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_UNSPECIFIED, 0)
+	}
+	b.mu.Lock()
+	subscribe := b.subscribeSyncboardTopic
+	b.mu.Unlock()
+	if subscribe == nil {
+		return refuse(pibridge.SyncboardReasonUnavailable, pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_UNSPECIFIED, 0)
+	}
+	if err := subscribe(owner, topic); err != nil {
+		switch {
+		case errors.Is(err, ErrSyncTopicInvalid):
+			return refuse(pibridge.SyncboardReasonInvalidRequest, pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_INVALID, 400)
+		case errors.Is(err, ErrSyncTopicTooLarge):
+			return refuse(pibridge.SyncboardReasonTooLarge, pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_TOO_LARGE, 413)
+		default:
+			return refuse(pibridge.SyncboardReasonCapacity, pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_CAPACITY, 503)
+		}
+	}
+	body, _ := json.Marshal(map[string]string{"topic": topic})
+	return &pibridgepb.SyncboardResponse{
+		RequestId: req.GetRequestId(), Outcome: pibridgepb.SyncboardOutcome_SYNCBOARD_OUTCOME_HTTP_RESPONSE,
+		HttpStatus: 200, BodyJson: body, CoordinatorEpoch: b.server.SyncboardTopicEpoch(), TopicBindingSeq: seq,
+	}
 }

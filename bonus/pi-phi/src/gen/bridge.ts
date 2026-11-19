@@ -111,6 +111,7 @@ export enum SyncboardOperation {
   SYNCBOARD_OPERATION_GET = 2,
   SYNCBOARD_OPERATION_UPSERT = 3,
   SYNCBOARD_OPERATION_DELETE = 4,
+  SYNCBOARD_OPERATION_SUBSCRIBE = 5,
   UNRECOGNIZED = -1,
 }
 
@@ -123,6 +124,15 @@ export enum SyncboardOutcome {
   SYNCBOARD_OUTCOME_HTTP_RESPONSE = 1,
   SYNCBOARD_OUTCOME_NOT_SENT = 2,
   SYNCBOARD_OUTCOME_UNKNOWN = 3,
+  UNRECOGNIZED = -1,
+}
+
+/** SyncboardRefusal is a typed, bounded refusal for topic operations. */
+export enum SyncboardRefusal {
+  SYNCBOARD_REFUSAL_UNSPECIFIED = 0,
+  SYNCBOARD_REFUSAL_INVALID = 1,
+  SYNCBOARD_REFUSAL_TOO_LARGE = 2,
+  SYNCBOARD_REFUSAL_CAPACITY = 3,
   UNRECOGNIZED = -1,
 }
 
@@ -201,6 +211,7 @@ export interface PhiToPi {
     | { $case: "transcriptSearchRequest"; value: TranscriptSearchRequest }
     | { $case: "syncboardNotification"; value: SyncboardNotification }
     | { $case: "terminalRefreshRequest"; value: TerminalRefreshRequest }
+    | { $case: "syncboardTopicRetired"; value: SyncboardTopicRetired }
     | undefined;
 }
 
@@ -730,6 +741,9 @@ export interface SyncboardResponse {
   httpStatus: number;
   bodyJson: Buffer;
   reason: string;
+  coordinatorEpoch: string;
+  refusal: SyncboardRefusal;
+  topicBindingSeq: bigint;
 }
 
 /**
@@ -746,6 +760,8 @@ export interface SyncboardNotification {
   value: Buffer;
   updatedAtUnixMs: bigint;
   messageId: string;
+  topic: string;
+  coordinatorEpoch: string;
 }
 
 /**
@@ -756,6 +772,17 @@ export interface SyncboardNotification {
 export interface SyncboardPushAck {
   seq: bigint;
   messageId: string;
+  coordinatorEpoch: string;
+}
+
+/**
+ * SyncboardTopicRetired retires every topic binding through a cumulative
+ * watermark. It is retained and replayed until the runtime applies it.
+ */
+export interface SyncboardTopicRetired {
+  retiredEpoch: string;
+  reason: string;
+  throughBindingSeq: bigint;
 }
 
 /**
@@ -1311,6 +1338,9 @@ export const PhiToPi: MessageFns<PhiToPi> = {
       case "terminalRefreshRequest":
         TerminalRefreshRequest.encode(message.payload.value, writer.uint32(226).fork()).join();
         break;
+      case "syncboardTopicRetired":
+        SyncboardTopicRetired.encode(message.payload.value, writer.uint32(234).fork()).join();
+        break;
     }
     return writer;
   },
@@ -1517,6 +1547,17 @@ export const PhiToPi: MessageFns<PhiToPi> = {
             };
             continue;
           }
+          case 29: {
+            if (tag !== 234) {
+              break;
+            }
+
+            message.payload = {
+              $case: "syncboardTopicRetired",
+              value: SyncboardTopicRetired.decode(reader, reader.uint32()),
+            };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1660,6 +1701,15 @@ export const PhiToPi: MessageFns<PhiToPi> = {
           message.payload = {
             $case: "terminalRefreshRequest",
             value: TerminalRefreshRequest.fromPartial(object.payload.value),
+          };
+        }
+        break;
+      }
+      case "syncboardTopicRetired": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = {
+            $case: "syncboardTopicRetired",
+            value: SyncboardTopicRetired.fromPartial(object.payload.value),
           };
         }
         break;
@@ -5076,7 +5126,16 @@ export const SyncboardRequest: MessageFns<SyncboardRequest> = {
 };
 
 function createBaseSyncboardResponse(): SyncboardResponse {
-  return { requestId: "", outcome: 0, httpStatus: 0, bodyJson: Buffer.alloc(0), reason: "" };
+  return {
+    requestId: "",
+    outcome: 0,
+    httpStatus: 0,
+    bodyJson: Buffer.alloc(0),
+    reason: "",
+    coordinatorEpoch: "",
+    refusal: 0,
+    topicBindingSeq: 0n,
+  };
 }
 
 export const SyncboardResponse: MessageFns<SyncboardResponse> = {
@@ -5095,6 +5154,18 @@ export const SyncboardResponse: MessageFns<SyncboardResponse> = {
     }
     if (message.reason !== "") {
       writer.uint32(42).string(message.reason);
+    }
+    if (message.coordinatorEpoch !== "") {
+      writer.uint32(50).string(message.coordinatorEpoch);
+    }
+    if (message.refusal !== 0) {
+      writer.uint32(56).int32(message.refusal);
+    }
+    if (message.topicBindingSeq !== 0n) {
+      if (BigInt.asUintN(64, message.topicBindingSeq) !== message.topicBindingSeq) {
+        throw new globalThis.Error("value provided for field message.topicBindingSeq of type uint64 too large");
+      }
+      writer.uint32(64).uint64(message.topicBindingSeq);
     }
     return writer;
   },
@@ -5152,6 +5223,30 @@ export const SyncboardResponse: MessageFns<SyncboardResponse> = {
             message.reason = reader.string();
             continue;
           }
+          case 6: {
+            if (tag !== 50) {
+              break;
+            }
+
+            message.coordinatorEpoch = reader.string();
+            continue;
+          }
+          case 7: {
+            if (tag !== 56) {
+              break;
+            }
+
+            message.refusal = reader.int32() as any;
+            continue;
+          }
+          case 8: {
+            if (tag !== 64) {
+              break;
+            }
+
+            message.topicBindingSeq = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -5174,12 +5269,26 @@ export const SyncboardResponse: MessageFns<SyncboardResponse> = {
     message.httpStatus = object.httpStatus ?? 0;
     message.bodyJson = object.bodyJson ?? Buffer.alloc(0);
     message.reason = object.reason ?? "";
+    message.coordinatorEpoch = object.coordinatorEpoch ?? "";
+    message.refusal = object.refusal ?? 0;
+    message.topicBindingSeq = (object.topicBindingSeq !== undefined && object.topicBindingSeq !== null)
+      ? BigInt(object.topicBindingSeq)
+      : 0n;
     return message;
   },
 };
 
 function createBaseSyncboardNotification(): SyncboardNotification {
-  return { seq: 0n, sender: "", recipient: "", value: Buffer.alloc(0), updatedAtUnixMs: 0n, messageId: "" };
+  return {
+    seq: 0n,
+    sender: "",
+    recipient: "",
+    value: Buffer.alloc(0),
+    updatedAtUnixMs: 0n,
+    messageId: "",
+    topic: "",
+    coordinatorEpoch: "",
+  };
 }
 
 export const SyncboardNotification: MessageFns<SyncboardNotification> = {
@@ -5207,6 +5316,12 @@ export const SyncboardNotification: MessageFns<SyncboardNotification> = {
     }
     if (message.messageId !== "") {
       writer.uint32(50).string(message.messageId);
+    }
+    if (message.topic !== "") {
+      writer.uint32(58).string(message.topic);
+    }
+    if (message.coordinatorEpoch !== "") {
+      writer.uint32(66).string(message.coordinatorEpoch);
     }
     return writer;
   },
@@ -5272,6 +5387,22 @@ export const SyncboardNotification: MessageFns<SyncboardNotification> = {
             message.messageId = reader.string();
             continue;
           }
+          case 7: {
+            if (tag !== 58) {
+              break;
+            }
+
+            message.topic = reader.string();
+            continue;
+          }
+          case 8: {
+            if (tag !== 66) {
+              break;
+            }
+
+            message.coordinatorEpoch = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -5297,12 +5428,14 @@ export const SyncboardNotification: MessageFns<SyncboardNotification> = {
       ? BigInt(object.updatedAtUnixMs)
       : 0n;
     message.messageId = object.messageId ?? "";
+    message.topic = object.topic ?? "";
+    message.coordinatorEpoch = object.coordinatorEpoch ?? "";
     return message;
   },
 };
 
 function createBaseSyncboardPushAck(): SyncboardPushAck {
-  return { seq: 0n, messageId: "" };
+  return { seq: 0n, messageId: "", coordinatorEpoch: "" };
 }
 
 export const SyncboardPushAck: MessageFns<SyncboardPushAck> = {
@@ -5315,6 +5448,9 @@ export const SyncboardPushAck: MessageFns<SyncboardPushAck> = {
     }
     if (message.messageId !== "") {
       writer.uint32(18).string(message.messageId);
+    }
+    if (message.coordinatorEpoch !== "") {
+      writer.uint32(26).string(message.coordinatorEpoch);
     }
     return writer;
   },
@@ -5348,6 +5484,14 @@ export const SyncboardPushAck: MessageFns<SyncboardPushAck> = {
             message.messageId = reader.string();
             continue;
           }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.coordinatorEpoch = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -5367,6 +5511,91 @@ export const SyncboardPushAck: MessageFns<SyncboardPushAck> = {
     const message = createBaseSyncboardPushAck();
     message.seq = (object.seq !== undefined && object.seq !== null) ? BigInt(object.seq) : 0n;
     message.messageId = object.messageId ?? "";
+    message.coordinatorEpoch = object.coordinatorEpoch ?? "";
+    return message;
+  },
+};
+
+function createBaseSyncboardTopicRetired(): SyncboardTopicRetired {
+  return { retiredEpoch: "", reason: "", throughBindingSeq: 0n };
+}
+
+export const SyncboardTopicRetired: MessageFns<SyncboardTopicRetired> = {
+  encode(message: SyncboardTopicRetired, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.retiredEpoch !== "") {
+      writer.uint32(10).string(message.retiredEpoch);
+    }
+    if (message.reason !== "") {
+      writer.uint32(18).string(message.reason);
+    }
+    if (message.throughBindingSeq !== 0n) {
+      if (BigInt.asUintN(64, message.throughBindingSeq) !== message.throughBindingSeq) {
+        throw new globalThis.Error("value provided for field message.throughBindingSeq of type uint64 too large");
+      }
+      writer.uint32(24).uint64(message.throughBindingSeq);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SyncboardTopicRetired {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSyncboardTopicRetired();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.retiredEpoch = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.reason = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.throughBindingSeq = reader.uint64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<SyncboardTopicRetired>, I>>(base?: I): SyncboardTopicRetired {
+    return SyncboardTopicRetired.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SyncboardTopicRetired>, I>>(object: I): SyncboardTopicRetired {
+    const message = createBaseSyncboardTopicRetired();
+    message.retiredEpoch = object.retiredEpoch ?? "";
+    message.reason = object.reason ?? "";
+    message.throughBindingSeq = (object.throughBindingSeq !== undefined && object.throughBindingSeq !== null)
+      ? BigInt(object.throughBindingSeq)
+      : 0n;
     return message;
   },
 };

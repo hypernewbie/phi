@@ -65,11 +65,19 @@ import { CAPABILITY_RELOAD } from './protocol.js';
 import { CAPABILITY_SKILLS } from './protocol.js';
 import { CAPABILITY_SYNCBOARD } from './protocol.js';
 import { CAPABILITY_SYNCBOARD_PUSH } from './protocol.js';
+import { CAPABILITY_SYNCBOARD_TOPICS } from './protocol.js';
 import {
     createSyncboardPushHandler,
     type SyncboardPushHandler,
     type SyncboardPushState,
 } from './push.js';
+import {
+    createSyncboardTopicHandler,
+    freshSyncboardTopicState,
+    retireSyncboardTopics,
+    type SyncboardTopicHandler,
+    type SyncboardTopicState,
+} from './topics.js';
 import { CAPABILITY_THINKING } from './protocol.js';
 import { CAPABILITY_TRANSCRIPT_SEARCH } from './protocol.js';
 import { MAX_COMPACT_IDENTITY_CHARS } from './protocol.js';
@@ -290,6 +298,7 @@ export interface RuntimeOptions {
      * unadvertised.
      */
     readonly syncboardPushState?: SyncboardPushState;
+    readonly syncboardTopicState?: SyncboardTopicState;
     readonly injectSyncboardMessage?:
         | ((customType: string, content: string) => void)
         | undefined;
@@ -573,8 +582,11 @@ export class Runtime {
     private syncboardSeq = 0n;
     private syncboardPending = new Map<string, SyncboardWaiter>();
     private syncboardPushAccepted = false;
+    private syncboardTopicAccepted = false;
     /** Created on first use: opts is assigned after field initializers. */
     private syncboardPushHandler: SyncboardPushHandler | null = null;
+    private syncboardTopicHandler: SyncboardTopicHandler | null = null;
+    private readonly syncboardTopicState: SyncboardTopicState;
     private attachmentsAccepted = false;
     private stateAccepted = false;
     private terminalRefreshAccepted = false;
@@ -626,6 +638,8 @@ export class Runtime {
 
     constructor(private readonly opts: RuntimeOptions) {
         this.backoffMs = opts.backoffBaseMs ?? RECONNECT_BASE_MS;
+        this.syncboardTopicState =
+            opts.syncboardTopicState ?? freshSyncboardTopicState();
     }
 
     /** Process-owned compaction latch, shared across runtimes. */
@@ -1056,6 +1070,7 @@ export class Runtime {
         this.shutdownRequested = true;
         this.setSyncboardAccepted(false);
         this.syncboardPushAccepted = false;
+        this.syncboardTopicAccepted = false;
         // Shutdown releases active status, never unresolved native
         // work or duplicate protection: those stay process-owned.
         if (this.compact.active?.runtimeId === this.runtimeId) {
@@ -1418,8 +1433,10 @@ export class Runtime {
         // Injection needs the host hook; without it the capability is not
         // advertised and Phi never sends a notification this runtime cannot
         // apply.
-        if (this.opts.injectSyncboardMessage)
+        if (this.opts.injectSyncboardMessage) {
             caps.push(CAPABILITY_SYNCBOARD_PUSH);
+            caps.push(CAPABILITY_SYNCBOARD_TOPICS);
+        }
         if (this.attachmentApi)
             caps.push(CAPABILITY_ATTACHMENTS, CAPABILITY_STATE);
         if (readRefreshTui(this.ui)) caps.push(CAPABILITY_TERMINAL_REFRESH);
@@ -1489,6 +1506,7 @@ export class Runtime {
         this.skillsAccepted = false;
         this.setSyncboardAccepted(false);
         this.syncboardPushAccepted = false;
+        this.syncboardTopicAccepted = false;
         this.attachmentsAccepted = false;
         this.stateAccepted = false;
         this.terminalRefreshAccepted = false;
@@ -1529,6 +1547,9 @@ export class Runtime {
                 this.syncboardPushAccepted =
                     this.opts.injectSyncboardMessage !== undefined &&
                     accepted.capabilities.includes(CAPABILITY_SYNCBOARD_PUSH);
+                this.syncboardTopicAccepted =
+                    this.opts.injectSyncboardMessage !== undefined &&
+                    accepted.capabilities.includes(CAPABILITY_SYNCBOARD_TOPICS);
                 this.attachmentsAccepted = accepted.capabilities.includes(
                     CAPABILITY_ATTACHMENTS,
                 );
@@ -1627,9 +1648,21 @@ export class Runtime {
             );
         } else if (
             msg.payload?.$case === 'syncboardNotification' &&
+            msg.payload.value.topic
+        ) {
+            if (this.syncboardTopicAccepted)
+                this.syncboardTopic().accept(msg.payload.value);
+        } else if (
+            msg.payload?.$case === 'syncboardNotification' &&
             this.syncboardPushAccepted
         ) {
             this.syncboardPush().accept(msg.payload.value);
+        } else if (msg.payload?.$case === 'syncboardTopicRetired') {
+            if (this.syncboardTopicAccepted)
+                retireSyncboardTopics(
+                    this.syncboardTopicState,
+                    msg.payload.value,
+                );
         } else if (
             msg.payload?.$case === 'attachmentPromptRequest' &&
             this.attachmentsAccepted
@@ -1768,6 +1801,31 @@ export class Runtime {
         return this.syncboardPushHandler;
     }
 
+    private syncboardTopic(): SyncboardTopicHandler {
+        if (this.syncboardTopicHandler === null) {
+            this.syncboardTopicHandler = createSyncboardTopicHandler({
+                state: this.syncboardTopicState,
+                inject: this.opts.injectSyncboardMessage,
+                ack: (seq, messageId, epoch) => {
+                    this.channel?.sendNonfatal({
+                        paneId: this.opts.creds.pane,
+                        processId: this.opts.creds.process,
+                        runtimeGeneration: this.opts.generation,
+                        payload: {
+                            $case: 'syncboardPushAck',
+                            value: SyncboardPushAck.create({
+                                seq,
+                                messageId,
+                                coordinatorEpoch: epoch,
+                            }),
+                        },
+                    });
+                },
+            });
+        }
+        return this.syncboardTopicHandler;
+    }
+
     private onSyncboardResponse(response: SyncboardResponse): void {
         const waiter = this.syncboardPending.get(response.requestId);
         if (
@@ -1790,6 +1848,51 @@ export class Runtime {
         response: SyncboardResponse,
         operation: SyncboardOperation,
     ): boolean {
+        if (operation === SyncboardOperation.SYNCBOARD_OPERATION_SUBSCRIBE) {
+            if (
+                response.outcome ===
+                    SyncboardOutcome.SYNCBOARD_OUTCOME_NOT_SENT &&
+                response.bodyJson.length === 0 &&
+                (response.httpStatus === 0 ||
+                    response.httpStatus === 400 ||
+                    response.httpStatus === 413 ||
+                    response.httpStatus === 503) &&
+                this.validSyncboardReason(response.reason)
+            )
+                return true;
+            if (
+                response.outcome !==
+                    SyncboardOutcome.SYNCBOARD_OUTCOME_HTTP_RESPONSE ||
+                response.httpStatus !== 200 ||
+                response.reason !== '' ||
+                response.bodyJson.length === 0 ||
+                !response.coordinatorEpoch ||
+                response.topicBindingSeq <= 0n ||
+                response.refusal !== 0
+            )
+                return false;
+            try {
+                const body = JSON.parse(
+                    new TextDecoder('utf-8', { fatal: true }).decode(
+                        response.bodyJson,
+                    ),
+                ) as { topic?: unknown };
+                return (
+                    typeof body === 'object' &&
+                    body !== null &&
+                    typeof body.topic === 'string' &&
+                    body.topic.length > 0
+                );
+            } catch {
+                return false;
+            }
+        }
+        if (
+            response.coordinatorEpoch !== '' ||
+            response.topicBindingSeq !== 0n ||
+            response.refusal !== 0
+        )
+            return false;
         switch (response.outcome) {
             case SyncboardOutcome.SYNCBOARD_OUTCOME_NOT_SENT:
             case SyncboardOutcome.SYNCBOARD_OUTCOME_UNKNOWN:
@@ -1839,6 +1942,7 @@ export class Runtime {
             case 'timeout':
             case 'cancelled':
             case 'too-large':
+            case 'capacity':
             case 'invalid-response':
             case 'http-error':
             case 'transport-error':
@@ -3397,6 +3501,7 @@ export class Runtime {
     private onStreamEnd(status: ServiceError | null): void {
         this.setSyncboardAccepted(false);
         this.syncboardPushAccepted = false;
+        this.syncboardTopicAccepted = false;
         const channel = this.channel;
         this.cancelTranscriptSearches(channel ?? undefined);
         channel?.close();

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -44,8 +45,16 @@ type Server struct {
 	// syncboardPush enables outbound addressed-message delivery. Only the
 	// negotiated capability unlocks it; the flag alone sends nothing.
 	syncboardPush bool
-	attachmentSeq atomic.Uint64
-	stateSeq      atomic.Uint64
+	// syncboardTopics enables local topic subscription delivery. It is a
+	// separate capability from REST and addressed push.
+	syncboardTopics bool
+	// syncboardTopicEpoch identifies this coordinator RAM instance.
+	syncboardTopicEpoch string
+	topicEpochMu        sync.RWMutex
+	onTopicAck          func(SyncboardOwner, string, uint64, string)
+	onTopicRetired      func(SyncboardTopicRetirement)
+	attachmentSeq       atomic.Uint64
+	stateSeq            atomic.Uint64
 	// compactSeq allocates monotonic server-side Compact request
 	// IDs. IDs are positive canonical decimal uint64 strings,
 	// never wrap, and are never reused or browser-supplied.
@@ -550,7 +559,7 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 	if hello.GetRuntimeId() == "" || hello.GetSessionId() == "" {
 		return status.Error(codes.InvalidArgument, "runtime and session required")
 	}
-	caps := negotiateCapabilities(hello.GetCapabilities(), s.syncboardHandler != nil, s.syncboardPush)
+	caps := negotiateCapabilities(hello.GetCapabilities(), s.syncboardHandler != nil, s.syncboardPush, s.syncboardTopics)
 
 	l.mu.Lock()
 	gen := first.GetRuntimeGeneration()
@@ -575,6 +584,7 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 		}
 	}
 	if !sameGen {
+		retirement := l.fenceTopicGeneration("generation-replaced", false)
 		l.maxGen = gen
 		l.runtimeID = hello.GetRuntimeId()
 		l.sessionID = hello.GetSessionId()
@@ -585,9 +595,18 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 		// reports through the fresh authoritative readiness.
 		l.compact = nil
 		l.attachment = nil
+		if retirement != nil && s.onTopicRetired != nil {
+			s.onTopicRetired(*retirement)
+		}
 		// A new generation never clears an unresolved Reload:
 		// the native callback outlives its runtime. The fresh
 		// Hello readiness below retires it on release evidence.
+	} else if slices.Contains(l.caps, CapabilitySyncboardTopics) && !caps[CapabilitySyncboardTopics] {
+		// A same-generation withdrawal is permanent for this runtime. A
+		// reconnect that restores the capability cannot revive bindings.
+		if retirement := l.fenceTopicGeneration("capability-withdrawn", true); retirement != nil && s.onTopicRetired != nil {
+			s.onTopicRetired(*retirement)
+		}
 	}
 	type pendingSettlement struct {
 		runID   uint64
@@ -624,7 +643,7 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 	}
 	oldPeer := l.peer
 	p := newPeer(gen, hello.GetSessionId(), stream)
-	p.onWritable = func() { l.flushPendingPushes(p) }
+	p.onWritable = func() { l.flushPendingPushes(p); l.flushPendingTopics(p) }
 	l.peer = p
 	l.caps = l.caps[:0]
 	for c := range caps {
@@ -701,6 +720,7 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 	// The read loop starts after this, so no acknowledgement can arrive before
 	// the replay is queued and clear work ahead of its notification.
 	l.flushPendingPushes(p)
+	l.flushPendingTopics(p)
 
 	for {
 		msg, err := p.recv()
@@ -887,6 +907,9 @@ func (s *Server) dispatchMessage(ctx context.Context, l *lease, p *peer, msg *pi
 		return nil
 	case msg.GetSyncboardRequest() != nil:
 		s.receiveSyncboard(ctx, l, p, msg.GetSyncboardRequest())
+		return nil
+	case msg.GetSyncboardPushAck() != nil && msg.GetSyncboardPushAck().GetCoordinatorEpoch() != "":
+		s.deliverSyncboardTopicAck(l, p, msg.GetSyncboardPushAck())
 		return nil
 	case msg.GetSyncboardPushAck() != nil:
 		s.deliverSyncboardPushAck(l, p, msg.GetSyncboardPushAck())

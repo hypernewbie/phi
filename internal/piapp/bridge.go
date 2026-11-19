@@ -108,6 +108,8 @@ type Bridge struct {
 	attachments  *attachments.AttachmentStore
 	// Syncboard handles local sync writes; nil keeps remote-only behavior.
 	Syncboard http.Handler
+	// subscribeSyncboardTopic registers one local topic subscription.
+	subscribeSyncboardTopic func(pibridge.SyncboardOwner, string) error
 	// LoadConfig reads the live config for sync routing; nil refuses sync.
 	LoadConfig func() (config.Config, error)
 	// bindSession records a session ID the Pi runtime reported for a live
@@ -193,6 +195,7 @@ func StartBridge(hub *ws.Hub, runtime func() ([]byte, error), version string, st
 	b.server.SetOnState(b.onState)
 	b.server.SetOnPeerDown(b.onPeerDown)
 	b.server.SetSyncboardHandler(b.handleSyncboard)
+	b.server.EnableSyncboardTopics(true)
 	// Push delivery is opt-in per server; a runtime that never advertises
 	// pi.syncboard.push.v1 simply never receives one.
 	b.server.EnableSyncboardPush(true)

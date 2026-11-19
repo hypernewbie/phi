@@ -219,6 +219,12 @@ type Config struct {
 	// the auth interceptor lands, so enabling it never widens the network face.
 	SyncMesh bool `json:"sync_mesh" toml:"sync_mesh"`
 
+	// Private peer settings for Syncboard topic federation. Never exposed
+	// through the Config JSON API or browser payloads.
+	SyncTopicsPeerID       string            `json:"-" toml:"sync_topics_peer_id,omitempty"`
+	SyncTopicsPeerSecret   string            `json:"-" toml:"sync_topics_peer_secret,omitempty"`
+	SyncTopicsAllowedPeers map[string]string `json:"-" toml:"sync_topics_allowed_peers,omitempty"`
+
 	// AuthOrigins lists extra origins a browser may present to the v2 auth
 	// routes when a reverse proxy terminates TLS. Same-origin requests never
 	// need an entry. Malformed entries are a startup error, not a skip.
@@ -376,6 +382,9 @@ func (s *Store) SaveLegacy(cfg Config) {
 	cfg.PiCommand = latest.PiCommand
 	cfg.PiArgs = latest.PiArgs
 	cfg.PiEnv = latest.PiEnv
+	cfg.SyncTopicsPeerID = latest.SyncTopicsPeerID
+	cfg.SyncTopicsPeerSecret = latest.SyncTopicsPeerSecret
+	cfg.SyncTopicsAllowedPeers = maps.Clone(latest.SyncTopicsAllowedPeers)
 	cfg.AccessPasswordHash = latest.AccessPasswordHash
 	cfg.AccessAuthMigration = latest.AccessAuthMigration
 	_ = s.writeContentsLocked(cfg)
@@ -742,6 +751,7 @@ func cloneConfig(cfg Config) Config {
 	cfg.PiArgs = slices.Clone(cfg.PiArgs)
 	cfg.PiEnv = maps.Clone(cfg.PiEnv)
 	cfg.Peers = slices.Clone(cfg.Peers)
+	cfg.SyncTopicsAllowedPeers = maps.Clone(cfg.SyncTopicsAllowedPeers)
 	cfg.AuthOrigins = slices.Clone(cfg.AuthOrigins)
 	cfg.AccessAuthMigration = clonePtr(cfg.AccessAuthMigration)
 	return cfg

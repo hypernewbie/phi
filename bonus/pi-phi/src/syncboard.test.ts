@@ -408,6 +408,40 @@ describe('Syncboard tool registration', () => {
         expect(request).toHaveBeenCalledTimes(1);
     });
 
+    it('surfaces unknown topic publish without retrying', async () => {
+        const registered: ToolDefinition[] = [];
+        const request = vi.fn(async () => {
+            throw new SyncboardCallError('unknown', 'timeout');
+        });
+        const manager = createSyncboardToolManager(fakeApi(registered), {
+            currentRuntime: () => ({ requestSyncboard: request }),
+            disabled: () => false,
+            isOwned: () => true,
+            setOwned: () => {},
+        });
+        expect(manager.prepare()).toBe(true);
+        manager.setAvailable(true);
+        const publish = registered.find(
+            (tool) => tool.name === 'syncboard_publish',
+        )!;
+        await expect(
+            publish.execute(
+                'call-topic',
+                { topic: 'alerts', value: { state: 'ready' } },
+                undefined,
+                undefined,
+                {} as ExtensionToolContext,
+            ),
+        ).rejects.toThrow(uncertaintyMessage);
+        expect(request).toHaveBeenCalledTimes(1);
+        expect(request).toHaveBeenCalledWith(
+            SyncboardOperation.SYNCBOARD_OPERATION_UPSERT,
+            'alerts',
+            Buffer.from(JSON.stringify({ state: 'ready' })),
+            undefined,
+        );
+    });
+
     it('checks bridge disablement again at tool execution', async () => {
         const registered: ToolDefinition[] = [];
         const api = fakeApi(registered);

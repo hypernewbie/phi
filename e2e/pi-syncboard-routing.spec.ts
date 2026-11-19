@@ -325,18 +325,8 @@ test('each real Pi session routes the same key to its owning coordinator', async
         expect(
             remoteMessagesA.some((message) => message.key === changedKey),
         ).toBe(false);
-        expect(
-            localMessagesA.some(
-                (message) =>
-                    message.key === SYNCBOARD_KEY || message.key === changedKey,
-            ),
-        ).toBe(false);
-        expect(
-            localMessagesB.some(
-                (message) =>
-                    message.key === SYNCBOARD_KEY || message.key === changedKey,
-            ),
-        ).toBe(false);
+        expect(localMessagesA).toEqual(remoteMessagesB);
+        expect(localMessagesB).toEqual(remoteMessagesB);
 
         await test.info().attach('syncboard-routing-evidence.json', {
             body: Buffer.from(

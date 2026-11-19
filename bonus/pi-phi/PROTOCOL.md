@@ -86,6 +86,7 @@ Runtime identity binds `(generation, runtime_id, session_id)`:
 | `pi.terminal-refresh.v1` | Live TUI repaint without a history replay |
 | `pi.transcript-search.v2` | Read-only visible-text search on the active Pi branch |
 | `pi.syncboard.push.v1` | Addressed Syncboard message injection through the host's `sendMessage` |
+| `pi.syncboard.topics.v1` | Explicit topic subscribe and complete batched delivery |
 
 Context, Compact, and Reload negotiate independently on every Hello
 from checked host availability: `pi.context.v1` needs `getContextUsage`;
@@ -223,9 +224,10 @@ shows nothing at all without it.
 
 ## Native Syncboard tool
 
-`pi.syncboard.v1` is advertised only when the Phi extension owns the
-native `syncboard` tool registration. Phi negotiates the capability only
-when it has a Syncboard handler. Pi keeps the tool hidden until Phi accepts
+`pi.syncboard.v1` is advertised only when the Phi extension owns the legacy
+`syncboard` tool registration. `pi.syncboard.topics.v1` is advertised only
+when the host has a configured topic engine. Phi negotiates each capability
+only when its own feature is available. Pi keeps the tool hidden until Phi accepts
 the capability, withdraws it when the stream loses availability, and checks
 availability again before each call. Without the bridge or capability, Pi
 keeps its existing tools and behavior.
@@ -262,6 +264,94 @@ lifecycle messages. The worker limit is four per peer.
 The value limit is 64 KiB and the response limit is 192 KiB. The Pi caller
 waits up to 15 seconds. Phi's remote HTTP request deadline is 10 seconds. The
 shared stream retains 16 KiB and two message slots for lifecycle traffic.
+
+## Syncboard topics
+
+`pi.syncboard.topics.v1` is negotiated separately from `pi.syncboard.v1` and
+`pi.syncboard.push.v1`. The host advertises it only when its topic engine is
+configured. Pi exposes `syncboard_publish(topic, value)` and
+`syncboard_subscribe(topic)` only while the capability is live.
+
+Subscribe sends `SyncboardRequest` operation 5. A success response has HTTP
+status 200, empty reason, `{"topic":"<key>"}`, `coordinator_epoch` field 6, and
+a positive `topic_binding_seq` field 8. A typed refusal keeps the same fields
+complete: `refusal` field 7 is `invalid`, `too_large`, or `capacity`, with the
+matching 400, 413, or 503 status. A malformed, incomplete, or mismatched
+result is an unknown outcome. Subscribe creates no message row and replays no
+history; it only binds the current native owner. A direct board POST refusal
+uses the same 400/413/503 statuses and the exact body
+`{"syncboard_admission":"refused","reason":"invalid|too-large|capacity"}`;
+any other non-200 answer is unknown, not proof of nonacceptance.
+
+A same-generation capability withdrawal or peer revocation permanently fences
+that native generation. Restoring the capability, reconnecting, or changing
+the coordinator epoch does not revive it; a higher native generation and an
+explicit subscribe are required. A coordinator epoch change alone fences the
+old binding and permits the unchanged owner to subscribe explicitly to the new
+epoch.
+
+The host sends `SyncboardNotification` field 27 with `topic` field 7,
+`coordinator_epoch` field 8, a positive batch sequence, a batch ID, and the
+complete immutable batch text. Pi injects the text once, after the host
+acknowledges admission. It answers `SyncboardPushAck` field 29 with
+`coordinator_epoch` field 3, the same batch ID and sequence. A duplicate is
+acked without a second injection. A refusal, a replacement owner, a retired
+binding, or an old epoch drops the batch without an ACK.
+
+`SyncboardTopicRetired` field 29 carries the retired epoch, a cumulative
+`through_binding_seq`, and a reason. Pi retains the highest retired binding
+sequence per owner and drops late batches and late results for retired
+bindings. A coordinator epoch change fences every old binding with a
+cumulative marker; a later explicit subscribe can bind the new epoch.
+
+Topic limits: key 256 bytes, stored value 128 KiB, encoded batch text 64 KiB,
+native/peer frame 256 KiB, 1024 coordinator subscriptions, 1024 pending
+batches, and 32 batches per owner. The feed carries no terminal bytes.
+
+### Peer delivery
+
+A follower Phi reaches the coordinator over `/ws/sync-topics` with the
+`phi.syncboard.topics.v1` WebSocket subprotocol. The request carries
+`X-Phi-Sync-Topics-Peer` and `X-Phi-Sync-Topics-Secret`. The coordinator
+looks up the peer in `[sync_topics_allowed_peers]` and compares its 64-byte
+lowercase hex secret in constant time before the upgrade. A missing or
+mismatched entry returns 401 and is never upgraded. A coordinator with a
+configured `sync_coordinator` rejects peer registration with 503.
+
+The peer exchange is JSON text. Counters use canonical decimal strings.
+The coordinator sends `offer` with its epoch, prior cohort fence, and state.
+The follower freezes `(epoch, instance, prior_fence)` on the first offer and
+sends `bind`. The coordinator sends `bound` with the new cohort fence,
+stream, state, and `bindings_retired`.
+
+A second online instance for one peer identity is refused. A same-instance
+reconnect retains the cohort fence, replaces the stream, and keeps
+unacknowledged owner work. A later instance is accepted only after the prior
+fence matches and the old cohort is offline. The coordinator retains at most
+64 cohort records.
+
+After bind, the follower resolves any unknown control, drains dirty
+`retire_owner` controls, then sends `ready` with its last applied control.
+The coordinator sends `ready_ack` only when that number matches its ledger,
+and only then dispatches batches. A batch head is retried every 500 ms while
+the stream is open. An ACK releases exactly the matching owner head and batch
+ID; an older epoch, batch, or sequence changes nothing. A duplicate control
+returns the cached result and does not mutate. A gap or older unseen control
+is refused without mutation.
+
+`bindings_retired` is retained until a fresh `ready` proves the follower
+fenced its native bindings. Revocation cancels the cohort's owner work,
+fences its stream, and sets `bindings_retired`; canceled work is never
+restored. The follower must subscribe again. A terminal cohort accepts only
+the reserved final `retire_cohort` control at `2^64-1` and never becomes
+ready again.
+
+`sync_topics_peer_id` and `sync_topics_peer_secret` identify the follower.
+`[sync_topics_allowed_peers]` maps each accepted follower identity to its
+secret on the coordinator. All three values are excluded from JSON and
+diagnostic output. A live secret or allowlist change closes the old stream,
+retires the cohort, and requires a fresh ready. A changed coordinator or peer
+identity requires a restart; the follower refuses new work until then.
 
 ## Addressed Syncboard pushes
 
@@ -561,6 +651,17 @@ model text.
 | Syncboard response body         | 192 KiB                         |
 | Syncboard caller wait           | 15 s                            |
 | Syncboard coordinator request   | 10 s                            |
+| Syncboard topic key            | 256 bytes                       |
+| Syncboard topic value          | 128 KiB                         |
+| Syncboard batch text           | 64 KiB                          |
+| Syncboard batches per owner    | 32                              |
+| Syncboard coordinator subscriptions | 1024                        |
+| Syncboard peer frame           | 256 KiB                         |
+| Syncboard peer cohorts         | 64                              |
+| Syncboard peer ID / fence / stream | 128 bytes                   |
+| Syncboard peer control         | 1 unconfirmed per stream        |
+| Syncboard peer ready wait      | 5 s per control attempt         |
+| Syncboard peer batch retry     | 500 ms while open               |
 | Pending attachment prompt per process | 1, no waiting queue      |
 | Attachment references in one bridge request | 8 max, 50 MiB total |
 | Attachment prompt text         | 64 KiB UTF-8 max               |

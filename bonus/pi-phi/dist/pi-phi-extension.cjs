@@ -24598,6 +24598,7 @@ var CAPABILITY_RELOAD = "pi.reload.v1";
 var CAPABILITY_SKILLS = "pi.skills.v1";
 var CAPABILITY_SYNCBOARD = "pi.syncboard.v1";
 var CAPABILITY_SYNCBOARD_PUSH = "pi.syncboard.push.v1";
+var CAPABILITY_SYNCBOARD_TOPICS = "pi.syncboard.topics.v1";
 var MAX_SYNCBOARD_VALUE_BYTES = 64 * 1024;
 var MAX_SYNCBOARD_RESPONSE_BYTES = 192 * 1024;
 var MAX_SYNCBOARD_PENDING = 4;
@@ -24789,6 +24790,87 @@ function createSyncboardPushHandler(options) {
     },
     remembered() {
       return seen.size;
+    }
+  };
+}
+
+// src/topics.ts
+var SYNCBOARD_TOPIC_CUSTOM_TYPE = "phi-syncboard-topic";
+var MAX_REMEMBERED_TOPIC_IDS = 1024;
+function freshSyncboardTopicState() {
+  return {
+    activeEpoch: "",
+    highestBinding: 0n,
+    retiredThrough: 0n,
+    lastSeq: 0n,
+    seen: /* @__PURE__ */ new Set()
+  };
+}
+function activateSyncboardTopic(state, epoch, binding) {
+  if (!epoch || binding <= 0n || binding <= state.retiredThrough)
+    return false;
+  if (binding < state.highestBinding) return false;
+  if (binding === state.highestBinding && epoch !== state.activeEpoch)
+    return false;
+  if (epoch !== state.activeEpoch) {
+    state.lastSeq = 0n;
+    state.seen.clear();
+  }
+  state.activeEpoch = epoch;
+  state.highestBinding = binding;
+  return true;
+}
+function retireSyncboardTopics(state, marker) {
+  const through = marker.throughBindingSeq ?? 0n;
+  if (through > state.retiredThrough) state.retiredThrough = through;
+  if (state.highestBinding <= state.retiredThrough) {
+    state.activeEpoch = "";
+  }
+}
+function createSyncboardTopicHandler(options) {
+  const { state } = options;
+  const remember = (id) => {
+    state.seen.add(id);
+    if (state.seen.size > MAX_REMEMBERED_TOPIC_IDS) {
+      const oldest = state.seen.values().next().value;
+      if (oldest !== void 0) state.seen.delete(oldest);
+    }
+  };
+  return {
+    accept(notification) {
+      const id = notification.messageId;
+      const epoch = notification.coordinatorEpoch;
+      const seq = notification.seq ?? 0n;
+      if (!id || !notification.topic || !epoch) return;
+      if (state.seen.has(id)) {
+        options.ack(seq, id, epoch);
+        return;
+      }
+      if (!state.activeEpoch || epoch !== state.activeEpoch) return;
+      if (state.highestBinding <= state.retiredThrough) return;
+      if (seq <= state.lastSeq) {
+        remember(id);
+        options.ack(seq, id, epoch);
+        return;
+      }
+      const inject = options.inject;
+      if (inject === void 0) return;
+      let content;
+      try {
+        content = new TextDecoder("utf-8", { fatal: true }).decode(
+          notification.value ?? new Uint8Array()
+        );
+      } catch {
+        return;
+      }
+      try {
+        inject(SYNCBOARD_TOPIC_CUSTOM_TYPE, content);
+      } catch {
+        return;
+      }
+      state.lastSeq = seq;
+      remember(id);
+      options.ack(seq, id, epoch);
     }
   };
 }
@@ -26461,6 +26543,9 @@ var PhiToPi = {
       case "terminalRefreshRequest":
         TerminalRefreshRequest.encode(message.payload.value, writer.uint32(226).fork()).join();
         break;
+      case "syncboardTopicRetired":
+        SyncboardTopicRetired.encode(message.payload.value, writer.uint32(234).fork()).join();
+        break;
     }
     return writer;
   },
@@ -26645,6 +26730,16 @@ var PhiToPi = {
             };
             continue;
           }
+          case 29: {
+            if (tag !== 234) {
+              break;
+            }
+            message.payload = {
+              $case: "syncboardTopicRetired",
+              value: SyncboardTopicRetired.decode(reader, reader.uint32())
+            };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -26785,6 +26880,15 @@ var PhiToPi = {
           message.payload = {
             $case: "terminalRefreshRequest",
             value: TerminalRefreshRequest.fromPartial(object.payload.value)
+          };
+        }
+        break;
+      }
+      case "syncboardTopicRetired": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = {
+            $case: "syncboardTopicRetired",
+            value: SyncboardTopicRetired.fromPartial(object.payload.value)
           };
         }
         break;
@@ -29871,7 +29975,16 @@ var SyncboardRequest = {
   }
 };
 function createBaseSyncboardResponse() {
-  return { requestId: "", outcome: 0, httpStatus: 0, bodyJson: Buffer.alloc(0), reason: "" };
+  return {
+    requestId: "",
+    outcome: 0,
+    httpStatus: 0,
+    bodyJson: Buffer.alloc(0),
+    reason: "",
+    coordinatorEpoch: "",
+    refusal: 0,
+    topicBindingSeq: 0n
+  };
 }
 var SyncboardResponse = {
   encode(message, writer = new BinaryWriter()) {
@@ -29889,6 +30002,18 @@ var SyncboardResponse = {
     }
     if (message.reason !== "") {
       writer.uint32(42).string(message.reason);
+    }
+    if (message.coordinatorEpoch !== "") {
+      writer.uint32(50).string(message.coordinatorEpoch);
+    }
+    if (message.refusal !== 0) {
+      writer.uint32(56).int32(message.refusal);
+    }
+    if (message.topicBindingSeq !== 0n) {
+      if (BigInt.asUintN(64, message.topicBindingSeq) !== message.topicBindingSeq) {
+        throw new globalThis.Error("value provided for field message.topicBindingSeq of type uint64 too large");
+      }
+      writer.uint32(64).uint64(message.topicBindingSeq);
     }
     return writer;
   },
@@ -29940,6 +30065,27 @@ var SyncboardResponse = {
             message.reason = reader.string();
             continue;
           }
+          case 6: {
+            if (tag !== 50) {
+              break;
+            }
+            message.coordinatorEpoch = reader.string();
+            continue;
+          }
+          case 7: {
+            if (tag !== 56) {
+              break;
+            }
+            message.refusal = reader.int32();
+            continue;
+          }
+          case 8: {
+            if (tag !== 64) {
+              break;
+            }
+            message.topicBindingSeq = reader.uint64();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -29961,11 +30107,23 @@ var SyncboardResponse = {
     message.httpStatus = object.httpStatus ?? 0;
     message.bodyJson = object.bodyJson ?? Buffer.alloc(0);
     message.reason = object.reason ?? "";
+    message.coordinatorEpoch = object.coordinatorEpoch ?? "";
+    message.refusal = object.refusal ?? 0;
+    message.topicBindingSeq = object.topicBindingSeq !== void 0 && object.topicBindingSeq !== null ? BigInt(object.topicBindingSeq) : 0n;
     return message;
   }
 };
 function createBaseSyncboardNotification() {
-  return { seq: 0n, sender: "", recipient: "", value: Buffer.alloc(0), updatedAtUnixMs: 0n, messageId: "" };
+  return {
+    seq: 0n,
+    sender: "",
+    recipient: "",
+    value: Buffer.alloc(0),
+    updatedAtUnixMs: 0n,
+    messageId: "",
+    topic: "",
+    coordinatorEpoch: ""
+  };
 }
 var SyncboardNotification = {
   encode(message, writer = new BinaryWriter()) {
@@ -29992,6 +30150,12 @@ var SyncboardNotification = {
     }
     if (message.messageId !== "") {
       writer.uint32(50).string(message.messageId);
+    }
+    if (message.topic !== "") {
+      writer.uint32(58).string(message.topic);
+    }
+    if (message.coordinatorEpoch !== "") {
+      writer.uint32(66).string(message.coordinatorEpoch);
     }
     return writer;
   },
@@ -30050,6 +30214,20 @@ var SyncboardNotification = {
             message.messageId = reader.string();
             continue;
           }
+          case 7: {
+            if (tag !== 58) {
+              break;
+            }
+            message.topic = reader.string();
+            continue;
+          }
+          case 8: {
+            if (tag !== 66) {
+              break;
+            }
+            message.coordinatorEpoch = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -30072,11 +30250,13 @@ var SyncboardNotification = {
     message.value = object.value ?? Buffer.alloc(0);
     message.updatedAtUnixMs = object.updatedAtUnixMs !== void 0 && object.updatedAtUnixMs !== null ? BigInt(object.updatedAtUnixMs) : 0n;
     message.messageId = object.messageId ?? "";
+    message.topic = object.topic ?? "";
+    message.coordinatorEpoch = object.coordinatorEpoch ?? "";
     return message;
   }
 };
 function createBaseSyncboardPushAck() {
-  return { seq: 0n, messageId: "" };
+  return { seq: 0n, messageId: "", coordinatorEpoch: "" };
 }
 var SyncboardPushAck = {
   encode(message, writer = new BinaryWriter()) {
@@ -30088,6 +30268,9 @@ var SyncboardPushAck = {
     }
     if (message.messageId !== "") {
       writer.uint32(18).string(message.messageId);
+    }
+    if (message.coordinatorEpoch !== "") {
+      writer.uint32(26).string(message.coordinatorEpoch);
     }
     return writer;
   },
@@ -30118,6 +30301,13 @@ var SyncboardPushAck = {
             message.messageId = reader.string();
             continue;
           }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+            message.coordinatorEpoch = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -30136,6 +30326,82 @@ var SyncboardPushAck = {
     const message = createBaseSyncboardPushAck();
     message.seq = object.seq !== void 0 && object.seq !== null ? BigInt(object.seq) : 0n;
     message.messageId = object.messageId ?? "";
+    message.coordinatorEpoch = object.coordinatorEpoch ?? "";
+    return message;
+  }
+};
+function createBaseSyncboardTopicRetired() {
+  return { retiredEpoch: "", reason: "", throughBindingSeq: 0n };
+}
+var SyncboardTopicRetired = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.retiredEpoch !== "") {
+      writer.uint32(10).string(message.retiredEpoch);
+    }
+    if (message.reason !== "") {
+      writer.uint32(18).string(message.reason);
+    }
+    if (message.throughBindingSeq !== 0n) {
+      if (BigInt.asUintN(64, message.throughBindingSeq) !== message.throughBindingSeq) {
+        throw new globalThis.Error("value provided for field message.throughBindingSeq of type uint64 too large");
+      }
+      writer.uint32(24).uint64(message.throughBindingSeq);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseSyncboardTopicRetired();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.retiredEpoch = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+            message.reason = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+            message.throughBindingSeq = reader.uint64();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return SyncboardTopicRetired.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseSyncboardTopicRetired();
+    message.retiredEpoch = object.retiredEpoch ?? "";
+    message.reason = object.reason ?? "";
+    message.throughBindingSeq = object.throughBindingSeq !== void 0 && object.throughBindingSeq !== null ? BigInt(object.throughBindingSeq) : 0n;
     return message;
   }
 };
@@ -31284,6 +31550,7 @@ var Runtime = class {
   constructor(opts) {
     this.opts = opts;
     this.backoffMs = opts.backoffBaseMs ?? RECONNECT_BASE_MS;
+    this.syncboardTopicState = opts.syncboardTopicState ?? freshSyncboardTopicState();
   }
   opts;
   runtimeId = (0, import_node_crypto3.randomUUID)();
@@ -31320,8 +31587,11 @@ var Runtime = class {
   syncboardSeq = 0n;
   syncboardPending = /* @__PURE__ */ new Map();
   syncboardPushAccepted = false;
+  syncboardTopicAccepted = false;
   /** Created on first use: opts is assigned after field initializers. */
   syncboardPushHandler = null;
+  syncboardTopicHandler = null;
+  syncboardTopicState;
   attachmentsAccepted = false;
   stateAccepted = false;
   terminalRefreshAccepted = false;
@@ -31737,6 +32007,7 @@ var Runtime = class {
     this.shutdownRequested = true;
     this.setSyncboardAccepted(false);
     this.syncboardPushAccepted = false;
+    this.syncboardTopicAccepted = false;
     if (this.compact.active?.runtimeId === this.runtimeId) {
       this.compact.active = null;
     }
@@ -32015,8 +32286,10 @@ var Runtime = class {
     if (this.opts.getSkills && this.opts.invokeSkill)
       caps.push(CAPABILITY_SKILLS);
     if (this.opts.syncboardEnabled) caps.push(CAPABILITY_SYNCBOARD);
-    if (this.opts.injectSyncboardMessage)
+    if (this.opts.injectSyncboardMessage) {
       caps.push(CAPABILITY_SYNCBOARD_PUSH);
+      caps.push(CAPABILITY_SYNCBOARD_TOPICS);
+    }
     if (this.attachmentApi)
       caps.push(CAPABILITY_ATTACHMENTS, CAPABILITY_STATE);
     if (readRefreshTui(this.ui)) caps.push(CAPABILITY_TERMINAL_REFRESH);
@@ -32073,6 +32346,7 @@ var Runtime = class {
     this.skillsAccepted = false;
     this.setSyncboardAccepted(false);
     this.syncboardPushAccepted = false;
+    this.syncboardTopicAccepted = false;
     this.attachmentsAccepted = false;
     this.stateAccepted = false;
     this.terminalRefreshAccepted = false;
@@ -32102,6 +32376,7 @@ var Runtime = class {
           this.opts.syncboardEnabled === true && accepted.capabilities.includes(CAPABILITY_SYNCBOARD)
         );
         this.syncboardPushAccepted = this.opts.injectSyncboardMessage !== void 0 && accepted.capabilities.includes(CAPABILITY_SYNCBOARD_PUSH);
+        this.syncboardTopicAccepted = this.opts.injectSyncboardMessage !== void 0 && accepted.capabilities.includes(CAPABILITY_SYNCBOARD_TOPICS);
         this.attachmentsAccepted = accepted.capabilities.includes(
           CAPABILITY_ATTACHMENTS
         );
@@ -32155,8 +32430,17 @@ var Runtime = class {
         msg.payload.value.requestId,
         msg.payload.value.name
       );
+    } else if (msg.payload?.$case === "syncboardNotification" && msg.payload.value.topic) {
+      if (this.syncboardTopicAccepted)
+        this.syncboardTopic().accept(msg.payload.value);
     } else if (msg.payload?.$case === "syncboardNotification" && this.syncboardPushAccepted) {
       this.syncboardPush().accept(msg.payload.value);
+    } else if (msg.payload?.$case === "syncboardTopicRetired") {
+      if (this.syncboardTopicAccepted)
+        retireSyncboardTopics(
+          this.syncboardTopicState,
+          msg.payload.value
+        );
     } else if (msg.payload?.$case === "attachmentPromptRequest" && this.attachmentsAccepted) {
       void this.onAttachmentPromptRequest(msg.payload.value);
     } else if (msg.payload?.$case === "stateRequest" && this.stateAccepted) {
@@ -32255,6 +32539,30 @@ var Runtime = class {
     }
     return this.syncboardPushHandler;
   }
+  syncboardTopic() {
+    if (this.syncboardTopicHandler === null) {
+      this.syncboardTopicHandler = createSyncboardTopicHandler({
+        state: this.syncboardTopicState,
+        inject: this.opts.injectSyncboardMessage,
+        ack: (seq, messageId, epoch) => {
+          this.channel?.sendNonfatal({
+            paneId: this.opts.creds.pane,
+            processId: this.opts.creds.process,
+            runtimeGeneration: this.opts.generation,
+            payload: {
+              $case: "syncboardPushAck",
+              value: SyncboardPushAck.create({
+                seq,
+                messageId,
+                coordinatorEpoch: epoch
+              })
+            }
+          });
+        }
+      });
+    }
+    return this.syncboardTopicHandler;
+  }
   onSyncboardResponse(response) {
     const waiter = this.syncboardPending.get(response.requestId);
     if (!waiter || waiter.channel !== this.channel || !this.syncboardAccepted)
@@ -32269,6 +32577,24 @@ var Runtime = class {
     this.finishSyncboardResponse(response.requestId, response);
   }
   validSyncboardWireResponse(response, operation) {
+    if (operation === 5 /* SYNCBOARD_OPERATION_SUBSCRIBE */) {
+      if (response.outcome === 2 /* SYNCBOARD_OUTCOME_NOT_SENT */ && response.bodyJson.length === 0 && (response.httpStatus === 0 || response.httpStatus === 400 || response.httpStatus === 413 || response.httpStatus === 503) && this.validSyncboardReason(response.reason))
+        return true;
+      if (response.outcome !== 1 /* SYNCBOARD_OUTCOME_HTTP_RESPONSE */ || response.httpStatus !== 200 || response.reason !== "" || response.bodyJson.length === 0 || !response.coordinatorEpoch || response.topicBindingSeq <= 0n || response.refusal !== 0)
+        return false;
+      try {
+        const body = JSON.parse(
+          new TextDecoder("utf-8", { fatal: true }).decode(
+            response.bodyJson
+          )
+        );
+        return typeof body === "object" && body !== null && typeof body.topic === "string" && body.topic.length > 0;
+      } catch {
+        return false;
+      }
+    }
+    if (response.coordinatorEpoch !== "" || response.topicBindingSeq !== 0n || response.refusal !== 0)
+      return false;
     switch (response.outcome) {
       case 2 /* SYNCBOARD_OUTCOME_NOT_SENT */:
       case 3 /* SYNCBOARD_OUTCOME_UNKNOWN */:
@@ -32297,6 +32623,7 @@ var Runtime = class {
       case "timeout":
       case "cancelled":
       case "too-large":
+      case "capacity":
       case "invalid-response":
       case "http-error":
       case "transport-error":
@@ -33476,6 +33803,7 @@ var Runtime = class {
   onStreamEnd(status) {
     this.setSyncboardAccepted(false);
     this.syncboardPushAccepted = false;
+    this.syncboardTopicAccepted = false;
     const channel = this.channel;
     this.cancelTranscriptSearches(channel ?? void 0);
     channel?.close();
@@ -37908,6 +38236,19 @@ __export(typebox_exports, {
 });
 
 // src/syncboard.ts
+var publishParameters = typebox_exports.Object(
+  {
+    topic: typebox_exports.String(),
+    value: typebox_exports.Unknown()
+  },
+  { additionalProperties: false }
+);
+var subscribeParameters = typebox_exports.Object(
+  {
+    topic: typebox_exports.String()
+  },
+  { additionalProperties: false }
+);
 var toolParameters = typebox_exports.Object(
   {
     operation: typebox_exports.Union([
@@ -37974,11 +38315,128 @@ function createSyncboardToolManager(pi, options) {
       };
     }
   });
+  const makeTopicTool = (name, exposure) => {
+    if (name === "syncboard_publish") {
+      return {
+        name,
+        label: "Syncboard publish",
+        description: "Write a value to one Syncboard topic. Every subscriber receives the complete stored value without calling another tool.",
+        promptSnippet: "Publish to a Phi Syncboard topic.",
+        parameters: publishParameters,
+        exposure,
+        execute: async (_toolCallId, params, signal) => {
+          const parsed = validateTopicPublish(params);
+          if (options.disabled()) {
+            manager.setAvailable(false);
+            throw new Error(
+              "Syncboard is unavailable because the Phi bridge is disabled."
+            );
+          }
+          const runtime = options.currentRuntime();
+          if (!runtime)
+            throw new Error(
+              "Syncboard is unavailable because the Phi bridge is not connected."
+            );
+          let response;
+          try {
+            response = await runtime.requestSyncboard(
+              3 /* SYNCBOARD_OPERATION_UPSERT */,
+              parsed.topic,
+              parsed.valueJson,
+              signal
+            );
+          } catch (error) {
+            if (error instanceof SyncboardCallError)
+              throw new Error(formatCallError(error));
+            throw new Error("Syncboard publish failed.");
+          }
+          const result = parseSyncboardResponse(response, {
+            operation: 3 /* SYNCBOARD_OPERATION_UPSERT */,
+            key: parsed.topic,
+            valueJson: parsed.valueJson
+          });
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(result, null, 2)
+              }
+            ],
+            details: { topic: parsed.topic, result }
+          };
+        }
+      };
+    }
+    return {
+      name,
+      label: "Syncboard subscribe",
+      description: "Subscribe this session to one Syncboard topic. Later posts to that key are delivered as complete model-visible messages without another tool call.",
+      promptSnippet: "Subscribe to a Phi Syncboard topic.",
+      promptGuidelines: [
+        "One successful subscribe is enough. Do not poll, fetch, or wait with another tool to receive a post."
+      ],
+      parameters: subscribeParameters,
+      exposure,
+      execute: async (_toolCallId, params, signal) => {
+        const topic = validateTopic(params);
+        if (options.disabled()) {
+          manager.setAvailable(false);
+          throw new Error(
+            "Syncboard is unavailable because the Phi bridge is disabled."
+          );
+        }
+        const runtime = options.currentRuntime();
+        if (!runtime)
+          throw new Error(
+            "Syncboard is unavailable because the Phi bridge is not connected."
+          );
+        let response;
+        try {
+          response = await runtime.requestSyncboard(
+            5 /* SYNCBOARD_OPERATION_SUBSCRIBE */,
+            topic,
+            void 0,
+            signal
+          );
+        } catch (error) {
+          if (error instanceof SyncboardCallError)
+            throw new Error(formatCallError(error));
+          throw new Error("Syncboard subscribe failed.");
+        }
+        const result = parseSubscribeResponse(response, topic);
+        if (options.topicState) {
+          if (!activateSyncboardTopic(
+            options.topicState,
+            result.epoch,
+            result.binding
+          ))
+            throw new Error(
+              "Syncboard subscription was superseded by a newer binding."
+            );
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                { subscribed: topic, epoch: result.epoch },
+                null,
+                2
+              )
+            }
+          ],
+          details: { topic, epoch: result.epoch }
+        };
+      }
+    };
+  };
   const manager = {
     prepare() {
       if (!pi.registerTool) return false;
       if (options.isOwned()) {
         try {
+          register(makeTopicTool("syncboard_publish", "hidden"));
+          register(makeTopicTool("syncboard_subscribe", "hidden"));
           register(makeTool("hidden"));
           return true;
         } catch {
@@ -37989,6 +38447,8 @@ function createSyncboardToolManager(pi, options) {
         const tools = pi.getAllTools();
         if (!Array.isArray(tools) || tools.some((tool) => tool.name === "syncboard"))
           return false;
+        register(makeTopicTool("syncboard_publish", "hidden"));
+        register(makeTopicTool("syncboard_subscribe", "hidden"));
         register(makeTool("hidden"));
         options.setOwned(true);
         return true;
@@ -38000,12 +38460,63 @@ function createSyncboardToolManager(pi, options) {
       if (!options.isOwned()) return;
       const exposure = available && !options.disabled() ? "direct" : "hidden";
       try {
+        register(makeTopicTool("syncboard_publish", exposure));
+        register(makeTopicTool("syncboard_subscribe", exposure));
         register(makeTool(exposure));
       } catch {
       }
     }
   };
   return manager;
+}
+function validateTopic(value) {
+  if (!isRecord2(value) || typeof value.topic !== "string")
+    throw new Error("Topic is required.");
+  const topic = trimGoSpace(value.topic);
+  if (!validKey(topic)) throw new Error("Invalid Syncboard topic.");
+  return topic;
+}
+function validateTopicPublish(value) {
+  if (!isRecord2(value) || !Object.hasOwn(value, "value"))
+    throw new Error("Publish requires a JSON value.");
+  const topic = validateTopic(value);
+  if (!isJsonValue(value.value)) throw new Error("Value must be valid JSON.");
+  const text = JSON.stringify(value.value);
+  if (text === void 0) throw new Error("Value must be valid JSON.");
+  const valueJson = Buffer.from(text, "utf8");
+  if (valueJson.byteLength === 0 || valueJson.byteLength > MAX_SYNCBOARD_VALUE_BYTES)
+    throw new Error("Syncboard value exceeds the 64 KiB limit.");
+  return { topic, valueJson };
+}
+function parseSubscribeResponse(response, topic) {
+  if (response.outcome === 2 /* SYNCBOARD_OUTCOME_NOT_SENT */)
+    throw new Error(
+      `Syncboard subscribe not sent (${safeReason(response.reason)}).`
+    );
+  if (response.outcome !== 1 /* SYNCBOARD_OUTCOME_HTTP_RESPONSE */)
+    throw new Error("Syncboard subscribe result unavailable.");
+  if (response.httpStatus !== 200 || response.reason !== "")
+    throw new Error(
+      `Syncboard subscribe refused (${safeReason(response.reason)}).`
+    );
+  if ((response.refusal ?? 0) !== 0)
+    throw new Error("Syncboard subscribe refused.");
+  if (!response.coordinatorEpoch || (response.topicBindingSeq ?? 0n) <= 0n)
+    throw new Error("Syncboard subscribe response was invalid.");
+  let body;
+  try {
+    body = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(response.bodyJson)
+    );
+  } catch {
+    throw new Error("Syncboard subscribe response was invalid.");
+  }
+  if (!isRecord2(body) || body.topic !== topic)
+    throw new Error("Syncboard subscribe response was invalid.");
+  return {
+    epoch: response.coordinatorEpoch,
+    binding: response.topicBindingSeq ?? 0n
+  };
 }
 function validateSyncboardInput(value) {
   if (!isRecord2(value)) throw new Error("Invalid Syncboard request.");
@@ -38172,6 +38683,7 @@ function safeReason(reason) {
     case "timeout":
     case "cancelled":
     case "too-large":
+    case "capacity":
     case "invalid-response":
     case "http-error":
     case "transport-error":
@@ -38203,6 +38715,12 @@ function ownerSyncboardPushState() {
   const slot = ownerSlot();
   if (!slot.syncboardPush) slot.syncboardPush = freshSyncboardPushState();
   return slot.syncboardPush;
+}
+function ownerSyncboardTopicState() {
+  const slot = ownerSlot();
+  if (!slot.syncboardTopics)
+    slot.syncboardTopics = freshSyncboardTopicState();
+  return slot.syncboardTopics;
 }
 function ownerAttachmentState() {
   const slot = ownerSlot();
@@ -38310,7 +38828,8 @@ function createExtension(pi, deps = {}) {
     isOwned: () => ownerSlot().syncboardOwned === true,
     setOwned: (owned) => {
       ownerSlot().syncboardOwned = owned;
-    }
+    },
+    topicState: ownerSyncboardTopicState()
   });
   const nativeThinking = pi;
   const getThinkingLevel = typeof nativeThinking.getThinkingLevel === "function" ? nativeThinking.getThinkingLevel.bind(pi) : void 0;
@@ -38336,6 +38855,7 @@ function createExtension(pi, deps = {}) {
       sendUserMessage: (content, options) => nativeSkills.sendUserMessage(content, options)
     } : {},
     syncboardPushState: ownerSyncboardPushState(),
+    syncboardTopicState: ownerSyncboardTopicState(),
     // A pushed message becomes a displayed custom message that
     // triggers a turn. followUp never interrupts a running turn.
     ...typeof pi.sendMessage === "function" ? {

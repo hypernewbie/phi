@@ -30,6 +30,13 @@ func TestSyncboardRequestValidation(t *testing.T) {
 			t.Fatalf("valid operation %s rejected: %+v, %q", operation, validKey, reason)
 		}
 	}
+	validSubscribe, reason := validateSyncboardRequest(&pibridgepb.SyncboardRequest{
+		Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_SUBSCRIBE,
+		Key:       "  topic/a  ",
+	})
+	if reason != "" || validSubscribe.GetKey() != "topic/a" {
+		t.Fatalf("valid subscribe rejected: %+v, %q", validSubscribe, reason)
+	}
 	for _, value := range []string{"null", "false", "0", `""`} {
 		validUpsert, reason := validateSyncboardRequest(&pibridgepb.SyncboardRequest{
 			Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_UPSERT,
@@ -47,6 +54,8 @@ func TestSyncboardRequestValidation(t *testing.T) {
 		{Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_UPSERT, Key: "a/../b", ValueJson: []byte("null")},
 		{Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_UPSERT, Key: "a", ValueJson: []byte("not-json")},
 		{Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_UPSERT, Key: "a"},
+		{Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_SUBSCRIBE, Key: "topic", ValueJson: []byte("null")},
+		{Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_SUBSCRIBE},
 		{Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_LIST, ValueJson: []byte("null")},
 		{Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_GET},
 		{Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_GET, Key: "a", ValueJson: []byte("null")},
@@ -101,6 +110,42 @@ func TestSyncboardResponseOperationSemantics(t *testing.T) {
 			valid: false,
 		},
 		{
+			name: "subscribe success",
+			request: &pibridgepb.SyncboardRequest{
+				Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_SUBSCRIBE, Key: "topic",
+			},
+			response: &pibridgepb.SyncboardResponse{
+				Outcome:    pibridgepb.SyncboardOutcome_SYNCBOARD_OUTCOME_HTTP_RESPONSE,
+				HttpStatus: 200, BodyJson: []byte(`{"topic":"topic"}`),
+				CoordinatorEpoch: "epoch-1", TopicBindingSeq: 4,
+			},
+			status: 200, body: `{"topic":"topic"}`, valid: true,
+		},
+		{
+			name: "subscribe capacity refusal",
+			request: &pibridgepb.SyncboardRequest{
+				Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_SUBSCRIBE, Key: "topic",
+			},
+			response: &pibridgepb.SyncboardResponse{
+				Outcome:    pibridgepb.SyncboardOutcome_SYNCBOARD_OUTCOME_HTTP_RESPONSE,
+				HttpStatus: 503, Reason: SyncboardReasonCapacity,
+				Refusal: pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_CAPACITY,
+			},
+			status: 503, valid: true,
+		},
+		{
+			name: "subscribe success without binding",
+			request: &pibridgepb.SyncboardRequest{
+				Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_SUBSCRIBE, Key: "topic",
+			},
+			response: &pibridgepb.SyncboardResponse{
+				Outcome:    pibridgepb.SyncboardOutcome_SYNCBOARD_OUTCOME_HTTP_RESPONSE,
+				HttpStatus: 200, BodyJson: []byte(`{"topic":"topic"}`),
+				CoordinatorEpoch: "epoch-1",
+			},
+			valid: false,
+		},
+		{
 			name:    "delete requires empty success body",
 			request: &pibridgepb.SyncboardRequest{Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_DELETE},
 			response: &pibridgepb.SyncboardResponse{
@@ -115,6 +160,9 @@ func TestSyncboardResponseOperationSemantics(t *testing.T) {
 			if item.valid {
 				if got.GetOutcome() != pibridgepb.SyncboardOutcome_SYNCBOARD_OUTCOME_HTTP_RESPONSE || got.GetHttpStatus() != item.status || string(got.GetBodyJson()) != item.body {
 					t.Fatalf("normalized response = %v", got)
+				}
+				if item.name == "subscribe capacity refusal" && got.GetRefusal() != pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_CAPACITY {
+					t.Fatalf("capacity refusal was not preserved: %v", got)
 				}
 				return
 			}

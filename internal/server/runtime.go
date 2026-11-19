@@ -175,6 +175,8 @@ func (app *Server) Run(ctx context.Context) error {
 	// panes provision against a live listener. A nil bridge (listener
 	// failure) leaves every launch on the unmanaged path.
 	app.bridge = piapp.StartBridge(app.hub, app.options.PiRuntime, app.options.PiVersion, app.attachmentStore)
+	app.wireSyncTopics()
+	app.startSyncTopicsDelivery()
 	if app.bridge != nil {
 		app.bridge.Syncboard = http.HandlerFunc(app.handleSyncMessages)
 		app.bridge.LoadConfig = app.configStore().LoadWithError

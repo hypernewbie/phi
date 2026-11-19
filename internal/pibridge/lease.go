@@ -65,6 +65,20 @@ type lease struct {
 	pendingPushes map[string]*pendingPush
 	// pendingOrder preserves delivery order; a full backlog refuses new work.
 	pendingOrder []string
+	// Topic subscriptions retain one cumulative native binding sequence
+	// per owner/epoch. RetiredThrough is permanent for this process.
+	topicEpoch          string
+	topicBinding        uint64
+	topicNextBinding    uint64
+	topicRetiredThrough uint64
+	// topicWithdrawnGen permanently fences topic binding for one runtime
+	// generation. A capability withdrawal or peer revocation cannot be
+	// undone by a same-generation reconnect; a higher generation is needed.
+	topicWithdrawnGen  uint64
+	topicRetired       *pibridgepb.SyncboardTopicRetired
+	topicRetiredSentTo *peer
+	pendingTopics      map[string]*pendingTopic
+	pendingTopicOrder  []string
 }
 
 type leaseState int

@@ -9,7 +9,23 @@ import {
     type SyncboardResponse,
 } from './gen/bridge.js';
 import { SyncboardCallError } from './runtime.js';
+import { activateSyncboardTopic, type SyncboardTopicState } from './topics.js';
 import { MAX_SYNCBOARD_VALUE_BYTES } from './protocol.js';
+
+const publishParameters = Type.Object(
+    {
+        topic: Type.String(),
+        value: Type.Unknown(),
+    },
+    { additionalProperties: false },
+);
+
+const subscribeParameters = Type.Object(
+    {
+        topic: Type.String(),
+    },
+    { additionalProperties: false },
+);
 
 const toolParameters = Type.Object(
     {
@@ -25,13 +41,25 @@ const toolParameters = Type.Object(
     { additionalProperties: false },
 );
 
+/** New topic fields are optional here so legacy callers stay assignable. */
+export interface SyncboardWireResponse {
+    requestId: string;
+    outcome: SyncboardOutcome;
+    httpStatus: number;
+    bodyJson: Uint8Array;
+    reason: string;
+    coordinatorEpoch?: string;
+    refusal?: number;
+    topicBindingSeq?: bigint;
+}
+
 export interface SyncboardRuntime {
     requestSyncboard(
         operation: SyncboardOperation,
         key: string,
         valueJson?: Uint8Array,
         signal?: AbortSignal,
-    ): Promise<SyncboardResponse>;
+    ): Promise<SyncboardWireResponse>;
 }
 
 export interface SyncboardToolOptions {
@@ -39,6 +67,7 @@ export interface SyncboardToolOptions {
     readonly disabled: () => boolean;
     readonly isOwned: () => boolean;
     readonly setOwned: (owned: boolean) => void;
+    readonly topicState?: SyncboardTopicState;
 }
 
 export interface SyncboardToolManager {
@@ -56,7 +85,7 @@ export function createSyncboardToolManager(
     pi: ExtensionAPI,
     options: SyncboardToolOptions,
 ): SyncboardToolManager {
-    const register = (tool: ToolDefinition<typeof toolParameters>): void => {
+    const register = (tool: ToolDefinition<any>): void => {
         if (typeof pi.registerTool !== 'function')
             throw new Error('Tool registration unavailable');
         pi.registerTool(tool);
@@ -89,7 +118,7 @@ export function createSyncboardToolManager(
                 throw new Error(
                     'Syncboard is unavailable because the Phi bridge is not connected.',
                 );
-            let response: SyncboardResponse;
+            let response: SyncboardWireResponse;
             try {
                 response = await runtime.requestSyncboard(
                     parsed.operation,
@@ -113,11 +142,139 @@ export function createSyncboardToolManager(
         },
     });
 
+    const makeTopicTool = (
+        name: 'syncboard_publish' | 'syncboard_subscribe',
+        exposure: 'direct' | 'hidden',
+    ): ToolDefinition<
+        typeof publishParameters | typeof subscribeParameters
+    > => {
+        if (name === 'syncboard_publish') {
+            return {
+                name,
+                label: 'Syncboard publish',
+                description:
+                    'Write a value to one Syncboard topic. Every subscriber receives the complete stored value without calling another tool.',
+                promptSnippet: 'Publish to a Phi Syncboard topic.',
+                parameters: publishParameters,
+                exposure,
+                execute: async (_toolCallId, params, signal) => {
+                    const parsed = validateTopicPublish(params);
+                    if (options.disabled()) {
+                        manager.setAvailable(false);
+                        throw new Error(
+                            'Syncboard is unavailable because the Phi bridge is disabled.',
+                        );
+                    }
+                    const runtime = options.currentRuntime();
+                    if (!runtime)
+                        throw new Error(
+                            'Syncboard is unavailable because the Phi bridge is not connected.',
+                        );
+                    let response: SyncboardWireResponse;
+                    try {
+                        response = await runtime.requestSyncboard(
+                            SyncboardOperation.SYNCBOARD_OPERATION_UPSERT,
+                            parsed.topic,
+                            parsed.valueJson,
+                            signal,
+                        );
+                    } catch (error) {
+                        if (error instanceof SyncboardCallError)
+                            throw new Error(formatCallError(error));
+                        throw new Error('Syncboard publish failed.');
+                    }
+                    const result = parseSyncboardResponse(response, {
+                        operation:
+                            SyncboardOperation.SYNCBOARD_OPERATION_UPSERT,
+                        key: parsed.topic,
+                        valueJson: parsed.valueJson,
+                    });
+                    return {
+                        content: [
+                            {
+                                type: 'text',
+                                text: JSON.stringify(result, null, 2),
+                            },
+                        ],
+                        details: { topic: parsed.topic, result },
+                    };
+                },
+            };
+        }
+        return {
+            name,
+            label: 'Syncboard subscribe',
+            description:
+                'Subscribe this session to one Syncboard topic. Later posts to that key are delivered as complete model-visible messages without another tool call.',
+            promptSnippet: 'Subscribe to a Phi Syncboard topic.',
+            promptGuidelines: [
+                'One successful subscribe is enough. Do not poll, fetch, or wait with another tool to receive a post.',
+            ],
+            parameters: subscribeParameters,
+            exposure,
+            execute: async (_toolCallId, params, signal) => {
+                const topic = validateTopic(params);
+                if (options.disabled()) {
+                    manager.setAvailable(false);
+                    throw new Error(
+                        'Syncboard is unavailable because the Phi bridge is disabled.',
+                    );
+                }
+                const runtime = options.currentRuntime();
+                if (!runtime)
+                    throw new Error(
+                        'Syncboard is unavailable because the Phi bridge is not connected.',
+                    );
+                let response: SyncboardWireResponse;
+                try {
+                    response = await runtime.requestSyncboard(
+                        SyncboardOperation.SYNCBOARD_OPERATION_SUBSCRIBE,
+                        topic,
+                        undefined,
+                        signal,
+                    );
+                } catch (error) {
+                    if (error instanceof SyncboardCallError)
+                        throw new Error(formatCallError(error));
+                    throw new Error('Syncboard subscribe failed.');
+                }
+                const result = parseSubscribeResponse(response, topic);
+                if (options.topicState) {
+                    if (
+                        !activateSyncboardTopic(
+                            options.topicState,
+                            result.epoch,
+                            result.binding,
+                        )
+                    )
+                        throw new Error(
+                            'Syncboard subscription was superseded by a newer binding.',
+                        );
+                }
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify(
+                                { subscribed: topic, epoch: result.epoch },
+                                null,
+                                2,
+                            ),
+                        },
+                    ],
+                    details: { topic, epoch: result.epoch },
+                };
+            },
+        };
+    };
+
     const manager: SyncboardToolManager = {
         prepare(): boolean {
             if (!pi.registerTool) return false;
             if (options.isOwned()) {
                 try {
+                    register(makeTopicTool('syncboard_publish', 'hidden'));
+                    register(makeTopicTool('syncboard_subscribe', 'hidden'));
                     register(makeTool('hidden'));
                     return true;
                 } catch {
@@ -131,6 +288,8 @@ export function createSyncboardToolManager(
                     tools.some((tool) => tool.name === 'syncboard')
                 )
                     return false;
+                register(makeTopicTool('syncboard_publish', 'hidden'));
+                register(makeTopicTool('syncboard_subscribe', 'hidden'));
                 register(makeTool('hidden'));
                 options.setOwned(true);
                 return true;
@@ -143,6 +302,8 @@ export function createSyncboardToolManager(
             const exposure =
                 available && !options.disabled() ? 'direct' : 'hidden';
             try {
+                register(makeTopicTool('syncboard_publish', exposure));
+                register(makeTopicTool('syncboard_subscribe', exposure));
                 register(makeTool(exposure));
             } catch {
                 // Tool registration failure only disables Syncboard.
@@ -150,6 +311,69 @@ export function createSyncboardToolManager(
         },
     };
     return manager;
+}
+
+interface ValidatedTopicPublish {
+    readonly topic: string;
+    readonly valueJson: Uint8Array;
+}
+
+function validateTopic(value: unknown): string {
+    if (!isRecord(value) || typeof value.topic !== 'string')
+        throw new Error('Topic is required.');
+    const topic = trimGoSpace(value.topic);
+    if (!validKey(topic)) throw new Error('Invalid Syncboard topic.');
+    return topic;
+}
+
+function validateTopicPublish(value: unknown): ValidatedTopicPublish {
+    if (!isRecord(value) || !Object.hasOwn(value, 'value'))
+        throw new Error('Publish requires a JSON value.');
+    const topic = validateTopic(value);
+    if (!isJsonValue(value.value)) throw new Error('Value must be valid JSON.');
+    const text = JSON.stringify(value.value);
+    if (text === undefined) throw new Error('Value must be valid JSON.');
+    const valueJson = Buffer.from(text, 'utf8');
+    if (
+        valueJson.byteLength === 0 ||
+        valueJson.byteLength > MAX_SYNCBOARD_VALUE_BYTES
+    )
+        throw new Error('Syncboard value exceeds the 64 KiB limit.');
+    return { topic, valueJson };
+}
+
+function parseSubscribeResponse(
+    response: SyncboardWireResponse,
+    topic: string,
+): { epoch: string; binding: bigint } {
+    if (response.outcome === SyncboardOutcome.SYNCBOARD_OUTCOME_NOT_SENT)
+        throw new Error(
+            `Syncboard subscribe not sent (${safeReason(response.reason)}).`,
+        );
+    if (response.outcome !== SyncboardOutcome.SYNCBOARD_OUTCOME_HTTP_RESPONSE)
+        throw new Error('Syncboard subscribe result unavailable.');
+    if (response.httpStatus !== 200 || response.reason !== '')
+        throw new Error(
+            `Syncboard subscribe refused (${safeReason(response.reason)}).`,
+        );
+    if ((response.refusal ?? 0) !== 0)
+        throw new Error('Syncboard subscribe refused.');
+    if (!response.coordinatorEpoch || (response.topicBindingSeq ?? 0n) <= 0n)
+        throw new Error('Syncboard subscribe response was invalid.');
+    let body: unknown;
+    try {
+        body = JSON.parse(
+            new TextDecoder('utf-8', { fatal: true }).decode(response.bodyJson),
+        );
+    } catch {
+        throw new Error('Syncboard subscribe response was invalid.');
+    }
+    if (!isRecord(body) || body.topic !== topic)
+        throw new Error('Syncboard subscribe response was invalid.');
+    return {
+        epoch: response.coordinatorEpoch,
+        binding: response.topicBindingSeq ?? 0n,
+    };
 }
 
 export interface ValidatedSyncboardInput {
@@ -264,7 +488,7 @@ function hasLoneSurrogate(value: string): boolean {
 }
 
 function parseSyncboardResponse(
-    response: SyncboardResponse,
+    response: SyncboardWireResponse,
     request: ValidatedSyncboardInput,
 ): unknown {
     if (response.outcome === SyncboardOutcome.SYNCBOARD_OUTCOME_NOT_SENT)
@@ -366,6 +590,7 @@ function safeReason(reason: string): string {
         case 'timeout':
         case 'cancelled':
         case 'too-large':
+        case 'capacity':
         case 'invalid-response':
         case 'http-error':
         case 'transport-error':

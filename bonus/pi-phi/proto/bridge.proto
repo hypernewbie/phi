@@ -86,6 +86,7 @@ message PhiToPi {
     TranscriptSearchRequest transcript_search_request = 26;
     SyncboardNotification syncboard_notification = 27;
     TerminalRefreshRequest terminal_refresh_request = 28;
+    SyncboardTopicRetired syncboard_topic_retired = 29;
   }
 }
 
@@ -592,6 +593,7 @@ enum SyncboardOperation {
   SYNCBOARD_OPERATION_GET = 2;
   SYNCBOARD_OPERATION_UPSERT = 3;
   SYNCBOARD_OPERATION_DELETE = 4;
+  SYNCBOARD_OPERATION_SUBSCRIBE = 5;
 }
 
 // SyncboardOutcome distinguishes a complete API response from a request
@@ -620,6 +622,17 @@ message SyncboardResponse {
   uint32 http_status = 3;
   bytes body_json = 4;
   string reason = 5;
+  string coordinator_epoch = 6;
+  SyncboardRefusal refusal = 7;
+  uint64 topic_binding_seq = 8;
+}
+
+// SyncboardRefusal is a typed, bounded refusal for topic operations.
+enum SyncboardRefusal {
+  SYNCBOARD_REFUSAL_UNSPECIFIED = 0;
+  SYNCBOARD_REFUSAL_INVALID = 1;
+  SYNCBOARD_REFUSAL_TOO_LARGE = 2;
+  SYNCBOARD_REFUSAL_CAPACITY = 3;
 }
 
 // SyncboardNotification delivers one addressed message for injection into
@@ -634,6 +647,8 @@ message SyncboardNotification {
   bytes value = 4;
   int64 updated_at_unix_ms = 5;
   string message_id = 6;
+  string topic = 7;
+  string coordinator_epoch = 8;
 }
 
 // SyncboardPushAck confirms one SyncboardNotification. A missing ack keeps
@@ -642,6 +657,15 @@ message SyncboardNotification {
 message SyncboardPushAck {
   uint64 seq = 1;
   string message_id = 2;
+  string coordinator_epoch = 3;
+}
+
+// SyncboardTopicRetired retires every topic binding through a cumulative
+// watermark. It is retained and replayed until the runtime applies it.
+message SyncboardTopicRetired {
+  string retired_epoch = 1;
+  string reason = 2;
+  uint64 through_binding_seq = 3;
 }
 
 // ---------------------------------------------------------------------------

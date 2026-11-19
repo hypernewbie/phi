@@ -19,6 +19,7 @@ const (
 	SyncboardReasonTimeout         = "timeout"
 	SyncboardReasonCancelled       = "cancelled"
 	SyncboardReasonTooLarge        = "too-large"
+	SyncboardReasonCapacity        = "capacity"
 	SyncboardReasonInvalidResponse = "invalid-response"
 	SyncboardReasonHTTPError       = "http-error"
 	SyncboardReasonTransportError  = "transport-error"
@@ -68,6 +69,12 @@ func validateSyncboardRequest(req *pibridgepb.SyncboardRequest) (*pibridgepb.Syn
 			return nil, SyncboardReasonInvalidRequest
 		}
 		normalized.Key = key
+	case pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_SUBSCRIBE:
+		key := strings.TrimSpace(req.GetKey())
+		if !validSyncboardKey(key) || len(req.GetValueJson()) != 0 {
+			return nil, SyncboardReasonInvalidRequest
+		}
+		normalized.Key = key
 	default:
 		return nil, SyncboardReasonInvalidRequest
 	}
@@ -90,7 +97,7 @@ func syncboardReasonAllowed(reason string) bool {
 	switch reason {
 	case SyncboardReasonUnavailable, SyncboardReasonInvalidRequest, SyncboardReasonInvalidConfig,
 		SyncboardReasonNotReady, SyncboardReasonBusy, SyncboardReasonTimeout, SyncboardReasonCancelled,
-		SyncboardReasonTooLarge, SyncboardReasonInvalidResponse, SyncboardReasonHTTPError,
+		SyncboardReasonTooLarge, SyncboardReasonCapacity, SyncboardReasonInvalidResponse, SyncboardReasonHTTPError,
 		SyncboardReasonTransportError:
 		return true
 	default:
@@ -114,20 +121,52 @@ func normalizeSyncboardResponse(id string, req *pibridgepb.SyncboardRequest, res
 	if res == nil {
 		return unknown(SyncboardReasonTransportError)
 	}
+	subscribe := req != nil && req.GetOperation() == pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_SUBSCRIBE
 	switch res.GetOutcome() {
 	case pibridgepb.SyncboardOutcome_SYNCBOARD_OUTCOME_NOT_SENT:
-		if res.GetHttpStatus() != 0 || len(res.GetBodyJson()) != 0 || !syncboardReasonAllowed(res.GetReason()) {
+		if subscribe {
+			if res.GetCoordinatorEpoch() != "" || res.GetTopicBindingSeq() != 0 ||
+				!validSyncboardRefusal(res.GetRefusal()) ||
+				!validSyncboardSubscribeRefusal(res, req) {
+				return unknown(SyncboardReasonInvalidResponse)
+			}
+			return res
+		}
+		if res.GetHttpStatus() != 0 || len(res.GetBodyJson()) != 0 || !syncboardReasonAllowed(res.GetReason()) ||
+			res.GetCoordinatorEpoch() != "" || res.GetRefusal() != pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_UNSPECIFIED || res.GetTopicBindingSeq() != 0 {
 			return unknown(SyncboardReasonInvalidResponse)
 		}
 		return &pibridgepb.SyncboardResponse{RequestId: id, Outcome: res.GetOutcome(), Reason: res.GetReason()}
 	case pibridgepb.SyncboardOutcome_SYNCBOARD_OUTCOME_UNKNOWN:
-		if res.GetHttpStatus() != 0 || len(res.GetBodyJson()) != 0 || !syncboardReasonAllowed(res.GetReason()) {
+		if res.GetHttpStatus() != 0 || len(res.GetBodyJson()) != 0 || !syncboardReasonAllowed(res.GetReason()) ||
+			res.GetCoordinatorEpoch() != "" || res.GetRefusal() != pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_UNSPECIFIED || res.GetTopicBindingSeq() != 0 {
 			return unknown(SyncboardReasonInvalidResponse)
 		}
 		return &pibridgepb.SyncboardResponse{RequestId: id, Outcome: res.GetOutcome(), Reason: res.GetReason()}
 	case pibridgepb.SyncboardOutcome_SYNCBOARD_OUTCOME_HTTP_RESPONSE:
 		status := res.GetHttpStatus()
 		if status < 100 || status > 599 || req == nil {
+			return unknown(SyncboardReasonInvalidResponse)
+		}
+		if subscribe {
+			if status != http.StatusOK {
+				if !validSyncboardSubscribeRefusal(res, req) {
+					return unknown(SyncboardReasonInvalidResponse)
+				}
+				return &pibridgepb.SyncboardResponse{
+					RequestId: id, Outcome: res.GetOutcome(), HttpStatus: status,
+					Reason: res.GetReason(), Refusal: res.GetRefusal(),
+				}
+			}
+			if res.GetReason() != "" ||
+				!validSyncboardRefusal(res.GetRefusal()) || res.GetRefusal() != pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_UNSPECIFIED ||
+				res.GetCoordinatorEpoch() == "" || len(res.GetCoordinatorEpoch()) > maxTopicIDBytes ||
+				res.GetTopicBindingSeq() == 0 || !validSyncboardSubscribeBody(req, res.GetBodyJson()) {
+				return unknown(SyncboardReasonInvalidResponse)
+			}
+			return res
+		}
+		if res.GetCoordinatorEpoch() != "" || res.GetRefusal() != pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_UNSPECIFIED || res.GetTopicBindingSeq() != 0 {
 			return unknown(SyncboardReasonInvalidResponse)
 		}
 		if status == http.StatusNotFound && (req.GetOperation() == pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_GET || req.GetOperation() == pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_DELETE) {
@@ -273,4 +312,47 @@ func syncboardEnvelope(pane, process string, generation uint64, response *pibrid
 		PaneId: pane, ProcessId: process, RuntimeGeneration: generation,
 		Payload: &pibridgepb.PhiToPi_SyncboardResponse{SyncboardResponse: response},
 	}
+}
+
+func validSyncboardRefusal(refusal pibridgepb.SyncboardRefusal) bool {
+	switch refusal {
+	case pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_UNSPECIFIED,
+		pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_INVALID,
+		pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_TOO_LARGE,
+		pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_CAPACITY:
+		return true
+	default:
+		return false
+	}
+}
+
+func validSyncboardSubscribeRefusal(res *pibridgepb.SyncboardResponse, req *pibridgepb.SyncboardRequest) bool {
+	if len(res.GetBodyJson()) != 0 || res.GetTopicBindingSeq() != 0 || res.GetCoordinatorEpoch() != "" {
+		return false
+	}
+	switch res.GetRefusal() {
+	case pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_INVALID:
+		return res.GetHttpStatus() == http.StatusBadRequest && res.GetReason() == SyncboardReasonInvalidRequest
+	case pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_TOO_LARGE:
+		return res.GetHttpStatus() == http.StatusRequestEntityTooLarge && res.GetReason() == SyncboardReasonTooLarge
+	case pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_CAPACITY:
+		return res.GetHttpStatus() == http.StatusServiceUnavailable && res.GetReason() == SyncboardReasonCapacity
+	case pibridgepb.SyncboardRefusal_SYNCBOARD_REFUSAL_UNSPECIFIED:
+		return res.GetHttpStatus() == 0 && syncboardReasonAllowed(res.GetReason())
+	default:
+		return false
+	}
+}
+
+func validSyncboardSubscribeBody(req *pibridgepb.SyncboardRequest, body []byte) bool {
+	if len(body) == 0 || len(body) > MaxSyncboardResponseBytes || !json.Valid(body) {
+		return false
+	}
+	var decoded struct {
+		Topic string `json:"topic"`
+	}
+	if json.Unmarshal(body, &decoded) != nil || decoded.Topic == "" || decoded.Topic != req.GetKey() {
+		return false
+	}
+	return true
 }

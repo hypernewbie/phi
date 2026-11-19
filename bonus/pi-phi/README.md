@@ -3,9 +3,11 @@
 Phi's integration endpoint inside Pi. The extension reports explicit
 Pi completion to Phi's existing bell and provides read-only editor history.
 It also lists and switches models through Phi's shared model picker.
-It shows context usage as display-only telemetry. It exposes a native
-`syncboard` tool for list, get, upsert, and delete while the owning Phi
-bridge capability is active. Phi resolves its own coordinator for each call.
+It shows context usage as display-only telemetry. It exposes native
+`syncboard_publish` and `syncboard_subscribe` tools for topics, plus the
+legacy `syncboard` tool for list, get, upsert, and delete while the owning
+Phi bridge capability is active. Phi resolves its own coordinator for each
+call.
 An unknown outcome is never retried. It runs a native compaction only on an
 explicit user action through the existing
 Compact control: one operation per Pi process, no server-side queue,
@@ -115,11 +117,28 @@ missing capability or a disconnected bridge keeps that replay path unchanged.
 ## Syncboard tool
 
 A Pi session with the negotiated `pi.syncboard.v1` capability exposes the
-native `syncboard` tool for `list`, `get`, `upsert`, and `delete`. Phi routes
-every call to the coordinator configured by the Phi process that owns the
-pane. Pi cannot supply or change that URL. An unset coordinator uses the
-owning Phi store. Without the bridge or capability, the tool stays hidden and
-existing Pi behavior remains unchanged.
+legacy `syncboard` tool for `list`, `get`, `upsert`, and `delete`. A session
+with `pi.syncboard.topics.v1` also exposes `syncboard_publish` and
+`syncboard_subscribe`. Phi routes every call to the coordinator configured by
+the Phi process that owns the pane. Pi cannot supply or change that URL. An
+unset coordinator uses the owning Phi store. Without the bridge or capability,
+the tools stay hidden and existing Pi behavior remains unchanged.
+
+`syncboard_publish` writes one topic key. `syncboard_subscribe` binds the
+session to later posts on that key. A subscribe creates no row and replays no
+history. Each accepted post arrives once as a complete model-visible message;
+the receiver must not poll or fetch. Delivery is RAM-only: a coordinator
+restart loses unacknowledged work. Re-subscribe explicitly after a coordinator
+epoch change. Topic keys are at most 256 bytes, stored values at most 128 KiB,
+and one batch's text at most 64 KiB.
+
+On a follower Phi, direct REST board calls are forwarded to the configured
+coordinator; reads reflect the coordinator board, not a dormant local copy.
+Peer topic delivery uses `/ws/sync-topics`. Set `sync_topics_peer_id` and
+`sync_topics_peer_secret` on the follower, and add the same identity and
+secret to `[sync_topics_allowed_peers]` on the coordinator. A peer needs a
+matching secret before any WebSocket upgrade; live allowlist or secret changes
+retire the cohort and require the follower to subscribe again.
 
 List returns messages. Get returns the message or `{found:false,key}` when the
 key is absent. Upsert stores a JSON value and returns the message. Delete

@@ -776,8 +776,11 @@ describe('native Syncboard tool', () => {
         });
         handlers.get('session_start')?.({}, mockCtx() as never);
         expect(enabled).toBe(true);
-        expect(tools).toHaveLength(1);
-        expect(tools[0]?.name).toBe('syncboard');
+        expect(tools.map((tool) => tool.name)).toEqual([
+            'syncboard_publish',
+            'syncboard_subscribe',
+            'syncboard',
+        ]);
         expect(tools[0]?.exposure).toBe('hidden');
 
         availability?.(true);

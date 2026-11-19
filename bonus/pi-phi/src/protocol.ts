@@ -22,6 +22,7 @@ export const CAPABILITY_SYNCBOARD = 'pi.syncboard.v1';
  * the board and being injected into are different hazards.
  */
 export const CAPABILITY_SYNCBOARD_PUSH = 'pi.syncboard.push.v1';
+export const CAPABILITY_SYNCBOARD_TOPICS = 'pi.syncboard.topics.v1';
 /** Bounds and deadlines for native Syncboard calls. */
 export const MAX_SYNCBOARD_VALUE_BYTES = 64 * 1024;
 export const MAX_SYNCBOARD_RESPONSE_BYTES = 192 * 1024;

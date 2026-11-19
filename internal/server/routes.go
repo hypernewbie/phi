@@ -131,6 +131,8 @@ func (app *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/system/cpu", app.handleSystemCPU)
 	mux.HandleFunc("/api/session-transcript", app.handleGetSessionTranscript)
 	mux.HandleFunc("/api/proxy", handleProxy)
+	mux.HandleFunc(syncTopicsPeerPath, app.handleSyncTopicPeer)
+	mux.HandleFunc("/api/sync/topics/status", app.handleSyncTopicsStatus)
 	mux.HandleFunc("/api/sync/messages/", app.handleSyncMessages)
 	mux.HandleFunc("/api/sync/messages", app.handleSyncMessages)
 	// Addressed messages, newest last. Local read only; the mesh holds them.

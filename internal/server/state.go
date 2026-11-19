@@ -96,6 +96,9 @@ type Server struct {
 	ocServiceCacheValid                bool
 	syncMu                             sync.RWMutex
 	syncStore                          map[string]*SyncMessage
+	syncTopics                         *syncTopicEngine
+	syncTopicPeer                      *syncTopicPeerClient
+	syncTopicPeers                     *syncTopicPeerRegistry
 	testSyncPath                       string
 	saveTimer                          *time.Timer
 	saveMu                             sync.Mutex
@@ -114,7 +117,9 @@ func New(options Options) *Server {
 		version: options.Version, commit: options.Commit, date: options.Date, buildSource: options.BuildSource,
 		startedAt: now.Unix(), serverStartedAt: now, diagnosticsProcessStartedAt: now,
 		cpu: system.NewSampler(), fleet: fleet.NewPoller(), rpc: rpc.NewManager(),
-		syncStore: make(map[string]*SyncMessage),
+		syncStore:      make(map[string]*SyncMessage),
+		syncTopics:     newSyncTopicEngine(""),
+		syncTopicPeers: newSyncTopicPeerRegistry(),
 	}
 	app.accessManager = access.NewManager(app.configStore, func() *ws.Hub { return app.hub })
 	app.pi = piapp.NewAPI(func() *piapp.Bridge { return app.bridge }, func() *attachments.AttachmentStore { return app.attachmentStore }, func() *pty.Manager { return app.pty })

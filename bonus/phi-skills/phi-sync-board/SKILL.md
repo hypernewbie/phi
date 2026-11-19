@@ -1,7 +1,7 @@
 ---
 name: phi-sync-board
 description: Read, write, and delete messages on a Phi Sync Board coordinator, pass state/messages between machines or agents on the same tailnet/LAN, and trigger rich UI actions (render interactive action cards, compact done cards, preview files/images, show web links, stage/run terminal buttons, or pop toast notifications) in the Phi web UI. Use when the user asks to "sync", "post to the board", "mark done", "preview this image/file in Phi", "open a link in Phi", "add buttons to Phi", or mentions the Phi server / sync board.
-allowed-tools: Bash, Read
+allowed-tools: Bash, Read, syncboard_publish, syncboard_subscribe
 ---
 
 # Phi Sync Board
@@ -22,6 +22,8 @@ Resolve the coordinator URL using the first available source:
 3. Otherwise, use `http://127.0.0.1:7070` only for a local default-port install. The web UI uses `window.location.origin` when the config value is empty, but a shell agent cannot infer that origin. For a custom port or remote server, set `$PHI_COORDINATOR` to the server's reachable address.
 
 In the commands below, `$PHI_COORDINATOR` refers to this resolved address.
+A follower Phi forwards direct REST board calls to its configured coordinator,
+so reads show the coordinator board, not a dormant local copy.
 
 ## API
 
@@ -31,6 +33,22 @@ In the commands below, `$PHI_COORDINATOR` refers to this resolved address.
 | Get one key | `curl -s "$PHI_COORDINATOR/api/sync/messages/<key>"` |
 | Create/update key | `curl -s -X POST "$PHI_COORDINATOR/api/sync/messages" -H "Content-Type: application/json" -d '{"key":"<key>","value":"<value>"}'` |
 | Delete key | `curl -s -X DELETE "$PHI_COORDINATOR/api/sync/messages/<key>"` |
+
+## Receiving posts without polling
+
+A bridge-enabled Pi or Psi session can subscribe before a post is needed:
+
+- `syncboard_subscribe(topic)` binds the current session to later posts on a
+  topic key. It creates no row and replays no history.
+- `syncboard_publish(topic, value)` writes the key. Every subscriber receives
+  the complete stored value once, as a model-visible message.
+- Do not call `list`, `get`, or another tool to wait for a post. One successful
+  subscribe is enough.
+
+Subscriptions and unacknowledged deliveries are RAM-only. A coordinator
+restart loses them; subscribe again after a coordinator epoch change. The
+legacy `syncboard` tool still supports `list`, `get`, `upsert`, and `delete`,
+and the REST commands below remain the portable path for scripts.
 
 ## Response shape
 

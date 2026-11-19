@@ -1,13 +1,21 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/hypernewbie/phi/internal/pibridge"
 	"github.com/hypernewbie/phi/pkg/system"
 	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"google.golang.org/protobuf/proto"
@@ -112,6 +120,9 @@ func (app *Server) loadSyncStore() error {
 }
 
 func (app *Server) handleSyncMessages(w http.ResponseWriter, r *http.Request) {
+	if app.forwardSyncMessages(w, r) {
+		return
+	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/sync/messages")
 	key := strings.TrimPrefix(path, "/")
 	key = strings.TrimSpace(key)
@@ -147,7 +158,7 @@ func (app *Server) handleSyncMessages(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		if key != "" {
-			http.Error(w, "Key should be supplied in body, not in URL path for POST", http.StatusBadRequest)
+			writeSyncboardAdmissionRefusal(w, http.StatusBadRequest, "invalid")
 			return
 		}
 
@@ -155,43 +166,75 @@ func (app *Server) handleSyncMessages(w http.ResponseWriter, r *http.Request) {
 			Key   string          `json:"key"`
 			Value json.RawMessage `json:"value"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		req.Key = strings.TrimSpace(req.Key)
-		if req.Key == "" {
-			http.Error(w, "Key is required", http.StatusBadRequest)
-			return
-		}
-
-		var valStr string
-		if len(req.Value) > 0 {
-			var s string
-			if err := json.Unmarshal(req.Value, &s); err == nil {
-				valStr = s
-			} else {
-				valStr = string(req.Value)
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxSyncTopicPostBytes))
+		if err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				writeSyncboardAdmissionRefusal(w, http.StatusRequestEntityTooLarge, "too-large")
+				return
 			}
+			writeSyncboardAdmissionRefusal(w, http.StatusBadRequest, "invalid")
+			return
+		}
+		// Check the raw request before JSON decoding can repair invalid UTF-8
+		// into replacement characters.
+		if !utf8.Valid(body) {
+			writeSyncboardAdmissionRefusal(w, http.StatusBadRequest, "invalid")
+			return
+		}
+		dec := json.NewDecoder(bytes.NewReader(body))
+		if err := dec.Decode(&req); err != nil {
+			writeSyncboardAdmissionRefusal(w, http.StatusBadRequest, "invalid")
+			return
+		}
+		var trailing any
+		if err := dec.Decode(&trailing); err != io.EOF {
+			writeSyncboardAdmissionRefusal(w, http.StatusBadRequest, "invalid")
+			return
+		}
+		req.Key = strings.TrimSpace(req.Key)
+		if req.Key == "" || len(req.Key) > maxSyncTopicKeyBytes || !utf8.ValidString(req.Key) {
+			writeSyncboardAdmissionRefusal(w, http.StatusBadRequest, "invalid")
+			return
+		}
+		if req.Value == nil {
+			writeSyncboardAdmissionRefusal(w, http.StatusBadRequest, "invalid")
+			return
+		}
+		valStr, err := normalizeSyncValue(req.Value)
+		if err != nil {
+			writeSyncboardAdmissionRefusal(w, http.StatusBadRequest, "invalid")
+			return
 		}
 
 		app.syncMu.Lock()
 		now := time.Now()
-		if existing, exists := app.syncStore[req.Key]; exists {
-			existing.Value = valStr
-			existing.UpdatedAt = now
-		} else {
-			app.syncStore[req.Key] = &SyncMessage{
-				Key:       req.Key,
-				Value:     valStr,
-				CreatedAt: now,
-				UpdatedAt: now,
+		admitted, err := app.syncTopics.admitPostLocked(req.Key, valStr, now)
+		if err != nil {
+			app.syncMu.Unlock()
+			switch {
+			case errors.Is(err, errSyncTopicTooLarge):
+				writeSyncboardAdmissionRefusal(w, http.StatusRequestEntityTooLarge, "too-large")
+			case errors.Is(err, errSyncTopicCapacity):
+				writeSyncboardAdmissionRefusal(w, http.StatusServiceUnavailable, "capacity")
+			default:
+				writeSyncboardAdmissionRefusal(w, http.StatusBadRequest, "invalid")
 			}
+			return
 		}
-		msg := *app.syncStore[req.Key]
+		row := &SyncMessage{Key: req.Key, Value: valStr, CreatedAt: now, UpdatedAt: now}
+		if existing, exists := app.syncStore[req.Key]; exists {
+			row.CreatedAt = existing.CreatedAt
+		}
+		// Published rows are immutable: a GET may still encode a previously
+		// selected row after releasing syncMu.
+		app.syncStore[req.Key] = row
+		msg := *row
 		app.syncMu.Unlock()
 		app.triggerSaveSyncStore()
+		if admitted {
+			app.pumpSyncTopics(now)
+		}
 
 		if app.hub != nil {
 			app.hub.BroadcastNotification(&wspb.Notification{
@@ -263,4 +306,145 @@ func (app *Server) handleSyncCoordinator(w http.ResponseWriter, r *http.Request)
 	cfg.SyncCoordinator = strings.TrimSpace(req.SyncCoordinator)
 	app.saveConfig(cfg)
 	w.WriteHeader(http.StatusOK)
+}
+
+// writeSyncboardAdmissionRefusal sends the fixed bounded refusal body. A
+// caller may treat a POST as not accepted only when both this status and this
+// exact body are present; any other non-200 answer is unknown.
+func writeSyncboardAdmissionRefusal(w http.ResponseWriter, status int, reason string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = fmt.Fprintf(w, `{"syncboard_admission":"refused","reason":%q}`, reason)
+}
+
+// normalizeSyncValue preserves the board's existing string semantics: a JSON
+// string becomes its contents, null becomes empty, and every other JSON value
+// remains its complete stored JSON text.
+func normalizeSyncValue(raw json.RawMessage) (string, error) {
+	if !utf8.Valid(raw) {
+		return "", errors.New("Value is not valid UTF-8")
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return "", nil
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		if !utf8.ValidString(text) {
+			return "", errors.New("Value is not valid UTF-8")
+		}
+		return text, nil
+	}
+	if !json.Valid(raw) {
+		return "", errors.New("Invalid JSON value")
+	}
+	return string(raw), nil
+}
+
+// syncForwardWriteTimeout bounds one downstream read response write. It is a
+// variable so tests can inject a short deadline without waiting ten seconds.
+var syncForwardWriteTimeout = 10 * time.Second
+
+// forwardSyncMessages relays follower REST board calls to the configured
+// coordinator. It never forwards a request from a coordinator or a request
+// already marked forwarded, so one hop cannot loop.
+func (app *Server) forwardSyncMessages(w http.ResponseWriter, r *http.Request) (forwarded bool) {
+	if app.configStore() == nil {
+		return false
+	}
+	cfg, err := app.configStore().LoadWithError()
+	if err != nil {
+		http.Error(w, "Sync configuration unavailable", http.StatusServiceUnavailable)
+		return true
+	}
+	if cfg.SyncCoordinator == "" {
+		return false
+	}
+	if r.Header.Get("X-Phi-Sync-Forwarded") == "1" {
+		http.Error(w, "Chained sync coordinator", http.StatusServiceUnavailable)
+		return true
+	}
+	if app.syncCoordinatorIsSelf(cfg.SyncCoordinator) {
+		http.Error(w, "Sync coordinator resolves to this server", http.StatusBadRequest)
+		return true
+	}
+	target := strings.TrimSuffix(cfg.SyncCoordinator, "/") + r.URL.EscapedPath()
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxSyncTopicPostBytes))
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeSyncboardAdmissionRefusal(w, http.StatusRequestEntityTooLarge, "too-large")
+		} else {
+			writeSyncboardAdmissionRefusal(w, http.StatusBadRequest, "invalid")
+		}
+		return true
+	}
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, target, bytes.NewReader(body))
+	if err != nil {
+		http.Error(w, "Invalid sync coordinator", http.StatusServiceUnavailable)
+		return true
+	}
+	if ct := r.Header.Get("Content-Type"); ct != "" {
+		req.Header.Set("Content-Type", ct)
+	}
+	req.Header.Set("X-Phi-Sync-Forwarded", "1")
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, "Sync coordinator unavailable", http.StatusServiceUnavailable)
+		return true
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		http.Error(w, "Sync coordinator redirect refused", http.StatusBadGateway)
+		return true
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		// Reads keep the existing stream semantics: the response is not
+		// size-capped by the mutation bound. A real downstream socket gets
+		// a write deadline so a slow reader cannot pin the relay.
+		if controller := http.NewResponseController(w); controller != nil {
+			_ = controller.SetWriteDeadline(time.Now().Add(syncForwardWriteTimeout))
+		}
+		w.WriteHeader(resp.StatusCode)
+		if r.Method != http.MethodHead {
+			_, _ = io.Copy(w, resp.Body)
+		}
+		return true
+	}
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, pibridge.MaxSyncboardResponseBytes+1))
+	if err != nil || len(respBody) > pibridge.MaxSyncboardResponseBytes {
+		http.Error(w, "Sync coordinator response invalid", http.StatusBadGateway)
+		return true
+	}
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write(respBody)
+	return true
+}
+
+// syncCoordinatorIsSelf rejects an explicit loopback alias for this listener.
+// It only trusts literal addresses; hostname resolution is never used.
+func (app *Server) syncCoordinatorIsSelf(raw string) bool {
+	if app.port == 0 {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") ||
+		u.User != nil || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return u.Port() == fmt.Sprintf("%d", app.port)
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback() && u.Port() == fmt.Sprintf("%d", app.port)
 }

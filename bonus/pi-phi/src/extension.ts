@@ -10,6 +10,10 @@ import type {
 } from '@earendil-works/pi-coding-agent';
 import { isAbsolute } from 'node:path';
 import { freshSyncboardPushState, type SyncboardPushState } from './push.js';
+import {
+    freshSyncboardTopicState,
+    type SyncboardTopicState,
+} from './topics.js';
 import type { ChannelCreds } from './channel.js';
 import {
     type AttachmentLatchState,
@@ -51,6 +55,7 @@ interface OwnerSlot {
     reload?: ReloadLatchState | undefined;
     syncboardOwned?: boolean | undefined;
     syncboardPush?: SyncboardPushState | undefined;
+    syncboardTopics?: SyncboardTopicState | undefined;
     attachments?: AttachmentLatchState | undefined;
     attachmentRoot?: string | undefined;
 }
@@ -70,6 +75,14 @@ function ownerSyncboardPushState(): SyncboardPushState {
     const slot = ownerSlot();
     if (!slot.syncboardPush) slot.syncboardPush = freshSyncboardPushState();
     return slot.syncboardPush;
+}
+
+/** Keep topic binding and duplicate state across reloads in one process. */
+function ownerSyncboardTopicState(): SyncboardTopicState {
+    const slot = ownerSlot();
+    if (!slot.syncboardTopics)
+        slot.syncboardTopics = freshSyncboardTopicState();
+    return slot.syncboardTopics;
 }
 
 /** Keep attachment request identity and single-flight state across reloads. */
@@ -288,6 +301,7 @@ export function createExtension(
         setOwned: (owned) => {
             ownerSlot().syncboardOwned = owned;
         },
+        topicState: ownerSyncboardTopicState(),
     });
 
     const nativeThinking = pi as Partial<
@@ -336,6 +350,7 @@ export function createExtension(
                       }
                     : {}),
                 syncboardPushState: ownerSyncboardPushState(),
+                syncboardTopicState: ownerSyncboardTopicState(),
                 // A pushed message becomes a displayed custom message that
                 // triggers a turn. followUp never interrupts a running turn.
                 ...(typeof pi.sendMessage === 'function'

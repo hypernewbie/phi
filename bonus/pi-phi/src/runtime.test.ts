@@ -4837,6 +4837,9 @@ describe('Runtime Syncboard', () => {
                     httpStatus: 200,
                     bodyJson: Buffer.from('[]'),
                     reason: '',
+                    coordinatorEpoch: '',
+                    refusal: 0,
+                    topicBindingSeq: 0n,
                 } satisfies SyncboardResponse,
             },
         });
@@ -5053,6 +5056,9 @@ describe('Runtime Syncboard', () => {
                             }),
                         ),
                         reason: '',
+                        coordinatorEpoch: '',
+                        refusal: 0,
+                        topicBindingSeq: 0n,
                     } satisfies SyncboardResponse,
                 },
             });
@@ -5131,6 +5137,9 @@ describe('Runtime Syncboard', () => {
                         httpStatus: 200,
                         bodyJson: Buffer.from('[]'),
                         reason: '',
+                        coordinatorEpoch: '',
+                        refusal: 0,
+                        topicBindingSeq: 0n,
                     } satisfies SyncboardResponse,
                 },
             });

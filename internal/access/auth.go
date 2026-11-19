@@ -2517,7 +2517,7 @@ func accessClientIP(remoteAddr string) string {
 
 func (m *Manager) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if accessAuthPublicPath(r.URL.Path) || isSyncBoardPath(r.URL.Path) {
+		if accessAuthPublicPath(r.URL.Path) || isSyncBoardPath(r.URL.Path) || r.URL.Path == "/ws/sync-topics" {
 			next.ServeHTTP(w, r)
 			return
 		}
