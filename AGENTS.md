@@ -39,3 +39,12 @@ Both rules at the same time are possible, and they are not easy to solve.
 When a task looks impossible under these rules, do the hard design work. Do
 not remove a rule to make a task easy. We do the not-easy thing, and we
 solve it.
+
+## UI acceptance
+
+- Reuse Phi's existing controls, typography, spacing, and CSS conventions.
+- Inspect the actual application at desktop and mobile sizes.
+- Check affected themes, font sizes, and interaction states.
+- Retain screenshots of the changed result.
+- Use targeted checks relevant to the change. Do not require every local
+  E2E or CI job for every visual change.
