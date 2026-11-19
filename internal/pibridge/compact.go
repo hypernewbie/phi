@@ -92,20 +92,28 @@ type compactOp struct {
 // identity, matching the wire contract.
 const maxCompactIdentityChars = 256
 
+// maxCompactInstructionBytes bounds one manual summary instruction.
+const maxCompactInstructionBytes = 4096
+
 // RequestCompact asks the live peer to run one native compaction and
 // waits for its terminal result. The browser's generation and
 // publication stamps must match the live lease, and the current
 // snapshot must show an idle host with no queued messages, no active
 // compaction, and no unresolved bridge work; anything else is refused
 // before dispatch without invoking the host. Expected host identities
-// are captured from the lease under the same admission fence, never
-// from the caller. At most one operation runs per process.
+// and the active-run fence are captured from the lease under the same
+// admission fence, never from the caller. At most one operation runs
+// per process.
+//
+// Custom instructions require pi.compact.v2. A v2 peer allows an
+// active conversation or queued input, fenced by the logical run id
+// from the same snapshot; v1 keeps the idle and queue guards.
 //
 // A nil error carries the host's terminal result, whatever its
 // outcome. A *CompactRefusal or *CompactUnavailable means the host
 // was never invoked. A *CompactUnknown means the request dispatched
 // but the wait ended first; the operation stays unresolved.
-func (s *Server) RequestCompact(ctx context.Context, processID string, generation, pubRev uint64) (CompactResult, error) {
+func (s *Server) RequestCompact(ctx context.Context, processID string, generation, pubRev uint64, instructions string) (CompactResult, error) {
 	if err := ctx.Err(); err != nil {
 		return CompactResult{}, &CompactUnavailable{msg: "caller done"}
 	}
@@ -123,6 +131,16 @@ func (s *Server) RequestCompact(ctx context.Context, processID string, generatio
 		l.mu.Unlock()
 		return CompactResult{}, &CompactUnavailable{msg: "capability not negotiated"}
 	}
+	v2 := slices.Contains(l.caps, CapabilityCompactV2)
+	if instructions != "" && !v2 {
+		// Never let a v1 host silently ignore instructions.
+		l.mu.Unlock()
+		return CompactResult{}, &CompactUnavailable{msg: "compact instructions require pi.compact.v2"}
+	}
+	if len(instructions) > maxCompactInstructionBytes {
+		l.mu.Unlock()
+		return CompactResult{}, &CompactRefusal{Reason: "unavailable"}
+	}
 	if generation != l.maxGen || pubRev != l.pubRev {
 		l.mu.Unlock()
 		return CompactResult{}, &CompactRefusal{Reason: "stale"}
@@ -137,30 +155,56 @@ func (s *Server) RequestCompact(ctx context.Context, processID string, generatio
 		l.mu.Unlock()
 		return CompactResult{}, &CompactRefusal{Reason: "pending"}
 	}
-	if snap.GetState() == pibridgepb.LogicalState_LOGICAL_STATE_RUNNING {
-		l.mu.Unlock()
-		return CompactResult{}, &CompactRefusal{Reason: "busy"}
-	}
 	ready := snap.GetCompactReadiness()
-	if ready == nil {
-		l.mu.Unlock()
-		return CompactResult{}, &CompactRefusal{Reason: "busy"}
-	}
-	if !ready.GetIdle() {
-		l.mu.Unlock()
-		return CompactResult{}, &CompactRefusal{Reason: "busy"}
-	}
-	if ready.GetHasPendingMessages() {
-		l.mu.Unlock()
-		return CompactResult{}, &CompactRefusal{Reason: "queued"}
-	}
-	if ready.GetCompactionActive() {
-		l.mu.Unlock()
-		return CompactResult{}, &CompactRefusal{Reason: "compaction-active"}
-	}
-	if ready.GetBridgePending() {
-		l.mu.Unlock()
-		return CompactResult{}, &CompactRefusal{Reason: "pending"}
+	var expectedRunID *uint64
+	if v2 {
+		// The run id comes from the same snapshot as the identity and
+		// readiness fences. Absence is unavailable: a v2 compact must
+		// never run without a run fence.
+		reload := snap.GetReloadReadiness()
+		if reload == nil || reload.RunId == nil {
+			l.mu.Unlock()
+			return CompactResult{}, &CompactUnavailable{msg: "compact run id unavailable"}
+		}
+		runID := reload.GetRunId()
+		expectedRunID = &runID
+		if ready == nil {
+			l.mu.Unlock()
+			return CompactResult{}, &CompactUnavailable{msg: "compact readiness unavailable"}
+		}
+		if ready.GetCompactionActive() {
+			l.mu.Unlock()
+			return CompactResult{}, &CompactRefusal{Reason: "compaction-active"}
+		}
+		if ready.GetBridgePending() {
+			l.mu.Unlock()
+			return CompactResult{}, &CompactRefusal{Reason: "pending"}
+		}
+	} else {
+		if snap.GetState() == pibridgepb.LogicalState_LOGICAL_STATE_RUNNING {
+			l.mu.Unlock()
+			return CompactResult{}, &CompactRefusal{Reason: "busy"}
+		}
+		if ready == nil {
+			l.mu.Unlock()
+			return CompactResult{}, &CompactRefusal{Reason: "busy"}
+		}
+		if !ready.GetIdle() {
+			l.mu.Unlock()
+			return CompactResult{}, &CompactRefusal{Reason: "busy"}
+		}
+		if ready.GetHasPendingMessages() {
+			l.mu.Unlock()
+			return CompactResult{}, &CompactRefusal{Reason: "queued"}
+		}
+		if ready.GetCompactionActive() {
+			l.mu.Unlock()
+			return CompactResult{}, &CompactRefusal{Reason: "compaction-active"}
+		}
+		if ready.GetBridgePending() {
+			l.mu.Unlock()
+			return CompactResult{}, &CompactRefusal{Reason: "pending"}
+		}
 	}
 	session := snap.GetSessionId()
 	if session == "" {
@@ -199,10 +243,12 @@ func (s *Server) RequestCompact(ctx context.Context, processID string, generatio
 		RuntimeGeneration: gen,
 		Payload: &pibridgepb.PhiToPi_CompactRequest{
 			CompactRequest: &pibridgepb.CompactRequest{
-				RequestId:         op.id,
-				ExpectedSessionId: session,
-				ExpectedLeafId:    leaf,
-				ExpectedModel:     expectedModel,
+				RequestId:          op.id,
+				ExpectedSessionId:  session,
+				ExpectedLeafId:     leaf,
+				ExpectedModel:      expectedModel,
+				CustomInstructions: instructions,
+				ExpectedRunId:      expectedRunID,
 			},
 		},
 	}

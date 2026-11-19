@@ -735,7 +735,7 @@ func (b *Bridge) RequestPaneReload(ctx context.Context, paneID, processID string
 // unmanaged, and peerless panes fail; every error means the host was
 // never invoked or the outcome is unknown, never a silent fallback.
 // The caller owns the deadline: the wait must not exceed 120 seconds.
-func (b *Bridge) RequestPaneCompact(ctx context.Context, paneID string, generation, pubRev uint64) (pibridge.CompactResult, error) {
+func (b *Bridge) RequestPaneCompact(ctx context.Context, paneID string, generation, pubRev uint64, instructions string) (pibridge.CompactResult, error) {
 	if b == nil {
 		return pibridge.CompactResult{}, fmt.Errorf("pi-bridge: disabled")
 	}
@@ -750,7 +750,7 @@ func (b *Bridge) RequestPaneCompact(ctx context.Context, paneID string, generati
 	if !ok || !managed {
 		return pibridge.CompactResult{}, fmt.Errorf("pi-bridge: pane not managed")
 	}
-	return b.server.RequestCompact(ctx, processID, generation, pubRev)
+	return b.server.RequestCompact(ctx, processID, generation, pubRev, instructions)
 }
 
 // terminalRefreshHint reports whether a pane's current Pi can repaint its own

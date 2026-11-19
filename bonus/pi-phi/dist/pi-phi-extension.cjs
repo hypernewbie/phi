@@ -28590,7 +28590,14 @@ var SetThinkingAck = {
   }
 };
 function createBaseCompactRequest() {
-  return { requestId: "", expectedSessionId: "", expectedLeafId: "", expectedModel: void 0 };
+  return {
+    requestId: "",
+    expectedSessionId: "",
+    expectedLeafId: "",
+    expectedModel: void 0,
+    customInstructions: "",
+    expectedRunId: void 0
+  };
 }
 var CompactRequest = {
   encode(message, writer = new BinaryWriter()) {
@@ -28605,6 +28612,15 @@ var CompactRequest = {
     }
     if (message.expectedModel !== void 0) {
       ModelSnapshot.encode(message.expectedModel, writer.uint32(34).fork()).join();
+    }
+    if (message.customInstructions !== "") {
+      writer.uint32(42).string(message.customInstructions);
+    }
+    if (message.expectedRunId !== void 0) {
+      if (BigInt.asUintN(64, message.expectedRunId) !== message.expectedRunId) {
+        throw new globalThis.Error("value provided for field message.expectedRunId of type uint64 too large");
+      }
+      writer.uint32(48).uint64(message.expectedRunId);
     }
     return writer;
   },
@@ -28649,6 +28665,20 @@ var CompactRequest = {
             message.expectedModel = ModelSnapshot.decode(reader, reader.uint32());
             continue;
           }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+            message.customInstructions = reader.string();
+            continue;
+          }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+            message.expectedRunId = reader.uint64();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -28669,6 +28699,8 @@ var CompactRequest = {
     message.expectedSessionId = object.expectedSessionId ?? "";
     message.expectedLeafId = object.expectedLeafId ?? "";
     message.expectedModel = object.expectedModel !== void 0 && object.expectedModel !== null ? ModelSnapshot.fromPartial(object.expectedModel) : void 0;
+    message.customInstructions = object.customInstructions ?? "";
+    message.expectedRunId = object.expectedRunId !== void 0 && object.expectedRunId !== null ? BigInt(object.expectedRunId) : void 0;
     return message;
   }
 };

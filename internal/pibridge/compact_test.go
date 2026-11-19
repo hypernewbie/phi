@@ -62,11 +62,54 @@ func openCompactStream(t *testing.T, s *Server, sock, pane string) (pibridgepb.I
 	return stream, proc, token, cancel, rev
 }
 
+func compactHelloV2(pane, proc string, gen uint64, state pibridgepb.LogicalState, runID uint64, ready *pibridgepb.CompactReadiness) *pibridgepb.PiToPhi {
+	return &pibridgepb.PiToPhi{
+		PaneId: pane, ProcessId: proc, RuntimeGeneration: gen,
+		Payload: &pibridgepb.PiToPhi_Hello{Hello: &pibridgepb.Hello{
+			ProtocolVersion: ProtocolVersion,
+			SessionId:       "sess", RuntimeId: "rt",
+			Capabilities: []string{CapabilityLifecycle, CapabilityContext, CapabilityCompact, CapabilityCompactV2},
+			CurrentState: &pibridgepb.StateSnapshot{
+				State:     state,
+				SessionId: "sess", LeafId: "leaf",
+				Model:            &pibridgepb.ModelSnapshot{Provider: "p", Model: "m"},
+				CompactReadiness: ready,
+				ReloadReadiness:  &pibridgepb.ReloadReadiness{RunId: uptr(runID), ContextRevision: uptr(0), Idle: true},
+			},
+		}},
+	}
+}
+
+// openCompactStreamV2 opens one accepted v2 stream with the given run and
+// readiness sample. It returns the stream, process, cancel, and stamps.
+func openCompactStreamV2(t *testing.T, s *Server, sock, pane string, state pibridgepb.LogicalState, runID uint64, ready *pibridgepb.CompactReadiness) (pibridgepb.Integration_ConnectClient, string, string, context.CancelFunc, uint64) {
+	t.Helper()
+	proc, token, err := s.RegisterPending(pane)
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	s.Complete(proc)
+	stream, cancel := openStream(t, sock, pane, proc, token)
+	if err := stream.Send(compactHelloV2(pane, proc, 1, state, runID, ready)); err != nil {
+		cancel()
+		t.Fatalf("hello: %v", err)
+	}
+	recvAccepted(t, stream)
+	rev, ok := s.PublicationRevision(proc)
+	if !ok {
+		cancel()
+		t.Fatal("no publication revision")
+	}
+	return stream, proc, token, cancel, rev
+}
+
 type compactWireRequest struct {
 	id              string
 	session, leaf   string
 	model           *pibridgepb.ModelSnapshot
 	hasExpectedLeaf bool
+	instructions    string
+	runID           *uint64
 }
 
 func recvCompactRequest(t *testing.T, stream pibridgepb.Integration_ConnectClient) compactWireRequest {
@@ -94,6 +137,7 @@ func recvCompactRequest(t *testing.T, stream pibridgepb.Integration_ConnectClien
 		return compactWireRequest{
 			id: req.GetRequestId(), session: req.GetExpectedSessionId(),
 			leaf: req.GetExpectedLeafId(), model: req.GetExpectedModel(),
+			instructions: req.GetCustomInstructions(), runID: req.ExpectedRunId,
 		}
 	case <-ctx.Done():
 		t.Fatalf("timed out waiting for compact request")
@@ -350,7 +394,7 @@ func TestRequestCompactRoundTrip(t *testing.T) {
 	go func() {
 		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
-		res, err := s.RequestCompact(ctx, proc, 1, rev)
+		res, err := s.RequestCompact(ctx, proc, 1, rev, "")
 		done <- outcome{res: res, err: err}
 	}()
 	wire := recvCompactRequest(t, stream)
@@ -382,7 +426,7 @@ func TestRequestCompactRoundTrip(t *testing.T) {
 	go func() {
 		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
-		res, err := s.RequestCompact(ctx, proc, 1, rev)
+		res, err := s.RequestCompact(ctx, proc, 1, rev, "")
 		done2 <- outcome{res: res, err: err}
 	}()
 	wire2 := recvCompactRequest(t, stream)
@@ -426,7 +470,7 @@ func TestRequestCompactAbsentModelFence(t *testing.T) {
 	go func() {
 		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
-		res, err := s.RequestCompact(ctx, proc, 1, rev)
+		res, err := s.RequestCompact(ctx, proc, 1, rev, "")
 		if err != nil {
 			t.Errorf("RequestCompact: %v", err)
 			return
@@ -474,10 +518,10 @@ func TestRequestCompactAdmissionRefusals(t *testing.T) {
 	// Stale generation and revision refuse without invoking the host.
 	stream, proc, cancel, rev := newIdle(t, "pane-stale")
 	defer cancel()
-	if err := func() error { _, err := s.RequestCompact(ctx, proc, 2, rev); return err }(); compactRefusalReason(t, err) != "stale" {
+	if err := func() error { _, err := s.RequestCompact(ctx, proc, 2, rev, ""); return err }(); compactRefusalReason(t, err) != "stale" {
 		t.Fatalf("gen mismatch reason %v", err)
 	}
-	if _, err := s.RequestCompact(ctx, proc, 1, rev+100); compactRefusalReason(t, err) != "stale" {
+	if _, err := s.RequestCompact(ctx, proc, 1, rev+100, ""); compactRefusalReason(t, err) != "stale" {
 		t.Fatalf("rev mismatch reason %v", err)
 	}
 	expectNoCompactRequest(t, stream)
@@ -495,7 +539,7 @@ func TestRequestCompactAdmissionRefusals(t *testing.T) {
 	}
 	recvAccepted(t, stream2)
 	rev2, _ := s.PublicationRevision(proc2)
-	if _, err := s.RequestCompact(ctx, proc2, 1, rev2); compactRefusalReason(t, err) != "busy" {
+	if _, err := s.RequestCompact(ctx, proc2, 1, rev2, ""); compactRefusalReason(t, err) != "busy" {
 		t.Fatalf("running reason %v", err)
 	}
 	expectNoCompactRequest(t, stream2)
@@ -526,7 +570,7 @@ func TestRequestCompactAdmissionRefusals(t *testing.T) {
 		}
 		recvAccepted(t, st)
 		rr, _ := s.PublicationRevision(pp)
-		if _, err := s.RequestCompact(ctx, pp, 1, rr); compactRefusalReason(t, err) != c.reason {
+		if _, err := s.RequestCompact(ctx, pp, 1, rr, ""); compactRefusalReason(t, err) != c.reason {
 			t.Fatalf("%s reason %v, want %s", c.name, err, c.reason)
 		}
 		expectNoCompactRequest(t, st)
@@ -547,7 +591,7 @@ func TestRequestCompactAdmissionRefusals(t *testing.T) {
 	}
 	recvAccepted(t, st)
 	rr, _ := s.PublicationRevision(pp)
-	if _, err := s.RequestCompact(ctx, pp, 1, rr); compactRefusalReason(t, err) != "stale" {
+	if _, err := s.RequestCompact(ctx, pp, 1, rr, ""); compactRefusalReason(t, err) != "stale" {
 		t.Fatalf("no-state reason %v", err)
 	}
 	expectNoCompactRequest(t, st)
@@ -559,11 +603,11 @@ func TestRequestCompactAdmissionRefusals(t *testing.T) {
 	go func() {
 		c, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
-		_, err := s.RequestCompact(c, proc3, 1, rev3)
+		_, err := s.RequestCompact(c, proc3, 1, rev3, "")
 		first <- err
 	}()
 	wire := recvCompactRequest(t, stream3)
-	if _, err := s.RequestCompact(ctx, proc3, 1, rev3); compactRefusalReason(t, err) != "pending" {
+	if _, err := s.RequestCompact(ctx, proc3, 1, rev3, ""); compactRefusalReason(t, err) != "pending" {
 		t.Fatalf("single-flight reason %v", err)
 	}
 	sendCompactResult(t, stream3, "pane-flight", proc3, 1, &pibridgepb.CompactResult{
@@ -585,7 +629,7 @@ func TestRequestCompactUnavailable(t *testing.T) {
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
 
-	if _, err := s.RequestCompact(ctx, "nope", 1, 1); err == nil || !strings.Contains(err.Error(), "unavailable") {
+	if _, err := s.RequestCompact(ctx, "nope", 1, 1, ""); err == nil || !strings.Contains(err.Error(), "unavailable") {
 		t.Fatalf("unknown process err %v", err)
 	}
 	// Peerless lease fails fast.
@@ -594,14 +638,14 @@ func TestRequestCompactUnavailable(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 	s.Complete(proc)
-	if _, err := s.RequestCompact(ctx, proc, 1, 1); err == nil || !strings.Contains(err.Error(), "unavailable") {
+	if _, err := s.RequestCompact(ctx, proc, 1, 1, ""); err == nil || !strings.Contains(err.Error(), "unavailable") {
 		t.Fatalf("peerless err %v", err)
 	}
 	// Unnegotiated capability never dispatches.
 	_, proc2, _, cancel2 := openLeaseStream(t, s, sock, "pane-nocap", CapabilityLifecycle, CapabilityContext)
 	defer cancel2()
 	rev2, _ := s.PublicationRevision(proc2)
-	if _, err := s.RequestCompact(ctx, proc2, 1, rev2); err == nil || !strings.Contains(err.Error(), "capability") {
+	if _, err := s.RequestCompact(ctx, proc2, 1, rev2, ""); err == nil || !strings.Contains(err.Error(), "capability") {
 		t.Fatalf("no-cap err %v", err)
 	}
 }
@@ -618,7 +662,7 @@ func TestRequestCompactFailedCancelledUncertain(t *testing.T) {
 		t.Helper()
 		done := make(chan CompactResult, 1)
 		go func() {
-			res, err := s.RequestCompact(ctx, proc, 1, rev)
+			res, err := s.RequestCompact(ctx, proc, 1, rev, "")
 			if err != nil {
 				t.Errorf("RequestCompact: %v", err)
 				return
@@ -649,7 +693,7 @@ func TestRequestCompactFailedCancelledUncertain(t *testing.T) {
 	if res := round(pibridgepb.CompactOutcome_COMPACT_OUTCOME_UNSPECIFIED, "uncertain"); res.Outcome != pibridgepb.CompactOutcome_COMPACT_OUTCOME_UNSPECIFIED || res.Reason != "uncertain" {
 		t.Fatalf("uncertain %+v", res)
 	}
-	if _, err := s.RequestCompact(ctx, proc, 1, rev); compactRefusalReason(t, err) != "pending" {
+	if _, err := s.RequestCompact(ctx, proc, 1, rev, ""); compactRefusalReason(t, err) != "pending" {
 		t.Fatalf("post-uncertain reason %v", err)
 	}
 	expectNoCompactRequest(t, stream)
@@ -665,7 +709,7 @@ func TestRequestCompactIgnoresStrayResults(t *testing.T) {
 	go func() {
 		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
-		res, err := s.RequestCompact(ctx, proc, 1, rev)
+		res, err := s.RequestCompact(ctx, proc, 1, rev, "")
 		if err != nil {
 			t.Errorf("RequestCompact: %v", err)
 			return
@@ -705,7 +749,7 @@ func TestRequestCompactIgnoresStrayResults(t *testing.T) {
 	go func() {
 		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
-		res, err := s.RequestCompact(ctx, proc, 1, rev)
+		res, err := s.RequestCompact(ctx, proc, 1, rev, "")
 		if err != nil {
 			t.Errorf("second RequestCompact: %v", err)
 			return
@@ -739,7 +783,7 @@ func TestRequestCompactTimeoutKeepsOperation(t *testing.T) {
 	go func() {
 		ctx, stop := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer stop()
-		_, err := s.RequestCompact(ctx, proc, 1, rev)
+		_, err := s.RequestCompact(ctx, proc, 1, rev, "")
 		errCh <- err
 	}()
 	wire := recvCompactRequest(t, stream)
@@ -758,7 +802,7 @@ func TestRequestCompactTimeoutKeepsOperation(t *testing.T) {
 	// dispatch consumed an allocation instead.)
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
-	if _, err := s.RequestCompact(ctx, proc, 1, rev); compactRefusalReason(t, err) != "pending" {
+	if _, err := s.RequestCompact(ctx, proc, 1, rev, ""); compactRefusalReason(t, err) != "pending" {
 		t.Fatalf("post-timeout reason %v", err)
 	}
 	// The late host result releases the operation but satisfies no
@@ -769,7 +813,7 @@ func TestRequestCompactTimeoutKeepsOperation(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	done := make(chan CompactResult, 1)
 	go func() {
-		res, err := s.RequestCompact(ctx, proc, 1, rev)
+		res, err := s.RequestCompact(ctx, proc, 1, rev, "")
 		if err != nil {
 			t.Errorf("next RequestCompact: %v", err)
 			return
@@ -802,7 +846,7 @@ func TestRequestCompactPeerLossKeepsOperation(t *testing.T) {
 	go func() {
 		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
-		_, err := s.RequestCompact(ctx, proc, 1, rev)
+		_, err := s.RequestCompact(ctx, proc, 1, rev, "")
 		errCh <- err
 	}()
 	wire := recvCompactRequest(t, stream)
@@ -827,7 +871,7 @@ func TestRequestCompactPeerLossKeepsOperation(t *testing.T) {
 	rev2, _ := s.PublicationRevision(proc)
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
-	if _, err := s.RequestCompact(ctx, proc, 1, rev2); compactRefusalReason(t, err) != "pending" {
+	if _, err := s.RequestCompact(ctx, proc, 1, rev2, ""); compactRefusalReason(t, err) != "pending" {
 		t.Fatalf("post-loss reason %v", err)
 	}
 	sendCompactResult(t, stream2, "pane-closs", proc, 1, &pibridgepb.CompactResult{
@@ -836,7 +880,7 @@ func TestRequestCompactPeerLossKeepsOperation(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	done := make(chan CompactResult, 1)
 	go func() {
-		res, err := s.RequestCompact(ctx, proc, 1, rev2)
+		res, err := s.RequestCompact(ctx, proc, 1, rev2, "")
 		if err != nil {
 			t.Errorf("next RequestCompact: %v", err)
 			return
@@ -872,7 +916,7 @@ func TestRequestCompactReplacementClearsOperation(t *testing.T) {
 		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
 		rev, _ := s.PublicationRevision(proc)
-		_, err := s.RequestCompact(ctx, proc, 1, rev)
+		_, err := s.RequestCompact(ctx, proc, 1, rev, "")
 		errCh <- err
 	}()
 	wire := recvCompactRequest(t, stream)
@@ -908,7 +952,7 @@ func TestRequestCompactReplacementClearsOperation(t *testing.T) {
 	defer stop()
 	done := make(chan CompactResult, 1)
 	go func() {
-		res, err := s.RequestCompact(ctx, proc, 2, rev2)
+		res, err := s.RequestCompact(ctx, proc, 2, rev2, "")
 		if err != nil {
 			t.Errorf("gen2 RequestCompact: %v", err)
 			return
@@ -968,7 +1012,7 @@ func TestRequestCompactSendMissReleasesRecord(t *testing.T) {
 	}
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
-	if _, err := s.RequestCompact(ctx, proc, 1, 7); err == nil || !strings.Contains(err.Error(), "unavailable") {
+	if _, err := s.RequestCompact(ctx, proc, 1, 7, ""); err == nil || !strings.Contains(err.Error(), "unavailable") {
 		t.Fatalf("err %v, want unavailable send miss", err)
 	}
 	// Never dispatched means no retained operation: the next caller
@@ -991,7 +1035,7 @@ func TestRequestCompactRevokeReleasesOperation(t *testing.T) {
 	go func() {
 		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
-		_, err := s.RequestCompact(ctx, proc, 1, rev)
+		_, err := s.RequestCompact(ctx, proc, 1, rev, "")
 		errCh <- err
 	}()
 	wire := recvCompactRequest(t, stream)
@@ -1048,7 +1092,7 @@ func TestDeliverCompactRejectsStalePeer(t *testing.T) {
 	go func() {
 		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
-		res, err := s.RequestCompact(ctx, proc, 1, rev)
+		res, err := s.RequestCompact(ctx, proc, 1, rev, "")
 		if err != nil {
 			errCh <- err
 			return
@@ -1106,7 +1150,7 @@ func TestDeliverCompactRejectsOlderGeneration(t *testing.T) {
 	go func() {
 		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
-		res, err := s.RequestCompact(ctx, proc, 1, rev)
+		res, err := s.RequestCompact(ctx, proc, 1, rev, "")
 		if err != nil {
 			t.Errorf("RequestCompact: %v", err)
 			return
@@ -1200,7 +1244,7 @@ func TestRequestCompactReplacementBetweenDeliveryAndConsumption(t *testing.T) {
 		gated := newGateContext(parent)
 		errCh := make(chan error, 1)
 		go func() {
-			_, err := s.RequestCompact(gated, proc, 1, rev)
+			_, err := s.RequestCompact(gated, proc, 1, rev, "")
 			errCh <- err
 		}()
 		wire := recvCompactRequest(t, stream)
@@ -1253,7 +1297,7 @@ func TestRequestCompactReadinessReleaseRetiresAfterTimeout(t *testing.T) {
 	go func() {
 		ctx, stop := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer stop()
-		_, err := s.RequestCompact(ctx, proc, 1, rev)
+		_, err := s.RequestCompact(ctx, proc, 1, rev, "")
 		errCh <- err
 	}()
 	wire := recvCompactRequest(t, stream)
@@ -1275,7 +1319,7 @@ func TestRequestCompactReadinessReleaseRetiresAfterTimeout(t *testing.T) {
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
 	rev2, _ := s.PublicationRevision(proc)
-	if _, err := s.RequestCompact(ctx, proc, 1, rev2); compactRefusalReason(t, err) != "pending" {
+	if _, err := s.RequestCompact(ctx, proc, 1, rev2, ""); compactRefusalReason(t, err) != "pending" {
 		t.Fatalf("pre-release reason %v, want pending", err)
 	}
 	// The authoritative released frame retires the operation without
@@ -1285,7 +1329,7 @@ func TestRequestCompactReadinessReleaseRetiresAfterTimeout(t *testing.T) {
 	done := make(chan CompactResult, 1)
 	go func() {
 		rev3, _ := s.PublicationRevision(proc)
-		res, err := s.RequestCompact(ctx, proc, 1, rev3)
+		res, err := s.RequestCompact(ctx, proc, 1, rev3, "")
 		if err != nil {
 			t.Errorf("next RequestCompact: %v", err)
 			return
@@ -1319,7 +1363,7 @@ func TestRequestCompactReadinessReleaseDefersWhileWaiterAttached(t *testing.T) {
 	go func() {
 		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
-		res, err := s.RequestCompact(ctx, proc, 1, rev)
+		res, err := s.RequestCompact(ctx, proc, 1, rev, "")
 		if err != nil {
 			t.Errorf("RequestCompact: %v", err)
 			return
@@ -1338,7 +1382,7 @@ func TestRequestCompactReadinessReleaseDefersWhileWaiterAttached(t *testing.T) {
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
 	rev2, _ := s.PublicationRevision(proc)
-	if _, err := s.RequestCompact(ctx, proc, 1, rev2); compactRefusalReason(t, err) != "pending" {
+	if _, err := s.RequestCompact(ctx, proc, 1, rev2, ""); compactRefusalReason(t, err) != "pending" {
 		t.Fatalf("attached reason %v, want pending", err)
 	}
 	sendCompactResult(t, stream, "pane-c2defer", proc, 1, &pibridgepb.CompactResult{
@@ -1365,7 +1409,7 @@ func TestRequestCompactStaleReadinessNeverRetires(t *testing.T) {
 	go func() {
 		ctx, stop := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer stop()
-		_, err := s.RequestCompact(ctx, proc, 1, rev)
+		_, err := s.RequestCompact(ctx, proc, 1, rev, "")
 		errCh <- err
 	}()
 	recvCompactRequest(t, stream)
@@ -1425,7 +1469,7 @@ func TestRequestCompactPreDispatchSnapshotNeverRetires(t *testing.T) {
 	go func() {
 		ctx, stop := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer stop()
-		_, err := s.RequestCompact(ctx, proc, 1, rev)
+		_, err := s.RequestCompact(ctx, proc, 1, rev, "")
 		errCh <- err
 	}()
 	recvCompactRequest(t, stream)
@@ -1441,7 +1485,7 @@ func TestRequestCompactPreDispatchSnapshotNeverRetires(t *testing.T) {
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
 	rev2, _ := s.PublicationRevision(proc)
-	if _, err := s.RequestCompact(ctx, proc, 1, rev2); compactRefusalReason(t, err) != "pending" {
+	if _, err := s.RequestCompact(ctx, proc, 1, rev2, ""); compactRefusalReason(t, err) != "pending" {
 		t.Fatalf("reason %v, want retained pending", err)
 	}
 }
@@ -1457,7 +1501,7 @@ func TestRequestCompactNewGenProtectedByBridgePending(t *testing.T) {
 		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
 		rev, _ := s.PublicationRevision(proc)
-		_, err := s.RequestCompact(ctx, proc, 1, rev)
+		_, err := s.RequestCompact(ctx, proc, 1, rev, "")
 		errCh <- err
 	}()
 	wire := recvCompactRequest(t, stream)
@@ -1488,7 +1532,7 @@ func TestRequestCompactNewGenProtectedByBridgePending(t *testing.T) {
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
 	rev2, _ := s.PublicationRevision(proc)
-	if _, err := s.RequestCompact(ctx, proc, 2, rev2); compactRefusalReason(t, err) != "pending" {
+	if _, err := s.RequestCompact(ctx, proc, 2, rev2, ""); compactRefusalReason(t, err) != "pending" {
 		t.Fatalf("gen2 reason %v, want pending", err)
 	}
 	// Once the runtime publishes release, the new generation admits.
@@ -1497,7 +1541,7 @@ func TestRequestCompactNewGenProtectedByBridgePending(t *testing.T) {
 	rev3, _ := s.PublicationRevision(proc)
 	done := make(chan CompactResult, 1)
 	go func() {
-		res, err := s.RequestCompact(ctx, proc, 2, rev3)
+		res, err := s.RequestCompact(ctx, proc, 2, rev3, "")
 		if err != nil {
 			t.Errorf("gen2 RequestCompact: %v", err)
 			return
@@ -1579,7 +1623,7 @@ func TestRequestCompactMissingReadinessNeverReleasesAttached(t *testing.T) {
 	go func() {
 		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
-		res, err := s.RequestCompact(ctx, proc, 1, rev)
+		res, err := s.RequestCompact(ctx, proc, 1, rev, "")
 		if err != nil {
 			t.Errorf("RequestCompact: %v", err)
 			return
@@ -1598,7 +1642,7 @@ func TestRequestCompactMissingReadinessNeverReleasesAttached(t *testing.T) {
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
 	rev2, _ := s.PublicationRevision(proc)
-	if _, err := s.RequestCompact(ctx, proc, 1, rev2); compactRefusalReason(t, err) != "pending" {
+	if _, err := s.RequestCompact(ctx, proc, 1, rev2, ""); compactRefusalReason(t, err) != "pending" {
 		t.Fatalf("unknown-sample reason %v, want pending", err)
 	}
 	sendCompactResult(t, stream, "pane-c2unk", proc, 1, &pibridgepb.CompactResult{
@@ -1624,7 +1668,7 @@ func TestRequestCompactUnknownThenExpiryStaysUnresolved(t *testing.T) {
 	go func() {
 		ctx, stop := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer stop()
-		_, err := s.RequestCompact(ctx, proc, 1, rev)
+		_, err := s.RequestCompact(ctx, proc, 1, rev, "")
 		errCh <- err
 	}()
 	recvCompactRequest(t, stream)
@@ -1647,7 +1691,7 @@ func TestRequestCompactUnknownThenExpiryStaysUnresolved(t *testing.T) {
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
 	rev2, _ := s.PublicationRevision(proc)
-	if _, err := s.RequestCompact(ctx, proc, 1, rev2); compactRefusalReason(t, err) != "pending" {
+	if _, err := s.RequestCompact(ctx, proc, 1, rev2, ""); compactRefusalReason(t, err) != "pending" {
 		t.Fatalf("reason %v, want retained pending", err)
 	}
 }
@@ -1662,7 +1706,7 @@ func TestRequestCompactUnknownBaselineThenExplicitRelease(t *testing.T) {
 	go func() {
 		ctx, stop := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer stop()
-		_, err := s.RequestCompact(ctx, proc, 1, rev)
+		_, err := s.RequestCompact(ctx, proc, 1, rev, "")
 		errCh <- err
 	}()
 	wire := recvCompactRequest(t, stream)
@@ -1689,7 +1733,7 @@ func TestRequestCompactUnknownBaselineThenExplicitRelease(t *testing.T) {
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
 	rev2, _ := s.PublicationRevision(proc)
-	if _, err := s.RequestCompact(ctx, proc, 1, rev2); compactRefusalReason(t, err) != "pending" {
+	if _, err := s.RequestCompact(ctx, proc, 1, rev2, ""); compactRefusalReason(t, err) != "pending" {
 		t.Fatalf("unknown-baseline reason %v, want pending", err)
 	}
 	// An explicit release baseline on a further reconnect retires
@@ -1703,7 +1747,7 @@ func TestRequestCompactUnknownBaselineThenExplicitRelease(t *testing.T) {
 	rev3, _ := s.PublicationRevision(proc)
 	done := make(chan CompactResult, 1)
 	go func() {
-		res, err := s.RequestCompact(ctx, proc, 1, rev3)
+		res, err := s.RequestCompact(ctx, proc, 1, rev3, "")
 		if err != nil {
 			t.Errorf("next RequestCompact: %v", err)
 			return
@@ -1724,5 +1768,222 @@ func TestRequestCompactUnknownBaselineThenExplicitRelease(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("next RequestCompact hung")
+	}
+}
+
+func TestRequestCompactV2Admission(t *testing.T) {
+	s, sock, cleanup := testServer(t)
+	defer cleanup()
+	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+
+	// An active conversation is allowed on v2 and carries the run fence and
+	// instructions captured from the same snapshot.
+	stream, proc, _, cancel, rev := openCompactStreamV2(t, s, sock, "pane-v2run",
+		pibridgepb.LogicalState_LOGICAL_STATE_RUNNING, 7,
+		&pibridgepb.CompactReadiness{Idle: false})
+	defer cancel()
+	type outcome struct {
+		res CompactResult
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := s.RequestCompact(ctx, proc, 1, rev, "FOCUS_TEXT")
+		done <- outcome{res: res, err: err}
+	}()
+	wire := recvCompactRequest(t, stream)
+	if wire.runID == nil || *wire.runID != 7 {
+		t.Fatalf("run id %v, want 7", wire.runID)
+	}
+	if wire.instructions != "FOCUS_TEXT" {
+		t.Fatalf("instructions %q, want FOCUS_TEXT", wire.instructions)
+	}
+	sendCompactResult(t, stream, "pane-v2run", proc, 1, &pibridgepb.CompactResult{
+		RequestId: wire.id, Outcome: pibridgepb.CompactOutcome_COMPACT_OUTCOME_COMPLETED,
+	})
+	select {
+	case o := <-done:
+		if o.err != nil || o.res.Outcome != pibridgepb.CompactOutcome_COMPACT_OUTCOME_COMPLETED {
+			t.Fatalf("result %+v err %v", o.res, o.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("v2 active-run compact hung")
+	}
+
+	// Queued input is allowed too, still fenced by the run id.
+	stream2, proc2, _, cancel2, rev2 := openCompactStreamV2(t, s, sock, "pane-v2queued",
+		pibridgepb.LogicalState_LOGICAL_STATE_RUNNING, 8,
+		&pibridgepb.CompactReadiness{Idle: false, HasPendingMessages: true})
+	defer cancel2()
+	done2 := make(chan outcome, 1)
+	go func() {
+		res, err := s.RequestCompact(ctx, proc2, 1, rev2, "")
+		done2 <- outcome{res: res, err: err}
+	}()
+	wire2 := recvCompactRequest(t, stream2)
+	if wire2.runID == nil || *wire2.runID != 8 || wire2.instructions != "" {
+		t.Fatalf("queued wire %+v", wire2)
+	}
+	sendCompactResult(t, stream2, "pane-v2queued", proc2, 1, &pibridgepb.CompactResult{
+		RequestId: wire2.id, Outcome: pibridgepb.CompactOutcome_COMPACT_OUTCOME_COMPLETED,
+	})
+	select {
+	case o := <-done2:
+		if o.err != nil {
+			t.Fatalf("queued result: %v", o.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("v2 queued compact hung")
+	}
+
+	// Missing run id is unavailable, never bare compact.
+	proc3, token3, err := s.RegisterPending("pane-v2norun")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Complete(proc3)
+	stream3, cancel3 := openStream(t, sock, "pane-v2norun", proc3, token3)
+	defer cancel3()
+	hello := compactHelloV2("pane-v2norun", proc3, 1, pibridgepb.LogicalState_LOGICAL_STATE_IDLE, 0, idleReadiness())
+	hello.GetHello().GetCurrentState().ReloadReadiness = nil
+	if err := stream3.Send(hello); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	recvAccepted(t, stream3)
+	rev3, _ := s.PublicationRevision(proc3)
+	var unavailable *CompactUnavailable
+	if _, err := s.RequestCompact(ctx, proc3, 1, rev3, ""); !errors.As(err, &unavailable) {
+		t.Fatalf("missing run id err %v, want unavailable", err)
+	}
+	expectNoCompactRequest(t, stream3)
+
+	// Active compaction refuses on v2 as well.
+	stream4, proc4, _, cancel4, rev4 := openCompactStreamV2(t, s, sock, "pane-v2active",
+		pibridgepb.LogicalState_LOGICAL_STATE_IDLE, 0,
+		&pibridgepb.CompactReadiness{Idle: true, CompactionActive: true})
+	defer cancel4()
+	if _, err := s.RequestCompact(ctx, proc4, 1, rev4, ""); compactRefusalReason(t, err) != "compaction-active" {
+		t.Fatalf("active compact reason %v", err)
+	}
+	expectNoCompactRequest(t, stream4)
+
+	// Instructions on a v1 peer never dispatch and never consume an ID.
+	stream5, proc5, _, cancel5, rev5 := openCompactStream(t, s, sock, "pane-v1focus")
+	defer cancel5()
+	if _, err := s.RequestCompact(ctx, proc5, 1, rev5, "FOCUS_TEXT"); err == nil || !strings.Contains(err.Error(), "v2") {
+		t.Fatalf("v1 focus err %v", err)
+	}
+	expectNoCompactRequest(t, stream5)
+
+	// A fresh v1 peer accepts bare compact. The next ID is 3, proving the
+	// rejected instructions did not allocate one.
+	stream6, proc6, _, cancel6, rev6 := openCompactStream(t, s, sock, "pane-v1bare")
+	defer cancel6()
+	ctx6, stop6 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop6()
+	done6 := make(chan CompactResult, 1)
+	go func() {
+		res, err := s.RequestCompact(ctx6, proc6, 1, rev6, "")
+		if err != nil {
+			t.Errorf("v1 bare compact: %v", err)
+			return
+		}
+		done6 <- res
+	}()
+	wire6 := recvCompactRequest(t, stream6)
+	if wire6.id != "3" || wire6.instructions != "" || wire6.runID != nil {
+		t.Fatalf("v1 wire %+v, want id 3 and no v2 fields", wire6)
+	}
+	sendCompactResult(t, stream6, "pane-v1bare", proc6, 1, &pibridgepb.CompactResult{
+		RequestId: wire6.id, Outcome: pibridgepb.CompactOutcome_COMPACT_OUTCOME_COMPLETED,
+	})
+	select {
+	case <-done6:
+	case <-time.After(5 * time.Second):
+		t.Fatal("v1 bare compact hung")
+	}
+}
+
+func TestRequestCompactV2PeerLossKeepsOperation(t *testing.T) {
+	s, sock, cleanup := testServer(t)
+	defer cleanup()
+	stream, proc, token, cancel, rev := openCompactStreamV2(t, s, sock, "pane-v2loss",
+		pibridgepb.LogicalState_LOGICAL_STATE_RUNNING, 7,
+		&pibridgepb.CompactReadiness{Idle: false, HasPendingMessages: true})
+
+	errCh := make(chan error, 1)
+	go func() {
+		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		_, err := s.RequestCompact(ctx, proc, 1, rev, "FOCUS_TEXT")
+		errCh <- err
+	}()
+	wire := recvCompactRequest(t, stream)
+	if wire.runID == nil || *wire.runID != 7 || wire.instructions != "FOCUS_TEXT" {
+		t.Fatalf("wire %+v", wire)
+	}
+	cancel()
+	select {
+	case err := <-errCh:
+		var unknown *CompactUnknown
+		if !errors.As(err, &unknown) || unknown.RequestID != wire.id {
+			t.Fatalf("err %v, want CompactUnknown for %s", err, wire.id)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("waiter hung after v2 peer loss")
+	}
+
+	// A same-generation reconnect keeps the unresolved operation and never
+	// resends it. A duplicate old result cannot release a newer owner.
+	stream2, cancel2 := openStream(t, sock, "pane-v2loss", proc, token)
+	defer cancel2()
+	if err := stream2.Send(compactHelloV2("pane-v2loss", proc, 1,
+		pibridgepb.LogicalState_LOGICAL_STATE_RUNNING, 7,
+		&pibridgepb.CompactReadiness{Idle: false, HasPendingMessages: true})); err != nil {
+		t.Fatalf("reconnect: %v", err)
+	}
+	recvAccepted(t, stream2)
+	rev2, _ := s.PublicationRevision(proc)
+	ctx2, stop2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop2()
+	if _, err := s.RequestCompact(ctx2, proc, 1, rev2, ""); compactRefusalReason(t, err) != "pending" {
+		t.Fatalf("post-loss reason %v", err)
+	}
+	sendCompactResult(t, stream2, "pane-v2loss", proc, 1, &pibridgepb.CompactResult{
+		RequestId: wire.id, Outcome: pibridgepb.CompactOutcome_COMPACT_OUTCOME_COMPLETED,
+	})
+	time.Sleep(200 * time.Millisecond)
+
+	done := make(chan CompactResult, 1)
+	go func() {
+		res, err := s.RequestCompact(ctx2, proc, 1, rev2, "NEXT_FOCUS")
+		if err != nil {
+			t.Errorf("next RequestCompact: %v", err)
+			return
+		}
+		done <- res
+	}()
+	wire2 := recvCompactRequest(t, stream2)
+	if wire2.id == wire.id || wire2.instructions != "NEXT_FOCUS" {
+		t.Fatalf("next wire %+v", wire2)
+	}
+	// The late duplicate for the previous operation must not release this one.
+	sendCompactResult(t, stream2, "pane-v2loss", proc, 1, &pibridgepb.CompactResult{
+		RequestId: wire.id, Outcome: pibridgepb.CompactOutcome_COMPACT_OUTCOME_REFUSED, Reason: "busy",
+	})
+	if _, err := s.RequestCompact(ctx2, proc, 1, rev2, ""); compactRefusalReason(t, err) != "pending" {
+		t.Fatalf("duplicate old result released the new owner: %v", err)
+	}
+	sendCompactResult(t, stream2, "pane-v2loss", proc, 1, &pibridgepb.CompactResult{
+		RequestId: wire2.id, Outcome: pibridgepb.CompactOutcome_COMPACT_OUTCOME_COMPLETED,
+	})
+	select {
+	case res := <-done:
+		if res.RequestID != wire2.id {
+			t.Fatalf("result %+v, want fresh operation", res)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("next v2 compact hung")
 	}
 }

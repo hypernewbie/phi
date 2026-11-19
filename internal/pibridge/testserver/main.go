@@ -301,7 +301,7 @@ func run() error {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), clampTimeout(req.TimeoutMs))
 				defer cancel()
-				res, err := srv.RequestCompact(ctx, req.Process, req.Generation, req.Revision)
+				res, err := srv.RequestCompact(ctx, req.Process, req.Generation, req.Revision, "")
 				call.done <- compactOutcome{result: res, err: err}
 			}()
 			_ = enc.Encode(response{OK: true, Call: id})
