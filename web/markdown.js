@@ -7,6 +7,7 @@ import { createDeltaTracker, PAGE_COUNTERS, PROCESS_COUNTERS, renderCounterRows,
 import { tryNative } from './desktop.js';
 import { kindFor } from './file-viewer.js';
 const MD_SORT_STORAGE_KEY = 'phi-md-sort';
+const MD_HIGHLIGHT_STORAGE_KEY = 'phi-md-highlight-unread';
 const MD_READ_DEADLINE_MS = 10_000;
 function compareNamePath(a, b) {
     if (a.name < b.name)
@@ -68,6 +69,7 @@ export class MarkdownManager {
     _lastRenderedKey;
     _externalDebounce;
     sortMode;
+    highlightUnread;
     _sortMenuEl;
     _sortButton;
     _acceptedFiles;
@@ -84,7 +86,8 @@ export class MarkdownManager {
     _previewScopeAbort;
     _attention;
     _pathState;
-    _baselineEstablished;
+    _baselineReady;
+    _knownDirs;
     _versionCounter;
     _onOnline;
     _onVisibility;
@@ -122,6 +125,7 @@ export class MarkdownManager {
         this.markdownClipboard = null;
         this.contextMenuEl = this._createContextMenu();
         this.sortMode = this._readSortMode();
+        this.highlightUnread = this._readHighlightUnread();
         this._sortMenuEl = this._createSortMenu();
         this._sortButton = null;
         this._acceptedFiles = null;
@@ -138,7 +142,8 @@ export class MarkdownManager {
         this._previewScopeAbort = null;
         this._attention = new Set();
         this._pathState = new Map();
-        this._baselineEstablished = false;
+        this._baselineReady = new Set();
+        this._knownDirs = new Set();
         this._versionCounter = 0;
         this.refreshRequestId = 0;
         this._lastRenderedKey = '';
@@ -364,9 +369,12 @@ export class MarkdownManager {
         const scope = app?.scope ?? null;
         const store = app?.getActiveStore?.() ?? null;
         const cwd = this.app.sessionsManager.activeCWD || '';
+        const dirs = [...(this.app.markdownDirs || [])];
+        const dirsKey = JSON.stringify(dirs);
         const contextGeneration = this._contextGeneration;
         if (scope?.aborted)
             return;
+        this._syncConfiguredDirs(dirs);
         const requestId = ++this.refreshRequestId;
         this._abortListing();
         const controller = new AbortController();
@@ -383,6 +391,7 @@ export class MarkdownManager {
             contextGeneration !== this._contextGeneration ||
             (app?.scope ?? null) !== scope ||
             (app?.getActiveStore?.() ?? null) !== store ||
+            this._dirsKey() !== dirsKey ||
             (this.app.sessionsManager.activeCWD || '') !== cwd;
         try {
             const res = await fetch(url, {
@@ -419,12 +428,12 @@ export class MarkdownManager {
             }
             const hadError = this._listError !== null;
             this._listError = null;
-            const key = `${cwd} ${body}`;
+            const key = `${cwd}\n${dirsKey}\n${body}`;
             if (silent && !hadError && key === this._lastRenderedKey)
                 return;
             this._lastRenderedKey = key;
             this._acceptedFiles = files;
-            this._applyListState(files);
+            this._applyListState(files, dirs);
             this._renderFileList(files);
         }
         catch (e) {
@@ -486,7 +495,8 @@ export class MarkdownManager {
         this._listError = null;
         this._attention.clear();
         this._pathState.clear();
-        this._baselineEstablished = false;
+        this._baselineReady.clear();
+        this._knownDirs.clear();
         this._versionCounter = 0;
         this._renderListStatus('loading', 'Scanning...');
         return true;
@@ -564,6 +574,38 @@ export class MarkdownManager {
             /* Storage can be unavailable; the in-memory choice still works. */
         }
     }
+    _readHighlightUnread() {
+        try {
+            return localStorage.getItem(MD_HIGHLIGHT_STORAGE_KEY) !== 'false';
+        }
+        catch {
+            return true;
+        }
+    }
+    _persistHighlightUnread() {
+        try {
+            localStorage.setItem(MD_HIGHLIGHT_STORAGE_KEY, String(this.highlightUnread));
+        }
+        catch {
+            /* Storage can be unavailable; the in-memory choice still works. */
+        }
+    }
+    _setHighlightUnread(enabled) {
+        this.highlightUnread = enabled === true;
+        this._persistHighlightUnread();
+        this._syncSortMenuState();
+        if (this._acceptedFiles) {
+            this._renderFileList(this._acceptedFiles, {
+                error: this._listError || undefined,
+            });
+        }
+    }
+    _showAttention(path) {
+        return this.highlightUnread && this._attention.has(path);
+    }
+    _dirsKey() {
+        return JSON.stringify(this.app?.markdownDirs || []);
+    }
     _setSortMode(mode) {
         if (mode !== 'name' && mode !== 'modified')
             return;
@@ -584,7 +626,14 @@ export class MarkdownManager {
     }
     _sortEntries(files) {
         const copy = files.slice();
+        const prioritizeUnread = this.sortMode === 'modified' && this.highlightUnread;
         copy.sort((a, b) => {
+            if (prioritizeUnread) {
+                const aUnread = this._attention.has(a.path);
+                const bUnread = this._attention.has(b.path);
+                if (aUnread !== bUnread)
+                    return aUnread ? -1 : 1;
+            }
             if (this.sortMode === 'modified') {
                 const aTime = this._parsedMtime(a);
                 const bTime = this._parsedMtime(b);
@@ -627,25 +676,58 @@ export class MarkdownManager {
             ? null
             : (file.mod_time ?? null);
     }
-    _applyListState(files) {
-        const establishBaseline = !this._baselineEstablished;
+    _syncConfiguredDirs(dirs) {
+        const next = new Set(dirs);
+        for (const dir of Array.from(this._knownDirs)) {
+            if (next.has(dir))
+                continue;
+            this._knownDirs.delete(dir);
+            this._baselineReady.delete(dir);
+            for (const [path, state] of Array.from(this._pathState)) {
+                if (state.dir !== dir)
+                    continue;
+                this._pathState.delete(path);
+                this._attention.delete(path);
+            }
+        }
+        for (const dir of dirs)
+            this._knownDirs.add(dir);
+    }
+    _applyListState(files, dirs) {
+        this._syncConfiguredDirs(dirs);
         const seen = new Set();
+        const observedDirs = new Set(dirs);
         for (const file of files) {
+            const dir = typeof file.dir === 'string' ? file.dir : '';
+            observedDirs.add(dir);
+            const establishBaseline = !this._baselineReady.has(dir);
             const timestamp = this._validMtime(file);
             seen.add(file.path);
             const previous = this._pathState.get(file.path);
-            if (!previous) {
+            if (establishBaseline) {
                 this._pathState.set(file.path, {
+                    dir,
                     lastKnown: timestamp,
                     listed: timestamp,
                     version: ++this._versionCounter,
                 });
-                if (!establishBaseline)
-                    this._attention.add(file.path);
+                this._attention.delete(file.path);
                 continue;
             }
-            if (timestamp === previous.listed)
+            if (!previous) {
+                this._pathState.set(file.path, {
+                    dir,
+                    lastKnown: timestamp,
+                    listed: timestamp,
+                    version: ++this._versionCounter,
+                });
+                this._attention.add(file.path);
                 continue;
+            }
+            if (timestamp === previous.listed) {
+                previous.dir = dir;
+                continue;
+            }
             const version = ++this._versionCounter;
             if (timestamp === null) {
                 // Metadata can disappear between listings (a pending write,
@@ -653,6 +735,7 @@ export class MarkdownManager {
                 // for change detection but block acknowledgment while the
                 // current value is unknown.
                 this._pathState.set(file.path, {
+                    dir,
                     lastKnown: previous.lastKnown,
                     listed: null,
                     version,
@@ -660,30 +743,39 @@ export class MarkdownManager {
                 continue;
             }
             this._pathState.set(file.path, {
+                dir,
                 lastKnown: timestamp,
                 listed: timestamp,
                 version,
             });
             // The first known timestamp for a path that was previously
             // unknown is a baseline, not a content change.
-            if (!establishBaseline &&
-                previous.lastKnown !== null &&
+            if (previous.lastKnown !== null &&
                 timestamp !== previous.lastKnown) {
                 this._attention.add(file.path);
             }
         }
+        for (const dir of observedDirs)
+            this._baselineReady.add(dir);
         for (const path of Array.from(this._pathState.keys())) {
             if (seen.has(path))
                 continue;
             this._pathState.delete(path);
             this._attention.delete(path);
         }
-        this._baselineEstablished = true;
     }
     _acknowledgeFile(path) {
         if (!this._attention.has(path))
             return;
         this._attention.delete(path);
+        if (this.sortMode === 'modified' &&
+            this.highlightUnread &&
+            this._acceptedFiles) {
+            this._renderFileList(this._acceptedFiles, {
+                error: this._listError || undefined,
+            });
+            return;
+        }
         this._updateRowAttention(path);
     }
     _fileIconMarkup(attention) {
@@ -693,7 +785,7 @@ export class MarkdownManager {
         return '<svg class="md-file-icon md-file-icon-doc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="13" y2="17"></line></svg>';
     }
     _updateRowAttention(path) {
-        const hasAttention = this._attention.has(path);
+        const hasAttention = this._showAttention(path);
         for (const row of Array.from(this.fileListEl.querySelectorAll('.md-file-row'))) {
             if (row.dataset.path !== path)
                 continue;
@@ -759,6 +851,9 @@ export class MarkdownManager {
         const app = this.app;
         const store = app?.getActiveStore?.() ?? null;
         const cwd = this.app.sessionsManager.activeCWD || '';
+        const dirs = [...(this.app.markdownDirs || [])];
+        const dirsKey = JSON.stringify(dirs);
+        this._syncConfiguredDirs(dirs);
         const url = `/api/markdown/files?cwd=${encodeURIComponent(cwd)}`;
         const raw = store?.responses?.get(url);
         let files = null;
@@ -786,10 +881,10 @@ export class MarkdownManager {
         const nextFiles = contextChanged || !this._acceptedFiles
             ? valid
             : this._acceptedFiles;
-        this._lastRenderedKey = `${cwd} ${JSON.stringify(nextFiles)}`;
+        this._lastRenderedKey = `${cwd}\n${dirsKey}\n${JSON.stringify(nextFiles)}`;
         if (contextChanged || !this._acceptedFiles) {
             this._acceptedFiles = valid;
-            this._applyListState(valid);
+            this._applyListState(valid, dirs);
         }
         this._renderFileList(nextFiles, {
             error: this._listError || undefined,
@@ -883,6 +978,25 @@ export class MarkdownManager {
             });
             this._sortMenuEl.appendChild(btn);
         }
+        const highlight = document.createElement('button');
+        highlight.type = 'button';
+        highlight.className = 'md-context-action md-sort-highlight-option';
+        highlight.setAttribute('role', 'menuitemcheckbox');
+        highlight.setAttribute('aria-checked', String(this.highlightUnread));
+        const highlightIcon = document.createElement('span');
+        highlightIcon.className = 'md-context-icon';
+        highlightIcon.setAttribute('aria-hidden', 'true');
+        highlightIcon.textContent = this.highlightUnread ? '✓' : '';
+        const highlightText = document.createElement('span');
+        highlightText.className = 'md-context-label';
+        highlightText.textContent = 'Highlight unread docs';
+        highlight.append(highlightIcon, highlightText);
+        highlight.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._setHighlightUnread(!this.highlightUnread);
+            this._hideSortMenu(true);
+        });
+        this._sortMenuEl.appendChild(highlight);
     }
     _syncSortMenuState() {
         for (const btn of Array.from(this._sortMenuEl.querySelectorAll('.md-sort-option'))) {
@@ -891,6 +1005,13 @@ export class MarkdownManager {
             const icon = btn.querySelector('.md-context-icon');
             if (icon)
                 icon.textContent = selected ? '✓' : '';
+        }
+        const highlight = this._sortMenuEl.querySelector('.md-sort-highlight-option');
+        if (highlight) {
+            highlight.setAttribute('aria-checked', String(this.highlightUnread));
+            const icon = highlight.querySelector('.md-context-icon');
+            if (icon)
+                icon.textContent = this.highlightUnread ? '✓' : '';
         }
     }
     _toggleSortMenu(anchor) {
@@ -953,7 +1074,7 @@ export class MarkdownManager {
         }
     }
     _sortMenuItems() {
-        return Array.from(this._sortMenuEl.querySelectorAll('.md-sort-option'));
+        return Array.from(this._sortMenuEl.querySelectorAll('.md-sort-option, .md-sort-highlight-option'));
     }
     _onSortMenuKeydown(e) {
         const items = this._sortMenuItems();
@@ -1096,7 +1217,7 @@ export class MarkdownManager {
                 else {
                     const sortedFiles = this._sortEntries(dirFiles);
                     sortedFiles.forEach((f) => {
-                        const hasAttention = this._attention.has(f.path);
+                        const hasAttention = this._showAttention(f.path);
                         const row = document.createElement('div');
                         row.className = hasAttention
                             ? 'md-file-row has-attention'

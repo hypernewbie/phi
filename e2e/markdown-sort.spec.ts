@@ -400,6 +400,256 @@ test('live attention: one changed row, dot, failed preview, and acknowledgment',
     });
 });
 
+test('directory baselines and unread preference', async ({
+    page,
+}, testInfo) => {
+    test.setTimeout(150_000);
+    const fixtureCwd = realpathSync(phi.dir);
+    const addedDir = join(fixtureCwd, 'added');
+    const firstDir = join(fixtureCwd, 'first');
+    mkdirSync(addedDir, { recursive: true });
+    const early = new Date('2024-01-01T00:00:00Z');
+    const late = new Date('2024-02-01T00:00:00Z');
+    writeFileSync(join(addedDir, 'added-a.md'), '# added a\n');
+    writeFileSync(join(addedDir, 'added-b.md'), '# added b\n');
+    utimesSync(join(addedDir, 'added-a.md'), early, early);
+    utimesSync(join(addedDir, 'added-b.md'), late, late);
+
+    const spawned = await page.request.post(`${phi.url}/api/terminals`, {
+        data: {
+            coder: 'bash',
+            cwd: fixtureCwd,
+            title: 'Markdown baselines',
+        },
+    });
+    expect(spawned.ok()).toBe(true);
+    const paneId = ((await spawned.json()) as { pane_id: string }).pane_id;
+
+    const notifications: Array<{ dir: string; at: number }> = [];
+    const listings: Array<{ cwd: string; at: number }> = [];
+    page.on('request', (request) => {
+        const url = new URL(request.url());
+        if (url.pathname !== '/api/markdown/files') return;
+        listings.push({
+            cwd: url.searchParams.get('cwd') ?? '',
+            at: Date.now(),
+        });
+    });
+    await page.routeWebSocket(`**/ws/pane/${paneId}?*`, (socket) => {
+        const backend = socket.connectToServer();
+        socket.onMessage((message) => backend.send(message));
+        backend.onMessage((message) => {
+            if (Buffer.isBuffer(message)) {
+                try {
+                    const frame = ServerCodec.decode(new Uint8Array(message));
+                    const payload = frame.payload;
+                    if (
+                        payload?.$case === 'notification' &&
+                        payload.value.kind?.$case === 'markdownChanged'
+                    ) {
+                        notifications.push({
+                            dir: payload.value.kind.value.dir ?? '',
+                            at: Date.now(),
+                        });
+                    }
+                } catch {
+                    // Evidence decoding never changes the pane stream.
+                }
+            }
+            socket.send(message);
+        });
+    });
+
+    await page.setViewportSize({ width: 1400, height: 850 });
+    await page.goto(phi.url);
+    await selectPane(page, paneId);
+    await openMarkdownPanel(page);
+    await expect(fileRow(page, 'bravo.md')).toBeVisible({ timeout: 20_000 });
+
+    await page.locator('.md-sort-btn').click();
+    const highlight = page.locator('.md-sort-highlight-option');
+    await expect(highlight).toHaveAttribute('aria-checked', 'true');
+    await page.locator('.md-sort-option[data-sort="modified"]').click();
+
+    const nameOrder = [
+        { label: './first', names: ['alpha.md', 'bravo.md'] },
+        { label: './second', names: ['charlie.md', 'delta.md'] },
+    ];
+    const modifiedBaseline = [
+        { label: './first', names: ['bravo.md', 'alpha.md'] },
+        { label: './second', names: ['delta.md', 'charlie.md'] },
+    ];
+    const withAdded = (groups: GroupView[]) => [
+        ...groups,
+        { label: './added', names: ['added-b.md', 'added-a.md'] },
+    ];
+    await expect
+        .poll(async () => readGroups(page), { timeout: 20_000 })
+        .toEqual(modifiedBaseline);
+
+    const addedListing = listingResponse(page, fixtureCwd);
+    await page.locator('.md-manage-btn', { hasText: '+ Add Dir' }).click();
+    await expect(page.locator('.config-editor-overlay')).toBeVisible();
+    await page.locator('#config-editor-dir').fill('./added');
+    await page.locator('.config-editor-footer .btn-accent').click();
+    await addedListing;
+    await expect
+        .poll(async () => readGroups(page), { timeout: 20_000 })
+        .toEqual(withAdded(modifiedBaseline));
+    await expect(
+        page.locator('#markdown-file-list .md-file-row.has-attention'),
+    ).toHaveCount(0);
+    expect(
+        await fileRow(page, 'added-a.md').locator('.md-file-icon-doc').count(),
+    ).toBe(1);
+
+    const writeAt = Date.now();
+    writeFileSync(join(firstDir, 'bravo.md'), '# bravo baseline gate\n');
+    utimesSync(
+        join(firstDir, 'bravo.md'),
+        new Date('2024-05-01T00:00:00Z'),
+        new Date('2024-05-01T00:00:00Z'),
+    );
+    writeFileSync(join(firstDir, 'alpha.md'), '# alpha baseline gate\n');
+    utimesSync(
+        join(firstDir, 'alpha.md'),
+        new Date('2024-06-01T00:00:00Z'),
+        new Date('2024-06-01T00:00:00Z'),
+    );
+
+    await expect
+        .poll(
+            () =>
+                notifications.some(
+                    (entry) =>
+                        entry.at >= writeAt && sameDir(entry.dir, firstDir),
+                ),
+            { timeout: 20_000 },
+        )
+        .toBe(true);
+    const notification = notifications.find(
+        (entry) => entry.at >= writeAt && sameDir(entry.dir, firstDir),
+    )!;
+    await expect
+        .poll(
+            () =>
+                listings.some(
+                    (entry) =>
+                        entry.at >= notification.at &&
+                        sameDir(entry.cwd, fixtureCwd),
+                ),
+            { timeout: 20_000 },
+        )
+        .toBe(true);
+
+    const unreadGroups = [
+        { label: './first', names: ['alpha.md', 'bravo.md'] },
+        ...withAdded(modifiedBaseline).slice(1),
+    ];
+    await expect(fileRow(page, 'alpha.md')).toHaveClass(/has-attention/, {
+        timeout: 20_000,
+    });
+    await expect(fileRow(page, 'bravo.md')).toHaveClass(/has-attention/);
+    await expect
+        .poll(async () => readGroups(page), { timeout: 20_000 })
+        .toEqual(unreadGroups);
+
+    const listingBeforePreview = listings.length;
+    await fileRow(page, 'alpha.md').locator('.md-file-item').click();
+    await expect(page.locator('#md-modal-body')).toContainText(
+        'alpha baseline gate',
+    );
+    await expect(fileRow(page, 'alpha.md')).not.toHaveClass(/has-attention/);
+    await expect(fileRow(page, 'bravo.md')).toHaveClass(/has-attention/);
+    const readGroupsView = [
+        { label: './first', names: ['bravo.md', 'alpha.md'] },
+        ...withAdded(modifiedBaseline).slice(1),
+    ];
+    await expect
+        .poll(async () => readGroups(page), { timeout: 20_000 })
+        .toEqual(readGroupsView);
+    expect(listings.length).toBe(listingBeforePreview);
+    await page.locator('#md-modal-close').click();
+
+    await page.locator('.md-sort-btn').click();
+    await page.locator('.md-sort-option[data-sort="name"]').click();
+    const nameWithAdded = [
+        ...nameOrder,
+        { label: './added', names: ['added-a.md', 'added-b.md'] },
+    ];
+    await expect
+        .poll(async () => readGroups(page), { timeout: 20_000 })
+        .toEqual(nameWithAdded);
+    await expect(fileRow(page, 'bravo.md')).toHaveClass(/has-attention/);
+
+    await page.locator('.md-sort-btn').click();
+    await page.locator('.md-sort-option[data-sort="modified"]').click();
+    await expect
+        .poll(async () => readGroups(page), { timeout: 20_000 })
+        .toEqual(readGroupsView);
+
+    await page.locator('.md-sort-btn').click();
+    await expect(highlight).toHaveAttribute('aria-checked', 'true');
+    await page.locator('.md-sort-highlight-option').click();
+    await expect(
+        page.locator('#markdown-file-list .md-file-row.has-attention'),
+    ).toHaveCount(0);
+    await expect(
+        page.locator('#markdown-file-list .md-file-attention-dot'),
+    ).toHaveCount(0);
+    const plainModified = [
+        { label: './first', names: ['alpha.md', 'bravo.md'] },
+        ...withAdded(modifiedBaseline).slice(1),
+    ];
+    await expect
+        .poll(async () => readGroups(page), { timeout: 20_000 })
+        .toEqual(plainModified);
+    expect(
+        await page.evaluate(() =>
+            localStorage.getItem('phi-md-highlight-unread'),
+        ),
+    ).toBe('false');
+
+    await page.locator('.md-sort-btn').click();
+    await expect(highlight).toHaveAttribute('aria-checked', 'false');
+    await page.locator('.md-sort-highlight-option').click();
+    await expect(fileRow(page, 'bravo.md')).toHaveClass(/has-attention/);
+    await expect
+        .poll(async () => readGroups(page), { timeout: 20_000 })
+        .toEqual(readGroupsView);
+
+    await page.locator('.md-sort-btn').click();
+    await expect(highlight).toHaveAttribute('aria-checked', 'true');
+    await page.screenshot({
+        path: testInfo.outputPath('md-sort-revision5-checked-menu.png'),
+        fullPage: true,
+    });
+    await page.locator('.md-sort-highlight-option').click();
+
+    await page.reload();
+    await selectPane(page, paneId);
+    await openMarkdownPanel(page);
+    await expect(fileRow(page, 'alpha.md')).toBeVisible({ timeout: 20_000 });
+    await expect
+        .poll(async () => readGroups(page), { timeout: 20_000 })
+        .toEqual(plainModified);
+    await expect(
+        page.locator('#markdown-file-list .md-file-row.has-attention'),
+    ).toHaveCount(0);
+
+    await page.locator('.md-sort-btn').click();
+    await expect(highlight).toHaveAttribute('aria-checked', 'false');
+    await expect(
+        page.locator('.md-sort-option[data-sort="modified"]'),
+    ).toHaveAttribute('aria-checked', 'true');
+    await page.setViewportSize({ width: 420, height: 850 });
+    await waitForSortMenu(page);
+    await page.screenshot({
+        path: testInfo.outputPath('md-sort-revision5-unchecked-mobile.png'),
+        fullPage: true,
+    });
+});
+
 test('pane reconnect catches up a missed markdown change', async ({ page }) => {
     test.setTimeout(150_000);
     const fixtureCwd = realpathSync(phi.dir);
@@ -646,6 +896,10 @@ test('visual acceptance: desktop, mobile, and appearance extremes', async ({
     await expect(
         page.locator('.md-sort-option[data-sort="modified"]'),
     ).toHaveAttribute('aria-checked', 'true');
+    await expect(page.locator('.md-sort-highlight-option')).toHaveAttribute(
+        'aria-checked',
+        'true',
+    );
     await page.screenshot({
         path: testInfo.outputPath('md-sort-1400-normal-purple-menu.png'),
         fullPage: true,
@@ -673,6 +927,17 @@ test('visual acceptance: desktop, mobile, and appearance extremes', async ({
     expect(mobileMenu!.y).toBeGreaterThanOrEqual(0);
     expect(mobileMenu!.x + mobileMenu!.width).toBeLessThanOrEqual(421);
     expect(mobileMenu!.y + mobileMenu!.height).toBeLessThanOrEqual(851);
+    const mobileHighlight = await page
+        .locator('.md-sort-highlight-option')
+        .boundingBox();
+    expect(mobileHighlight).not.toBeNull();
+    expect(mobileHighlight!.x).toBeGreaterThanOrEqual(0);
+    expect(mobileHighlight!.x + mobileHighlight!.width).toBeLessThanOrEqual(
+        421,
+    );
+    await expect(
+        page.locator('.md-sort-highlight-option .md-context-label'),
+    ).toHaveText('Highlight unread docs');
     expect(
         await page.evaluate(
             () => document.documentElement.scrollWidth <= window.innerWidth + 1,
@@ -713,6 +978,7 @@ test('visual acceptance: desktop, mobile, and appearance extremes', async ({
     await expect(
         page.locator('.md-sort-option[data-sort="modified"]'),
     ).toBeVisible();
+    await expect(page.locator('.md-sort-highlight-option')).toBeVisible();
     await page.screenshot({
         path: testInfo.outputPath('md-sort-1400-24px-white-menu.png'),
         fullPage: true,
@@ -736,16 +1002,16 @@ test('visual acceptance: desktop, mobile, and appearance extremes', async ({
             () => document.documentElement.scrollWidth <= window.innerWidth + 1,
         ),
     ).toBe(true);
-    const optionBoxes = await page
-        .locator('.md-sort-option')
+    const menuItemBoxes = await page
+        .locator('.md-sort-option, .md-sort-highlight-option')
         .evaluateAll((options) =>
             options.map((option) => {
                 const rect = option.getBoundingClientRect();
                 return { left: rect.left, right: rect.right };
             }),
         );
-    expect(optionBoxes).toHaveLength(2);
-    for (const box of optionBoxes) {
+    expect(menuItemBoxes).toHaveLength(3);
+    for (const box of menuItemBoxes) {
         expect(box.left).toBeGreaterThanOrEqual(0);
         expect(box.right).toBeLessThanOrEqual(420);
     }

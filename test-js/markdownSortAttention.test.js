@@ -310,10 +310,11 @@ describe('markdown sort menu', () => {
         expect(mm._sortMenuEl.classList.contains('hidden')).toBe(false);
         expect(button.getAttribute('aria-expanded')).toBe('true');
         const options = mm._sortMenuItems();
-        expect(options.map((item) => item.dataset.sort)).toEqual([
-            'name',
-            'modified',
-        ]);
+        expect(
+            options
+                .filter((item) => item.dataset.sort)
+                .map((item) => item.dataset.sort),
+        ).toEqual(['name', 'modified']);
         expect(options[0].getAttribute('aria-checked')).toBe('true');
         expect(options[0].getAttribute('role')).toBe('menuitemradio');
 
@@ -342,6 +343,56 @@ describe('markdown sort menu', () => {
         document.body.click();
         expect(mm._sortMenuEl.classList.contains('hidden')).toBe(true);
         expect(mm.contextMenuEl.classList.contains('hidden')).toBe(true);
+    });
+
+    it('defaults unread highlighting on and persists the menu checkbox', async () => {
+        localStorage.removeItem('phi-md-highlight-unread');
+        vi.stubGlobal('fetch', jsonFetch([]));
+        const { mm } = makeMm();
+        await mm.refreshFiles({ force: true });
+
+        expect(mm.highlightUnread).toBe(true);
+        mm._sortButton.click();
+        const toggle = mm._sortMenuEl.querySelector(
+            '.md-sort-highlight-option',
+        );
+        expect(toggle).not.toBeNull();
+        expect(toggle.getAttribute('role')).toBe('menuitemcheckbox');
+        expect(toggle.getAttribute('aria-checked')).toBe('true');
+        expect(toggle.textContent).toContain('Highlight unread docs');
+
+        const items = mm._sortMenuItems();
+        expect(items).toHaveLength(3);
+        items[1].focus();
+        items[1].dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+        );
+        expect(document.activeElement).toBe(toggle);
+
+        toggle.click();
+        expect(mm.highlightUnread).toBe(false);
+        expect(localStorage.getItem('phi-md-highlight-unread')).toBe('false');
+        expect(mm._sortMenuEl.classList.contains('hidden')).toBe(true);
+        expect(document.activeElement).toBe(mm._sortButton);
+
+        const second = makeMm();
+        expect(second.mm.highlightUnread).toBe(false);
+        second.mm._setHighlightUnread(true);
+        expect(localStorage.getItem('phi-md-highlight-unread')).toBe('true');
+
+        localStorage.setItem('phi-md-highlight-unread', 'nonsense');
+        expect(makeMm().mm.highlightUnread).toBe(true);
+
+        vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+            throw new Error('storage denied');
+        });
+        const fourth = makeMm();
+        expect(fourth.mm.highlightUnread).toBe(true);
+        vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+            throw new Error('storage denied');
+        });
+        expect(() => fourth.mm._setHighlightUnread(false)).not.toThrow();
+        expect(fourth.mm.highlightUnread).toBe(false);
     });
 });
 
@@ -916,6 +967,346 @@ describe('markdown changed-file attention', () => {
         expect(mm.modalBody.textContent).toContain('b');
         expect(mm.modalBody.textContent).not.toContain('stale a');
         expect(attentionPaths(mm)).toEqual(['./docs/a.md']);
+    });
+
+    it('baselines a newly added populated directory without marking its files changed', async () => {
+        const docs = [file('a.md', './docs', '2024-01-01T00:00:00Z')];
+        routeFetch({ list: docs });
+        const { mm, app } = makeMm();
+        await mm.refreshFiles({ force: true });
+
+        app.markdownDirs = ['./docs', './added'];
+        const added = [
+            file('x.md', './added', '2024-01-01T00:00:00Z'),
+            file('y.md', './added', '2024-02-01T00:00:00Z'),
+        ];
+        routeFetch({ list: [...docs, ...added] });
+        await mm.refreshFiles({ force: false, silent: true });
+
+        expect(groupLabels(mm)).toEqual(['./docs', './added']);
+        expect(attentionPaths(mm)).toEqual([]);
+        expect(rowNames(mm)).toEqual(['a.md', 'x.md', 'y.md']);
+
+        routeFetch({
+            list: [
+                ...docs,
+                ...added,
+                file('z.md', './added', '2024-03-01T00:00:00Z'),
+            ],
+        });
+        await mm.refreshFiles({ force: false, silent: true });
+        expect(attentionPaths(mm)).toEqual(['./added/z.md']);
+    });
+
+    it('renders and baselines a newly added empty directory when the file body is unchanged', async () => {
+        routeFetch({ list: [] });
+        const { mm, app } = makeMm();
+        await mm.refreshFiles({ force: true });
+        expect(groupLabels(mm)).toEqual(['./docs']);
+
+        app.markdownDirs = ['./docs', './empty'];
+        const fetchMock = routeFetch({ list: [] });
+        await mm.refreshFiles({ force: false, silent: true });
+
+        expect(fetchMock).toHaveBeenCalledOnce();
+        expect(groupLabels(mm)).toEqual(['./docs', './empty']);
+        expect(mm.fileListEl.querySelectorAll('.md-file-group')).toHaveLength(
+            2,
+        );
+        expect(attentionPaths(mm)).toEqual([]);
+
+        routeFetch({
+            list: [file('later.md', './empty', '2024-01-01T00:00:00Z')],
+        });
+        await mm.refreshFiles({ force: false, silent: true });
+        expect(attentionPaths(mm)).toEqual(['./empty/later.md']);
+    });
+
+    it('invalidates a removed directory on a failed refresh and re-baselines it on re-addition', async () => {
+        const docs = [file('a.md', './docs', '2024-01-01T00:00:00Z')];
+        const added = [file('b.md', './added', '2024-01-01T00:00:00Z')];
+        routeFetch({ list: docs });
+        const { mm, app } = makeMm();
+        await mm.refreshFiles();
+        app.markdownDirs = ['./docs', './added'];
+        routeFetch({ list: [...docs, ...added] });
+        await mm.refreshFiles({ silent: true });
+        expect(attentionPaths(mm)).toEqual([]);
+
+        routeFetch({
+            list: [file('a.md', './docs', '2024-02-01T00:00:00Z')],
+        });
+        await mm.refreshFiles({ silent: true });
+        expect(attentionPaths(mm)).toEqual(['./docs/a.md']);
+
+        app.markdownDirs = ['./docs'];
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => ({
+                ok: false,
+                status: 500,
+                text: async () => 'down',
+            })),
+        );
+        await mm.refreshFiles({ silent: true });
+        expect(mm._baselineReady.has('./added')).toBe(false);
+        expect(mm._pathState.has('./added/b.md')).toBe(false);
+        expect(mm._attention.has('./docs/a.md')).toBe(true);
+        expect(mm.fileListEl.textContent).toContain('down');
+
+        app.markdownDirs = ['./docs', './added'];
+        routeFetch({
+            list: [file('a.md', './docs', '2024-02-01T00:00:00Z'), ...added],
+        });
+        await mm.refreshFiles({ silent: true });
+        expect(attentionPaths(mm)).toEqual(['./docs/a.md']);
+        expect(mm._baselineReady.has('./added')).toBe(true);
+    });
+
+    it('moves an acknowledged unread row below remaining unread rows in Modified order', async () => {
+        const base = [
+            file('older.md', './docs', '2024-01-01T00:00:00Z'),
+            file('newer.md', './docs', '2024-01-02T00:00:00Z'),
+        ];
+        const changed = [
+            file('older.md', './docs', '2024-03-01T00:00:00Z'),
+            file('newer.md', './docs', '2024-04-01T00:00:00Z'),
+        ];
+        routeFetch({ list: base });
+        const { mm } = makeMm();
+        await mm.refreshFiles({ force: true });
+        routeFetch({ list: changed });
+        await mm.refreshFiles({ force: false, silent: true });
+        mm._setSortMode('modified');
+        expect(rowNames(mm)).toEqual(['newer.md', 'older.md']);
+        expect(attentionPaths(mm)).toEqual([
+            './docs/newer.md',
+            './docs/older.md',
+        ]);
+
+        routeFetch({
+            file: { ok: false, status: 500, text: async () => 'nope' },
+        });
+        await mm.openFile({ name: 'newer.md', path: './docs/newer.md' });
+        expect(mm.modalBody.textContent).toContain('nope');
+        expect(rowNames(mm)).toEqual(['newer.md', 'older.md']);
+        expect(attentionPaths(mm)).toHaveLength(2);
+
+        let listingCalls = 0;
+        const remaining = rowFor(mm, './docs/older.md');
+        remaining.querySelector('.md-file-item').focus();
+        routeFetch({
+            list: () => {
+                listingCalls++;
+                return changed;
+            },
+            file: { ok: true, text: async () => '# newer' },
+        });
+        await mm.openFile({ name: 'newer.md', path: './docs/newer.md' });
+        expect(mm.modalBody.textContent).toContain('newer');
+        expect(attentionPaths(mm)).toEqual(['./docs/older.md']);
+        expect(rowNames(mm)).toEqual(['older.md', 'newer.md']);
+        expect(listingCalls).toBe(0);
+        expect(document.activeElement).toBe(
+            rowFor(mm, './docs/older.md').querySelector('.md-file-item'),
+        );
+
+        mm._setSortMode('name');
+        expect(rowNames(mm)).toEqual(['newer.md', 'older.md']);
+    });
+
+    it('drops a listing whose configured directories changed while its body was pending', async () => {
+        const docs = [file('a.md', './docs', '2024-01-01T00:00:00Z')];
+        const store = { responses: new Map() };
+        routeFetch({ list: docs });
+        const { mm, app } = makeMm({ store });
+        await mm.refreshFiles();
+        const cached = store.responses.get('/api/markdown/files?cwd=%2Fw');
+
+        const body = deferred();
+        routeFetch({ list: () => body.promise });
+        const pending = mm.refreshFiles({ silent: true });
+        await Promise.resolve();
+        app.markdownDirs = ['./docs', './added'];
+        body.resolve([
+            ...docs,
+            file('x.md', './added', '2024-02-01T00:00:00Z'),
+        ]);
+        await pending;
+
+        expect(groupLabels(mm)).toEqual(['./docs']);
+        expect(rowNames(mm)).toEqual(['a.md']);
+        expect(attentionPaths(mm)).toEqual([]);
+        expect(store.responses.get('/api/markdown/files?cwd=%2Fw')).toBe(
+            cached,
+        );
+        expect(mm._baselineReady.has('./added')).toBe(false);
+    });
+
+    it('keeps a retained preview valid when another directory is configured', async () => {
+        const base = [file('a.md', './docs', '2024-01-01T00:00:00Z')];
+        const changed = [file('a.md', './docs', '2024-02-01T00:00:00Z')];
+        routeFetch({ list: base });
+        const { mm, app } = makeMm();
+        await mm.refreshFiles();
+        routeFetch({ list: changed });
+        await mm.refreshFiles({ silent: true });
+        expect(attentionPaths(mm)).toEqual(['./docs/a.md']);
+
+        const body = deferred();
+        routeFetch({ file: { ok: true, text: () => body.promise } });
+        const pending = mm.openFile({
+            name: 'a.md',
+            path: './docs/a.md',
+        });
+        await Promise.resolve();
+
+        app.markdownDirs = ['./docs', './added'];
+        routeFetch({ list: changed });
+        await mm.refreshFiles({ silent: true });
+        expect(attentionPaths(mm)).toEqual(['./docs/a.md']);
+
+        body.resolve('# retained preview');
+        await pending;
+        expect(mm.modalBody.textContent).toContain('retained preview');
+        expect(attentionPaths(mm)).toEqual([]);
+        expect(groupLabels(mm)).toEqual(['./docs', './added']);
+    });
+
+    it('keeps ties and missing timestamps inside the unread and read partitions', async () => {
+        localStorage.removeItem('phi-md-highlight-unread');
+        const base = [
+            file('alpha.md', './docs', '2024-01-01T00:00:00Z'),
+            file('beta.md', './docs', '2024-01-01T00:00:00Z'),
+            file('gamma.md', './docs', '2024-01-01T00:00:00Z'),
+            file('delta.md', './docs', '2024-01-01T00:00:00Z'),
+        ];
+        const changed = [
+            file('alpha.md', './docs', '2024-03-01T00:00:00Z'),
+            file('beta.md', './docs', '2024-04-01T00:00:00Z'),
+            file('gamma.md', './docs', '2024-03-01T00:00:00Z'),
+            file('delta.md', './docs', '2024-04-01T00:00:00Z'),
+            file('epsilon.md', './docs'),
+        ];
+        routeFetch({ list: base });
+        const { mm } = makeMm();
+        await mm.refreshFiles({ force: true });
+        routeFetch({ list: changed });
+        await mm.refreshFiles({ force: false, silent: true });
+        mm._setSortMode('modified');
+        expect(rowNames(mm)).toEqual([
+            'beta.md',
+            'delta.md',
+            'alpha.md',
+            'gamma.md',
+            'epsilon.md',
+        ]);
+
+        routeFetch({ file: { ok: true, text: async () => '# ok' } });
+        await mm.openFile({ name: 'beta.md', path: './docs/beta.md' });
+        await mm.openFile({ name: 'delta.md', path: './docs/delta.md' });
+        expect(attentionPaths(mm)).toEqual([
+            './docs/alpha.md',
+            './docs/gamma.md',
+            './docs/epsilon.md',
+        ]);
+        expect(rowNames(mm)).toEqual([
+            'alpha.md',
+            'gamma.md',
+            'epsilon.md',
+            'beta.md',
+            'delta.md',
+        ]);
+
+        mm._setSortMode('name');
+        expect(rowNames(mm)).toEqual([
+            'alpha.md',
+            'beta.md',
+            'delta.md',
+            'epsilon.md',
+            'gamma.md',
+        ]);
+
+        mm._setHighlightUnread(false);
+        mm._setSortMode('modified');
+        expect(rowNames(mm)).toEqual([
+            'beta.md',
+            'delta.md',
+            'alpha.md',
+            'gamma.md',
+            'epsilon.md',
+        ]);
+    });
+
+    it('gates cues and Modified unread priority without forgetting attention', async () => {
+        localStorage.removeItem('phi-md-highlight-unread');
+        const base = [
+            file('alpha.md', './docs', '2024-01-01T00:00:00Z'),
+            file('zeta.md', './docs', '2024-01-02T00:00:00Z'),
+        ];
+        routeFetch({ list: base });
+        const { mm } = makeMm();
+        await mm.refreshFiles({ force: true });
+        routeFetch({
+            list: [
+                file('alpha.md', './docs', '2024-03-01T00:00:00Z'),
+                file('zeta.md', './docs', '2024-04-01T00:00:00Z'),
+            ],
+        });
+        await mm.refreshFiles({ force: false, silent: true });
+        const toggleFetch = vi.mocked(fetch);
+        toggleFetch.mockClear();
+        mm._setHighlightUnread(false);
+        expect(toggleFetch).not.toHaveBeenCalled();
+        mm._setHighlightUnread(true);
+        expect(toggleFetch).not.toHaveBeenCalled();
+        mm._setSortMode('modified');
+        expect(rowNames(mm)).toEqual(['zeta.md', 'alpha.md']);
+        expect(mm.highlightUnread).toBe(true);
+
+        routeFetch({ file: { ok: true, text: async () => '# zeta' } });
+        await mm.openFile({ name: 'zeta.md', path: './docs/zeta.md' });
+        expect(attentionPaths(mm)).toEqual(['./docs/alpha.md']);
+        expect(rowNames(mm)).toEqual(['alpha.md', 'zeta.md']);
+
+        mm._setHighlightUnread(false);
+        expect(attentionPaths(mm)).toEqual([]);
+        expect(
+            mm.fileListEl.querySelector('.md-file-attention-dot'),
+        ).toBeNull();
+        expect(
+            mm.fileListEl.querySelectorAll('.md-file-icon-doc'),
+        ).toHaveLength(2);
+        expect(mm._attention.has('./docs/alpha.md')).toBe(true);
+        expect(rowNames(mm)).toEqual(['zeta.md', 'alpha.md']);
+        expect(localStorage.getItem('phi-md-highlight-unread')).toBe('false');
+
+        mm._setSortMode('name');
+        expect(rowNames(mm)).toEqual(['alpha.md', 'zeta.md']);
+
+        routeFetch({
+            list: [
+                file('alpha.md', './docs', '2024-05-01T00:00:00Z'),
+                file('zeta.md', './docs', '2024-04-01T00:00:00Z'),
+            ],
+        });
+        await mm.refreshFiles({ force: false, silent: true });
+        expect(mm._attention.has('./docs/alpha.md')).toBe(true);
+        expect(attentionPaths(mm)).toEqual([]);
+
+        mm._setHighlightUnread(true);
+        expect(attentionPaths(mm)).toEqual(['./docs/alpha.md']);
+        mm._setHighlightUnread(false);
+
+        routeFetch({ file: { ok: true, text: async () => '# alpha' } });
+        await mm.openFile({ name: 'alpha.md', path: './docs/alpha.md' });
+        expect(mm._attention.has('./docs/alpha.md')).toBe(false);
+        expect(attentionPaths(mm)).toEqual([]);
+
+        mm._setHighlightUnread(true);
+        expect(attentionPaths(mm)).toEqual([]);
+        mm._setSortMode('modified');
+        expect(rowNames(mm)).toEqual(['alpha.md', 'zeta.md']);
     });
 });
 

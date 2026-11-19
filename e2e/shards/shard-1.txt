@@ -6,6 +6,7 @@ attachments-sources.spec.ts › multi-file batches preserve order and refuse par
 attachments-sources.spec.ts › server selection outside cwd keeps unsafe names as data and supports keyboard
 attachments-sources.spec.ts › upload races keep typing, chips, and sends consistent
 coder-selector-layout.spec.ts › left coder selector drops labels before wrapping and restores them when widened
+markdown-sort.spec.ts › directory baselines and unread preference
 markdown-sort.spec.ts › hidden cwd round-trip resets attention without a background listing
 markdown-sort.spec.ts › live attention: one changed row, dot, failed preview, and acknowledgment
 markdown-sort.spec.ts › live refresh preserves the focused action and list scroll after a reorder
