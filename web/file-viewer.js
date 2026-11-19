@@ -52,8 +52,11 @@ const AUD_EXT = /\.(mp3|m4a|ogg|oga|wav|flac|opus)$/i;
 const MD_EXT = /\.(md|markdown)$/i;
 const JSON_EXT = /\.(jsonc|json5)$/i;
 // `language` values for hljs. Source-of-truth list per the vendored
-// hljs bundle; extending the dispatcher to a new code language is
-// one line here.
+// hljs bundle (highlight.min.js plus the extra glsl.min.js grammar);
+// extending the dispatcher to a new code language is one line here.
+// HLSL and Slang have no highlight.js grammar to download, so they
+// map to C++ — both are C-lexical, which covers comments, strings,
+// numbers, preprocessor lines, and control flow.
 const CODE_LANG = {
     ts: 'typescript',
     tsx: 'typescript',
@@ -105,6 +108,21 @@ const CODE_LANG = {
     env: 'plaintext',
     dockerfile: 'dockerfile',
     makefile: 'makefile',
+    glsl: 'glsl',
+    vert: 'glsl',
+    frag: 'glsl',
+    geom: 'glsl',
+    tesc: 'glsl',
+    tese: 'glsl',
+    comp: 'glsl',
+    hlsl: 'cpp',
+    hlsli: 'cpp',
+    fx: 'cpp',
+    fxh: 'cpp',
+    vsh: 'cpp',
+    psh: 'cpp',
+    slang: 'cpp',
+    slangh: 'cpp',
 };
 export function kindFor(ext) {
     const e = ext.toLowerCase();

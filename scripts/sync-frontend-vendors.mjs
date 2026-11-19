@@ -41,6 +41,16 @@ export const VENDOR_GROUPS = {
     file('diff', 'dist/diff.min.js', 'jsdiff.min.js'),
     file('dompurify', 'dist/purify.min.js', 'purify.min.js'),
     file('@highlightjs/cdn-assets', 'highlight.min.js', 'highlight.min.js'),
+    // Extra hljs language grammars ship as sibling files in the same
+    // package (same license, already vendored as highlight.LICENSE).
+    // GLSL is the only shader language highlight.js publishes; HLSL
+    // and Slang have no hljs grammar, so they map to C++ in the
+    // extension tables instead of vendoring anything here.
+    file(
+      '@highlightjs/cdn-assets',
+      'languages/glsl.min.js',
+      'glsl.min.js',
+    ),
     file(
       '@highlightjs/cdn-assets',
       'styles/github-dark.min.css',

@@ -144,6 +144,7 @@ describe('web/vendor/*.js - parse integrity', () => {
         'diff2html.min.js',
         'jsdiff.min.js',
         'highlight.min.js',
+        'glsl.min.js',
         'marked.min.js',
         'purify.min.js',
         'xterm.js',
@@ -202,6 +203,28 @@ describe('jsdiff vendor exposes the expected browser primitive', () => {
             { count: 1, added: false, removed: true, value: 'old' },
             { count: 1, added: true, removed: false, value: 'new' },
         ]);
+    });
+
+    it('glsl.min.js registers the glsl grammar on hljs', () => {
+        // The language file is a browser script that calls
+        // hljs.registerLanguage at load. Run it against a stub and
+        // verify it registers under the name the extension tables use.
+        // (The grammar factory itself only runs inside real hljs, so
+        // this pins the wiring — file present, complete, right name.)
+        const src = readFileSync(join(VENDOR_DIR, 'glsl.min.js'), 'utf8');
+        let registered = null;
+        const fn = new Function('hljs', `${src}\nreturn;`);
+        expect(
+            () =>
+                fn({
+                    registerLanguage: (name, def) => {
+                        registered = { name, def };
+                    },
+                }),
+            'glsl.min.js failed to evaluate',
+        ).not.toThrow();
+        expect(registered?.name).toBe('glsl');
+        expect(typeof registered?.def).toBe('function');
     });
 
     it('loads jsdiff before the app module entry', () => {

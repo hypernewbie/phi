@@ -98,6 +98,36 @@ describe('Diff syntax highlighting DOM stream helpers', () => {
         expect(DIFF_EXT_TO_HLJS.rs).toBe('rust');
         expect(DIFF_EXT_TO_HLJS.css).toBe('css');
     });
+
+    it('maps shader extensions: real GLSL grammar, HLSL/Slang ride on C++', () => {
+        // GLSL has a real vendored grammar (web/vendor/glsl.min.js).
+        // HLSL and Slang have no highlight.js grammar to download, so
+        // both map to C++ (C-lexical: comments, strings, numbers,
+        // preprocessor, control flow all highlight).
+        for (const ext of [
+            'glsl',
+            'vert',
+            'frag',
+            'geom',
+            'tesc',
+            'tese',
+            'comp',
+        ]) {
+            expect(DIFF_EXT_TO_HLJS[ext]).toBe('glsl');
+        }
+        for (const ext of [
+            'hlsl',
+            'hlsli',
+            'fx',
+            'fxh',
+            'vsh',
+            'psh',
+            'slang',
+            'slangh',
+        ]) {
+            expect(DIFF_EXT_TO_HLJS[ext]).toBe('cpp');
+        }
+    });
 });
 
 describe('DiffController syntax highlighting & context buttons', () => {

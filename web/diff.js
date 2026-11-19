@@ -4895,4 +4895,24 @@ export const DIFF_EXT_TO_HLJS = {
     kts: 'kotlin',
     makefile: 'makefile',
     mk: 'makefile',
+    // Shader languages. GLSL ships as a real grammar in the vendored
+    // hljs bundle (web/vendor/glsl.min.js, loaded by index.html). HLSL
+    // and Slang have no highlight.js grammar to download, so they ride
+    // on C++: both are C-lexical, which covers comments, strings,
+    // numbers, preprocessor lines, and control flow.
+    glsl: 'glsl',
+    vert: 'glsl',
+    frag: 'glsl',
+    geom: 'glsl',
+    tesc: 'glsl',
+    tese: 'glsl',
+    comp: 'glsl',
+    hlsl: 'cpp',
+    hlsli: 'cpp',
+    fx: 'cpp',
+    fxh: 'cpp',
+    vsh: 'cpp',
+    psh: 'cpp',
+    slang: 'cpp',
+    slangh: 'cpp',
 };
