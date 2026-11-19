@@ -554,6 +554,48 @@ test('directory baselines and unread preference', async ({
         .poll(async () => readGroups(page), { timeout: 20_000 })
         .toEqual(unreadGroups);
 
+    // Two configured spellings resolve to the same filesystem paths. Adding
+    // or removing the alias must not acknowledge an already unread file.
+    const alias = './first/.';
+    const aliasListing = listingResponse(page, fixtureCwd);
+    await page.locator('.md-manage-btn', { hasText: '+ Add Dir' }).click();
+    await page.locator('#config-editor-dir').fill(alias);
+    await page.locator('.config-editor-footer .btn-accent').click();
+    const aliasFiles = (await (await aliasListing).json()) as Array<{
+        path: string;
+        name: string;
+        dir: string;
+    }>;
+    const sharedAlpha = aliasFiles.filter((entry) => entry.name === 'alpha.md');
+    expect(sharedAlpha.map((entry) => entry.dir)).toEqual(['./first', alias]);
+    expect(new Set(sharedAlpha.map((entry) => entry.path)).size).toBe(1);
+    await expect
+        .poll(() => readGroups(page), { timeout: 20_000 })
+        .toEqual([
+            ...unreadGroups,
+            { label: alias, names: ['alpha.md', 'bravo.md'] },
+        ]);
+    await expect(
+        page.locator('#markdown-file-list .md-file-row.has-attention'),
+    ).toHaveCount(4);
+
+    const removedAliasListing = listingResponse(page, fixtureCwd);
+    page.once('dialog', (dialog) => void dialog.accept());
+    await page
+        .locator('.md-file-group')
+        .filter({
+            has: page.locator('.md-dir-label > span', { hasText: alias }),
+        })
+        .locator('.md-dir-del-btn')
+        .click();
+    await removedAliasListing;
+    await expect
+        .poll(() => readGroups(page), { timeout: 20_000 })
+        .toEqual(unreadGroups);
+    await expect(
+        page.locator('#markdown-file-list .md-file-row.has-attention'),
+    ).toHaveCount(2);
+
     const listingBeforePreview = listings.length;
     await fileRow(page, 'alpha.md').locator('.md-file-item').click();
     await expect(page.locator('#md-modal-body')).toContainText(

@@ -1063,6 +1063,143 @@ describe('markdown changed-file attention', () => {
         expect(mm._baselineReady.has('./added')).toBe(true);
     });
 
+    it.each(['before', 'after'])(
+        'preserves unread paths and a pending preview when an alias is added %s the original group',
+        async (position) => {
+            const path = '/w/docs/a.md';
+            const base = {
+                ...file('a.md', './docs', '2024-01-01T00:00:00Z'),
+                path,
+            };
+            const changed = { ...base, mod_time: '2024-02-01T00:00:00Z' };
+            routeFetch({ list: [base] });
+            const { mm, app } = makeMm();
+            await mm.refreshFiles();
+            routeFetch({ list: [changed] });
+            await mm.refreshFiles({ silent: true });
+            const version = mm._pathState.get(path).version;
+
+            const body = deferred();
+            routeFetch({ file: { ok: true, text: () => body.promise } });
+            const preview = mm.openFile(changed);
+            await Promise.resolve();
+
+            const newPath = '/w/docs/new.md';
+            const original = [
+                changed,
+                { ...changed, path: newPath, name: 'new.md' },
+            ];
+            const aliases = original.map((entry) => ({
+                ...entry,
+                dir: '/w/docs',
+            }));
+            app.markdownDirs =
+                position === 'before'
+                    ? ['/w/docs', './docs']
+                    : ['./docs', '/w/docs'];
+            routeFetch({
+                list:
+                    position === 'before'
+                        ? [...aliases, ...original]
+                        : [...original, ...aliases],
+            });
+            await mm.refreshFiles({ silent: true });
+            expect(attentionPaths(mm)).toEqual([path, newPath, path, newPath]);
+            expect(mm._pathState.get(path).version).toBe(version);
+
+            body.resolve('# shared preview');
+            await preview;
+            expect(mm.modalBody.textContent).toContain('shared preview');
+            expect(attentionPaths(mm)).toEqual([newPath, newPath]);
+        },
+    );
+
+    it.each(['./docs', '/w/docs'])(
+        'retains a shared path during a failed refresh after removing %s',
+        async (removed) => {
+            const path = '/w/docs/a.md';
+            const base = {
+                ...file('a.md', './docs', '2024-01-01T00:00:00Z'),
+                path,
+            };
+            const changed = { ...base, mod_time: '2024-02-01T00:00:00Z' };
+            const dirs = ['./docs', '/w/docs'];
+            routeFetch({ list: [base, { ...base, dir: '/w/docs' }] });
+            const { mm, app } = makeMm({ markdownDirs: dirs });
+            await mm.refreshFiles();
+            routeFetch({ list: [changed, { ...changed, dir: '/w/docs' }] });
+            await mm.refreshFiles({ silent: true });
+            const version = mm._pathState.get(path).version;
+
+            const body = deferred();
+            routeFetch({ file: { ok: true, text: () => body.promise } });
+            const preview = mm.openFile(changed);
+            await Promise.resolve();
+
+            app.markdownDirs = dirs.filter((dir) => dir !== removed);
+            vi.stubGlobal(
+                'fetch',
+                vi.fn(async () => {
+                    throw new Error('offline');
+                }),
+            );
+            await mm.refreshFiles({ silent: true });
+            expect(mm._pathState.get(path)?.version).toBe(version);
+            expect(mm._attention.has(path)).toBe(true);
+            expect(mm.fileListEl.textContent).toContain('offline');
+
+            body.resolve('# retained preview');
+            await preview;
+            expect(mm.modalBody.textContent).toContain('retained preview');
+            expect(attentionPaths(mm)).toEqual([]);
+
+            app.markdownDirs = [];
+            await mm.refreshFiles({ silent: true });
+            expect(mm._pathState.has(path)).toBe(false);
+        },
+    );
+
+    it('does not let a retained cache paint skip a new empty directory baseline', async () => {
+        const docs = [file('a.md', './docs', '2024-01-01T00:00:00Z')];
+        const store = { responses: new Map() };
+        routeFetch({ list: docs });
+        const { mm, app } = makeMm({ store });
+        await mm.refreshFiles();
+
+        app.markdownDirs = ['./docs', './empty'];
+        expect(mm.paintFromStore()).toBe(true);
+        expect(groupLabels(mm)).toEqual(['./docs', './empty']);
+        await mm.refreshFiles({ silent: true });
+
+        routeFetch({
+            list: [
+                ...docs,
+                file('later.md', './empty', '2024-02-01T00:00:00Z'),
+            ],
+        });
+        await mm.refreshFiles({ silent: true });
+        expect(attentionPaths(mm)).toEqual(['./empty/later.md']);
+    });
+
+    it('re-accepts an identical listing after cache-only directory removal and re-addition', async () => {
+        const base = [file('a.md', './docs', '2024-01-01T00:00:00Z')];
+        const store = { responses: new Map() };
+        routeFetch({ list: base });
+        const { mm, app } = makeMm({ store });
+        await mm.refreshFiles();
+
+        app.markdownDirs = [];
+        mm.paintFromStore();
+        app.markdownDirs = ['./docs'];
+        await mm.refreshFiles({ silent: true });
+
+        routeFetch({
+            list: [file('a.md', './docs', '2024-02-01T00:00:00Z')],
+        });
+        await mm.refreshFiles({ silent: true });
+        expect(attentionPaths(mm)).toEqual(['./docs/a.md']);
+    });
+
     it('moves an acknowledged unread row below remaining unread rows in Modified order', async () => {
         const base = [
             file('older.md', './docs', '2024-01-01T00:00:00Z'),

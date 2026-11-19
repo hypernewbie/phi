@@ -114,7 +114,6 @@ export class MarkdownManager {
     _pathState: Map<
         string,
         {
-            dir: string;
             lastKnown: string | null;
             listed: string | null;
             version: number;
@@ -807,54 +806,60 @@ export class MarkdownManager {
 
     _syncConfiguredDirs(dirs: string[]): void {
         const next = new Set(dirs);
-        for (const dir of Array.from(this._knownDirs)) {
+        let removed = false;
+        for (const dir of this._knownDirs) {
             if (next.has(dir)) continue;
-            this._knownDirs.delete(dir);
             this._baselineReady.delete(dir);
-            for (const [path, state] of Array.from(this._pathState)) {
-                if (state.dir !== dir) continue;
+            removed = true;
+        }
+        if (removed) {
+            this._lastRenderedKey = '';
+            // Directory aliases can share a server-reported path. Retire its
+            // version only when no configured group still contains it.
+            const retainedPaths = new Set(
+                (this._acceptedFiles || [])
+                    .filter((file) => next.has(file.dir))
+                    .map((file) => file.path),
+            );
+            for (const path of this._pathState.keys()) {
+                if (retainedPaths.has(path)) continue;
                 this._pathState.delete(path);
                 this._attention.delete(path);
             }
         }
-        for (const dir of dirs) this._knownDirs.add(dir);
+        this._knownDirs = next;
     }
 
     _applyListState(files: MDFileEntry[], dirs: string[]): void {
         this._syncConfiguredDirs(dirs);
-        const seen = new Set<string>();
+        const filesByPath = new Map<string, MDFileEntry>();
         const observedDirs = new Set<string>(dirs);
         for (const file of files) {
-            const dir = typeof file.dir === 'string' ? file.dir : '';
-            observedDirs.add(dir);
-            const establishBaseline = !this._baselineReady.has(dir);
-            const timestamp = this._validMtime(file);
-            seen.add(file.path);
-            const previous = this._pathState.get(file.path);
-            if (establishBaseline) {
-                this._pathState.set(file.path, {
-                    dir,
-                    lastKnown: timestamp,
-                    listed: timestamp,
-                    version: ++this._versionCounter,
-                });
-                this._attention.delete(file.path);
-                continue;
+            observedDirs.add(file.dir);
+            // An established group takes precedence over a new alias, so a
+            // new file in that group stays unread regardless of group order.
+            if (
+                !filesByPath.has(file.path) ||
+                this._baselineReady.has(file.dir)
+            ) {
+                filesByPath.set(file.path, file);
             }
+        }
+        for (const file of filesByPath.values()) {
+            const timestamp = this._validMtime(file);
+            const previous = this._pathState.get(file.path);
             if (!previous) {
                 this._pathState.set(file.path, {
-                    dir,
                     lastKnown: timestamp,
                     listed: timestamp,
                     version: ++this._versionCounter,
                 });
-                this._attention.add(file.path);
+                if (this._baselineReady.has(file.dir)) {
+                    this._attention.add(file.path);
+                }
                 continue;
             }
-            if (timestamp === previous.listed) {
-                previous.dir = dir;
-                continue;
-            }
+            if (timestamp === previous.listed) continue;
 
             const version = ++this._versionCounter;
             if (timestamp === null) {
@@ -863,7 +868,6 @@ export class MarkdownManager {
                 // for change detection but block acknowledgment while the
                 // current value is unknown.
                 this._pathState.set(file.path, {
-                    dir,
                     lastKnown: previous.lastKnown,
                     listed: null,
                     version,
@@ -871,7 +875,6 @@ export class MarkdownManager {
                 continue;
             }
             this._pathState.set(file.path, {
-                dir,
                 lastKnown: timestamp,
                 listed: timestamp,
                 version,
@@ -888,8 +891,8 @@ export class MarkdownManager {
 
         for (const dir of observedDirs) this._baselineReady.add(dir);
 
-        for (const path of Array.from(this._pathState.keys())) {
-            if (seen.has(path)) continue;
+        for (const path of this._pathState.keys()) {
+            if (filesByPath.has(path)) continue;
             this._pathState.delete(path);
             this._attention.delete(path);
         }
@@ -1022,8 +1025,8 @@ export class MarkdownManager {
             contextChanged || !this._acceptedFiles
                 ? valid
                 : this._acceptedFiles;
-        this._lastRenderedKey = `${cwd}\n${dirsKey}\n${JSON.stringify(nextFiles)}`;
         if (contextChanged || !this._acceptedFiles) {
+            this._lastRenderedKey = `${cwd}\n${dirsKey}\n${JSON.stringify(nextFiles)}`;
             this._acceptedFiles = valid;
             this._applyListState(valid, dirs);
         }
