@@ -122,7 +122,11 @@ phi-cmd send "add a test for X" --json       # prompt a chat session, stream NDJ
 phi-cmd input --pane p1 "make test\r"        # type into a live pane
 phi-cmd model set anthropic/claude-3         # chat / pi-bridge / recipe switch
 phi-cmd git diff | run "make check" | raw GET /api/version
+phi-cmd syncboard post job "done"        # shared board: upsert a key
+phi-cmd syncboard wait job --for change  # sleep until the board moves
 ```
+
+The board also carries the desktop `PHI_NOTIF` / `PHI_ALARM` conventions: `syncboard notify` and `syncboard alarm` append the marker to the key, and `syncboard wait --alarm-only` sleeps until any alarm entry appears. Waiting honors `--poll` and `--timeout`; deleting an absent key is success (`deleted: false`), reading one is exit `3`. Any phi address works as `--server`, including a `PHI_COORDINATOR` URL — and when no `--server`, state file, or profile selects one, `PHI_COORDINATOR` is the fallback.
 
 `--json` on every command emits one stable document; exit codes are a contract (`0` ok, `1` error, `2` usage, `3` not found, `4` auth, `5` timeout); output is byte-bounded (`--max-bytes`, `--tail`). It reads the same desktop profile document as `phic` and writes only its own state file. Access-protected servers log in with `PHI_CMD_PASSWORD`, `--password-file`, or a TTY prompt. `phi-cmd help` lists everything.
 

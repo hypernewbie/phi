@@ -33,9 +33,11 @@ Commands:
   git status | log | diff  read-only git views of a server cwd
   run [--cwd DIR] "cmd"    run a command on the backend host
   raw METHOD PATH [BODY]   bounded escape hatch to any /api endpoint
+  syncboard list|get|post|notify|alarm|delete|wait
+                           shared board keys; wait sleeps until they change
 
 Global flags:
-  --server NAME|URL        target backend (default: state file, or the only one)
+  --server NAME|URL        target backend (default: state file, PHI_COORDINATOR, or the only one)
   --coder ID               active coder (default: pi)
   --cwd DIR                server-side working directory
   --session SID            live chat session id
@@ -147,6 +149,8 @@ func Run(argv []string) int {
 		runErr = with(cmdRun)
 	case "raw":
 		runErr = with(cmdRaw)
+	case "syncboard":
+		runErr = with(cmdSyncboard)
 	case "--version", "version":
 		fmt.Println(Version())
 		return ExitOK

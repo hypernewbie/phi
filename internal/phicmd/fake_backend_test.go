@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,6 +51,7 @@ type fakeBackend struct {
 	paneInputOK *sync.Cond    // signals a pane input arrival
 	controlDown bool          // refuse the control socket (auth)
 	configDelay time.Duration // slow /api/config answers
+	syncBoard   map[string]SyncEntry
 }
 
 // waitForPaneInput blocks until the fake's pane handler has observed
@@ -77,6 +79,7 @@ func newFakeBackend(t *testing.T) *fakeBackend {
 			"hostname": "fake-host", "theme_color": "#aa0000",
 			"workspaces": []string{"/w1"}, "active_cwd": "/w1",
 		},
+		syncBoard:  map[string]SyncEntry{},
 		turnScript: defaultTurnScript,
 	}
 	b.paneInputOK = sync.NewCond(&b.mu)
@@ -227,6 +230,85 @@ func newFakeBackend(t *testing.T) *fakeBackend {
 	mux.HandleFunc("/api/pi-bridge/model", gated("/api/pi-bridge/model", func(w http.ResponseWriter) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 	}))
+	// --- sync board: an in-memory map with the real endpoint semantics
+	// (list order unspecified, GET/DELETE 404 on absent, POST upserts
+	// and normalizes string values to text, objects to raw JSON).
+	syncAuthed := func(w http.ResponseWriter, r *http.Request) bool {
+		b.mu.Lock()
+		b.requests = append(b.requests, r.Method+" "+r.URL.Path)
+		authed := !b.authEnabled || b.cookieOK(r)
+		b.mu.Unlock()
+		if !authed {
+			http.Error(w, "access authentication required", http.StatusUnauthorized)
+			return false
+		}
+		return true
+	}
+	mux.HandleFunc("/api/sync/messages", func(w http.ResponseWriter, r *http.Request) {
+		if !syncAuthed(w, r) {
+			return
+		}
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if r.Method == http.MethodPost {
+			var req struct {
+				Key   string          `json:"key"`
+				Value json.RawMessage `json:"value"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			req.Key = strings.TrimSpace(req.Key)
+			if req.Key == "" {
+				http.Error(w, "Key is required", http.StatusBadRequest)
+				return
+			}
+			var valStr string
+			if len(req.Value) > 0 {
+				var s string
+				if err := json.Unmarshal(req.Value, &s); err == nil {
+					valStr = s
+				} else {
+					valStr = string(req.Value)
+				}
+			}
+			now := time.Now().UTC().Format(time.RFC3339Nano)
+			if existing, ok := b.syncBoard[req.Key]; ok {
+				existing.Value = valStr
+				existing.UpdatedAt = now
+				b.syncBoard[req.Key] = existing
+			} else {
+				b.syncBoard[req.Key] = SyncEntry{Key: req.Key, Value: valStr, CreatedAt: now, UpdatedAt: now}
+			}
+			_ = json.NewEncoder(w).Encode(b.syncBoard[req.Key])
+			return
+		}
+		list := make([]SyncEntry, 0, len(b.syncBoard))
+		for _, e := range b.syncBoard {
+			list = append(list, e)
+		}
+		_ = json.NewEncoder(w).Encode(list)
+	})
+	mux.HandleFunc("/api/sync/messages/", func(w http.ResponseWriter, r *http.Request) {
+		if !syncAuthed(w, r) {
+			return
+		}
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		key, _ := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/api/sync/messages/"))
+		e, ok := b.syncBoard[key]
+		if !ok {
+			http.Error(w, "Message not found", http.StatusNotFound)
+			return
+		}
+		if r.Method == http.MethodDelete {
+			delete(b.syncBoard, key)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(e)
+	})
 
 	// --- control ---
 	upgrader := websocket.Upgrader{Subprotocols: []string{wireproto.ControlSubprotocol}}

@@ -146,7 +146,7 @@ func resolveEnvMode(g Globals, allServers bool) (*Env, error) {
 		return nil, readErr
 	}
 
-	want := firstNonEmpty(g.Server, state.Server)
+	want := firstNonEmpty(g.Server, state.Server, os.Getenv("PHI_COORDINATOR"))
 	if want == "" {
 		if len(env.Profiles) == 1 {
 			env.Origin = env.Profiles[0].Origin
