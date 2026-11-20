@@ -112,6 +112,11 @@ func compactSeedSession(t *testing.T, path, cwd, provider, model string) {
 	}
 }
 
+// The live user message alone exceeds the fixture's retained-tail budget.
+// The cut belongs at this turn boundary, not partway through a turn that
+// legitimately requires two summary requests.
+var compactProcessPrompt = "LIVE_PROMPT_MARKER" + strings.Repeat(" keep", 120)
+
 func compactRecordCounts(t *testing.T, path string) (prompts int, aborted int, checkpoints int) {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -140,7 +145,7 @@ func compactRecordCounts(t *testing.T, path string) (prompts int, aborted int, c
 			switch record.Message.Role {
 			case "user":
 				var text string
-				if json.Unmarshal(record.Message.Content, &text) == nil && text == "LIVE_PROMPT_MARKER" {
+				if json.Unmarshal(record.Message.Content, &text) == nil && text == compactProcessPrompt {
 					prompts++
 				}
 			case "assistant":
@@ -182,8 +187,7 @@ func TestActualPsiBridgeCompactSettlement(t *testing.T) {
 	)
 	var calls struct {
 		sync.Mutex
-		seen   int
-		bodies []string
+		seen int
 	}
 	releaseSummary := make(chan struct{})
 	stopStub := make(chan struct{})
@@ -202,7 +206,6 @@ func TestActualPsiBridgeCompactSettlement(t *testing.T) {
 		calls.Lock()
 		calls.seen++
 		index := calls.seen
-		calls.bodies = append(calls.bodies, string(body))
 		calls.Unlock()
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.(http.Flusher).Flush()
@@ -289,10 +292,12 @@ func TestActualPsiBridgeCompactSettlement(t *testing.T) {
 	})
 
 	tape.wait(t, "esc interrupt")
-	_, _ = master.WriteString("LIVE_PROMPT_MARKER\r")
+	if _, err := master.WriteString(compactProcessPrompt + "\r"); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case body := <-runSeen:
-		if !strings.Contains(body, "LIVE_PROMPT_MARKER") {
+		if !strings.Contains(body, compactProcessPrompt) {
 			t.Fatalf("active request lacks the prompt marker: %s", body)
 		}
 	case <-time.After(8 * time.Second):
