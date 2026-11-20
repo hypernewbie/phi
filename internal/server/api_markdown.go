@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/hypernewbie/phi/internal/config"
 	"github.com/hypernewbie/phi/pkg/session"
@@ -60,9 +61,10 @@ func (app *Server) handleMarkdownDirs(w http.ResponseWriter, r *http.Request) {
 }
 
 type MDFileEntry struct {
-	Path string `json:"path"`
-	Name string `json:"name"`
-	Dir  string `json:"dir"`
+	Path    string `json:"path"`
+	Name    string `json:"name"`
+	Dir     string `json:"dir"`
+	ModTime string `json:"mod_time,omitempty"`
 }
 
 type MarkdownPasteRequest struct {
@@ -176,10 +178,15 @@ func (app *Server) handleMarkdownFiles(w http.ResponseWriter, r *http.Request) {
 			if entry.IsDir() || strings.ToLower(filepath.Ext(entry.Name())) != ".md" {
 				continue
 			}
+			modTime := ""
+			if info, err := entry.Info(); err == nil {
+				modTime = info.ModTime().UTC().Format(time.RFC3339Nano)
+			}
 			files = append(files, MDFileEntry{
-				Path: filepath.Join(absDir, entry.Name()),
-				Name: entry.Name(),
-				Dir:  dir,
+				Path:    filepath.Join(absDir, entry.Name()),
+				Name:    entry.Name(),
+				Dir:     dir,
+				ModTime: modTime,
 			})
 		}
 	}

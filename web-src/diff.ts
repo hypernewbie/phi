@@ -3867,6 +3867,7 @@ export class DiffController {
     ): Promise<void> {
         const gitContext = this.captureGitManageContext();
         this.refreshGitManagement(gitContext);
+        this.app.markdownManager?.syncContext?.();
         if (!this.isPanelOpen || !this.term) return;
 
         this._diffStreamToken = (this._diffStreamToken || 0) + 1;

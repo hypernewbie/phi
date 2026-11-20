@@ -6,6 +6,20 @@ import { formatAttachment } from './attachments.js';
 import { createDeltaTracker, PAGE_COUNTERS, PROCESS_COUNTERS, renderCounterRows, TERMINAL_COUNTERS, } from './diag-counters.js';
 import { tryNative } from './desktop.js';
 import { kindFor } from './file-viewer.js';
+const MD_SORT_STORAGE_KEY = 'phi-md-sort';
+const MD_HIGHLIGHT_STORAGE_KEY = 'phi-md-highlight-unread';
+const MD_READ_DEADLINE_MS = 10_000;
+function compareNamePath(a, b) {
+    if (a.name < b.name)
+        return -1;
+    if (a.name > b.name)
+        return 1;
+    if (a.path < b.path)
+        return -1;
+    if (a.path > b.path)
+        return 1;
+    return 0;
+}
 export class MarkdownManager {
     app;
     fileListEl;
@@ -54,6 +68,30 @@ export class MarkdownManager {
     refreshRequestId;
     _lastRenderedKey;
     _externalDebounce;
+    sortMode;
+    highlightUnread;
+    _sortMenuEl;
+    _sortButton;
+    _acceptedFiles;
+    _listError;
+    _contextGeneration;
+    _observedScope;
+    _observedStore;
+    _observedCwd;
+    _listController;
+    _listDeadlineTimer;
+    _listScopeAbort;
+    _previewController;
+    _previewDeadlineTimer;
+    _previewScopeAbort;
+    _attention;
+    _pathState;
+    _baselineReady;
+    _knownDirs;
+    _versionCounter;
+    _onOnline;
+    _onVisibility;
+    _onSortMenuLayout;
     constructor(app) {
         this.app = app;
         this.fileListEl = document.getElementById('markdown-file-list');
@@ -86,10 +124,37 @@ export class MarkdownManager {
         this.currentRawContent = '';
         this.markdownClipboard = null;
         this.contextMenuEl = this._createContextMenu();
+        this.sortMode = this._readSortMode();
+        this.highlightUnread = this._readHighlightUnread();
+        this._sortMenuEl = this._createSortMenu();
+        this._sortButton = null;
+        this._acceptedFiles = null;
+        this._listError = null;
+        this._contextGeneration = 0;
+        this._observedScope = this.app?.scope ?? null;
+        this._observedStore = this.app?.getActiveStore?.() ?? null;
+        this._observedCwd = app.sessionsManager?.activeCWD || '';
+        this._listController = null;
+        this._listDeadlineTimer = null;
+        this._listScopeAbort = null;
+        this._previewController = null;
+        this._previewDeadlineTimer = null;
+        this._previewScopeAbort = null;
+        this._attention = new Set();
+        this._pathState = new Map();
+        this._baselineReady = new Set();
+        this._knownDirs = new Set();
+        this._versionCounter = 0;
         this.refreshRequestId = 0;
         this._lastRenderedKey = '';
         this._externalDebounce = null;
         this._diagInterval = null;
+        this._onOnline = () => this.onExternalChange({});
+        this._onVisibility = () => {
+            if (!document.hidden)
+                this.onExternalChange({});
+        };
+        this._onSortMenuLayout = () => this._positionSortMenu();
         this._setupEventListeners();
     }
     _setupEventListeners() {
@@ -237,6 +302,11 @@ export class MarkdownManager {
         }
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
+                if (this._sortMenuEl &&
+                    !this._sortMenuEl.classList.contains('hidden')) {
+                    this._hideSortMenu(true);
+                    return;
+                }
                 if (this.contextMenuEl &&
                     !this.contextMenuEl.classList.contains('hidden')) {
                     this._hideContextMenu();
@@ -263,7 +333,21 @@ export class MarkdownManager {
                 !e.target.closest('#md-modal-dropdown-btn')) {
                 this._hideContextMenu();
             }
+            if (this._sortMenuEl &&
+                !e.target.closest('.md-sort-menu') &&
+                !e.target.closest('.md-sort-btn')) {
+                this._hideSortMenu(false);
+            }
         });
+        // Catch-up triggers for a visible panel: a socket reconnect can
+        // miss an md-changed event, and a machine that was offline or a
+        // backgrounded tab can miss a whole burst. They feed the existing
+        // debounce and the existing panel/dir filters. Bind once for this
+        // persistent manager, never per backend scope.
+        window.addEventListener('online', this._onOnline);
+        document.addEventListener('visibilitychange', this._onVisibility);
+        window.addEventListener('resize', this._onSortMenuLayout);
+        this.fileListEl?.addEventListener('scroll', this._onSortMenuLayout);
     }
     // refreshFiles re-scans the markdown dirs for the active cwd.
     //   force  (default true): bypass the panel-visibility gate.
@@ -272,6 +356,7 @@ export class MarkdownManager {
     //     this is what background triggers (fsnotify push, same-context
     //     tab clicks) use so the list never flickers under the user.
     async refreshFiles(options = {}) {
+        this.syncContext();
         const force = options.force !== false;
         const silent = options.silent === true;
         const diffCtrl = this.app.diffController;
@@ -280,43 +365,476 @@ export class MarkdownManager {
             (!diffCtrl.isPanelOpen || diffCtrl.activeTab !== 'markdown')) {
             return;
         }
+        const app = this.app;
+        const scope = app?.scope ?? null;
+        const store = app?.getActiveStore?.() ?? null;
         const cwd = this.app.sessionsManager.activeCWD || '';
+        const dirs = [...(this.app.markdownDirs || [])];
+        const dirsKey = JSON.stringify(dirs);
+        const contextGeneration = this._contextGeneration;
+        if (scope?.aborted)
+            return;
+        this._syncConfiguredDirs(dirs);
         const requestId = ++this.refreshRequestId;
-        if (!silent) {
-            this.fileListEl.innerHTML =
-                '<div class="md-list-loading">Scanning...</div>';
+        this._abortListing();
+        const controller = new AbortController();
+        this._listController = controller;
+        const read = this._startReadDeadline(controller, scope);
+        this._listDeadlineTimer = read.timer;
+        this._listScopeAbort = read.detach;
+        if (!silent && !this._acceptedFiles) {
+            this._renderListStatus('loading', 'Scanning...');
         }
+        const url = `/api/markdown/files?cwd=${encodeURIComponent(cwd)}`;
+        const isStale = () => scope?.aborted ||
+            requestId !== this.refreshRequestId ||
+            contextGeneration !== this._contextGeneration ||
+            (app?.scope ?? null) !== scope ||
+            (app?.getActiveStore?.() ?? null) !== store ||
+            this._dirsKey() !== dirsKey ||
+            (this.app.sessionsManager.activeCWD || '') !== cwd;
         try {
-            const fetchFn = this.app?.scope &&
-                typeof this.app.scope.fetch === 'function'
-                ? (url, opts) => this.app.scope.fetch(url, opts)
-                : fetch;
-            const url = `/api/markdown/files?cwd=${encodeURIComponent(cwd)}`;
-            const res = await fetchFn(url);
+            const res = await fetch(url, {
+                headers: this._scopedHeaders(scope),
+                credentials: 'same-origin',
+                cache: 'no-store',
+                signal: controller.signal,
+            });
             if (!res.ok)
-                throw new Error(await res.text());
-            const files = await res.json();
-            if (requestId !== this.refreshRequestId)
-                return;
-            const store = this.app?.getActiveStore?.();
-            if (store) {
-                store.responses.set(url, JSON.stringify(files));
+                throw new Error((await res.text()) || `HTTP ${res.status}`);
+            let parsed;
+            try {
+                parsed = await res.json();
             }
-            const key = `${cwd} ${JSON.stringify(files)}`;
-            if (silent && key === this._lastRenderedKey)
+            catch (error) {
+                if (read.elapsed())
+                    throw new Error('Request timed out');
+                if (error?.name === 'AbortError')
+                    throw error;
+                throw new Error('Invalid markdown list response');
+            }
+            if (isStale())
+                return;
+            if (read.elapsed())
+                throw new Error('Request timed out');
+            const files = this._validEntries(parsed);
+            if (!files)
+                throw new Error('Invalid markdown list response');
+            if (isStale())
+                return;
+            const body = JSON.stringify(files);
+            if (store) {
+                store.responses.set(url, body);
+            }
+            const hadError = this._listError !== null;
+            this._listError = null;
+            const key = `${cwd}\n${dirsKey}\n${body}`;
+            if (silent && !hadError && key === this._lastRenderedKey)
                 return;
             this._lastRenderedKey = key;
+            this._acceptedFiles = files;
+            this._applyListState(files, dirs);
             this._renderFileList(files);
         }
         catch (e) {
-            if (e?.name === 'AbortError' || this.app?.scope?.aborted)
+            if (isStale())
                 return;
-            if (requestId !== this.refreshRequestId)
+            if (scope?.aborted)
                 return;
-            if (!silent) {
-                this.fileListEl.innerHTML = `<div class="md-list-error">Failed to load: ${escapeHtml(e.message)}</div>`;
+            if (!read.elapsed() && e?.name === 'AbortError')
+                return;
+            const message = e?.message || 'Failed to load markdown files';
+            this._listError = message;
+            if (this._acceptedFiles) {
+                this._renderFileList(this._acceptedFiles, { error: message });
+            }
+            else {
+                this._renderListStatus('error', `Failed to load: ${message}`, true);
             }
         }
+        finally {
+            read.detach();
+            if (this._listDeadlineTimer === read.timer)
+                this._listDeadlineTimer = null;
+            if (this._listScopeAbort === read.detach)
+                this._listScopeAbort = null;
+            if (this._listController === controller)
+                this._listController = null;
+        }
+    }
+    // syncContext drops every piece of listing state that belongs to the
+    // previous backend or cwd. It is synchronous and never fetches, so the
+    // hidden-panel and worktree-switch paths can call it without starting
+    // background work. Applies the new identities only after observing a
+    // change, so the first call from the constructor's own context is a
+    // no-op rather than a manufactured switch.
+    syncContext() {
+        const app = this.app;
+        const scope = app?.scope ?? null;
+        const store = app?.getActiveStore?.() ?? null;
+        const cwd = this.app.sessionsManager?.activeCWD || '';
+        if (scope === this._observedScope &&
+            store === this._observedStore &&
+            cwd === this._observedCwd) {
+            return false;
+        }
+        this._observedScope = scope;
+        this._observedStore = store;
+        this._observedCwd = cwd;
+        this._contextGeneration++;
+        this.refreshRequestId++;
+        this._abortListing();
+        if (this._externalDebounce) {
+            clearTimeout(this._externalDebounce);
+            this._externalDebounce = null;
+        }
+        this.closeModal();
+        this._hideSortMenu(false);
+        this._acceptedFiles = null;
+        this._lastRenderedKey = '';
+        this._listError = null;
+        this._attention.clear();
+        this._pathState.clear();
+        this._baselineReady.clear();
+        this._knownDirs.clear();
+        this._versionCounter = 0;
+        this._renderListStatus('loading', 'Scanning...');
+        return true;
+    }
+    _startReadDeadline(controller, scope) {
+        let elapsed = false;
+        const timer = setTimeout(() => {
+            elapsed = true;
+            controller.abort();
+        }, MD_READ_DEADLINE_MS);
+        const onScopeAbort = () => controller.abort();
+        const signal = scope?.signal;
+        if (signal && typeof signal.addEventListener === 'function') {
+            signal.addEventListener('abort', onScopeAbort);
+        }
+        return {
+            timer,
+            detach: () => {
+                if (signal &&
+                    typeof signal.removeEventListener === 'function') {
+                    signal.removeEventListener('abort', onScopeAbort);
+                }
+                clearTimeout(timer);
+            },
+            elapsed: () => elapsed,
+        };
+    }
+    _scopedHeaders(scope) {
+        return scope && typeof scope.headers === 'function'
+            ? scope.headers()
+            : {};
+    }
+    _abortListing() {
+        if (this._listController) {
+            this._listController.abort();
+            this._listController = null;
+        }
+        if (this._listDeadlineTimer) {
+            clearTimeout(this._listDeadlineTimer);
+            this._listDeadlineTimer = null;
+        }
+        if (this._listScopeAbort) {
+            this._listScopeAbort();
+            this._listScopeAbort = null;
+        }
+    }
+    _abortPreview() {
+        if (this._previewController) {
+            this._previewController.abort();
+            this._previewController = null;
+        }
+        if (this._previewDeadlineTimer) {
+            clearTimeout(this._previewDeadlineTimer);
+            this._previewDeadlineTimer = null;
+        }
+        if (this._previewScopeAbort) {
+            this._previewScopeAbort();
+            this._previewScopeAbort = null;
+        }
+    }
+    _readSortMode() {
+        try {
+            const raw = localStorage.getItem(MD_SORT_STORAGE_KEY);
+            return raw === 'modified' ? 'modified' : 'name';
+        }
+        catch {
+            return 'name';
+        }
+    }
+    _persistSortMode() {
+        try {
+            localStorage.setItem(MD_SORT_STORAGE_KEY, this.sortMode);
+        }
+        catch {
+            /* Storage can be unavailable; the in-memory choice still works. */
+        }
+    }
+    _readHighlightUnread() {
+        try {
+            return localStorage.getItem(MD_HIGHLIGHT_STORAGE_KEY) !== 'false';
+        }
+        catch {
+            return true;
+        }
+    }
+    _persistHighlightUnread() {
+        try {
+            localStorage.setItem(MD_HIGHLIGHT_STORAGE_KEY, String(this.highlightUnread));
+        }
+        catch {
+            /* Storage can be unavailable; the in-memory choice still works. */
+        }
+    }
+    _setHighlightUnread(enabled) {
+        this.highlightUnread = enabled === true;
+        this._persistHighlightUnread();
+        this._syncSortMenuState();
+        if (this._acceptedFiles) {
+            this._renderFileList(this._acceptedFiles, {
+                error: this._listError || undefined,
+            });
+        }
+    }
+    _showAttention(path) {
+        return this.highlightUnread && this._attention.has(path);
+    }
+    _dirsKey() {
+        return JSON.stringify(this.app?.markdownDirs || []);
+    }
+    _setSortMode(mode) {
+        if (mode !== 'name' && mode !== 'modified')
+            return;
+        this.sortMode = mode;
+        this._persistSortMode();
+        this._syncSortMenuState();
+        if (this._acceptedFiles) {
+            this._renderFileList(this._acceptedFiles, {
+                error: this._listError || undefined,
+            });
+        }
+    }
+    _parsedMtime(file) {
+        if (typeof file.mod_time !== 'string')
+            return null;
+        const parsed = Date.parse(file.mod_time);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+    _sortEntries(files) {
+        const copy = files.slice();
+        const prioritizeUnread = this.sortMode === 'modified' && this.highlightUnread;
+        copy.sort((a, b) => {
+            if (prioritizeUnread) {
+                const aUnread = this._attention.has(a.path);
+                const bUnread = this._attention.has(b.path);
+                if (aUnread !== bUnread)
+                    return aUnread ? -1 : 1;
+            }
+            if (this.sortMode === 'modified') {
+                const aTime = this._parsedMtime(a);
+                const bTime = this._parsedMtime(b);
+                if (aTime !== null && bTime !== null && aTime !== bTime) {
+                    return bTime - aTime;
+                }
+                if (aTime !== null && bTime === null)
+                    return -1;
+                if (aTime === null && bTime !== null)
+                    return 1;
+            }
+            return compareNamePath(a, b);
+        });
+        return copy;
+    }
+    _validEntries(value) {
+        if (!Array.isArray(value))
+            return null;
+        const entries = [];
+        for (const raw of value) {
+            if (!raw || typeof raw !== 'object')
+                return null;
+            const row = raw;
+            if (typeof row.path !== 'string' ||
+                typeof row.name !== 'string' ||
+                typeof row.dir !== 'string') {
+                return null;
+            }
+            entries.push({
+                path: row.path,
+                name: row.name,
+                dir: row.dir,
+                mod_time: typeof row.mod_time === 'string' ? row.mod_time : undefined,
+            });
+        }
+        return entries;
+    }
+    _validMtime(file) {
+        return this._parsedMtime(file) === null
+            ? null
+            : (file.mod_time ?? null);
+    }
+    _syncConfiguredDirs(dirs) {
+        const next = new Set(dirs);
+        let removed = false;
+        for (const dir of this._knownDirs) {
+            if (next.has(dir))
+                continue;
+            this._baselineReady.delete(dir);
+            removed = true;
+        }
+        if (removed) {
+            this._lastRenderedKey = '';
+            // Directory aliases can share a server-reported path. Retire its
+            // version only when no configured group still contains it.
+            const retainedPaths = new Set((this._acceptedFiles || [])
+                .filter((file) => next.has(file.dir))
+                .map((file) => file.path));
+            for (const path of this._pathState.keys()) {
+                if (retainedPaths.has(path))
+                    continue;
+                this._pathState.delete(path);
+                this._attention.delete(path);
+            }
+        }
+        this._knownDirs = next;
+    }
+    _applyListState(files, dirs) {
+        this._syncConfiguredDirs(dirs);
+        const filesByPath = new Map();
+        const observedDirs = new Set(dirs);
+        for (const file of files) {
+            observedDirs.add(file.dir);
+            // An established group takes precedence over a new alias, so a
+            // new file in that group stays unread regardless of group order.
+            if (!filesByPath.has(file.path) ||
+                this._baselineReady.has(file.dir)) {
+                filesByPath.set(file.path, file);
+            }
+        }
+        for (const file of filesByPath.values()) {
+            const timestamp = this._validMtime(file);
+            const previous = this._pathState.get(file.path);
+            if (!previous) {
+                this._pathState.set(file.path, {
+                    lastKnown: timestamp,
+                    listed: timestamp,
+                    version: ++this._versionCounter,
+                });
+                if (this._baselineReady.has(file.dir)) {
+                    this._attention.add(file.path);
+                }
+                continue;
+            }
+            if (timestamp === previous.listed)
+                continue;
+            const version = ++this._versionCounter;
+            if (timestamp === null) {
+                // Metadata can disappear between listings (a pending write,
+                // a transient stat failure). Keep the last known timestamp
+                // for change detection but block acknowledgment while the
+                // current value is unknown.
+                this._pathState.set(file.path, {
+                    lastKnown: previous.lastKnown,
+                    listed: null,
+                    version,
+                });
+                continue;
+            }
+            this._pathState.set(file.path, {
+                lastKnown: timestamp,
+                listed: timestamp,
+                version,
+            });
+            // The first known timestamp for a path that was previously
+            // unknown is a baseline, not a content change.
+            if (previous.lastKnown !== null &&
+                timestamp !== previous.lastKnown) {
+                this._attention.add(file.path);
+            }
+        }
+        for (const dir of observedDirs)
+            this._baselineReady.add(dir);
+        for (const path of this._pathState.keys()) {
+            if (filesByPath.has(path))
+                continue;
+            this._pathState.delete(path);
+            this._attention.delete(path);
+        }
+    }
+    _acknowledgeFile(path) {
+        if (!this._attention.has(path))
+            return;
+        this._attention.delete(path);
+        if (this.sortMode === 'modified' &&
+            this.highlightUnread &&
+            this._acceptedFiles) {
+            this._renderFileList(this._acceptedFiles, {
+                error: this._listError || undefined,
+            });
+            return;
+        }
+        this._updateRowAttention(path);
+    }
+    _fileIconMarkup(attention) {
+        if (attention) {
+            return '<span class="md-file-icon md-file-attention-dot" aria-hidden="true"></span>';
+        }
+        return '<svg class="md-file-icon md-file-icon-doc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="13" y2="17"></line></svg>';
+    }
+    _updateRowAttention(path) {
+        const hasAttention = this._showAttention(path);
+        for (const row of Array.from(this.fileListEl.querySelectorAll('.md-file-row'))) {
+            if (row.dataset.path !== path)
+                continue;
+            row.classList.toggle('has-attention', hasAttention);
+            const item = row.querySelector('.md-file-item');
+            if (!item)
+                continue;
+            const icon = item.querySelector('.md-file-icon');
+            if (icon) {
+                const template = document.createElement('template');
+                template.innerHTML = this._fileIconMarkup(hasAttention);
+                const replacement = template.content.firstElementChild;
+                if (replacement)
+                    icon.replaceWith(replacement);
+            }
+            const name = this._acceptedFiles?.find((file) => file.path === path)?.name ??
+                item.querySelector('.md-file-name')?.textContent ??
+                '';
+            if (hasAttention) {
+                item.setAttribute('aria-label', `${name} (changed)`);
+            }
+            else {
+                item.removeAttribute('aria-label');
+            }
+        }
+    }
+    _maybeAcknowledgePreview(path, captured) {
+        if (captured.timestamp === null || captured.version === null)
+            return;
+        const app = this.app;
+        if (captured.contextGeneration !== this._contextGeneration)
+            return;
+        if ((app?.scope ?? null) !== captured.scope)
+            return;
+        if ((app?.getActiveStore?.() ?? null) !== captured.store)
+            return;
+        if ((this.app.sessionsManager.activeCWD || '') !== captured.cwd) {
+            return;
+        }
+        const current = this._pathState.get(path);
+        if (!current)
+            return;
+        if (current.listed !== captured.timestamp ||
+            current.version !== captured.version) {
+            return;
+        }
+        if (!this._acceptedFiles?.some((file) => file.path === path))
+            return;
+        this._acknowledgeFile(path);
     }
     // paintFromStore renders the file list from the new active
     // backend's cached response — the switch's synchronous paint phase,
@@ -326,11 +844,16 @@ export class MarkdownManager {
     // scanning placeholder: stale files must never survive a switch,
     // not even for the frames before the background refresh lands.
     paintFromStore() {
+        const contextChanged = this.syncContext();
         // Invalidate an old-profile request before it can paint over this
         // switch while the new backend's active-config fetch is in flight.
         this.refreshRequestId++;
-        const store = this.app?.getActiveStore?.();
+        const app = this.app;
+        const store = app?.getActiveStore?.() ?? null;
         const cwd = this.app.sessionsManager.activeCWD || '';
+        const dirs = [...(this.app.markdownDirs || [])];
+        const dirsKey = JSON.stringify(dirs);
+        this._syncConfiguredDirs(dirs);
         const url = `/api/markdown/files?cwd=${encodeURIComponent(cwd)}`;
         const raw = store?.responses?.get(url);
         let files = null;
@@ -342,16 +865,30 @@ export class MarkdownManager {
                 files = null;
             }
         }
-        if (!Array.isArray(files)) {
-            this.fileListEl.innerHTML =
-                '<div class="md-list-loading">Scanning...</div>';
-            this._lastRenderedKey = '';
+        const valid = this._validEntries(files);
+        if (!valid) {
+            if (contextChanged || !this._acceptedFiles) {
+                this._renderListStatus('loading', 'Scanning...');
+                this._lastRenderedKey = '';
+                return false;
+            }
+            this._renderFileList(this._acceptedFiles, {
+                error: this._listError || undefined,
+            });
             return false;
         }
-        // Same key format as refreshFiles so its silent-diff guard
-        // suppresses a redundant re-render of identical data.
-        this._lastRenderedKey = `${cwd} ${JSON.stringify(files)}`;
-        this._renderFileList(files);
+        // The key must describe the retained rows, not a stale cache entry.
+        const nextFiles = contextChanged || !this._acceptedFiles
+            ? valid
+            : this._acceptedFiles;
+        if (contextChanged || !this._acceptedFiles) {
+            this._lastRenderedKey = `${cwd}\n${dirsKey}\n${JSON.stringify(nextFiles)}`;
+            this._acceptedFiles = valid;
+            this._applyListState(valid, dirs);
+        }
+        this._renderFileList(nextFiles, {
+            error: this._listError || undefined,
+        });
         return true;
     }
     // onExternalChange handles a 0x07 md-changed push. N open tabs mean N
@@ -377,32 +914,276 @@ export class MarkdownManager {
             this.refreshFiles({ force: false, silent: true });
         }, 250);
     }
-    _renderFileList(files) {
-        this.fileListEl.innerHTML = '';
-        const allDirs = this.app.markdownDirs || [];
-        const byDir = {};
-        allDirs.forEach((d) => {
-            byDir[d] = [];
+    _renderToolbar() {
+        const toolbar = document.createElement('div');
+        toolbar.className = 'md-list-toolbar';
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'md-sort-btn';
+        button.setAttribute('aria-label', 'Sort markdown files');
+        button.setAttribute('aria-haspopup', 'menu');
+        button.setAttribute('aria-expanded', String(!this._sortMenuEl.classList.contains('hidden')));
+        button.title = 'Sort markdown files';
+        button.textContent = '☰';
+        button.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._toggleSortMenu(button);
         });
-        if (files && files.length > 0) {
-            files.forEach((f) => {
-                if (!byDir[f.dir])
-                    byDir[f.dir] = [];
-                byDir[f.dir].push(f);
+        button.addEventListener('keydown', (e) => {
+            if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp')
+                return;
+            e.preventDefault();
+            this._openSortMenu(button, e.key === 'ArrowUp' ? 'last' : 'selected');
+        });
+        toolbar.appendChild(button);
+        this._sortButton = button;
+        return toolbar;
+    }
+    _createSortMenu() {
+        const menu = document.createElement('div');
+        menu.className = 'md-context-menu md-sort-menu hidden';
+        menu.setAttribute('role', 'menu');
+        menu.setAttribute('aria-label', 'Sort markdown files');
+        menu.addEventListener('keydown', (e) => this._onSortMenuKeydown(e));
+        document.body.appendChild(menu);
+        return menu;
+    }
+    _sortOptions() {
+        return [
+            ['name', 'Name A–Z'],
+            ['modified', 'Modified (newest first)'],
+        ];
+    }
+    _renderSortMenu() {
+        this._sortMenuEl.innerHTML = '';
+        for (const [mode, label] of this._sortOptions()) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'md-context-action md-sort-option';
+            btn.setAttribute('role', 'menuitemradio');
+            btn.setAttribute('aria-checked', String(this.sortMode === mode));
+            btn.dataset.sort = mode;
+            const icon = document.createElement('span');
+            icon.className = 'md-context-icon';
+            icon.setAttribute('aria-hidden', 'true');
+            icon.textContent = this.sortMode === mode ? '✓' : '';
+            const text = document.createElement('span');
+            text.className = 'md-context-label';
+            text.textContent = label;
+            btn.append(icon, text);
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._setSortMode(mode);
+                this._hideSortMenu(true);
+            });
+            this._sortMenuEl.appendChild(btn);
+        }
+        const highlight = document.createElement('button');
+        highlight.type = 'button';
+        highlight.className = 'md-context-action md-sort-highlight-option';
+        highlight.setAttribute('role', 'menuitemcheckbox');
+        highlight.setAttribute('aria-checked', String(this.highlightUnread));
+        const highlightIcon = document.createElement('span');
+        highlightIcon.className = 'md-context-icon';
+        highlightIcon.setAttribute('aria-hidden', 'true');
+        highlightIcon.textContent = this.highlightUnread ? '✓' : '';
+        const highlightText = document.createElement('span');
+        highlightText.className = 'md-context-label';
+        highlightText.textContent = 'Highlight unread docs';
+        highlight.append(highlightIcon, highlightText);
+        highlight.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._setHighlightUnread(!this.highlightUnread);
+            this._hideSortMenu(true);
+        });
+        this._sortMenuEl.appendChild(highlight);
+    }
+    _syncSortMenuState() {
+        for (const btn of Array.from(this._sortMenuEl.querySelectorAll('.md-sort-option'))) {
+            const selected = btn.dataset.sort === this.sortMode;
+            btn.setAttribute('aria-checked', String(selected));
+            const icon = btn.querySelector('.md-context-icon');
+            if (icon)
+                icon.textContent = selected ? '✓' : '';
+        }
+        const highlight = this._sortMenuEl.querySelector('.md-sort-highlight-option');
+        if (highlight) {
+            highlight.setAttribute('aria-checked', String(this.highlightUnread));
+            const icon = highlight.querySelector('.md-context-icon');
+            if (icon)
+                icon.textContent = this.highlightUnread ? '✓' : '';
+        }
+    }
+    _toggleSortMenu(anchor) {
+        if (!this._sortMenuEl.classList.contains('hidden')) {
+            this._hideSortMenu(true);
+            return;
+        }
+        this._openSortMenu(anchor, 'selected');
+    }
+    _openSortMenu(anchor, focus = 'selected') {
+        this._renderSortMenu();
+        this._sortMenuEl.classList.remove('hidden');
+        anchor.setAttribute('aria-expanded', 'true');
+        this._positionSortMenu();
+        const items = this._sortMenuItems();
+        if (items.length === 0)
+            return;
+        let target = items[0];
+        if (focus === 'last')
+            target = items[items.length - 1];
+        else if (focus === 'selected') {
+            target =
+                items.find((item) => item.dataset.sort === this.sortMode) ??
+                    items[0];
+        }
+        target.focus({ preventScroll: true });
+    }
+    _positionSortMenu() {
+        const anchor = this._sortButton;
+        if (!anchor?.isConnected ||
+            this._sortMenuEl.classList.contains('hidden'))
+            return;
+        const anchorRect = anchor.getBoundingClientRect();
+        const listRect = this.fileListEl.getBoundingClientRect();
+        if (anchorRect.bottom < listRect.top ||
+            anchorRect.top > listRect.bottom) {
+            this._hideSortMenu(true);
+            return;
+        }
+        const menuRect = this._sortMenuEl.getBoundingClientRect();
+        const left = Math.max(8, Math.min(anchorRect.left, window.innerWidth - menuRect.width - 8));
+        const below = anchorRect.bottom + 6;
+        const top = Math.max(8, below + menuRect.height <= window.innerHeight - 8
+            ? below
+            : anchorRect.top - menuRect.height - 6);
+        this._sortMenuEl.style.left = `${left}px`;
+        this._sortMenuEl.style.top = `${top}px`;
+    }
+    _hideSortMenu(returnFocus) {
+        if (!this._sortMenuEl)
+            return;
+        const wasOpen = !this._sortMenuEl.classList.contains('hidden');
+        if (wasOpen)
+            this._sortMenuEl.classList.add('hidden');
+        if (this._sortButton) {
+            this._sortButton.setAttribute('aria-expanded', 'false');
+        }
+        if (wasOpen && returnFocus && this._sortButton?.isConnected) {
+            this._sortButton.focus({ preventScroll: true });
+        }
+    }
+    _sortMenuItems() {
+        return Array.from(this._sortMenuEl.querySelectorAll('.md-sort-option, .md-sort-highlight-option'));
+    }
+    _onSortMenuKeydown(e) {
+        const items = this._sortMenuItems();
+        if (items.length === 0)
+            return;
+        const active = document.activeElement;
+        const index = active ? items.indexOf(active) : -1;
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            items[(index + 1 + items.length) % items.length].focus({
+                preventScroll: true,
             });
         }
-        if (Object.keys(byDir).length === 0) {
-            this.fileListEl.innerHTML =
-                '<div class="md-list-empty">No markdown directories configured.</div>';
+        else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            items[(index - 1 + items.length) % items.length].focus({
+                preventScroll: true,
+            });
+        }
+        else if (e.key === 'Home') {
+            e.preventDefault();
+            items[0].focus({ preventScroll: true });
+        }
+        else if (e.key === 'End') {
+            e.preventDefault();
+            items[items.length - 1].focus({ preventScroll: true });
+        }
+        else if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            this._hideSortMenu(true);
+        }
+    }
+    _renderListStatus(kind, message, retry = false) {
+        this.fileListEl.innerHTML = '';
+        this.fileListEl.appendChild(this._renderToolbar());
+        const status = document.createElement('div');
+        status.className =
+            kind === 'error'
+                ? 'md-list-error'
+                : kind === 'loading'
+                    ? 'md-list-loading'
+                    : 'md-list-empty';
+        const label = document.createElement('span');
+        label.textContent = message;
+        status.appendChild(label);
+        if (retry) {
+            const retryBtn = document.createElement('button');
+            retryBtn.type = 'button';
+            retryBtn.className = 'md-list-retry';
+            retryBtn.textContent = 'Retry';
+            retryBtn.addEventListener('click', () => void this.refreshFiles());
+            status.appendChild(retryBtn);
+        }
+        this.fileListEl.appendChild(status);
+        this._positionSortMenu();
+    }
+    _renderFileList(files, opts = {}) {
+        const previousScroll = this.fileListEl.scrollTop;
+        const activeEl = document.activeElement;
+        const activePath = activeEl && this.fileListEl.contains(activeEl)
+            ? (activeEl
+                .closest('.md-file-row')
+                ?.getAttribute('data-path') ?? null)
+            : null;
+        const restoreFocus = activeEl?.tagName === 'BUTTON' &&
+            this.fileListEl.contains(activeEl);
+        this.fileListEl.innerHTML = '';
+        this.fileListEl.appendChild(this._renderToolbar());
+        if (opts.error) {
+            const error = document.createElement('div');
+            error.className = 'md-list-error md-list-error-inline';
+            const label = document.createElement('span');
+            label.textContent = `Failed to load: ${opts.error}`;
+            const retry = document.createElement('button');
+            retry.type = 'button';
+            retry.className = 'md-list-retry';
+            retry.textContent = 'Retry';
+            retry.addEventListener('click', () => void this.refreshFiles());
+            error.append(label, retry);
+            this.fileListEl.appendChild(error);
+        }
+        const allDirs = this.app.markdownDirs || [];
+        const groups = new Map();
+        allDirs.forEach((d) => {
+            groups.set(d, []);
+        });
+        for (const f of files || []) {
+            if (!f || typeof f.path !== 'string')
+                continue;
+            const dir = typeof f.dir === 'string' ? f.dir : '';
+            if (!groups.has(dir))
+                groups.set(dir, []);
+            groups.get(dir).push(f);
+        }
+        if (groups.size === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'md-list-empty';
+            empty.textContent = 'No markdown directories configured.';
+            this.fileListEl.appendChild(empty);
         }
         else {
-            for (const [dir, dirFiles] of Object.entries(byDir)) {
+            for (const [dir, dirFiles] of groups) {
                 const group = document.createElement('div');
                 group.className = 'md-file-group';
                 const dirLabel = document.createElement('div');
                 dirLabel.className = 'md-dir-label';
                 const nameSpan = document.createElement('span');
-                nameSpan.innerText = dir;
+                nameSpan.textContent = dir;
                 dirLabel.appendChild(nameSpan);
                 const delBtn = document.createElement('button');
                 delBtn.className = 'md-dir-del-btn';
@@ -430,13 +1211,18 @@ export class MarkdownManager {
                 if (dirFiles.length === 0) {
                     const emptyHint = document.createElement('div');
                     emptyHint.className = 'md-file-empty-hint';
-                    emptyHint.innerText = 'No files found';
+                    emptyHint.textContent = 'No files found';
                     group.appendChild(emptyHint);
                 }
                 else {
-                    dirFiles.forEach((f) => {
+                    const sortedFiles = this._sortEntries(dirFiles);
+                    sortedFiles.forEach((f) => {
+                        const hasAttention = this._showAttention(f.path);
                         const row = document.createElement('div');
-                        row.className = 'md-file-row';
+                        row.className = hasAttention
+                            ? 'md-file-row has-attention'
+                            : 'md-file-row';
+                        row.dataset.path = f.path;
                         const item = document.createElement('button');
                         item.className = 'md-file-item';
                         // Standard lucide-style 'file' icon. Universal render,
@@ -445,8 +1231,12 @@ export class MarkdownManager {
                         // Decorative scroll/hieroglyph styling lives in the
                         // markdown VIEWER modal header instead, where it has
                         // room to breathe and a font fallback is acceptable.
-                        item.innerHTML = `<svg class="md-file-icon md-file-icon-doc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="13" y2="17"></line></svg><span class="md-file-name">${escapeHtml(f.name)}</span>`;
+                        // A changed row replaces the glyph with a solid dot.
+                        item.innerHTML = `${this._fileIconMarkup(hasAttention)}<span class="md-file-name">${escapeHtml(f.name)}</span>`;
                         item.title = f.path;
+                        if (hasAttention) {
+                            item.setAttribute('aria-label', `${f.name} (changed)`);
+                        }
                         item.addEventListener('click', (e) => {
                             if (e.ctrlKey || e.metaKey) {
                                 e.preventDefault();
@@ -495,6 +1285,17 @@ export class MarkdownManager {
         addDirBtn.addEventListener('click', () => this._promptAddDir());
         manageRow.appendChild(addDirBtn);
         this.fileListEl.appendChild(manageRow);
+        this.fileListEl.scrollTop = previousScroll;
+        if (restoreFocus && activeEl) {
+            const replacement = Array.from(this.fileListEl.querySelectorAll('button')).find((button) => button.id === activeEl.id &&
+                button.className === activeEl.className &&
+                button.title === activeEl.title &&
+                (button
+                    .closest('.md-file-row')
+                    ?.getAttribute('data-path') ?? null) === activePath);
+            replacement?.focus({ preventScroll: true });
+        }
+        this._positionSortMenu();
     }
     // _setModalTitle renders the modal title with a stylized papyrus-scroll
     // SVG glyph on the left and the file name as text. Uses pure SVG paths
@@ -517,8 +1318,26 @@ export class MarkdownManager {
         this.modalTitle.innerHTML = `${scrollSvg}<span class="md-modal-title-text">${escapeHtml(name)}</span>`;
     }
     async openFile(f) {
+        this.syncContext();
         const render = ++this._modalRenderId;
+        this._abortPreview();
+        const app = this.app;
+        const scope = app?.scope ?? null;
+        const store = app?.getActiveStore?.() ?? null;
         const cwd = this.app.sessionsManager.activeCWD || '';
+        const contextGeneration = this._contextGeneration;
+        if (scope?.aborted)
+            return;
+        const isStale = () => scope?.aborted ||
+            render !== this._modalRenderId ||
+            contextGeneration !== this._contextGeneration ||
+            (app?.scope ?? null) !== scope ||
+            (app?.getActiveStore?.() ?? null) !== store ||
+            (this.app.sessionsManager.activeCWD || '') !== cwd;
+        const listedState = this._pathState.get(f.path);
+        const capturedTimestamp = listedState?.listed ?? null;
+        const capturedVersion = listedState?.version ?? null;
+        const requestUrl = `/api/markdown/file?path=${encodeURIComponent(f.path)}&cwd=${encodeURIComponent(cwd)}`;
         this._setModalTitle(f.name);
         this.modalBody.innerHTML =
             '<div class="md-rendering">Rendering...</div>';
@@ -529,29 +1348,61 @@ export class MarkdownManager {
             path: f.path,
             name: f.name,
             cwd,
-            url: `/api/markdown/file?path=${encodeURIComponent(f.path)}&cwd=${encodeURIComponent(cwd)}`,
+            url: requestUrl,
         };
         this._updateModalActions();
+        const controller = new AbortController();
+        this._previewController = controller;
+        const read = this._startReadDeadline(controller, scope);
+        this._previewDeadlineTimer = read.timer;
+        this._previewScopeAbort = read.detach;
         try {
-            const res = await fetch(`/api/markdown/file?path=${encodeURIComponent(f.path)}&cwd=${encodeURIComponent(cwd)}`);
-            if (render !== this._modalRenderId)
+            const res = await fetch(requestUrl, {
+                headers: this._scopedHeaders(scope),
+                credentials: 'same-origin',
+                cache: 'no-store',
+                signal: controller.signal,
+            });
+            if (isStale())
                 return;
             if (!res.ok)
                 throw new Error(await res.text());
             const raw = await res.text();
-            if (render !== this._modalRenderId)
+            if (isStale())
                 return;
+            if (read.elapsed())
+                throw new Error('Preview request timed out');
             this.currentRawContent = raw;
             this._updateModalActions();
             const html = renderMarkdownSafe(raw);
             this.modalBody.innerHTML = `<div class="md-rendered">${html}</div>`;
             rewriteRelativeImages(this.modalBody, f.path, cwd);
             highlightCodeIn(this.modalBody);
+            this._maybeAcknowledgePreview(f.path, {
+                scope,
+                store,
+                cwd,
+                contextGeneration,
+                timestamp: capturedTimestamp,
+                version: capturedVersion,
+            });
         }
         catch (e) {
-            if (render !== this._modalRenderId)
+            if (isStale())
                 return;
-            this.modalBody.innerHTML = `<div class="md-list-error">Failed to load: ${escapeHtml(e.message)}</div>`;
+            const message = read.elapsed()
+                ? 'Preview request timed out'
+                : e.message;
+            this.modalBody.innerHTML = `<div class="md-list-error">Failed to load: ${escapeHtml(message)}</div>`;
+        }
+        finally {
+            read.detach();
+            if (this._previewDeadlineTimer === read.timer)
+                this._previewDeadlineTimer = null;
+            if (this._previewScopeAbort === read.detach)
+                this._previewScopeAbort = null;
+            if (this._previewController === controller)
+                this._previewController = null;
         }
     }
     /** Preview an arbitrary workspace file in the markdown modal. Used
@@ -574,6 +1425,7 @@ export class MarkdownManager {
         }
         this._setModalTitle(f.name);
         this._modalRenderId++;
+        this._abortPreview();
         this.modalBody.innerHTML = '<div class="md-rendering">Loading…</div>';
         this.modal.classList.remove('hidden');
         this.currentRawContent = '';
@@ -624,6 +1476,7 @@ export class MarkdownManager {
     }
     closeModal() {
         this._modalRenderId++;
+        this._abortPreview();
         this.modal.classList.add('hidden');
         this.modalBody.innerHTML = '';
         this.currentRawContent = '';

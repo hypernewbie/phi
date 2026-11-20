@@ -7634,6 +7634,88 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     color: var(--red);
 }
 
+.md-list-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 4px;
+    padding: 0 4px 4px;
+    flex-shrink: 0;
+}
+
+.md-sort-btn {
+    min-width: 28px;
+    min-height: 28px;
+    padding: 0 6px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: var(--text-muted);
+    font-size: 0.9286rem;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition:
+        color 0.1s,
+        background 0.1s,
+        border-color 0.1s;
+}
+
+.md-sort-btn:hover,
+.md-sort-btn[aria-expanded="true"] {
+    color: var(--accent-bright);
+    background: var(--bg-elevated);
+    border-color: var(--bg-border);
+}
+
+.md-sort-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+.md-sort-menu {
+    min-width: 220px;
+}
+
+.md-list-error-inline {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0.5rem 0.7143rem;
+    font-size: 0.7857rem;
+}
+
+.md-list-retry {
+    flex-shrink: 0;
+    background: var(--bg-elevated);
+    border: 1px solid var(--bg-border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 0.7857rem;
+    padding: 0.2143rem 0.5714rem;
+    cursor: pointer;
+    transition:
+        color 0.1s,
+        border-color 0.1s;
+}
+
+.md-list-retry:hover {
+    color: var(--accent-bright);
+    border-color: var(--accent);
+}
+
+@media (max-width: 768px),
+    (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
+    .md-sort-btn {
+        min-width: 40px;
+        min-height: 40px;
+    }
+}
+
 .md-file-group {
     margin-bottom: 8px;
 }
@@ -7752,6 +7834,34 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 .md-file-row:hover .md-file-icon-doc {
     color: var(--accent);
     opacity: 0.95;
+}
+
+/* Changed-file attention: a static wash plus a solid dot in the icon slot.
+   No repeating animation and no hard-coded theme colors. */
+.md-file-row.has-attention {
+    border-radius: 4px;
+    background: var(--accent-wash);
+    box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.md-file-row.has-attention .md-file-item,
+.md-file-row.has-attention .md-file-name {
+    color: var(--accent-bright);
+}
+
+.md-file-row.has-attention .md-file-item:hover {
+    background: var(--accent-soft);
+    color: var(--accent-bright);
+}
+
+.md-file-attention-dot {
+    width: 8px;
+    height: 8px;
+    margin: 0 3px;
+    border-radius: 50%;
+    background: var(--accent-bright);
+    box-shadow: 0 0 6px var(--accent-glow);
+    flex-shrink: 0;
 }
 .md-file-name {
     flex: 1;

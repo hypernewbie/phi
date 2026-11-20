@@ -40,6 +40,20 @@ export function isCancelledGitRead(request: Request, origin: string): boolean {
     );
 }
 
+// A newer listing or context reset cancels the obsolete markdown listing.
+export function isCancelledMarkdownListRead(
+    request: Request,
+    origin: string,
+): boolean {
+    const url = new URL(request.url());
+    return (
+        request.method() === 'GET' &&
+        request.failure()?.errorText === 'net::ERR_ABORTED' &&
+        url.origin === new URL(origin).origin &&
+        url.pathname === '/api/markdown/files'
+    );
+}
+
 // A pane refresh, close, or replacement aborts its in-flight replay fetch.
 export function isCancelledTerminalReplay(
     request: Request,
@@ -79,6 +93,7 @@ export function isCancelledBackgroundRead(
     return (
         isCancelledWorktreeRead(request, origin) ||
         isCancelledSessionListRead(request, origin) ||
-        isCancelledGitRead(request, origin)
+        isCancelledGitRead(request, origin) ||
+        isCancelledMarkdownListRead(request, origin)
     );
 }

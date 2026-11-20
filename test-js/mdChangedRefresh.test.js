@@ -20,7 +20,7 @@ setupDomHarness();
 // real DOM writes, so fileListEl must be a live element. The five ids
 // below are exactly what the constructor dereferences directly; every
 // other lookup in the class is null-guarded.
-function makeMm({ markdownDirs = [], activeCWD = '/w' } = {}) {
+function makeMm({ markdownDirs = [], activeCWD = '/w', appExtra = {} } = {}) {
     document.body.innerHTML = `
         <div id="markdown-file-list"></div>
         <div id="md-modal" class="hidden"></div>
@@ -32,6 +32,7 @@ function makeMm({ markdownDirs = [], activeCWD = '/w' } = {}) {
         showToast: vi.fn(),
         markdownDirs,
         sessionsManager: { activeCWD },
+        ...appExtra,
     };
     const mm = new MarkdownManager(app);
     return { mm, app };
@@ -154,5 +155,179 @@ describe('MarkdownManager silent refresh', () => {
         expect(mm.fileListEl.innerHTML).not.toContain('Scanning');
         await pending;
         expect(mm.fileListEl.innerHTML).not.toContain('Scanning');
+    });
+
+    it('keeps accepted rows through an HTTP failure and recovers through Retry', async () => {
+        const first = [
+            { path: '/w/research/a.md', name: 'a.md', dir: './research' },
+        ];
+        const second = [
+            { path: '/w/research/a.md', name: 'a.md', dir: './research' },
+            { path: '/w/research/b.md', name: 'b.md', dir: './research' },
+        ];
+        let mode = 'ok';
+        let files = first;
+        const fetchMock = vi.fn(async () => {
+            if (mode === 'fail') {
+                return {
+                    ok: false,
+                    status: 500,
+                    text: async () => 'backend exploded',
+                };
+            }
+            return {
+                ok: true,
+                json: async () => files,
+                text: async () => JSON.stringify(files),
+            };
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const { mm } = makeMm({ markdownDirs: ['./research'] });
+        await mm.refreshFiles({ force: true });
+        expect(mm.fileListEl.textContent).toContain('a.md');
+
+        mode = 'fail';
+        await mm.refreshFiles({ force: true });
+        expect(mm.fileListEl.textContent).toContain('a.md');
+        expect(mm.fileListEl.textContent).toContain('backend exploded');
+        expect(
+            mm.fileListEl.querySelector('.md-list-error-inline .md-list-retry'),
+        ).not.toBeNull();
+
+        mode = 'ok';
+        files = second;
+        mm.fileListEl.querySelector('.md-list-retry').click();
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(mm.fileListEl.textContent).not.toContain('backend exploded');
+        expect(mm.fileListEl.textContent).toContain('b.md');
+    });
+
+    it('ignores a slow older response and its late body', async () => {
+        const oldFiles = [
+            { path: '/w/research/old.md', name: 'old.md', dir: './research' },
+        ];
+        const newFiles = [
+            { path: '/w/research/new.md', name: 'new.md', dir: './research' },
+        ];
+        let resolveOld;
+        const oldBody = new Promise((resolve) => {
+            resolveOld = resolve;
+        });
+        const fetchMock = vi
+            .fn()
+            .mockImplementationOnce(async () => ({
+                ok: true,
+                json: () => oldBody,
+                text: async () => '',
+            }))
+            .mockImplementation(async () => ({
+                ok: true,
+                json: async () => newFiles,
+                text: async () => JSON.stringify(newFiles),
+            }));
+        vi.stubGlobal('fetch', fetchMock);
+
+        const store = { responses: new Map() };
+        const { mm } = makeMm({
+            markdownDirs: ['./research'],
+            appExtra: { getActiveStore: () => store },
+        });
+        const older = mm.refreshFiles({ force: true });
+        const newer = mm.refreshFiles({ force: true });
+        await newer;
+        expect(mm.fileListEl.textContent).toContain('new.md');
+        expect(mm.fileListEl.textContent).not.toContain('old.md');
+
+        resolveOld(oldFiles);
+        await older;
+        expect(mm.fileListEl.textContent).toContain('new.md');
+        expect(mm.fileListEl.textContent).not.toContain('old.md');
+        const cached = store.responses.get('/api/markdown/files?cwd=%2Fw');
+        expect(cached).toBe(JSON.stringify(newFiles));
+    });
+
+    it('turns a stalled response body into a visible Retry state within ten seconds', async () => {
+        const fetchMock = vi.fn((_url, options) =>
+            Promise.resolve({
+                ok: true,
+                json: () =>
+                    new Promise((_resolve, reject) => {
+                        options.signal.addEventListener('abort', () => {
+                            const error = new Error('aborted');
+                            error.name = 'AbortError';
+                            reject(error);
+                        });
+                    }),
+                text: async () => '',
+            }),
+        );
+        vi.stubGlobal('fetch', fetchMock);
+
+        const { mm } = makeMm({ markdownDirs: ['./research'] });
+        const pending = mm.refreshFiles({ force: true });
+        await vi.advanceTimersByTimeAsync(10_000);
+        await pending;
+
+        expect(mm.fileListEl.textContent).toContain('Request timed out');
+        expect(mm.fileListEl.querySelector('.md-list-retry')).not.toBeNull();
+        expect(mm.fileListEl.textContent).not.toContain('Scanning');
+    });
+
+    it('resets a hidden cwd round-trip without fetching and drops late results', async () => {
+        const scopeA = {
+            aborted: false,
+            signal: new AbortController().signal,
+            headers: () => ({}),
+        };
+        const scopeB = {
+            aborted: false,
+            signal: new AbortController().signal,
+            headers: () => ({}),
+        };
+        const storeA = { responses: new Map() };
+        const storeB = { responses: new Map() };
+        let resolveOld;
+        const oldBody = new Promise((resolve) => {
+            resolveOld = resolve;
+        });
+        const fetchMock = vi.fn(async () => ({
+            ok: true,
+            json: () => oldBody,
+            text: async () => '',
+        }));
+        vi.stubGlobal('fetch', fetchMock);
+
+        const appExtra = {
+            scope: scopeA,
+            getActiveStore: () => storeA,
+        };
+        const { mm, app } = makeMm({
+            markdownDirs: ['./research'],
+            appExtra,
+        });
+        const pending = mm.refreshFiles({ force: true });
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        app.sessionsManager.activeCWD = '/b';
+        app.scope = scopeB;
+        app.getActiveStore = () => storeB;
+        expect(mm.syncContext()).toBe(true);
+        app.sessionsManager.activeCWD = '/w';
+        app.scope = scopeA;
+        app.getActiveStore = () => storeA;
+        expect(mm.syncContext()).toBe(true);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(mm.fileListEl.textContent).toContain('Scanning');
+        expect(mm.fileListEl.querySelector('.md-file-row')).toBeNull();
+
+        resolveOld([
+            { path: '/w/research/old.md', name: 'old.md', dir: './research' },
+        ]);
+        await pending;
+        expect(mm.fileListEl.querySelector('.md-file-row')).toBeNull();
+        expect(storeA.responses.size).toBe(0);
+        expect(storeB.responses.size).toBe(0);
     });
 });
