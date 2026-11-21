@@ -172,9 +172,13 @@ func (c *syncTopicPeerClient) connect(secret string) error {
 	header.Set(syncTopicsSecretHeader, secret)
 	ws, resp, err := dialer.Dial(c.url.String(), header)
 	if err != nil {
-		if resp != nil && resp.StatusCode == 401 {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			if string(body) == `{"sync_topics":"refused","reason":"not-authorized"}` {
+		if resp != nil && resp.StatusCode == http.StatusUnauthorized {
+			const refusal = `{"sync_topics":"refused","reason":"not-authorized"}`
+			body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			// A failed upgrade can expose only a bounded error-body prefix.
+			// Require its declared complete length too; a truncated or chunked
+			// prefix cannot prove permanent revocation.
+			if readErr == nil && resp.ContentLength == int64(len(refusal)) && string(body) == refusal {
 				c.applyPeerRevocation()
 			}
 		}

@@ -130,7 +130,9 @@ history. Each accepted post arrives once as a complete model-visible message;
 the receiver must not poll or fetch. Delivery is RAM-only: a coordinator
 restart loses unacknowledged work. Re-subscribe explicitly after a coordinator
 epoch change. Topic keys are at most 256 bytes, stored values at most 128 KiB,
-and one batch's text at most 64 KiB.
+and one batch's text at most 64 KiB. Every post must fit a complete one-post
+batch, even without subscribers. A size refusal changes neither the board nor
+recipient work.
 
 On a follower Phi, direct REST board calls are forwarded to the configured
 coordinator; reads reflect the coordinator board, not a dormant local copy.

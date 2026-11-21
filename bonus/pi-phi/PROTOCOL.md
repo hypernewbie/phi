@@ -306,7 +306,10 @@ cumulative marker; a later explicit subscribe can bind the new epoch.
 
 Topic limits: key 256 bytes, stored value 128 KiB, encoded batch text 64 KiB,
 native/peer frame 256 KiB, 1024 coordinator subscriptions, 1024 pending
-batches, and 32 batches per owner. The feed carries no terminal bytes.
+batches, and 32 batches per owner. Each post must fit a complete one-post
+encoded batch, even without subscribers. These checks precede board mutation,
+persistence, browser notification, and recipient admission. The feed carries no
+terminal bytes.
 
 ### Peer delivery
 
@@ -317,6 +320,14 @@ looks up the peer in `[sync_topics_allowed_peers]` and compares its 64-byte
 lowercase hex secret in constant time before the upgrade. A missing or
 mismatched entry returns 401 and is never upgraded. A coordinator with a
 configured `sync_coordinator` rejects peer registration with 503.
+
+Permanent follower revocation requires status 401 and the exact body
+`{"sync_topics":"refused","reason":"not-authorized"}`.
+The declared `Content-Length` must match the complete body. Incomplete,
+chunked, oversized, and malformed responses do not prove revocation.
+A config error or other uncertain failure keeps accepted work retained and
+leaves the feed not-ready. The coordinator checks authority again after each
+blocking application read, before it applies controls or ACKs.
 
 The peer exchange is JSON text. Counters use canonical decimal strings.
 The coordinator sends `offer` with its epoch, prior cohort fence, and state.

@@ -208,6 +208,10 @@ func (app *Server) handleSyncTopicPeer(w http.ResponseWriter, r *http.Request) {
 		if err != nil || messageType != websocket.TextMessage || validatePeerFrameSize(data) != nil || json.Unmarshal(data, &frame) != nil {
 			return
 		}
+		// Authority may change while ReadMessage waits for application data.
+		if !app.checkPeerAuthority(conn) {
+			return
+		}
 		switch frame.Type {
 		case "control":
 			app.peerRegistry().control(app, conn, &frame)

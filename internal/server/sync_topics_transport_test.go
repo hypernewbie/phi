@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -177,6 +178,54 @@ func TestSyncTopicFollowerRequiresPongDespiteApplicationTraffic(t *testing.T) {
 		t.Fatalf("follower state after Pong expiry: hadReady=%v active=%v", wasReady, stillActive)
 	}
 	<-handlerDone
+}
+
+func TestSyncTopicFollowerRevokesOnlyForCompleteAuthorityRefusal(t *testing.T) {
+	const refusal = `{"sync_topics":"refused","reason":"not-authorized"}`
+	for _, scenario := range []string{"complete", "unavailable", "malformed", "oversized", "incomplete", "chunked"} {
+		t.Run(scenario, func(t *testing.T) {
+			status, body := http.StatusUnauthorized, refusal
+			switch scenario {
+			case "unavailable":
+				status = http.StatusServiceUnavailable
+			case "malformed":
+				body += " {}"
+			case "oversized":
+				body += strings.Repeat(" ", 4096)
+			}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if scenario == "incomplete" {
+					w.Header().Set("Content-Length", strconv.Itoa(len(body)+1))
+				}
+				w.WriteHeader(status)
+				if scenario == "chunked" {
+					w.(http.Flusher).Flush()
+				}
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+			target, err := url.Parse("ws" + strings.TrimPrefix(srv.URL, "http"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := newSyncTopicPeerClient(&Server{}, *target, srv.URL, "f1", strings.Repeat("a", 64))
+			owner := syncTopicWireOwn{Pane: "pane", Process: "proc", Generation: 1}
+			client.intents["pane\x00proc\x00alerts"] = syncTopicPeerIntent{owner: owner, topic: "alerts"}
+			if err := client.connect(client.secret); err == nil {
+				t.Fatal("failed upgrade unexpectedly connected")
+			}
+			if client.active || client.ready {
+				t.Fatal("failed upgrade left the feed ready")
+			}
+			if scenario == "complete" {
+				if !client.retired || len(client.intents) != 0 || len(client.dirtyRetire) != 1 {
+					t.Fatal("complete authority refusal did not retire the owner")
+				}
+			} else if client.retired || len(client.intents) != 1 || len(client.dirtyRetire) != 0 {
+				t.Fatal("uncertain upgrade failure permanently retired accepted work")
+			}
+		})
+	}
 }
 
 func TestSyncTopicFollowerBlockedWriteHasDeadline(t *testing.T) {

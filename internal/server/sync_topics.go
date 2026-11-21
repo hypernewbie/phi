@@ -172,6 +172,14 @@ func (e *syncTopicEngine) admitPostLocked(topic, value string, now time.Time) (b
 	if len(value) > maxSyncTopicPostBytes || !utf8.ValidString(value) {
 		return false, errSyncTopicInvalid
 	}
+	// Apply the same complete-value bound even when no owner is subscribed.
+	single := &syncTopicBatch{
+		id: "batch-00000000000000000000", topic: topic,
+		posts: []syncTopicPost{{postID: "post-00000000000000000000", value: value}},
+	}
+	if len(marshalSyncTopicBatch(single)) > maxSyncTopicBatchTextBytes {
+		return false, errSyncTopicTooLarge
+	}
 	recipients := e.byTopic[topic]
 	if len(recipients) == 0 {
 		return false, nil
@@ -200,15 +208,6 @@ func (e *syncTopicEngine) admitPostLocked(topic, value string, now time.Time) (b
 		}
 		if len(o.batches) >= maxSyncTopicBatchesPerOwner || e.totalBatches >= maxSyncTopicBatches {
 			return false, errSyncTopicCapacity
-		}
-		candidate := &syncTopicBatch{
-			id: "batch-00000000000000000000", seq: 1, topic: topic,
-			posts:    []syncTopicPost{{postID: "post-00000000000000000000", value: value}},
-			deadline: now.Add(syncTopicBatchWindow), created: now,
-		}
-		candidate.text = marshalSyncTopicBatch(candidate)
-		if len(candidate.text) > maxSyncTopicBatchTextBytes {
-			return false, errSyncTopicTooLarge
 		}
 		plans = append(plans, plan{owner: o, batch: nil, fresh: true})
 	}
