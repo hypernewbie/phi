@@ -87,45 +87,15 @@ func (c *syncTopicPeerClient) run() {
 		if blocked {
 			return
 		}
-		cfg, err := c.app.configStore().LoadWithError()
-		if err != nil {
-			time.Sleep(backoff)
-			continue
-		}
-		if cfg.SyncCoordinator != c.targetBase || cfg.SyncTopicsPeerID != c.peerID {
-			c.mu.Lock()
-			c.blocked = true
-			c.mu.Unlock()
-			if c.app.bridge != nil {
-				c.app.bridge.RetireSyncboardTopicBindings("peer-config-changed")
-			}
-			return
-		}
-		if cfg.SyncTopicsPeerSecret != c.secret {
-			c.mu.Lock()
-			c.secret = cfg.SyncTopicsPeerSecret
-			c.retired = true
-			c.ready = false
-			c.intents = make(map[string]syncTopicPeerIntent)
-			c.dirtyRetire = make(map[string]syncTopicPeerRetire)
-			c.batches = make(map[string]syncTopicWireOwn)
-			ws := c.ws
-			c.mu.Unlock()
-			if c.app.bridge != nil {
-				c.app.bridge.RetireSyncboardTopicBindings("peer-secret-rotated")
-			}
-			if ws != nil {
-				_ = ws.Close()
-			}
-		}
-		if cfg.SyncCoordinator == "" || cfg.SyncTopicsPeerSecret == "" {
+		if !c.checkConfig() {
 			time.Sleep(backoff)
 			continue
 		}
 		c.mu.Lock()
 		c.hadReady = false
+		secret := c.secret
 		c.mu.Unlock()
-		err = c.connect(cfg.SyncTopicsPeerSecret)
+		err := c.connect(secret)
 		c.mu.Lock()
 		recovered := c.hadReady
 		c.hadReady = false
@@ -142,8 +112,44 @@ func (c *syncTopicPeerClient) run() {
 	}
 }
 
+// checkConfig runs before handoff, controls, ACKs, and heartbeat traffic, not
+// only between connection attempts. Unreadable config pauses without retirement.
+func (c *syncTopicPeerClient) checkConfig() bool {
+	if c.app.configStore() == nil {
+		return true
+	}
+	cfg, err := c.app.loadSyncConfig()
+	available := err == nil && validPeerID(cfg.SyncTopicsPeerID) && validPeerSecret(cfg.SyncTopicsPeerSecret)
+	c.mu.Lock()
+	rotated := available && cfg.SyncTopicsPeerSecret != c.secret
+	if !available || rotated {
+		c.active, c.ready = false, false
+	}
+	if rotated {
+		c.secret = cfg.SyncTopicsPeerSecret
+		if c.pending != nil && c.pending.action == "register" {
+			c.pending.retired = true
+		}
+	}
+	conn := c.ws
+	c.mu.Unlock()
+	if rotated {
+		c.applyPeerRevocation()
+	}
+	if !available || rotated {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		return false
+	}
+	return true
+}
+
 func (c *syncTopicPeerClient) applyPeerRevocation() {
 	c.mu.Lock()
+	if c.pending != nil && c.pending.action == "register" {
+		c.pending.retired = true
+	}
 	if c.dirtyRetire == nil {
 		c.dirtyRetire = make(map[string]syncTopicPeerRetire)
 	}
@@ -163,6 +169,9 @@ func (c *syncTopicPeerClient) applyPeerRevocation() {
 }
 
 func (c *syncTopicPeerClient) connect(secret string) error {
+	if !c.checkConfig() {
+		return errSyncTopicPeerNotReady
+	}
 	dialer := websocket.Dialer{
 		Subprotocols:     []string{syncTopicsPeerProtocol},
 		HandshakeTimeout: syncTopicsPeerHandshakeTimeout,
@@ -198,6 +207,10 @@ func (c *syncTopicPeerClient) connect(secret string) error {
 		offerFrame.Epoch == "" || len(offerFrame.Epoch) > syncTopicsPeerMaxID || !validPeerState(offerFrame.State) {
 		_ = ws.Close()
 		return errors.New("invalid peer offer")
+	}
+	if !c.checkConfig() {
+		_ = ws.Close()
+		return errSyncTopicPeerNotReady
 	}
 	offer := *offerFrame
 	c.mu.Lock()
@@ -242,6 +255,10 @@ func (c *syncTopicPeerClient) connect(secret string) error {
 		boundFrame.Fence == "" || boundFrame.Stream == "" || !validPeerState(boundFrame.State) {
 		_ = ws.Close()
 		return errors.New("invalid peer bound")
+	}
+	if !c.checkConfig() {
+		_ = ws.Close()
+		return errSyncTopicPeerNotReady
 	}
 	bound := *boundFrame
 	c.mu.Lock()
@@ -315,6 +332,9 @@ func (c *syncTopicPeerClient) connect(secret string) error {
 		if err != nil || messageType != websocket.TextMessage || validatePeerFrameSize(data) != nil || json.Unmarshal(data, &frame) != nil {
 			return errSyncTopicPeerNotReady
 		}
+		if !c.checkConfig() {
+			return errSyncTopicPeerNotReady
+		}
 		switch frame.Type {
 		case "result":
 			c.handleResult(&frame)
@@ -334,7 +354,7 @@ func (c *syncTopicPeerClient) connect(secret string) error {
 }
 
 func (c *syncTopicPeerClient) sendReadyLocked() {
-	if c.ws == nil || c.ready || c.readySent || c.terminal || c.pending != nil || len(c.dirtyRetire) > 0 {
+	if !c.active || c.blocked || c.ws == nil || c.ready || c.readySent || c.terminal || c.pending != nil || len(c.dirtyRetire) > 0 {
 		return
 	}
 	c.readySent = true
@@ -345,9 +365,12 @@ func (c *syncTopicPeerClient) sendReadyLocked() {
 }
 
 func (c *syncTopicPeerClient) handleReadyAck(frame *syncTopicPeerFrame) {
+	if !c.checkConfig() {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if frame.Epoch != c.epoch || frame.Fence != c.fence || frame.Stream != c.stream {
+	if c.blocked || !c.active || frame.Epoch != c.epoch || frame.Fence != c.fence || frame.Stream != c.stream {
 		return
 	}
 	last, ok := parsePeerCounter(frame.Last, true)
@@ -362,9 +385,12 @@ func (c *syncTopicPeerClient) handleReadyAck(frame *syncTopicPeerFrame) {
 }
 
 func (c *syncTopicPeerClient) handleResult(frame *syncTopicPeerFrame) {
+	if !c.checkConfig() {
+		return
+	}
 	c.mu.Lock()
 	pending := c.pending
-	if pending == nil || frame.Epoch != c.epoch || frame.Fence != c.fence || frame.Stream != c.stream {
+	if c.blocked || pending == nil || frame.Epoch != c.epoch || frame.Fence != c.fence || frame.Stream != c.stream {
 		c.mu.Unlock()
 		return
 	}
@@ -394,6 +420,9 @@ func (p *syncTopicPeerPending) ownerKey() string {
 }
 
 func (c *syncTopicPeerClient) Register(owner pibridge.SyncboardOwner, topic string) error {
+	if !c.checkConfig() {
+		return errSyncTopicPeerNotReady
+	}
 	wire := *wireOwnerFromPibridge(owner)
 	c.mu.Lock()
 	var pending *syncTopicPeerPending
@@ -495,6 +524,9 @@ func (c *syncTopicPeerClient) retryPending(pending *syncTopicPeerPending) {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for {
+		if !c.checkConfig() {
+			return
+		}
 		c.mu.Lock()
 		if c.pending != pending || !c.active {
 			c.mu.Unlock()
@@ -515,6 +547,7 @@ func (c *syncTopicPeerClient) retryPending(pending *syncTopicPeerPending) {
 }
 
 func (c *syncTopicPeerClient) RetireOwner(owner pibridge.SyncboardOwner, epoch string) {
+	_ = c.checkConfig()
 	wire := *wireOwnerFromPibridge(owner)
 	key := wire.Pane + "\x00" + wire.Process
 	c.mu.Lock()
@@ -598,6 +631,9 @@ func (c *syncTopicPeerClient) exhaustControlLocked() {
 }
 
 func (c *syncTopicPeerClient) Ack(owner pibridge.SyncboardOwner, epoch string, seq uint64, batchID string) bool {
+	if !c.checkConfig() {
+		return false
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.active || !c.ready || c.epoch != epoch {
@@ -621,6 +657,9 @@ func (c *syncTopicPeerClient) Ack(owner pibridge.SyncboardOwner, epoch string, s
 }
 
 func (c *syncTopicPeerClient) handleBatch(frame *syncTopicPeerFrame) {
+	if !c.checkConfig() {
+		return
+	}
 	c.mu.Lock()
 	if !c.active || !c.ready || c.epoch != frame.Epoch || c.fence != frame.Fence || c.stream != frame.Stream ||
 		frame.Owner == nil || !validPeerOwner(frame.Owner) || !validPeerTopic(frame.Topic) ||
@@ -670,6 +709,9 @@ func (c *syncTopicPeerClient) heartbeat(ws *websocket.Conn, stop <-chan struct{}
 		case <-stop:
 			return
 		case <-ticker.C:
+			if !c.checkConfig() {
+				return
+			}
 			if err := ws.WriteControl(websocket.PingMessage, nil, time.Now().Add(syncTopicsPeerControlTimeout)); err != nil {
 				_ = ws.Close()
 				return
@@ -679,7 +721,7 @@ func (c *syncTopicPeerClient) heartbeat(ws *websocket.Conn, stop <-chan struct{}
 }
 
 func (c *syncTopicPeerClient) writeLocked(frame syncTopicPeerFrame) error {
-	if c.writer == nil {
+	if c.blocked || c.writer == nil {
 		return errSyncTopicPeerNotReady
 	}
 	err := c.writer.enqueue(frame)

@@ -97,6 +97,7 @@ type Server struct {
 	syncMu                             sync.RWMutex
 	syncStore                          map[string]*SyncMessage
 	syncTopics                         *syncTopicEngine
+	syncTopicConfig                    syncTopicConfig
 	syncTopicPeer                      *syncTopicPeerClient
 	syncTopicPeers                     *syncTopicPeerRegistry
 	testSyncPath                       string

@@ -31,19 +31,27 @@ func TestSyncTopicPeerHealthyIdleLinkSurvivesHeartbeats(t *testing.T) {
 			syncTopicsPeerPingInterval = 20 * time.Millisecond
 			syncTopicsPeerReadTimeout = 150 * time.Millisecond
 			defer func() { syncTopicsPeerPingInterval, syncTopicsPeerReadTimeout = oldPing, oldRead }()
+			coordinator := testServer
 			handlerDone := make(chan struct{})
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				defer close(handlerDone)
-				testServer.handleSyncTopicPeer(w, r)
+				coordinator.handleSyncTopicPeer(w, r)
 			}))
 			defer srv.Close()
 			target, err := url.Parse("ws" + strings.TrimPrefix(srv.URL, "http") + syncTopicsPeerPath)
 			if err != nil {
 				t.Fatal(err)
 			}
+			withTempConfig(t)
+			if _, err := testStore.Update(func(cfg *config.Config) error {
+				cfg.SyncCoordinator, cfg.SyncTopicsPeerID, cfg.SyncTopicsPeerSecret = srv.URL, "f1", secret
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
 			client := newSyncTopicPeerClient(testServer, *target, srv.URL, "f1", secret)
 			if scenario == "retirement-recovery" {
-				client.epoch = testServer.syncTopics.epoch
+				client.epoch = coordinator.syncTopics.epoch
 				for _, pane := range []string{"old-a", "old-b"} {
 					key := pane + "\x00proc"
 					client.dirtyRetire[key] = syncTopicPeerRetire{

@@ -6,8 +6,9 @@ It also lists and switches models through Phi's shared model picker.
 It shows context usage as display-only telemetry. It exposes native
 `syncboard_publish` and `syncboard_subscribe` tools for topics, plus the
 legacy `syncboard` tool for list, get, upsert, and delete while the owning
-Phi bridge capability is active. Phi resolves its own coordinator for each
-call.
+Phi bridge capability is active. Phi uses its own configured coordinator;
+Pi cannot select the target. Live role, target, or follower-ID changes require
+a Phi restart.
 An unknown outcome is never retried. It runs a native compaction only on an
 explicit user action through the existing
 Compact control: one operation per Pi process, no server-side queue,
@@ -141,6 +142,15 @@ Peer topic delivery uses `/ws/sync-topics`. Set `sync_topics_peer_id` and
 secret to `[sync_topics_allowed_peers]` on the coordinator. A peer needs a
 matching secret before any WebSocket upgrade; live allowlist or secret changes
 retire the cohort and require the follower to subscribe again.
+
+The board and topic feed use one authority for the Phi process lifetime.
+A valid live role, coordinator-target, or follower-ID change closes the feeds,
+fences native bindings, and refuses board operations and new subscriptions
+until Phi restarts. Restoring the old setting does not clear that block.
+Closing the old feed does not cancel reservations at its former coordinator;
+that coordinator retains them until authorized retirement or revocation.
+Unreadable or invalid configuration pauses work without cancellation or local
+fallback. It can resume after the configuration is corrected.
 
 List returns messages. Get returns the message or `{found:false,key}` when the
 key is absent. Upsert stores a JSON value and returns the message. Delete

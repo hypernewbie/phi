@@ -13,6 +13,14 @@ import (
 )
 
 func TestSyncTopicPeerRechecksAuthorityAfterBlockedRead(t *testing.T) {
+	for _, change := range []string{"unreadable", "role-change"} {
+		t.Run(change, func(t *testing.T) {
+			testSyncTopicPeerAuthorityAfterBlockedRead(t, change)
+		})
+	}
+}
+
+func testSyncTopicPeerAuthorityAfterBlockedRead(t *testing.T, change string) {
 	for _, kind := range []string{"register", "retire_owner", "ack", "ready"} {
 		t.Run(kind, func(t *testing.T) {
 			path := withTempConfig(t)
@@ -75,10 +83,17 @@ func TestSyncTopicPeerRechecksAuthorityAfterBlockedRead(t *testing.T) {
 				ponged = true
 				// Pong proves the server passed its pre-read authority check and
 				// is inside ReadMessage. Change authority before application data.
-				if err := os.WriteFile(path, []byte("sync_coordinator = \n"), 0o600); err != nil {
+				if change == "unreadable" {
+					if err := os.WriteFile(path, []byte("sync_coordinator = \n"), 0o600); err != nil {
+						return err
+					}
+					testStore.ResetCache()
+				} else if _, err := testStore.Update(func(cfg *config.Config) error {
+					cfg.SyncCoordinator = "http://replacement.invalid"
+					return nil
+				}); err != nil {
 					return err
 				}
-				testStore.ResetCache()
 				return conn.WriteJSON(frame)
 			})
 			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second)); err != nil {

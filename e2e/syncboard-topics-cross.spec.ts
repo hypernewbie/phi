@@ -69,7 +69,7 @@ async function waitForPeer(request: APIRequestContext, follower: PhiServer) {
     .toBe(true);
 }
 
-test("coordinator post reaches a follower Pi subscriber", async ({
+test("coordinator post reaches a follower Pi; live role change fences it", async ({
   request,
 }) => {
   test.setTimeout(180_000);
@@ -85,7 +85,7 @@ test("coordinator post reaches a follower Pi subscriber", async ({
       },
       setup: allowPeerSetup,
     });
-    provider = await startTopicsProvider();
+    provider = await startTopicsProvider({ refuseResubscribe: true });
     let fixture: ReturnType<typeof seedTopicsPi> | undefined;
     follower = await startPhi({
       config: {
@@ -141,6 +141,29 @@ test("coordinator post reaches a follower Pi subscriber", async ({
       .toBe(true);
     expect(provider.error()).toBe("");
     expect(provider.bodies()[2]).toContain("cross-c-f");
+
+    const changed = await request.post(`${follower.url}/api/config/sync-coordinator`, {
+      data: { sync_coordinator: "" },
+    });
+    expect(changed.status()).toBe(200);
+    const fenced = await request.get(`${follower.url}/api/sync/messages`);
+    expect(fenced.status()).toBe(503);
+    const restored = await request.post(`${follower.url}/api/config/sync-coordinator`, {
+      data: { sync_coordinator: coordinator.url },
+    });
+    expect(restored.status()).toBe(200);
+    expect((await request.get(`${follower.url}/api/sync/messages`)).status()).toBe(503);
+    await expect.poll(async () => {
+      const status = await request.get(`${follower!.url}/api/sync/topics/status`);
+      return ((await status.json()) as { peer_connected: boolean }).peer_connected;
+    }).toBe(false);
+    const resubscribe = await request.post(`${follower.url}/api/terminals/${paneID}/input`, {
+      data: { text: `Subscribe explicitly to ${TOPICS_KEY} again.` },
+    });
+    expect(resubscribe.status()).toBe(204);
+    await provider.waitForRequestCount(5, 30_000);
+    expect(provider.error()).toBe("");
+    expect(provider.bodies()[4]).toContain("Syncboard subscribe not sent (unavailable).");
   } finally {
     await follower?.stop();
     await coordinator?.stop();

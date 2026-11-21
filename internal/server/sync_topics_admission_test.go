@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hypernewbie/phi/internal/config"
 	"github.com/hypernewbie/phi/internal/piapp"
 	"github.com/hypernewbie/phi/internal/pibridge"
 	"github.com/hypernewbie/phi/pkg/ws"
@@ -18,6 +19,13 @@ import (
 
 func TestSyncTopicFollowerRegistrationRejectsRemovedNativeOwner(t *testing.T) {
 	withTempConfig(t)
+	if _, err := testStore.Update(func(cfg *config.Config) error {
+		cfg.SyncCoordinator, cfg.SyncTopicsPeerID = "http://coordinator.invalid", "f1"
+		cfg.SyncTopicsPeerSecret = strings.Repeat("a", 64)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	app := testServer
 	app.hub = ws.NewHub(0)
 	app.bridge = piapp.StartBridge(app.hub, func() ([]byte, error) { return []byte("test runtime"), nil }, "0.0.0-test", nil)
@@ -28,7 +36,7 @@ func TestSyncTopicFollowerRegistrationRejectsRemovedNativeOwner(t *testing.T) {
 	app.bridge.SetSyncboardTopicEpoch(app.syncTopics.epoch)
 	for _, existing := range []bool{false, true} {
 		t.Run(strconv.FormatBool(existing), func(t *testing.T) {
-			client := newSyncTopicPeerClient(app, url.URL{}, "", "f1", "")
+			client := newSyncTopicPeerClient(app, url.URL{}, "http://coordinator.invalid", "f1", strings.Repeat("a", 64))
 			client.active, client.ready, client.epoch = true, true, app.syncTopics.epoch
 			owner := pibridge.SyncboardOwner{PaneID: "removed", ProcessID: "proc", Generation: 1}
 			if existing {

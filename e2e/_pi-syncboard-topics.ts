@@ -107,6 +107,8 @@ function events(model: string, body: unknown): string {
 export interface TopicsProviderOptions {
     /** Keep the post-subscribe provider response open until the test releases it. */
     holdSecond?: boolean;
+    /** Expect the later explicit subscribe to fail after authority is fenced. */
+    refuseResubscribe?: boolean;
 }
 
 export interface TopicsProvider {
@@ -256,6 +258,13 @@ export async function startTopicsProvider(
                     const latest = results.at(-1);
                     if (!latest)
                         throw new Error('expected a second tool result');
+                    if (options.refuseResubscribe) {
+                        if (!latest.includes('Syncboard subscribe not sent (unavailable).'))
+                            throw new Error('changed authority did not refuse the later subscribe');
+                        res.writeHead(200, SSE_HEADERS);
+                        res.end(events(TOPICS_MODEL, { type: 'text' }));
+                        return;
+                    }
                     let result: unknown;
                     try {
                         result = JSON.parse(latest) as unknown;

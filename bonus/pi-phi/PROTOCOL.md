@@ -361,8 +361,14 @@ ready again.
 `[sync_topics_allowed_peers]` maps each accepted follower identity to its
 secret on the coordinator. All three values are excluded from JSON and
 diagnostic output. A live secret or allowlist change closes the old stream,
-retires the cohort, and requires a fresh ready. A changed coordinator or peer
-identity requires a restart; the follower refuses new work until then.
+retires the cohort, and requires a fresh ready. The board and topic feed share
+one process-lifetime authority. A valid live role, coordinator-target, or
+follower-ID change closes feeds, permanently fences existing native bindings,
+and refuses board operations and new subscriptions until Phi restarts.
+Restoring the original configuration does not clear this block. No retirement
+control is sent to the former coordinator; its reservations remain charged
+until authorized retirement or revocation. An unreadable or invalid config
+pauses work without retirement or local fallback and can recover after repair.
 
 ## Addressed Syncboard pushes
 

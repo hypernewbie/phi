@@ -179,7 +179,7 @@ func (app *Server) Run(ctx context.Context) error {
 	app.startSyncTopicsDelivery()
 	if app.bridge != nil {
 		app.bridge.Syncboard = http.HandlerFunc(app.handleSyncMessages)
-		app.bridge.LoadConfig = app.configStore().LoadWithError
+		app.bridge.LoadConfig = app.loadSyncConfig
 		// A pane launched without a forced --session-id adopts the identity
 		// its Pi runtime reports on Hello.
 		app.bridge.SetSessionBinder(app.pty.BindSession)

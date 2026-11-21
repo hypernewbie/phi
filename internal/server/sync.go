@@ -207,6 +207,13 @@ func (app *Server) handleSyncMessages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// The request body may have blocked after the initial routing check.
+		if app.configStore() != nil {
+			if _, err := app.loadSyncConfig(); err != nil {
+				http.Error(w, "Sync configuration unavailable", http.StatusServiceUnavailable)
+				return
+			}
+		}
 		app.syncMu.Lock()
 		var now time.Time
 		var admitted bool
@@ -361,7 +368,7 @@ func (app *Server) forwardSyncMessages(w http.ResponseWriter, r *http.Request) (
 	if app.configStore() == nil {
 		return false
 	}
-	cfg, err := app.configStore().LoadWithError()
+	cfg, err := app.loadSyncConfig()
 	if err != nil {
 		http.Error(w, "Sync configuration unavailable", http.StatusServiceUnavailable)
 		return true
@@ -386,6 +393,10 @@ func (app *Server) forwardSyncMessages(w http.ResponseWriter, r *http.Request) (
 		} else {
 			writeSyncboardAdmissionRefusal(w, http.StatusBadRequest, "invalid")
 		}
+		return true
+	}
+	if _, err := app.loadSyncConfig(); err != nil {
+		http.Error(w, "Sync configuration unavailable", http.StatusServiceUnavailable)
 		return true
 	}
 	req, err := http.NewRequestWithContext(r.Context(), r.Method, target, bytes.NewReader(body))

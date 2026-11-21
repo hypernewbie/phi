@@ -119,7 +119,7 @@ func (app *Server) handleSyncTopicPeer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"sync_topics":"refused","reason":"unavailable"}`, http.StatusServiceUnavailable)
 		return
 	}
-	cfg, err := app.configStore().LoadWithError()
+	cfg, err := app.loadSyncConfig()
 	if err != nil {
 		http.Error(w, `{"sync_topics":"refused","reason":"unavailable"}`, http.StatusServiceUnavailable)
 		return
@@ -179,6 +179,10 @@ func (app *Server) handleSyncTopicPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	conn.cohort = cohort
+	defer app.peerRegistry().closeConn(app, conn)
+	if !app.checkPeerAuthority(conn) {
+		return
+	}
 	if err := conn.write(syncTopicPeerFrame{
 		Type: "bound", Version: syncTopicsPeerVersion, Epoch: app.syncTopics.epoch,
 		Fence: cohort.fence, Stream: cohort.stream, State: cohort.state, Retired: cohort.retired,
@@ -193,7 +197,6 @@ func (app *Server) handleSyncTopicPeer(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		conn.close()
 		<-heartbeatDone
-		app.peerRegistry().closeConn(app, conn)
 	}()
 	_ = ws.SetReadDeadline(time.Now().Add(syncTopicsPeerReadTimeout))
 	ws.SetPongHandler(func(string) error {
@@ -229,7 +232,7 @@ func (app *Server) checkPeerAuthority(conn *syncTopicPeerConn) bool {
 	if app.configStore() == nil {
 		return false
 	}
-	cfg, err := app.configStore().LoadWithError()
+	cfg, err := app.loadSyncConfig()
 	if err != nil {
 		return false
 	}
@@ -252,13 +255,7 @@ func (c *syncTopicPeerConn) heartbeat() {
 				c.close()
 				return
 			}
-			cfg, err := c.app.configStore().LoadWithError()
-			if err != nil {
-				c.close()
-				return
-			}
-			if cfg.SyncCoordinator != "" || !peerAllowedSecret(cfg, c.peerID, c.secret) {
-				c.app.peerRegistry().revoke(c.app, c.peerID, "revoked")
+			if !c.app.checkPeerAuthority(c) {
 				c.close()
 				return
 			}
@@ -424,7 +421,7 @@ func (r *syncTopicPeerRegistry) ensure(conn *syncTopicPeerConn, frame *syncTopic
 }
 
 func (r *syncTopicPeerRegistry) sweep(app *Server) {
-	cfg, err := app.configStore().LoadWithError()
+	cfg, err := app.loadSyncConfig()
 	if err != nil {
 		return
 	}
@@ -606,6 +603,11 @@ func (r *syncTopicPeerRegistry) ready(app *Server, conn *syncTopicPeerConn, fram
 }
 
 func (app *Server) sendCohortBatch(expected *syncTopicCohort, wire *syncTopicWireOwn, batch *syncTopicBatch) error {
+	if app.configStore() != nil {
+		if _, err := app.loadSyncConfig(); err != nil {
+			return errSyncTopicPeerNotReady
+		}
+	}
 	app.peerRegistry().mu.Lock()
 	cohort := app.peerRegistry().byKey[expected.key]
 	if cohort != expected || !cohort.ready || cohort.conn == nil {
@@ -686,19 +688,11 @@ func (app *Server) handleSyncTopicsStatus(w http.ResponseWriter, r *http.Request
 	})
 }
 
-func (c *syncTopicPeerClient) target() string {
-	cfg, err := c.app.configStore().LoadWithError()
-	if err != nil {
-		return ""
-	}
-	return cfg.SyncCoordinator
-}
-
 func (app *Server) startSyncTopicsPeer() {
 	if app.configStore() == nil {
 		return
 	}
-	cfg, err := app.configStore().LoadWithError()
+	cfg, err := app.loadSyncConfig()
 	if err != nil || cfg.SyncCoordinator == "" || cfg.SyncTopicsPeerID == "" || cfg.SyncTopicsPeerSecret == "" ||
 		app.syncCoordinatorIsSelf(cfg.SyncCoordinator) {
 		return

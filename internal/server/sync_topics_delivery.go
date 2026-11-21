@@ -11,6 +11,7 @@ import (
 // subscription callback enters admission; the ACK callback re-enters pump
 // after the bridge has released its own locks.
 func (app *Server) wireSyncTopics() {
+	_, _ = app.loadSyncConfig()
 	if app.bridge == nil || app.syncTopics == nil {
 		return
 	}
@@ -19,6 +20,10 @@ func (app *Server) wireSyncTopics() {
 		app.retireSyncTopicOwner(retirement)
 	})
 	app.bridge.SetSyncboardTopicSubscriber(func(owner pibridge.SyncboardOwner, topic string) error {
+		cfg, err := app.loadSyncConfig()
+		if err != nil || (cfg.SyncCoordinator != "" && app.syncTopicPeer == nil) {
+			return pibridge.ErrTopicUnavailable
+		}
 		if app.syncTopicPeer != nil {
 			return app.syncTopicPeer.Register(owner, topic)
 		}
@@ -41,7 +46,11 @@ func (app *Server) wireSyncTopics() {
 		})
 	})
 	app.bridge.SetSyncboardTopicAckHandler(func(owner pibridge.SyncboardOwner, epoch string, seq uint64, batchID string) {
-		if app.syncTopicPeer != nil && app.syncTopicPeer.Ack(owner, epoch, seq, batchID) {
+		if _, err := app.loadSyncConfig(); err != nil {
+			return
+		}
+		if app.syncTopicPeer != nil {
+			app.syncTopicPeer.Ack(owner, epoch, seq, batchID)
 			return
 		}
 		app.syncMu.Lock()
@@ -114,6 +123,11 @@ func (app *Server) retireSyncTopicOwner(retirement pibridge.SyncboardTopicRetire
 func (app *Server) pumpSyncTopics(now time.Time) {
 	if app.syncTopics == nil || app.bridge == nil {
 		return
+	}
+	if app.configStore() != nil {
+		if _, err := app.loadSyncConfig(); err != nil {
+			return
+		}
 	}
 	app.syncMu.Lock()
 	deliveries := app.syncTopics.pumpLocked(now)
