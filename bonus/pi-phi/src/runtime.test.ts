@@ -2733,6 +2733,7 @@ function compactRequest(
             $case: 'compactRequest',
             value: {
                 requestId: id,
+                customInstructions: '',
                 expectedSessionId: over.session ?? 'sess',
                 expectedLeafId: over.leaf ?? 'leaf',
                 expectedModel:

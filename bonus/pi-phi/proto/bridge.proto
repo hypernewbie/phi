@@ -398,6 +398,15 @@ message CompactRequest {
   // admission only; native success changes the leaf, so completion
   // never requires the old leaf.
   ModelSnapshot expected_model = 4;
+  // Optional manual summary instructions. Empty means no instructions.
+  // Nonempty instructions require pi.compact.v2 and expected_run_id:
+  // a v1 peer must never receive them. At most 4096 UTF-8 bytes.
+  string custom_instructions = 5;
+  // Expected logical run id from the same state snapshot. Present only
+  // on pi.compact.v2, where an active conversation or queued input is
+  // allowed; zero is valid before the first run. Absence on v2 is
+  // unavailable, never a legacy bare-compact fallback.
+  optional uint64 expected_run_id = 6;
 }
 
 // Terminal compaction outcome. UNSPECIFIED means genuinely unknown:

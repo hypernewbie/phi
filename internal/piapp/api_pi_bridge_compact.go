@@ -53,9 +53,10 @@ func (a *API) HandlePiBridgeCompact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Pane              string `json:"pane"`
-		Generation        string `json:"generation"`
-		TelemetryRevision string `json:"telemetry_revision"`
+		Pane               string `json:"pane"`
+		Generation         string `json:"generation"`
+		TelemetryRevision  string `json:"telemetry_revision"`
+		CustomInstructions string `json:"custom_instructions"`
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, piBridgeCompactMaxBody))
 	dec.DisallowUnknownFields()
@@ -88,7 +89,7 @@ func (a *API) HandlePiBridgeCompact(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), piBridgeCompactTimeout)
 	defer cancel()
-	res, err := a.bridgeOrNil().RequestPaneCompact(ctx, body.Pane, generation, pubRev)
+	res, err := a.bridgeOrNil().RequestPaneCompact(ctx, body.Pane, generation, pubRev, body.CustomInstructions)
 	writeCompactResult(w, res, err)
 }
 

@@ -534,7 +534,22 @@ export interface CompactRequest {
    * admission only; native success changes the leaf, so completion
    * never requires the old leaf.
    */
-  expectedModel: ModelSnapshot | undefined;
+  expectedModel:
+    | ModelSnapshot
+    | undefined;
+  /**
+   * Optional manual summary instructions. Empty means no instructions.
+   * Nonempty instructions require pi.compact.v2 and expected_run_id:
+   * a v1 peer must never receive them. At most 4096 UTF-8 bytes.
+   */
+  customInstructions: string;
+  /**
+   * Expected logical run id from the same state snapshot. Present only
+   * on pi.compact.v2, where an active conversation or queued input is
+   * allowed; zero is valid before the first run. Absence on v2 is
+   * unavailable, never a legacy bare-compact fallback.
+   */
+  expectedRunId?: bigint | undefined;
 }
 
 /**
@@ -3661,7 +3676,14 @@ export const SetThinkingAck: MessageFns<SetThinkingAck> = {
 };
 
 function createBaseCompactRequest(): CompactRequest {
-  return { requestId: "", expectedSessionId: "", expectedLeafId: "", expectedModel: undefined };
+  return {
+    requestId: "",
+    expectedSessionId: "",
+    expectedLeafId: "",
+    expectedModel: undefined,
+    customInstructions: "",
+    expectedRunId: undefined,
+  };
 }
 
 export const CompactRequest: MessageFns<CompactRequest> = {
@@ -3677,6 +3699,15 @@ export const CompactRequest: MessageFns<CompactRequest> = {
     }
     if (message.expectedModel !== undefined) {
       ModelSnapshot.encode(message.expectedModel, writer.uint32(34).fork()).join();
+    }
+    if (message.customInstructions !== "") {
+      writer.uint32(42).string(message.customInstructions);
+    }
+    if (message.expectedRunId !== undefined) {
+      if (BigInt.asUintN(64, message.expectedRunId) !== message.expectedRunId) {
+        throw new globalThis.Error("value provided for field message.expectedRunId of type uint64 too large");
+      }
+      writer.uint32(48).uint64(message.expectedRunId);
     }
     return writer;
   },
@@ -3726,6 +3757,22 @@ export const CompactRequest: MessageFns<CompactRequest> = {
             message.expectedModel = ModelSnapshot.decode(reader, reader.uint32());
             continue;
           }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.customInstructions = reader.string();
+            continue;
+          }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+
+            message.expectedRunId = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -3748,6 +3795,10 @@ export const CompactRequest: MessageFns<CompactRequest> = {
     message.expectedLeafId = object.expectedLeafId ?? "";
     message.expectedModel = (object.expectedModel !== undefined && object.expectedModel !== null)
       ? ModelSnapshot.fromPartial(object.expectedModel)
+      : undefined;
+    message.customInstructions = object.customInstructions ?? "";
+    message.expectedRunId = (object.expectedRunId !== undefined && object.expectedRunId !== null)
+      ? BigInt(object.expectedRunId)
       : undefined;
     return message;
   },

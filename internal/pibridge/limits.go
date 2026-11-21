@@ -47,6 +47,9 @@ const (
 	CapabilityContext = "pi.context.v1"
 	// CapabilityCompact is the native-compaction capability name.
 	CapabilityCompact = "pi.compact.v1"
+	// CapabilityCompactV2 allows manual instructions and an active run or
+	// queued input, fenced by the expected logical run id.
+	CapabilityCompactV2 = "pi.compact.v2"
 	// CapabilityReload is the native resource-reload capability name.
 	CapabilityReload = "pi.reload.v1"
 	// CapabilitySkills is the on-demand skill list/invocation capability name.

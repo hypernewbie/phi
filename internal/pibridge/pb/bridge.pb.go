@@ -2812,6 +2812,15 @@ type CompactRequest struct {
 	// admission only; native success changes the leaf, so completion
 	// never requires the old leaf.
 	ExpectedModel *ModelSnapshot `protobuf:"bytes,4,opt,name=expected_model,json=expectedModel,proto3" json:"expected_model,omitempty"`
+	// Optional manual summary instructions. Empty means no instructions.
+	// Nonempty instructions require pi.compact.v2 and expected_run_id:
+	// a v1 peer must never receive them. At most 4096 UTF-8 bytes.
+	CustomInstructions string `protobuf:"bytes,5,opt,name=custom_instructions,json=customInstructions,proto3" json:"custom_instructions,omitempty"`
+	// Expected logical run id from the same state snapshot. Present only
+	// on pi.compact.v2, where an active conversation or queued input is
+	// allowed; zero is valid before the first run. Absence on v2 is
+	// unavailable, never a legacy bare-compact fallback.
+	ExpectedRunId *uint64 `protobuf:"varint,6,opt,name=expected_run_id,json=expectedRunId,proto3,oneof" json:"expected_run_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2872,6 +2881,20 @@ func (x *CompactRequest) GetExpectedModel() *ModelSnapshot {
 		return x.ExpectedModel
 	}
 	return nil
+}
+
+func (x *CompactRequest) GetCustomInstructions() string {
+	if x != nil {
+		return x.CustomInstructions
+	}
+	return ""
+}
+
+func (x *CompactRequest) GetExpectedRunId() uint64 {
+	if x != nil && x.ExpectedRunId != nil {
+		return *x.ExpectedRunId
+	}
+	return 0
 }
 
 // CompactResult reports one terminal outcome for request_id, echoed
@@ -4582,13 +4605,16 @@ const file_bridge_proto_rawDesc = "" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x0e\n" +
 	"\x02ok\x18\x02 \x01(\bR\x02ok\x12\x16\n" +
-	"\x06reason\x18\x03 \x01(\tR\x06reason\"\xca\x01\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\"\xbc\x02\n" +
 	"\x0eCompactRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12.\n" +
 	"\x13expected_session_id\x18\x02 \x01(\tR\x11expectedSessionId\x12(\n" +
 	"\x10expected_leaf_id\x18\x03 \x01(\tR\x0eexpectedLeafId\x12?\n" +
-	"\x0eexpected_model\x18\x04 \x01(\v2\x18.phi.pi.v1.ModelSnapshotR\rexpectedModel\"{\n" +
+	"\x0eexpected_model\x18\x04 \x01(\v2\x18.phi.pi.v1.ModelSnapshotR\rexpectedModel\x12/\n" +
+	"\x13custom_instructions\x18\x05 \x01(\tR\x12customInstructions\x12+\n" +
+	"\x0fexpected_run_id\x18\x06 \x01(\x04H\x00R\rexpectedRunId\x88\x01\x01B\x12\n" +
+	"\x10_expected_run_id\"{\n" +
 	"\rCompactResult\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x123\n" +
@@ -4962,6 +4988,7 @@ func file_bridge_proto_init() {
 		(*PhiToPi_TerminalRefreshRequest)(nil),
 	}
 	file_bridge_proto_msgTypes[12].OneofWrappers = []any{}
+	file_bridge_proto_msgTypes[25].OneofWrappers = []any{}
 	file_bridge_proto_msgTypes[27].OneofWrappers = []any{}
 	file_bridge_proto_msgTypes[29].OneofWrappers = []any{}
 	file_bridge_proto_msgTypes[35].OneofWrappers = []any{}

@@ -77,7 +77,7 @@ func TestCompactSequenceSaturates(t *testing.T) {
 	s.compactSeq.Store(math.MaxUint64)
 	for i := 0; i < 2; i++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-		_, err := s.RequestCompact(ctx, proc, 1, l.pubRev)
+		_, err := s.RequestCompact(ctx, proc, 1, l.pubRev, "")
 		cancel()
 		var unavailable *CompactUnavailable
 		if !errors.As(err, &unavailable) {

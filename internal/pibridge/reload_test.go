@@ -416,7 +416,7 @@ func TestRequestReloadAdmissionRefusals(t *testing.T) {
 		go func() {
 			cctx, cstop := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cstop()
-			_, err := s.RequestCompact(cctx, proc, 1, rev)
+			_, err := s.RequestCompact(cctx, proc, 1, rev, "")
 			creq <- err
 		}()
 		_ = recvCompactRequest(t, stream)
@@ -447,7 +447,7 @@ func TestRequestReloadAdmissionRefusals(t *testing.T) {
 			t.Fatalf("self reason %v, want pending", err)
 		}
 		// The unresolved Reload also excludes a fresh Compact.
-		if _, err := s.RequestCompact(ctx, proc, 1, rev); compactRefusalReason(t, err) != "pending" {
+		if _, err := s.RequestCompact(ctx, proc, 1, rev, ""); compactRefusalReason(t, err) != "pending" {
 			t.Fatalf("compact cross reason %v, want pending", err)
 		}
 		sendReloadAck(t, stream, "pane-rpend", proc, 1, &pibridgepb.ReloadAck{
@@ -1082,7 +1082,7 @@ func TestReloadCapabilityNegotiatedIndependently(t *testing.T) {
 	rev, _ := s.PublicationRevision(proc)
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
-	if _, err := s.RequestCompact(ctx, proc, 1, rev); err == nil || !strings.Contains(err.Error(), "capability") {
+	if _, err := s.RequestCompact(ctx, proc, 1, rev, ""); err == nil || !strings.Contains(err.Error(), "capability") {
 		t.Fatalf("compact err %v, want capability miss", err)
 	}
 	done := make(chan ReloadResult, 1)

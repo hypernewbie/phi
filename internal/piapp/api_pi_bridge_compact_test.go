@@ -57,10 +57,54 @@ func dialCompactPane(t *testing.T, b *Bridge, pane string) (pibridgepb.Integrati
 	return stream, cancel, proc, strconv.FormatUint(rev, 10)
 }
 
+// dialCompactPaneV2 provisions a managed pane and opens an accepted stream
+// that negotiates pi.compact.v2 with the supplied run and readiness samples.
+func dialCompactPaneV2(t *testing.T, b *Bridge, pane string, state pibridgepb.LogicalState, runID uint64, ready *pibridgepb.CompactReadiness) (pibridgepb.Integration_ConnectClient, context.CancelFunc, string, string) {
+	t.Helper()
+	env, _, managed := b.Provision(pane, true)
+	if !managed {
+		t.Fatal("provision not managed")
+	}
+	b.Complete(&pty.PTYInstance{ID: pane})
+	proc := env[piBridgeEnvProcess]
+	stream, cancel := dialBridge(t, b, pane, proc, env[piBridgeEnvToken])
+	hello := &pibridgepb.PiToPhi{
+		PaneId: pane, ProcessId: proc, RuntimeGeneration: 1,
+		Payload: &pibridgepb.PiToPhi_Hello{Hello: &pibridgepb.Hello{
+			ProtocolVersion: 1, SessionId: "sess", RuntimeId: "rt",
+			Capabilities: []string{"pi.lifecycle.v1", "pi.context.v1", "pi.compact.v1", "pi.compact.v2"},
+			CurrentState: &pibridgepb.StateSnapshot{
+				State: state, SessionId: "sess", LeafId: "leaf",
+				Model:            &pibridgepb.ModelSnapshot{Provider: "p", Model: "m"},
+				CompactReadiness: ready,
+				ReloadReadiness:  &pibridgepb.ReloadReadiness{RunId: &runID, ContextRevision: u64ptr(0), Idle: false},
+			},
+		}},
+	}
+	if err := stream.Send(hello); err != nil {
+		cancel()
+		t.Fatalf("hello: %v", err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		cancel()
+		t.Fatalf("accepted: %v", err)
+	}
+	rev, ok := b.server.PublicationRevision(proc)
+	if !ok {
+		cancel()
+		t.Fatal("no publication revision")
+	}
+	return stream, cancel, proc, strconv.FormatUint(rev, 10)
+}
+
+func u64ptr(v uint64) *uint64 { return &v }
+
 type compactCanned struct {
 	id            string
 	session, leaf string
 	model         *pibridgepb.ModelSnapshot
+	instructions  string
+	runID         *uint64
 }
 
 // answerCompactOnce receives one Compact request, answers it with the
@@ -87,7 +131,7 @@ func answerCompactOnce(t *testing.T, stream pibridgepb.Integration_ConnectClient
 		if req == nil {
 			t.Fatalf("not a compact request: %v", r.msg.GetPayload())
 		}
-		got := compactCanned{id: req.GetRequestId(), session: req.GetExpectedSessionId(), leaf: req.GetExpectedLeafId(), model: req.GetExpectedModel()}
+		got := compactCanned{id: req.GetRequestId(), session: req.GetExpectedSessionId(), leaf: req.GetExpectedLeafId(), model: req.GetExpectedModel(), instructions: req.GetCustomInstructions(), runID: req.ExpectedRunId}
 		if err := stream.Send(&pibridgepb.PiToPhi{
 			PaneId: r.msg.GetPaneId(), ProcessId: r.msg.GetProcessId(), RuntimeGeneration: r.msg.GetRuntimeGeneration(),
 			Payload: &pibridgepb.PiToPhi_CompactResult{CompactResult: &pibridgepb.CompactResult{
@@ -219,19 +263,19 @@ func TestBridgeRequestPaneCompact(t *testing.T) {
 	defer stop()
 
 	var nilBridge *Bridge
-	if _, err := nilBridge.RequestPaneCompact(ctx, "pane-1", 1, 1); err == nil {
+	if _, err := nilBridge.RequestPaneCompact(ctx, "pane-1", 1, 1, ""); err == nil {
 		t.Fatal("nil bridge succeeded")
 	}
-	if _, err := b.RequestPaneCompact(ctx, "unknown", 1, 1); err == nil {
+	if _, err := b.RequestPaneCompact(ctx, "unknown", 1, 1, ""); err == nil {
 		t.Fatal("unknown pane succeeded")
 	}
 	b.Provision("pane-off", false)
-	if _, err := b.RequestPaneCompact(ctx, "pane-off", 1, 1); err == nil {
+	if _, err := b.RequestPaneCompact(ctx, "pane-off", 1, 1, ""); err == nil {
 		t.Fatal("unmanaged pane succeeded")
 	}
 	// A managed pane with no live peer fails without dispatch.
 	b.Provision("pane-np", true)
-	if _, err := b.RequestPaneCompact(ctx, "pane-np", 1, 1); err == nil {
+	if _, err := b.RequestPaneCompact(ctx, "pane-np", 1, 1, ""); err == nil {
 		t.Fatal("peerless pane succeeded")
 	}
 
@@ -245,7 +289,7 @@ func TestBridgeRequestPaneCompact(t *testing.T) {
 	}
 	done := make(chan outcome, 1)
 	go func() {
-		res, err := b.RequestPaneCompact(ctx, "pane-1", gen, revNum)
+		res, err := b.RequestPaneCompact(ctx, "pane-1", gen, revNum, "")
 		done <- outcome{res: res, err: err}
 	}()
 	got := answerCompactOnce(t, stream, pibridgepb.CompactOutcome_COMPACT_OUTCOME_COMPLETED, "")
@@ -562,6 +606,7 @@ func TestHandlePiBridgeCompactValidation(t *testing.T) {
 		{"empty-rev", `{"pane":"p","generation":"1","telemetry_revision":""}`},
 		{"plus", `{"pane":"p","generation":"+1","telemetry_revision":"1"}`},
 		{"oversize", fmt.Sprintf(`{"pane":%q,"generation":"1","telemetry_revision":"1"}`, strings.Repeat("p", 5000))},
+		{"oversize-instructions", fmt.Sprintf(`{"pane":"p","generation":"1","telemetry_revision":"1","custom_instructions":%q}`, strings.Repeat("x", 5000))},
 	}
 	for _, tc := range bodies {
 		rec := serveCompact(t, tc.body, nil)
@@ -591,6 +636,11 @@ func TestHandlePiBridgeCompactValidation(t *testing.T) {
 	rec = serveCompact(t, `{"pane":"unknown","generation":"18446744073709551615","telemetry_revision":"18446744073709551615"}`, nil)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("maxuint code %d, want 503 past decoding", rec.Code)
+	}
+	// The new v2 body field decodes before the broker fences the unknown pane.
+	rec = serveCompact(t, `{"pane":"unknown","generation":"1","telemetry_revision":"1","custom_instructions":"FOCUS_TEXT"}`, nil)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("v2 instructions code %d, want 503 past decoding", rec.Code)
 	}
 	// Bounded trailing whitespace passes decoding; the 4KiB limit
 	// is exact, including bare whitespace past the object.
@@ -724,5 +774,94 @@ func TestHandlePiBridgeCompactOrigin(t *testing.T) {
 	testAPI().HandlePiBridgeCompact(plainRec, plainReq)
 	if plainRec.Code != http.StatusForbidden {
 		t.Fatalf("plain https-origin code %d, want 403", plainRec.Code)
+	}
+}
+
+func TestHandlePiBridgeCompactV2ActiveRun(t *testing.T) {
+	b := startTestBridge(t)
+	if b == nil {
+		t.Fatal("bridge did not start")
+	}
+	defer b.Stop()
+	prev := testBridge
+	testBridge = b
+	t.Cleanup(func() { testBridge = prev })
+
+	runID := uint64(7)
+	stream, cancel, _, revStr := dialCompactPaneV2(t, b, "pane-v2", pibridgepb.LogicalState_LOGICAL_STATE_RUNNING, runID,
+		&pibridgepb.CompactReadiness{Idle: false, HasPendingMessages: true})
+	defer cancel()
+	body := fmt.Sprintf(`{"pane":"pane-v2","generation":"1","telemetry_revision":%q,"custom_instructions":"FOCUS_TEXT"}`, revStr)
+	req := httptest.NewRequest(http.MethodPost, "/api/pi-bridge/compact", strings.NewReader(body))
+	req.Host = "example.com"
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		testAPI().HandlePiBridgeCompact(rec, req)
+		close(done)
+	}()
+	got := answerCompactOnce(t, stream, pibridgepb.CompactOutcome_COMPACT_OUTCOME_COMPLETED, "")
+	if got.instructions != "FOCUS_TEXT" {
+		t.Fatalf("instructions %q, want FOCUS_TEXT", got.instructions)
+	}
+	if got.runID == nil || *got.runID != runID {
+		t.Fatalf("run id %v, want %d", got.runID, runID)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler hung")
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code %d body %s, want 200", rec.Code, rec.Body.String())
+	}
+	result := decodeCompactBody(t, rec)
+	if result["outcome"] != "completed" || result["request_id"] != got.id {
+		t.Fatalf("body %v", result)
+	}
+}
+
+func TestHandlePiBridgeCompactV1RejectsInstructions(t *testing.T) {
+	b := startTestBridge(t)
+	if b == nil {
+		t.Fatal("bridge did not start")
+	}
+	defer b.Stop()
+	prev := testBridge
+	testBridge = b
+	t.Cleanup(func() { testBridge = prev })
+
+	stream, cancel, _, revStr := dialCompactPane(t, b, "pane-v1")
+	defer cancel()
+	body := fmt.Sprintf(`{"pane":"pane-v1","generation":"1","telemetry_revision":%q,"custom_instructions":"FOCUS_TEXT"}`, revStr)
+	rec := serveCompact(t, body, nil)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("code %d body %s, want 503 before dispatch", rec.Code, rec.Body.String())
+	}
+	result := decodeCompactBody(t, rec)
+	if result["outcome"] != "rejected-before-start" {
+		t.Fatalf("body %v", result)
+	}
+	expectNoCompactDispatch(t, stream)
+}
+
+func expectNoCompactDispatch(t *testing.T, stream pibridgepb.Integration_ConnectClient) {
+	t.Helper()
+	type res struct {
+		msg *pibridgepb.PhiToPi
+		err error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		msg, err := stream.Recv()
+		ch <- res{msg: msg, err: err}
+	}()
+	select {
+	case r := <-ch:
+		if r.err == nil {
+			t.Fatalf("unexpected compact dispatch: %v", r.msg.GetPayload())
+		}
+	case <-time.After(200 * time.Millisecond):
 	}
 }

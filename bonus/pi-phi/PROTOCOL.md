@@ -78,6 +78,7 @@ Runtime identity binds `(generation, runtime_id, session_id)`:
 | `pi.thinking.v1`  | On-demand thinking-level reads and setting       |
 | `pi.context.v1`   | Context usage telemetry in snapshots             |
 | `pi.compact.v1`   | Native compaction on explicit user action        |
+| `pi.compact.v2`   | Manual compaction with instructions and active-run admission |
 | `pi.reload.v1`    | Native `/reload` dispatch from an interactive editor |
 | `pi.skills.v1`    | On-demand skill list and skill invocation        |
 | `pi.syncboard.v1` | Direct Pi tool for the owning Phi Syncboard      |
@@ -90,9 +91,10 @@ Runtime identity binds `(generation, runtime_id, session_id)`:
 Context, Compact, and Reload negotiate independently on every Hello
 from checked host availability: `pi.context.v1` needs `getContextUsage`;
 `pi.compact.v1` needs the `compact`/`isIdle`/`hasPendingMessages` trio;
-`pi.reload.v1` needs the checked interactive editor baseline plus
-`isIdle`/`hasPendingMessages`. Any may be absent without disabling
-lifecycle, models, or history.
+`pi.compact.v2` is a separate capability that additionally carries summary
+instructions and the expected logical run id; `pi.reload.v1` needs the checked
+interactive editor baseline plus `isIdle`/`hasPendingMessages`. Any may be
+absent without disabling lifecycle, models, or history.
 
 ## History reads
 
@@ -426,6 +428,18 @@ live peer, the negotiated capability, matching generation/publication
 stamps, and a snapshot showing an idle host with no queued messages,
 no active compaction, and no unresolved bridge work. Anything else
 is refused before start or unavailable, and the host is never invoked.
+
+`pi.compact.v2` is additive and keeps v1 unchanged. Its request carries
+`custom_instructions` (field 5, at most 4096 UTF-8 bytes; empty means no
+instructions) and `expected_run_id` (field 6, optional uint64; zero is valid
+before the first run). Nonempty instructions and the run fence require v2; a
+v1 peer never receives either. A missing run id, missing reload readiness, a
+run-id mismatch, stale session/leaf/model identity, active compaction, unresolved
+bridge work, or another owned operation is refused before ID allocation. V2
+allows an active conversation and queued input; v1 keeps the idle and queue
+guards. The browser button remains idle-only and sends no instructions. The
+bundled Pi extension still advertises and implements v1 only; v2 is a host-side
+Psi contract.
 
 The extension rechecks live identity, idleness, queued messages,
 and local compaction state immediately before invocation, and
