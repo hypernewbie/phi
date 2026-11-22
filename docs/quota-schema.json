@@ -1,0 +1,69 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Phi Quota Snapshot v1",
+    "description": "Generic quota snapshot rendered by the Phi quota overlay. See docs/quota-format.md.",
+    "type": "object",
+    "required": ["version", "sections"],
+    "properties": {
+        "version": {
+            "const": 1
+        },
+        "updated_at": {
+            "type": "string"
+        },
+        "sections": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["rows"],
+                "properties": {
+                    "id": {
+                        "type": "string"
+                    },
+                    "title": {
+                        "type": "string"
+                    },
+                    "rows": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["label"],
+                            "properties": {
+                                "label": {
+                                    "type": "string"
+                                },
+                                "remaining_percent": {
+                                    "type": "number"
+                                },
+                                "used_percent": {
+                                    "type": "number"
+                                },
+                                "used": {
+                                    "type": "number"
+                                },
+                                "total": {
+                                    "type": "number"
+                                },
+                                "unit": {
+                                    "type": "string"
+                                },
+                                "text": {
+                                    "type": "string"
+                                },
+                                "resets_at": {
+                                    "type": ["string", "number", "null"]
+                                },
+                                "note": {
+                                    "type": "string"
+                                },
+                                "low_below": {
+                                    "type": "number"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -4,6 +4,9 @@ All notable changes to phi are documented here. Newest versions first.
 
 ## Unreleased
 
+### Added
+- **Quota snapshot v1: a generic format any aggregator can emit** (`docs/quota-format.md`). The overlay no longer needs per-provider client code: backends declare labels, amounts, direction (`remaining_percent` vs `used_percent` vs `used`+`total`), and reset times, and Phi pretty-prints them. A runnable stdlib-only template lives at `examples/quota-aggregator.example.py` with JSON Schema at `docs/quota-schema.json`. Pre-v1 provider-dict snapshots keep rendering through a deprecated shim.
+
 ## v0.41.2 — 2026-11-18
 
 No user-facing changes since v0.41.1.

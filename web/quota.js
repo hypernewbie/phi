@@ -1,9 +1,14 @@
 // Model-quota overlay for Phi. Fetches a JSON quota snapshot from a
-// user-configured URL (default http://charon/api/all) and renders one
-// section per provider. Every renderer is defensive: missing shapes skip
-// their section, a throwing renderer becomes a section-level error, and
-// unrecognized top-level keys fall back to a raw-JSON details block so
-// new providers keep working without a client change.
+// user-configured URL and renders it generically.
+//
+// Snapshot v1 (docs/quota-format.md) is the contract: servers declare
+// labels, amounts, direction (remaining vs used), and reset times, and
+// the client pretty-prints them with no provider-specific code. New
+// backends are new sections — zero Phi changes.
+//
+// Pre-v1 provider-dict snapshots still render through the deprecated
+// per-provider shim below so old URLs keep working. New aggregators
+// MUST emit v1; the shim will be removed in a later release.
 //
 // The overlay reuses the standard modal classes (.modal-overlay,
 // .modal-content, .modal-header/body/footer), so all existing compact
@@ -50,11 +55,11 @@ function pctNumber(value) {
     const n = Number(value);
     return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : null;
 }
-function bar(percent) {
+function bar(percent, lowBelow = 10) {
     const pct = pctNumber(percent);
     if (pct === null)
         return '<span class="quota-val">—</span>';
-    const low = pct < 10 ? ' is-low' : '';
+    const low = pct < lowBelow ? ' is-low' : '';
     return (`<div class="quota-bar" role="img" aria-label="${pct}% remaining">` +
         `<div class="quota-fill${low}" style="width:${pct}%"></div></div>` +
         `<span class="quota-val">${pct}%</span>`);
@@ -95,6 +100,124 @@ function row(label, barHtml, note) {
 function money(n) {
     const v = Number(n);
     return Number.isFinite(v) ? `$${v.toFixed(2)}` : '—';
+}
+function isRecord(value) {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function isGenericSnapshot(data) {
+    return isRecord(data) && Array.isArray(data.sections);
+}
+function titleCaseId(id) {
+    const words = String(id ?? '')
+        .split(/[_.-]+/)
+        .filter(Boolean)
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1));
+    return words.length > 0 ? words.join(' ') : 'Quota';
+}
+function fmtReset(value) {
+    if (value === null || value === undefined || value === '')
+        return '';
+    if (typeof value === 'string') {
+        const t = Date.parse(value);
+        if (!Number.isFinite(t))
+            return '';
+        return fmtClock(t);
+    }
+    return fmtStamp(value);
+}
+const CURRENCY_UNITS = new Set([
+    'usd',
+    '$',
+    'eur',
+    '€',
+    'gbp',
+    '£',
+    'cny',
+    '¥',
+    'jpy',
+]);
+function fmtAmount(n, unit) {
+    const v = Number(n);
+    if (!Number.isFinite(v))
+        return '—';
+    const u = String(unit ?? '').trim();
+    if (u !== '' && CURRENCY_UNITS.has(u.toLowerCase()))
+        return money(v);
+    const rounded = Math.round(v * 100) / 100;
+    return u === '' ? String(rounded) : `${rounded} ${u}`;
+}
+function lowThreshold(row) {
+    const t = Number(row.low_below);
+    return Number.isFinite(t) && t >= 0 && t <= 100 ? t : 10;
+}
+function renderGenericRow(raw) {
+    if (!isRecord(raw))
+        return '';
+    const rowData = raw;
+    const label = String(rowData.label ?? '').trim();
+    if (label === '')
+        return '';
+    const when = fmtReset(rowData.resets_at);
+    const note = typeof rowData.note === 'string' ? rowData.note.trim() : '';
+    const suffixBits = [];
+    if (when !== '')
+        suffixBits.push(`resets ${when}`);
+    if (note !== '')
+        suffixBits.push(note);
+    const suffix = suffixBits.join(' · ');
+    const low = lowThreshold(rowData);
+    // Precedence is documented in docs/quota-format.md: an explicit
+    // remaining percent wins, then used percent, then used/total, then
+    // text. Recognized envelope with no usable value skips the row,
+    // never the section.
+    const remaining = Number(rowData.remaining_percent);
+    if (Number.isFinite(remaining)) {
+        return row(label, bar(Math.max(0, Math.min(100, remaining)), low), suffix);
+    }
+    const usedPct = Number(rowData.used_percent);
+    if (Number.isFinite(usedPct)) {
+        return row(label, bar(Math.max(0, Math.min(100, 100 - usedPct)), low), suffix);
+    }
+    const used = Number(rowData.used);
+    const total = Number(rowData.total);
+    if (Number.isFinite(used) && Number.isFinite(total)) {
+        const pct = total > 0
+            ? Math.max(0, Math.min(100, (1 - used / total) * 100))
+            : used > 0
+                ? 0
+                : 100;
+        const amounts = `${fmtAmount(used, rowData.unit)} of ${fmtAmount(total, rowData.unit)}`;
+        return row(label, bar(pct, low), suffix === '' ? amounts : `${amounts} · ${suffix}`);
+    }
+    if (typeof rowData.text === 'string') {
+        return (`<div class="quota-line"><span>${escapeHtml(label)}</span>` +
+            `<span class="quota-note">${escapeHtml(rowData.text)}${suffix === '' ? '' : ` · ${escapeHtml(suffix)}`}</span></div>`);
+    }
+    return '';
+}
+function renderGenericSection(raw) {
+    if (!isRecord(raw))
+        return '';
+    const sectionData = raw;
+    const rawTitle = sectionData.title;
+    const title = typeof rawTitle === 'string' && rawTitle.trim() !== ''
+        ? rawTitle.trim()
+        : titleCaseId(sectionData.id);
+    const rows = Array.isArray(sectionData.rows) ? sectionData.rows : [];
+    const html = rows
+        .map((entry) => {
+        try {
+            return renderGenericRow(entry);
+        }
+        catch {
+            return '';
+        }
+    })
+        .filter((chunk) => chunk !== '')
+        .join('');
+    if (html === '')
+        return '';
+    return section(title, html);
 }
 const RENDERERS = {
     quota(value) {
@@ -200,12 +323,42 @@ function renderUnknown(key, value) {
     return (`<details class="quota-raw"><summary>${escapeHtml(key)} (unrecognized format)</summary>` +
         `<pre class="quota-pre">${escapeHtml(JSON.stringify(value, null, 2) ?? '')}</pre></details>`);
 }
-// Renders every top-level provider of a quota snapshot into bodyEl.
-// Pure DOM output — exported for tests.
+// Renders a quota snapshot into bodyEl. Pure DOM output — exported for
+// tests. Snapshots with a top-level `sections` array take the generic v1
+// path (docs/quota-format.md); anything else falls through to the
+// deprecated pre-v1 provider-dict shim below.
 export function renderQuotaInto(bodyEl, data) {
     if (!data || typeof data !== 'object') {
         bodyEl.innerHTML =
             '<div class="quota-error">Empty response from the quota source.</div>';
+        return;
+    }
+    if (isGenericSnapshot(data)) {
+        const parts = [];
+        for (const raw of data.sections) {
+            try {
+                const html = renderGenericSection(raw);
+                if (html)
+                    parts.push(html);
+            }
+            catch {
+                // Defensive: a hostile section must not blank the overlay.
+            }
+        }
+        bodyEl.innerHTML =
+            parts.length > 0
+                ? parts.join('')
+                : '<div class="quota-error">No usable quota sections in the response.</div>';
+        return;
+    }
+    // ── Deprecated pre-v1 shim ─────────────────────────────────────────
+    // Provider-keyed dict. Kept so old aggregator URLs keep working;
+    // new aggregators MUST emit snapshot v1 instead. A top-level array is
+    // neither v1 nor a provider dict, so it reports no sections instead of
+    // falling through to per-index raw dumps.
+    if (Array.isArray(data)) {
+        bodyEl.innerHTML =
+            '<div class="quota-error">No usable quota sections in the response.</div>';
         return;
     }
     const snapshot = data;
