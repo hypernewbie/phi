@@ -401,7 +401,11 @@ for (const failure of ['http', 'offline', 'lost'] as const) {
                     .evaluate((el) => el.getBoundingClientRect().right),
             )
             .toBeLessThanOrEqual(1);
-        await expect(p.locator('.toast-error')).toBeVisible();
+        // The failure is recorded, not painted: compact shells never
+        // show popups, so the error toast stays attached but hidden while
+        // the drawer and badge carry the notification.
+        await expect(p.locator('.toast-error')).toHaveCount(1);
+        await expect(p.locator('.toast-error')).toBeHidden();
         await expect(p.locator('#tabs-container .tab')).toHaveCount(1);
         expect(posts).toBe(1);
         if (failure === 'lost') {

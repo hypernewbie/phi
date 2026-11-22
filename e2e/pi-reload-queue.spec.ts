@@ -312,18 +312,19 @@ test('queued reload waits for its turn, then cancels or flushes', async ({
         const mobileMenu = mobilePage.locator('#quick-commands-dropup');
         await expect(mobileMenu).toContainText('Built-in Commands');
         await mobileMenu.getByRole('button', { name: '/reload' }).tap();
-        await expect(
-            mobilePage.locator('.toast', {
-                hasText: 'Reload queued — runs when Pi is idle',
-            }),
-        ).toBeVisible({ timeout: 15_000 });
+        // Compact shells record queue receipts without painting them.
+        const mobileQueuedToast = mobilePage.locator('.toast', {
+            hasText: 'Reload queued — runs when Pi is idle',
+        });
+        await expect(mobileQueuedToast).toHaveCount(1, { timeout: 15_000 });
+        await expect(mobileQueuedToast).toBeHidden();
         await mobilePage.getByRole('button', { name: 'Cmds ▾' }).tap();
         await mobileMenu.getByRole('button', { name: '/reload' }).tap();
-        await expect(
-            mobilePage.locator('.toast', {
-                hasText: 'Queued reload cancelled',
-            }),
-        ).toBeVisible({ timeout: 15_000 });
+        const mobileCancelledToast = mobilePage.locator('.toast', {
+            hasText: 'Queued reload cancelled',
+        });
+        await expect(mobileCancelledToast).toHaveCount(1, { timeout: 15_000 });
+        await expect(mobileCancelledToast).toBeHidden();
         stub.release();
         await expect
             .poll(() => paneBridgeReload(request, serverUrl, mobilePane), {

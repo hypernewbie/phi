@@ -434,12 +434,22 @@ for (const mobile of [false, true]) {
                 });
                 if (mobile) await reload.tap();
                 else await reload.click();
-                await expect(
-                    page.getByText(
-                        'History could not be recovered; showing live output only.',
-                        { exact: true },
-                    ),
-                ).toBeVisible({ timeout: 30_000 });
+                // The recovery notice is a toast: on mobile it is recorded
+                // (drawer and badge live) but never painted.
+                const recoveryNotice = page.getByText(
+                    'History could not be recovered; showing live output only.',
+                    { exact: true },
+                );
+                if (mobile) {
+                    await expect(recoveryNotice).toHaveCount(1, {
+                        timeout: 30_000,
+                    });
+                    await expect(recoveryNotice).toBeHidden();
+                } else {
+                    await expect(recoveryNotice).toBeVisible({
+                        timeout: 30_000,
+                    });
+                }
                 expect(await paneBody(page, pane)).not.toContain(
                     'RECOVERED-SCREEN',
                 );

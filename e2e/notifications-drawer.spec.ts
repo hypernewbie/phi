@@ -254,13 +254,14 @@ test('M1 notifications drawer caps compact popups and dismisses locally', async 
             const visiblePopupMessages = page.locator(
                 '#toast-container > .toast:visible .toast-message',
             );
+            // Compact shells never paint popups: the drawer and badge
+            // carry notifications there, so zero paint while all five
+            // entries still land in history.
             await expect(visiblePopupMessages).toHaveCount(
-                view.compact ? 3 : 5,
+                view.compact ? 0 : 5,
             );
             expect(await visiblePopupMessages.allTextContents()).toEqual(
-                view.compact
-                    ? ['N3', 'N4', 'N5']
-                    : ['N1', 'N2', 'N3', 'N4', 'N5'],
+                view.compact ? [] : ['N1', 'N2', 'N3', 'N4', 'N5'],
             );
             expect(
                 await page.locator('#toast-container > .toast').count(),
@@ -628,9 +629,19 @@ test('M1 notifications drawer caps compact popups and dismisses locally', async 
             await expect(
                 page.locator('#toast-container .toast-message'),
             ).toHaveText('After clear');
-            await expect(
-                page.locator('#toast-container > .toast:visible'),
-            ).toHaveCount(1);
+            // Compact shells record the post-clear toast without painting it.
+            if (view.compact) {
+                await expect(
+                    page.locator('#toast-container > .toast'),
+                ).toHaveCount(1);
+                await expect(
+                    page.locator('#toast-container > .toast'),
+                ).toBeHidden();
+            } else {
+                await expect(
+                    page.locator('#toast-container > .toast:visible'),
+                ).toHaveCount(1);
+            }
 
             expect(pageErrors, `${view.name} page errors`).toEqual([]);
             // startPhi builds a source binary, which has no release-only updateChecker.
@@ -883,7 +894,9 @@ test('M2 real bridge settlements group distinct ready panes and open the existin
                 isMobile: true,
                 hasTouch: true,
                 compact: true,
-                visible: ['M2 prior 2', 'M2 prior 3', '2 tabs ready'],
+                // Compact shells never paint popups; the ready group is
+                // recorded (nodes attached, drawer live) but invisible.
+                visible: [],
             },
         ] as const;
 
@@ -987,11 +1000,21 @@ test('M2 real bridge settlements group distinct ready panes and open the existin
 
             await paneInput(request, phi.url, piA.pane_id, 'start');
             await paneInput(request, phi.url, piA.pane_id, 'settle');
-            await expect(
-                page.locator('#toast-container .toast-message').filter({
+            // Compact shells record the ready toast without painting it:
+            // assert the node lands, then that it stays hidden.
+            const readyToast = page
+                .locator('#toast-container .toast-message')
+                .filter({
                     hasText: 'Session "E2E Pi A" is waiting at a prompt.',
-                }),
-            ).toBeVisible({ timeout: 15_000 });
+                });
+            if (layout.compact) {
+                await expect(readyToast).toHaveCount(1, {
+                    timeout: 15_000,
+                });
+                await expect(readyToast).toBeHidden();
+            } else {
+                await expect(readyToast).toBeVisible({ timeout: 15_000 });
+            }
             await paneInput(request, phi.url, piB.pane_id, 'start');
             await paneInput(request, phi.url, piB.pane_id, 'settle');
             await expect(
@@ -1328,11 +1351,19 @@ test('M3a restores bounded notification previews and keeps local dismissal usabl
                     duration: 0,
                 });
             });
-            await expect(
-                page.locator('#toast-container .toast-message').filter({
+            // The memory-only entry still lands as a node on compact
+            // shells; only the popup stays unpainted.
+            const m3aToast = page
+                .locator('#toast-container .toast-message')
+                .filter({
                     hasText: 'M3a memory-only after write failure',
-                }),
-            ).toBeVisible();
+                });
+            if (layout.compact) {
+                await expect(m3aToast).toHaveCount(1);
+                await expect(m3aToast).toBeHidden();
+            } else {
+                await expect(m3aToast).toBeVisible();
+            }
             expect(
                 await page.evaluate(
                     () =>
@@ -2447,12 +2478,10 @@ test('M3c injected Electron errors share the browser notification history and co
                 reducedMotion: 'reduce',
                 lowPower: true,
                 theme: 'white',
-                visibleCount: 3,
-                visibleMessages: [
-                    'M3c ordinary two',
-                    '2 tabs ready',
-                    errorMessage,
-                ],
+                // Compact shells never paint popups; history still
+                // records all four entries (asserted below).
+                visibleCount: 0,
+                visibleMessages: [],
             },
         ] as const;
 

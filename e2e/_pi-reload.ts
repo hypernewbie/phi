@@ -240,9 +240,24 @@ export async function expectNewToast(
         for (const toast of toasts) toast.setAttribute('data-toast-seen', '');
     });
     await click();
-    await expect(
-        page.locator('.toast:not([data-toast-seen])', { hasText: text }),
-    ).toBeVisible({ timeout: 60_000 });
+    const fresh = page.locator('.toast:not([data-toast-seen])', {
+        hasText: text,
+    });
+    // Compact shells never paint popups: the notification is still
+    // recorded (node attached, drawer and badge live) but the container
+    // stays hidden, so assert attachment instead of visibility there.
+    const compact = await page.evaluate(
+        () =>
+            window.matchMedia(
+                '(max-width: 768px), (max-height: 500px) and (orientation: landscape) and (pointer: coarse)',
+            ).matches,
+    );
+    if (compact) {
+        await expect(fresh).toHaveCount(1, { timeout: 60_000 });
+        await expect(fresh).toBeHidden();
+        return;
+    }
+    await expect(fresh).toBeVisible({ timeout: 60_000 });
 }
 
 // Press Reload and require the "requested" receipt, tolerating the one

@@ -356,11 +356,12 @@ test('offline reload waits for reconnect and restores without replay', async ({
         const mobileMenu = mobilePage.locator('#quick-commands-dropup');
         await expect(mobileMenu).toContainText('Built-in Commands');
         await mobileMenu.getByRole('button', { name: '/reload' }).tap();
-        await expect(
-            mobilePage.locator('.toast', {
-                hasText: 'Reload queued — waiting for connection',
-            }),
-        ).toBeVisible({ timeout: 15_000 });
+        // Compact shells record the queue receipt without painting it.
+        const mobileQueued = mobilePage.locator('.toast', {
+            hasText: 'Reload queued — waiting for connection',
+        });
+        await expect(mobileQueued).toHaveCount(1, { timeout: 15_000 });
+        await expect(mobileQueued).toBeHidden();
         expect(mobileReloads.calls).toHaveLength(0);
         expect(countStarts(markerFile)).toBe(startsBeforeMobile + 1);
         await expect(mobilePage.locator('#input-textarea')).toHaveValue(

@@ -137,11 +137,16 @@ test('Reload restores status and handles focus refusal and delayed receipts', as
                 );
                 await activate(reload);
                 expect((await refusal).status()).toBe(409);
-                await expect(
-                    page.locator('.toast', {
-                        hasText: 'Reload refused: unavailable',
-                    }),
-                ).toBeVisible();
+                // Compact shells record the refusal without painting it.
+                const refusedToast = page.locator('.toast', {
+                    hasText: 'Reload refused: unavailable',
+                });
+                if (mobile) {
+                    await expect(refusedToast).toHaveCount(1);
+                    await expect(refusedToast).toBeHidden();
+                } else {
+                    await expect(refusedToast).toBeVisible();
+                }
                 expect(
                     await paneRecording(request, phi.url, pane),
                 ).not.toContain('native command entered: /reload');

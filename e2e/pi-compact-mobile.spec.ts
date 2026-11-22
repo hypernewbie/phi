@@ -225,9 +225,13 @@ test('native mobile compact: slash entry, keyboard, pending, preserved draft', a
         await page.keyboard.press('Escape');
 
         stub.release();
-        await expect(
-            page.locator('.toast', { hasText: 'Compaction complete' }),
-        ).toBeVisible({ timeout: 60_000 });
+        // Compact shells record completion without painting the popup;
+        // the stub count, session entries, and meter below prove the op.
+        const compactDone = page.locator('.toast', {
+            hasText: 'Compaction complete',
+        });
+        await expect(compactDone).toHaveCount(1, { timeout: 60_000 });
+        await expect(compactDone).toBeHidden();
         expect(stub.count()).toBe(1);
         expect(compactionEntries(sessionFile)).toBe(1);
         await expect(meter).toHaveText('— / 8.2K', { timeout: 15_000 });
