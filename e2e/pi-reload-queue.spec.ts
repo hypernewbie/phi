@@ -373,11 +373,12 @@ test('queued reload waits for its turn, then cancels or flushes', async ({
         );
         await mobilePage.keyboard.press('Escape');
         stub.release();
-        await expect(
-            mobilePage.locator('.toast', {
-                hasText: 'Reload requested — check Pi',
-            }),
-        ).toBeVisible({ timeout: 60_000 });
+        // Compact shells record the dispatch receipt without painting it.
+        const mobileRequested = mobilePage.locator('.toast', {
+            hasText: 'Reload requested — check Pi',
+        });
+        await expect(mobileRequested).toHaveCount(1, { timeout: 60_000 });
+        await expect(mobileRequested).toBeHidden();
         await expect
             .poll(() => paneBridgeReload(request, serverUrl, mobilePane), {
                 timeout: 30_000,

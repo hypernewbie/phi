@@ -393,11 +393,14 @@ test('offline reload waits for reconnect and restores without replay', async ({
                 status: 202,
                 body: { outcome: 'dispatched' },
             });
-            await expect(
-                mobilePage.locator('.toast', {
-                    hasText: 'Reload requested — check Pi',
-                }),
-            ).toBeVisible({ timeout: 60_000 });
+            // Compact shells record the dispatch receipt without painting it.
+            const mobileRequested = mobilePage.locator('.toast', {
+                hasText: 'Reload requested — check Pi',
+            });
+            await expect(mobileRequested).toHaveCount(1, {
+                timeout: 60_000,
+            });
+            await expect(mobileRequested).toBeHidden();
             await expect
                 .poll(() => paneBridgeReload(request, serverUrl, mobilePane), {
                     timeout: 30_000,
@@ -420,11 +423,14 @@ test('offline reload waits for reconnect and restores without replay', async ({
                 status: 504,
                 body: { outcome: 'unknown' },
             });
-            await expect(
-                mobilePage.locator('.toast', {
-                    hasText: 'Reload unconfirmed — check Pi. Not retried.',
-                }),
-            ).toBeVisible({ timeout: 15_000 });
+            // Compact shells record the unconfirmed receipt without painting it.
+            const mobileUnconfirmed = mobilePage.locator('.toast', {
+                hasText: 'Reload unconfirmed — check Pi. Not retried.',
+            });
+            await expect(mobileUnconfirmed).toHaveCount(1, {
+                timeout: 15_000,
+            });
+            await expect(mobileUnconfirmed).toBeHidden();
             await mobilePage.reload();
             await expect(mobilePage.locator(`#term-${mobilePane}`)).toBeVisible(
                 { timeout: 30_000 },
