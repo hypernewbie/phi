@@ -235,6 +235,20 @@ describe('COMPACT_VIEWPORT_QUERY', () => {
     });
 });
 
+describe('style.css compact toasts', () => {
+    it('never paints toasts on compact shells — drawer and badge only', () => {
+        // Transient toast popups have no room to fit in compact mode,
+        // so the compact prelude suppresses the container outright.
+        // History, deadlines, live-region announcements, and the
+        // trigger badge all keep working: only the popup is gone.
+        const squash = (s) => s.replace(/\s+/g, ' ');
+        expect(squash(CSS)).toContain(
+            '@media (max-width: 768px), (max-height: 500px) and (orientation: landscape) and (pointer: coarse) ' +
+                '{ .toast-container { display: none; } }',
+        );
+    });
+});
+
 // ── CSS drift guards ─────────────────────────────────────────────────────
 
 describe('style.css compact blocks', () => {

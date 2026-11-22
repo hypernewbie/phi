@@ -7439,12 +7439,14 @@ html[data-phi-config-page] .settings-modal {
     color: var(--text-primary);
 }
 
+/* Compact shells never show transient toasts: the overlay has no room
+to fit, so notifications live in the drawer and trigger badge only.
+History, deadlines, announcements, and actions all keep working —
+only the popup is suppressed. */
 @media (max-width: 768px),
     (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
     .toast-container {
-        top: calc(
-            env(safe-area-inset-top, 0px) + var(--app-header-height)
-        ) !important;
+        display: none;
     }
 }
 
