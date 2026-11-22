@@ -3,7 +3,10 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { configToToml, startPhi, type PhiServer } from './_server.js';
-import { isCancelledWorktreeRead } from './_session-requests.js';
+import {
+    isCancelledMarkdownListRead,
+    isCancelledWorktreeRead,
+} from './_session-requests.js';
 
 let phi: PhiServer | null = null;
 let ownership: {
@@ -25,19 +28,23 @@ type FailedRequest = {
     url: string;
     error: string;
     cancelledWorktreeRead?: boolean;
+    cancelledMarkdownListRead?: boolean;
 };
 
-// Context changes can abort obsolete Git metadata and worktree-dirty reads.
-// The file list is a metadata read with the same lifecycle.
+// Context changes cancel obsolete Git metadata and markdown listings.
 function unexpectedFailedRequests(requests: FailedRequest[]): FailedRequest[] {
+    if (!phi) return requests;
+    const origin = new URL(phi.url).origin;
     return requests.filter((request) => {
         const url = new URL(request.url);
         return !(
             request.method === 'GET' &&
+            url.origin === origin &&
             [
                 '/api/git/info',
                 '/api/git/status-files',
                 '/api/git/worktree-dirty',
+                '/api/markdown/files',
             ].includes(url.pathname) &&
             request.error === 'net::ERR_ABORTED'
         );
@@ -689,6 +696,10 @@ async function exerciseNetworkSafety(
             url: request.url(),
             error: request.failure()?.errorText || '',
             cancelledWorktreeRead: isCancelledWorktreeRead(request, origin),
+            cancelledMarkdownListRead: isCancelledMarkdownListRead(
+                request,
+                origin,
+            ),
         });
     });
     page.on('request', (request) => {
@@ -793,7 +804,8 @@ async function exerciseNetworkSafety(
     expect(failedPaths).toContain('/api/git/raw-diff');
     expect(failedPaths).toContain('/api/git/info');
     const unexpectedFailures = failedRequests.filter((request) => {
-        if (request.cancelledWorktreeRead) return false;
+        if (request.cancelledWorktreeRead || request.cancelledMarkdownListRead)
+            return false;
         const url = new URL(request.url);
         if (request.method !== 'GET') return true;
         if (url.pathname === '/api/git/raw-diff')

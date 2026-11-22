@@ -20,6 +20,7 @@ import {
 import { startPhi, type PhiServer } from './_server.js';
 import {
     isCancelledGitRead,
+    isCancelledMarkdownListRead,
     isCancelledSessionListRead,
     isCancelledWorktreeRead,
 } from './_session-requests.js';
@@ -872,6 +873,8 @@ async function installDiagnostics(
             classification = 'cancelled-worktree-read';
         else if (isCancelledGitRead(request, origin))
             classification = 'cancelled-git-info-read';
+        else if (isCancelledMarkdownListRead(request, origin))
+            classification = 'cancelled-markdown-list-read';
         entries.push({
             phase: metadata?.phase ?? phase,
             kind: 'request-failed',

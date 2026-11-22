@@ -10998,6 +10998,7 @@ export class TabManager {
                     newTab.workspace;
                 this.app.sessionsManager.activeWorkspace = newTab.workspace;
                 this.app.sessionsManager.activeCWD = newTab.cwd || '';
+                this.app.markdownManager?.syncContext?.();
                 this.app.sessionsManager.updateWorkspaceSelectWidth();
                 const store = (this.app as any)?.getActiveStore?.();
                 const url = `/api/git/worktrees?cwd=${encodeURIComponent(newTab.workspace)}`;
@@ -11022,6 +11023,7 @@ export class TabManager {
                 }
             } else if (coderChanged) {
                 this.app.sessionsManager.activeCWD = newTab.cwd || '';
+                this.app.markdownManager?.syncContext?.();
                 if (newTab.cwd) {
                     this.app.sessionsManager.highlightActiveWorktree?.(
                         newTab.cwd,
@@ -11031,6 +11033,7 @@ export class TabManager {
                 }
             } else if (cwdChanged) {
                 this.app.sessionsManager.activeCWD = newTab.cwd || '';
+                this.app.markdownManager?.syncContext?.();
                 if (newTab.cwd) {
                     this.app.sessionsManager.highlightActiveWorktree?.(
                         newTab.cwd,
@@ -11047,6 +11050,7 @@ export class TabManager {
             this.app.sessionsManager.workspaceSelect.value = newTab.workspace;
             this.app.sessionsManager.activeWorkspace = newTab.workspace;
             this.app.sessionsManager.activeCWD = newTab.cwd || '';
+            this.app.markdownManager?.syncContext?.();
             this.app.sessionsManager.updateWorkspaceSelectWidth();
 
             this.app.sessionsManager
@@ -11075,6 +11079,7 @@ export class TabManager {
             // Workspace is the same, but coder changed. Rebuild worktrees for
             // the new coder.
             this.app.sessionsManager.activeCWD = newTab.cwd || '';
+            this.app.markdownManager?.syncContext?.();
             this.app.sessionsManager
                 .loadWorktrees(newTab.cwd || null)
                 .then(() => {
@@ -11100,6 +11105,7 @@ export class TabManager {
         } else if (cwdChanged) {
             // Workspace and coder are the same, only CWD changed.
             this.app.sessionsManager.activeCWD = newTab.cwd || '';
+            this.app.markdownManager?.syncContext?.();
             if (newTab.cwd) {
                 this.app.sessionsManager.highlightActiveWorktree(newTab.cwd);
             } else {
@@ -17386,6 +17392,7 @@ export class TabManager {
                     this.updateDocumentTitle();
                     if (overlay) overlay.remove();
                     this.updateDisconnectBanner();
+                    this.app.markdownManager?.onExternalChange?.({});
                     if (
                         this._canReconnectTab(tabInfo) &&
                         tabInfo === this.getActiveTab()

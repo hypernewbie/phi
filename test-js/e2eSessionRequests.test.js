@@ -192,6 +192,43 @@ describe('expected Git read cancellation diagnostics', () => {
     });
 });
 
+describe('markdown listing cancellation boundaries', () => {
+    it('recognizes only an aborted same-origin listing GET with a CWD', () => {
+        expect(
+            isCancelledBackgroundRead(
+                request(`${origin}/api/markdown/files?cwd=%2Fwork`),
+                origin,
+            ),
+        ).toBe(true);
+    });
+
+    it.each([
+        [`${origin}/api/markdown/files`, 'POST', 'net::ERR_ABORTED'],
+        [`${origin}/api/markdown/files`, 'PUT', 'net::ERR_ABORTED'],
+        [`${origin}/api/markdown/files`, 'DELETE', 'net::ERR_ABORTED'],
+        [`${origin}/api/markdown/files`, 'GET', 'net::ERR_FAILED'],
+        [`${origin}/api/markdown/files`, 'GET', 'net::ERR_CONNECTION_RESET'],
+        [`${origin}/api/markdown/files`, 'GET', 'net::ERR_TIMED_OUT'],
+        [
+            `${origin}/api/markdown/files`,
+            'GET',
+            'net::ERR_INTERNET_DISCONNECTED',
+        ],
+        [`${origin}/api/markdown/files`, 'GET', null],
+        [`${origin}/api/markdown/files/extra`, 'GET', 'net::ERR_ABORTED'],
+        [`${origin}/api/markdown/file?path=a.md`, 'GET', 'net::ERR_ABORTED'],
+        [
+            'http://127.0.0.1:17778/api/markdown/files',
+            'GET',
+            'net::ERR_ABORTED',
+        ],
+    ])('does not exempt %s %s %s', (url, method, errorText) => {
+        expect(
+            isCancelledBackgroundRead(request(url, method, errorText), origin),
+        ).toBe(false);
+    });
+});
+
 describe('expected background cancellation aggregate', () => {
     // Sidebar ownership changes supersede these reads on purpose. The
     // aggregate is what specs use when they assert "no unexpected failed
@@ -203,6 +240,7 @@ describe('expected background cancellation aggregate', () => {
         '/api/sessions',
         '/api/git/info',
         '/api/git/status-files',
+        '/api/markdown/files',
     ])('exempts a deliberate same-origin abort of %s', (path) => {
         expect(
             isCancelledBackgroundRead(request(`${origin}${path}`), origin),

@@ -9,10 +9,8 @@ import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { configToToml, startPhi } from './_server.js';
 import {
-    isCancelledGitRead,
-    isCancelledSessionListRead,
+    isCancelledBackgroundRead,
     isCancelledTerminalReplay,
-    isCancelledWorktreeRead,
 } from './_session-requests.js';
 
 // The composer presets row is one line of buttons that never squeezes a
@@ -75,9 +73,7 @@ async function watchPage(page: Page, serverOrigin: string) {
     page.on('pageerror', (error) => pageErrors.push(error.message));
     page.on('requestfailed', (request) => {
         if (
-            isCancelledGitRead(request, serverOrigin) ||
-            isCancelledWorktreeRead(request, serverOrigin) ||
-            isCancelledSessionListRead(request, serverOrigin) ||
+            isCancelledBackgroundRead(request, serverOrigin) ||
             isCancelledTerminalReplay(request, serverOrigin)
         )
             return;
