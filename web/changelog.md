@@ -7,6 +7,9 @@ All notable changes to phi are documented here. Newest versions first.
 ### Added
 - **Quota snapshot v1: a generic format any aggregator can emit** (`docs/quota-format.md`). The overlay no longer needs per-provider client code: backends declare labels, amounts, direction (`remaining_percent` vs `used_percent` vs `used`+`total`), and reset times, and Phi pretty-prints them. A runnable stdlib-only template lives at `examples/quota-aggregator.example.py` with JSON Schema at `docs/quota-schema.json`. Pre-v1 provider-dict snapshots keep rendering through a deprecated shim.
 
+### Fixed
+- **The desktop bottom row clears an auto-hiding Dock on macOS** (`f9c747e8`). With the Dock set to auto-hide, the composer and the rail's add button sat against the window's bottom edge, so pointer travel toward them grazed the Dock's trigger strip and the Dock slid over the row mid-click. The macOS desktop now injects a fixed 24px blank trim under the app column (padding, never a resize: the page keeps its viewport and the terminal grid keeps its rows). The trim spans the body views — embedded shell and legacy servers, single- and multi-tab — and the rail, re-arms after every navigation and reload, and is static layout that low power mode cannot affect. The stylesheet is author-origin (the page's `* { padding: 0 }` reset would beat a user-origin sheet) and scoped to the desktop-hosted page marker, so the shipped web bundle never contains it and a browser never matches it; other desktop platforms get no trim.
+
 ## v0.41.2 — 2026-11-18
 
 No user-facing changes since v0.41.1.

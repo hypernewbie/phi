@@ -129,6 +129,7 @@ import {
   switchToScript,
 } from './injected.js';
 import type { FileAction, Dividers } from './injected.js';
+import { installDockSafeArea } from './dockSafeArea.js';
 import { installFullscreenToggle } from './fullscreen.js';
 import { DesktopHooksManager, type DesktopHookState } from './hooks.js';
 import { installReloadShortcut } from './reload.js';
@@ -4552,6 +4553,11 @@ export class DesktopHost {
         railWidth: RAIL_WIDTH,
         getContentZoomPercent: () => this.getContentZoomPercent(),
         getLowPowerMode: () => this.controller?.getLowPowerMode() ?? false,
+        // macOS-only Dock safe-area trim on every body view (embedded
+        // shell + legacy servers, single- and multi-tab): the composer
+        // lifts off the window's bottom edge so an auto-hiding Dock
+        // cannot steal the pointer from the bottom row.
+        dockSafeArea: process.platform === 'darwin',
         onZoomAction: (action) => this.requestContentZoom(action),
         onFullscreenToggle: (next) => this.notifyFullscreen(next),
         log: (msg) => console.log(`phi-desktop: views: ${msg}`),
@@ -4680,6 +4686,9 @@ export class DesktopHost {
       this.railView = rail;
       this.trustedSessionSenders.add(rail.webContents);
       win.contentView.addChildView(rail);
+      // Same macOS trim for the rail's own bottom row (the add button):
+      // the safe area spans the full window bottom, body views + rail.
+      if (process.platform === 'darwin') installDockSafeArea(rail.webContents);
       installZoomShortcuts(rail.webContents, (action) =>
         this.requestContentZoom(action),
       );

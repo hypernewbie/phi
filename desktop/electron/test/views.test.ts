@@ -51,6 +51,7 @@ interface RecordingView {
   reloadIgnoringCacheCalls: number;
   executeJavaScriptCalls: string[];
   executeJavaScriptResult?: any;
+  insertCSSCalls: Array<{ css: string; cssOrigin?: string }>;
 }
 
 function makeFakeView(): RecordingView {
@@ -64,6 +65,7 @@ function makeFakeView(): RecordingView {
   const zoomModes: string[] = [];
   const zoomFactors: number[] = [];
   const executeJavaScriptCalls: string[] = [];
+  const insertCSSCalls: RecordingView['insertCSSCalls'] = [];
   const webContentsDestroyed = false;
   const rec: RecordingView = {
     view: {
@@ -99,6 +101,10 @@ function makeFakeView(): RecordingView {
           rec.executeJavaScriptCalls.push(code);
           return Promise.resolve(rec.executeJavaScriptResult ?? true);
         },
+        insertCSS: (css: string, options?: { cssOrigin?: string }) => {
+          insertCSSCalls.push({ css, cssOrigin: options?.cssOrigin });
+          return Promise.resolve('1');
+        },
         setZoomMode: (mode: string) => {
           zoomModes.push(mode);
         },
@@ -123,6 +129,7 @@ function makeFakeView(): RecordingView {
     reloadCalls: 0,
     reloadIgnoringCacheCalls: 0,
     executeJavaScriptCalls,
+    insertCSSCalls,
   };
   return rec;
 }
@@ -179,6 +186,7 @@ function makeManager(opts?: {
   onFullscreenToggle?: (nextFullscreen: boolean) => void;
   singleTab?: boolean;
   embeddedOrigin?: string;
+  dockSafeArea?: boolean;
   onSingleTabSwitch?: (
     id: string,
     origin: string,
@@ -214,6 +222,7 @@ function makeManager(opts?: {
     log: () => {},
     singleTab: opts?.singleTab,
     embeddedOrigin: opts?.embeddedOrigin,
+    dockSafeArea: opts?.dockSafeArea,
     onSingleTabSwitch: opts?.onSingleTabSwitch,
   });
   return { manager, win, views, zoomActions, fullscreenToggles };
@@ -726,6 +735,47 @@ describe('ProfileViewManager low-power fan-out (tray global -> every server)', (
     expect(p2).toHaveLength(2);
     expect(p2[0]).toContain('const enabled = true;');
     expect(p2[1]).toContain('const enabled = false;');
+  });
+});
+
+describe('ProfileViewManager macOS Dock safe-area trim', () => {
+  it('is off by default (non-mac hosts and tests insert no CSS)', () => {
+    const { manager, views } = makeManager();
+    manager.addProfile('p1', 'http://127.0.0.1:7070/');
+    manager.setActive('p1');
+    expect(views[0].insertCSSCalls).toHaveLength(0);
+  });
+
+  it('installs the trim once per created view when enabled (multi-tab)', () => {
+    const { manager, views } = makeManager({ dockSafeArea: true });
+    manager.addProfile('p1', 'http://127.0.0.1:7070/');
+    manager.setActive('p1');
+    expect(views[0].insertCSSCalls).toHaveLength(1);
+    expect(views[0].insertCSSCalls[0].cssOrigin).toBe('author');
+    expect(views[0].insertCSSCalls[0].css).toContain(
+      'html[data-phi-desktop] .app-container',
+    );
+    // Reloads/navigations re-arm through the installer's own
+    // did-finish-load listener: one initial insert + one per finished
+    // load (the sheet died with the replaced document).
+    views[0].loadHandlers.forEach((fire) => fire());
+    views[0].loadHandlers.forEach((fire) => fire());
+    expect(views[0].insertCSSCalls).toHaveLength(3);
+    expect(views[0].insertCSSCalls.every((c) => c.cssOrigin === 'author')).toBe(
+      true,
+    );
+  });
+
+  it('installs the trim on the single-tab embedded view when enabled', () => {
+    const { manager, views } = makeManager({
+      singleTab: true,
+      dockSafeArea: true,
+    });
+    manager.addProfile('p1', 'http://127.0.0.1:7070/');
+    manager.setActive('p1');
+    expect(views).toHaveLength(1);
+    expect(views[0].insertCSSCalls).toHaveLength(1);
+    expect(views[0].insertCSSCalls[0].css).toContain('#rail');
   });
 });
 

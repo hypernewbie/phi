@@ -14,6 +14,7 @@ export default defineConfig({
         '**/auth-desktop.spec.ts',
         '**/desktop-shell-drawer.spec.ts',
         '**/desktop-workspace-manager.spec.ts',
+        '**/desktop-dock-safe-area.spec.ts',
     ],
     testIgnore: [],
     workers: 1,

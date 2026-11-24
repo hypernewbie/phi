@@ -41,6 +41,7 @@
  * job). The manager only owns the view lifecycle.
  */
 import type { BrowserWindow, WebContentsView } from 'electron';
+import { installDockSafeArea } from './dockSafeArea.js';
 import { installFullscreenToggle } from './fullscreen.js';
 import { installReloadShortcut } from './reload.js';
 import {
@@ -80,6 +81,11 @@ export interface ProfileViewManagerOptions {
    *  controller-owned global, applied to every view on load (global
    *  wins, content-zoom parity). */
   getLowPowerMode?: () => boolean;
+  /** Installs the macOS Dock safe-area trim on every created view
+   * (macOS-only host wiring; default false so non-mac hosts and tests
+   * are unchanged). The trim itself is static injected CSS, so the
+   * low-power frame pacer and effect kills cannot affect it. */
+  dockSafeArea?: boolean;
   /** Routes a body-view zoom chord to the controller-owned global action. */
   onZoomAction: (action: ZoomAction) => void;
   /** Optional callback fired when plain F11 toggles fullscreen on any body view. */
@@ -153,6 +159,7 @@ export class ProfileViewManager {
   private readonly railWidth: number;
   private readonly getContentZoomPercent: () => number;
   private readonly getLowPowerMode: () => boolean;
+  private readonly dockSafeArea: boolean;
   private readonly onZoomAction: (action: ZoomAction) => void;
   private readonly onFullscreenToggle?: (nextFullscreen: boolean) => void;
   private readonly log: (s: string) => void;
@@ -175,6 +182,7 @@ export class ProfileViewManager {
     this.railWidth = opts.railWidth;
     this.getContentZoomPercent = opts.getContentZoomPercent;
     this.getLowPowerMode = opts.getLowPowerMode ?? (() => false);
+    this.dockSafeArea = opts.dockSafeArea ?? false;
     this.onZoomAction = opts.onZoomAction;
     this.onFullscreenToggle = opts.onFullscreenToggle;
     this.log = opts.log ?? (() => {});
@@ -671,6 +679,9 @@ export class ProfileViewManager {
     view.setBounds(bounds);
     entry.lastBounds = bounds;
     applyContentZoom(view.webContents, this.getContentZoomPercent());
+    // macOS trim: re-arms itself on every did-finish-load, so reloads
+    // and legacy navigations keep the Dock safe area.
+    if (this.dockSafeArea) installDockSafeArea(view.webContents);
 
     view.webContents.on('did-finish-load', () => {
       if (this.singleEntry?.view !== view) return;
@@ -858,6 +869,9 @@ export class ProfileViewManager {
     view.setBounds(bounds);
     entry.lastBounds = bounds;
     applyContentZoom(view.webContents, this.getContentZoomPercent());
+    // macOS trim: re-arms itself on every did-finish-load, so reloads
+    // and legacy navigations keep the Dock safe area.
+    if (this.dockSafeArea) installDockSafeArea(view.webContents);
     view.webContents.on('did-finish-load', () => {
       const current = this.views.get(id);
       if (!current || current.view !== view) return; // removed meanwhile
