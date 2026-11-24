@@ -758,8 +758,8 @@ describe('ProfileViewManager macOS Dock safe-area trim', () => {
     // Reloads/navigations re-arm through the installer's own
     // did-finish-load listener: one initial insert + one per finished
     // load (the sheet died with the replaced document).
-    views[0].loadHandlers.forEach((fire) => fire());
-    views[0].loadHandlers.forEach((fire) => fire());
+    for (const fire of views[0].loadHandlers) fire();
+    for (const fire of views[0].loadHandlers) fire();
     expect(views[0].insertCSSCalls).toHaveLength(3);
     expect(views[0].insertCSSCalls.every((c) => c.cssOrigin === 'author')).toBe(
       true,

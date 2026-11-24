@@ -70,7 +70,8 @@ interface BodyWebContents {
     getZoomFactor?: () => number;
 }
 
-test('the bottom row keeps a Dock safe-area trim on macOS (and only there)', async ({}, testInfo) => {
+test('the bottom row keeps a Dock safe-area trim on macOS (and only there)', async () => {
+    const testInfo = test.info();
     const paths = ownedPaths();
     const phi = await startPhi();
     const app = await _electron.launch({
