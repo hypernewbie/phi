@@ -246,8 +246,11 @@ func TestHandleModelPresets_AgyCatalogValidationAndNormalization(t *testing.T) {
 	}
 
 	cfg = testServer.loadConfig()
-	if containsString(cfg.ModelPresets["agy"], "gemini-4-argon-medium") {
-		t.Error("model should have been removed after delete via alias")
+	// The served agy options always contain the verified catalog (the
+	// dropup offers the allowlist itself), so a deleted catalog slug
+	// reappears via catalog completion — delete only drops stored extras.
+	if !containsString(cfg.ModelPresets["agy"], "gemini-4-argon-medium") {
+		t.Error("catalog slug should be served after delete via catalog completion")
 	}
 }
 

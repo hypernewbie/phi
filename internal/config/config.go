@@ -561,6 +561,24 @@ var legacyAgyDefaults = []string{
 	"gemini-1.5-flash",
 }
 
+func unionCatalogFirst(catalog, stored []string) []string {
+	seen := make(map[string]bool, len(catalog)+len(stored))
+	out := make([]string, 0, len(catalog)+len(stored))
+	for _, s := range catalog {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	for _, s := range stored {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 func ensureModelPresetDefaults(m ModelPresetsMap) ModelPresetsMap {
 	if m == nil {
 		m = make(ModelPresetsMap)
@@ -572,11 +590,20 @@ func ensureModelPresetDefaults(m ModelPresetsMap) ModelPresetsMap {
 		m["agy"] = agent.Slugs()
 	}
 
+	// Agy's options ARE the verified catalog: the server rejects anything
+	// outside it, so a stored agy list can only ever be a (possibly stale
+	// or empty) subset. Union the catalog in — catalog order first,
+	// stored extras appended — so the dropup always offers the full
+	// allowlist instead of forcing blind free-text entry. An explicit
+	// empty agy list is not a user choice here (it would guarantee
+	// whitelist rejections); other coders accept arbitrary identifiers,
+	// so their explicit-empty lists are still honored below.
+	m["agy"] = unionCatalogFirst(agent.Slugs(), m["agy"])
+
 	// Pi's model list comes from the live RPC, so no preset default is set
 	// here — shipping a stale hardcoded list (as we did previously) made the
 	// Pi-RPC picker open to a group of synthesized ghost rows. Opencode and
-	// Claude have fixed coders and keep their defaults. Agy uses the verified
-	// catalog from internal/agent.
+	// Claude have fixed coders and keep their defaults.
 	defaults := map[string][]string{
 		"opencode": {
 			"opencode/big-pickle",
@@ -587,7 +614,6 @@ func ensureModelPresetDefaults(m ModelPresetsMap) ModelPresetsMap {
 			"sonnet",
 			"haiku",
 		},
-		"agy": agent.Slugs(),
 	}
 
 	for coder, defaultList := range defaults {

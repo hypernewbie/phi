@@ -657,12 +657,14 @@ func TestModelPresetDefaultsMerge(t *testing.T) {
 	if !reflect.DeepEqual(merged["agy"], agent.Slugs()) {
 		t.Errorf("agy defaults = %v, want %v", merged["agy"], agent.Slugs())
 	}
-	// An explicit empty list is a user choice, not a missing default.
+	// An explicit empty list is a user choice for open-identifier coders —
+	// but not for agy, whose options are the closed catalog (empty would
+	// guarantee whitelist rejections on every blind entry).
 	if got := ensureModelPresetDefaults(ModelPresetsMap{"claude": {}}); len(got["claude"]) != 0 {
 		t.Errorf("explicit empty claude list must stay empty, got %v", got["claude"])
 	}
-	if got := ensureModelPresetDefaults(ModelPresetsMap{"agy": {}}); len(got["agy"]) != 0 {
-		t.Errorf("explicit empty agy list must stay empty, got %v", got["agy"])
+	if got := ensureModelPresetDefaults(ModelPresetsMap{"agy": {}}); !reflect.DeepEqual(got["agy"], agent.Slugs()) {
+		t.Errorf("explicit empty agy list must complete to the catalog, got %v", got["agy"])
 	}
 
 	// Legacy 4-element agy presets slice upgrades cleanly to current verified catalog
@@ -672,10 +674,12 @@ func TestModelPresetDefaultsMerge(t *testing.T) {
 		t.Errorf("legacy agy defaults upgrade = %v, want %v", upgraded["agy"], agent.Slugs())
 	}
 
-	// Custom user presets for agy are preserved
+	// Stored agy entries are completed with the catalog, catalog order
+	// first; anything outside the catalog is kept, appended, never dropped.
 	customAgy := ModelPresetsMap{"agy": {"custom-gemini-preview", "gemini-4-argon-high"}}
 	kept := ensureModelPresetDefaults(customAgy)
-	if !reflect.DeepEqual(kept["agy"], []string{"custom-gemini-preview", "gemini-4-argon-high"}) {
-		t.Errorf("custom agy presets overwritten: %v", kept["agy"])
+	wantKept := append(agent.Slugs(), "custom-gemini-preview")
+	if !reflect.DeepEqual(kept["agy"], wantKept) {
+		t.Errorf("agy union = %v, want %v", kept["agy"], wantKept)
 	}
 }
