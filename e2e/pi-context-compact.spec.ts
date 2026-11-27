@@ -179,9 +179,17 @@ test('native desktop compact: known meter, one entry, unknown, recovery', async 
             hasText: '/compact',
         });
         await expect(legacyBtn).toBeEnabled({ timeout: 15_000 });
-        const toastsBefore = await page
+        // No NEW 'Compaction' popup from the legacy click. Mark the
+        // existing ones instead of snapshotting a count: the old popup
+        // expires on its own deadline, so a slow backend (longer than the
+        // 6s toast life) would turn a count comparison into an expiry
+        // race. Seen-marking asserts exactly the intent — nothing fresh.
+        await page
             .locator('.toast', { hasText: 'Compaction' })
-            .count();
+            .evaluateAll((toasts) => {
+                for (const toast of toasts)
+                    toast.setAttribute('data-toast-seen', '');
+            });
         await legacyBtn.click();
         await expect
             .poll(
@@ -194,8 +202,12 @@ test('native desktop compact: known meter, one entry, unknown, recovery', async 
             )
             .toContain('compact');
         expect(
-            await page.locator('.toast', { hasText: 'Compaction' }).count(),
-        ).toBe(toastsBefore);
+            await page
+                .locator('.toast:not([data-toast-seen])', {
+                    hasText: 'Compaction',
+                })
+                .count(),
+        ).toBe(0);
         expect(stub.count()).toBe(2);
         expect(pageErrors).toEqual([]);
     } finally {
