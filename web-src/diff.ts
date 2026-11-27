@@ -348,6 +348,51 @@ export function findReusableShellTab(
     return null;
 }
 
+// DIFF_LINE_CLIP_CHARS bounds one hunk content line handed to the rich
+// diff. A generated file can put its whole content on a single line (a
+// minified search index is ~800k chars). Every 256px tile that touches
+// such a text run costs the compositor ~200 ms to raster, and a
+// full-window modal has nothing else to show, so the main thread blocks
+// on the commit and the UI freezes. No line a person reviews is this
+// long.
+export const DIFF_LINE_CLIP_CHARS = 4000;
+
+// clipDiffLines shortens hunk content lines longer than maxChars: the
+// marker leads the line, naming the full length, and the first maxChars
+// content chars follow. (A trailing marker would sit tens of thousands
+// of pixels off-screen to the right, past the kept text.) File headers,
+// hunk headers and binary markers pass through untouched. Returns the
+// input itself when no line is long enough. Pure.
+export function clipDiffLines(
+    patch: string,
+    maxChars: number = DIFF_LINE_CLIP_CHARS,
+): string {
+    if (!patch || patch.length <= maxChars) return patch;
+    let inHunk = false;
+    let changed = false;
+    const lines = patch.split('\n').map((line) => {
+        const body = line.endsWith('\r') ? line.slice(0, -1) : line;
+        if (
+            body.startsWith('diff --git ') ||
+            body.startsWith('diff --cc ') ||
+            body.startsWith('diff --combined ')
+        ) {
+            inHunk = false;
+        } else if (body.startsWith('@@')) {
+            inHunk = true;
+        } else if (
+            inHunk &&
+            body.length - 1 > maxChars &&
+            (body[0] === ' ' || body[0] === '+' || body[0] === '-')
+        ) {
+            changed = true;
+            return `${body[0]}…[${(body.length - 1).toLocaleString()}-char line, first ${maxChars.toLocaleString()} shown] ${body.slice(1, 1 + maxChars)}`;
+        }
+        return line;
+    });
+    return changed ? lines.join('\n') : patch;
+}
+
 export class DiffController {
     app: AppLike;
     activeTab: string; // 'diff' | 'log'
@@ -4570,7 +4615,9 @@ export class DiffController {
         // binary blob has no line structure to render. Filtering the
         // patch text (not the rendered DOM) keeps parsed file records
         // and wrapper indices aligned, so VS Code actions and review
-        // overlays still pair with the right file.
+        // overlays still pair with the right file. Lines past the clip
+        // bound are shortened in the same pass for the same reason: the
+        // cached raw text and copy-diff keep the full patch.
         const binaryNames: string[] = [];
         const renderText = this._splitDiffChunks(rawDiffText)
             .filter((chunk) => {
@@ -4578,7 +4625,7 @@ export class DiffController {
                 if (chunk.name) binaryNames.push(chunk.name);
                 return false;
             })
-            .map((chunk) => chunk.text)
+            .map((chunk) => clipDiffLines(chunk.text))
             .join('\n');
 
         if (!renderText.trim()) {
