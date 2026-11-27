@@ -253,6 +253,23 @@ async function outputOrNoMatch(
     }
 }
 
+/** PowerShell that lists the TCP listeners on one address and port as a
+ *  compact JSON array. `Get-NetTCPConnection` raises when nothing is
+ *  listening, which a fixture whose server has already released its port
+ *  asks for on every teardown; that answer is an empty list. Any other
+ *  query failure still fails the command, so readiness and teardown keep
+ *  failing closed when the listener query cannot be answered. */
+export function windowsListenerScript(address: string, port: number): string {
+    return (
+        `$ErrorActionPreference = 'Stop'; ` +
+        `try { $rows = @(Get-NetTCPConnection -State Listen -LocalAddress '${address}' ` +
+        `-LocalPort ${port} -ErrorAction Stop | ` +
+        `Select-Object OwningProcess,LocalAddress,LocalPort) } ` +
+        `catch { if ($_.FullyQualifiedErrorId -notlike 'CmdletizationQuery_NotFound*') { throw }; $rows = @() }; ` +
+        `ConvertTo-Json -InputObject $rows -Compress`
+    );
+}
+
 function sameExecutable(a: string, b: string): boolean {
     const clean = (value: string) =>
         resolve(value.startsWith('\\\\?\\') ? value.slice(4) : value);
@@ -312,12 +329,7 @@ async function listenerRecords(
     cwd: string,
 ): Promise<ListenerRecord[]> {
     if (process.platform === 'win32') {
-        const script =
-            `$ErrorActionPreference = 'Stop'; ` +
-            `$rows = @(Get-NetTCPConnection -State Listen -LocalAddress '127.0.0.1' ` +
-            `-LocalPort ${port} | ` +
-            `Select-Object OwningProcess,LocalAddress,LocalPort); ` +
-            `ConvertTo-Json -InputObject $rows -Compress`;
+        const script = windowsListenerScript('127.0.0.1', port);
         const raw = await output(
             'powershell.exe',
             ['-NoProfile', '-NonInteractive', '-Command', script],
@@ -676,12 +688,10 @@ function verifyOwnedServer(
         ) {
             throw new Error('phi fixture PID was reused');
         }
-        const listenerScript =
-            `$ErrorActionPreference = 'Stop'; ` +
-            `$rows = @(Get-NetTCPConnection -State Listen -LocalAddress '${identity.bindAddress}' ` +
-            `-LocalPort ${identity.port} | ` +
-            `Select-Object OwningProcess,LocalAddress,LocalPort); ` +
-            `ConvertTo-Json -InputObject $rows -Compress`;
+        const listenerScript = windowsListenerScript(
+            identity.bindAddress,
+            identity.port,
+        );
         const listeners = JSON.parse(
             execFileSync(
                 'powershell.exe',
