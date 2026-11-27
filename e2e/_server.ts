@@ -773,7 +773,11 @@ export async function startPhi(
 ): Promise<PhiServer> {
     // Short prefix: the owned runtime-temp socket candidate must fit the
     // 100-byte Unix bound even under a long macOS TMPDIR.
-    const dir = mkdtempSync(join(tmpdir(), 'pe-'));
+    const created = mkdtempSync(join(tmpdir(), 'pe-'));
+    // Windows can name the profile directory by its 8.3 alias while the
+    // app reports real paths, and specs compare the two.
+    const dir =
+        process.platform === 'win32' ? realpathSync.native(created) : created;
     let server: ChildProcess | null = null;
     let serverIdentity: PhiServerIdentity | null = null;
     let disposed = false;

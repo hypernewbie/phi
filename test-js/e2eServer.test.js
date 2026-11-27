@@ -25,7 +25,9 @@ vi.mock('node:fs', async (importOriginal) => {
         writeFileSync: vi.fn(),
         appendFileSync: vi.fn(),
         readFileSync: vi.fn(),
-        realpathSync: vi.fn(),
+        // The fixture asks for the native form, the one that expands a
+        // Windows 8.3 alias.
+        realpathSync: Object.assign(vi.fn(), { native: vi.fn() }),
         rmSync: vi.fn(),
         accessSync: vi.fn(),
         statSync: vi.fn(),
@@ -127,6 +129,7 @@ beforeEach(() => {
     statSync.mockReturnValue({ isDirectory: () => true, mode: 0o40700 });
     readFileSync.mockReturnValue(Buffer.from('fixture binary'));
     realpathSync.mockImplementation((path) => path);
+    realpathSync.native.mockImplementation((path) => path);
     execFileSync.mockImplementation((cmd, args) => {
         if (cmd === 'ps') return `start-${args[1]}\n`;
         if (cmd === 'lsof' && args.includes('-d')) {
