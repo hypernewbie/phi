@@ -236,6 +236,17 @@ export async function expectNewToast(
     text: string,
     click: () => Promise<void>,
 ): Promise<void> {
+    // Congressional toast discipline: an identical popup emitted within
+    // 2s of its predecessor is dropped, so never trigger a receipt while
+    // the previous one is still up. Wait for same-text popups to be
+    // REMOVED from the DOM (bounded — a sticky popup falls through and
+    // the assertions below still apply). Expiry removes nodes within
+    // seconds (in compact shells too — hidden there is not the same as
+    // gone), so this resolves immediately in the normal case and only
+    // bites in the danger window.
+    await expect(page.locator('.toast', { hasText: text })).toHaveCount(0, {
+        timeout: 10_000,
+    });
     await page.locator('.toast', { hasText: text }).evaluateAll((toasts) => {
         for (const toast of toasts) toast.setAttribute('data-toast-seen', '');
     });
@@ -273,6 +284,14 @@ export async function expectReloadRequested(
 ): Promise<void> {
     const REQUESTED = 'Reload requested — check Pi';
     for (let attempt = 1; attempt <= attempts; attempt++) {
+        // Same quiescence as expectNewToast: the receipt must not follow
+        // an identical popup by less than the 2s term limit, or congress
+        // drops it and this wait can never succeed. Count zero (removed),
+        // not merely hidden — compact shells hide without removing.
+        await expect(page.locator('.toast', { hasText: 'Reload' })).toHaveCount(
+            0,
+            { timeout: 10_000 },
+        );
         const seen = page.locator('.toast', { hasText: 'Reload' });
         const before = await seen.count();
         for (let index = 0; index < before; index++) {
