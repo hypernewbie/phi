@@ -5,6 +5,7 @@ All notable changes to phi are documented here. Newest versions first.
 ## Unreleased
 
 ### Added
+- **Congressional toast discipline: no new toast without a ballot and a vote.** Every transient popup now anchors bottom-left, notification-style — top-right is forbidden, so popups never cover the tab/session controls. Structurally: `web-src/toast-registry.ts` is the ballot (every key needs a >=24-char justification), and `test-js/toastDiscipline.test.js` freezes the 162 `showToast` call sites (adding one requires registering a key and bumping the count — that bump is the vote). Term limit: the same key (or same unkeyed title+message) twice within 2s is dropped in production and throws in tests — a global vitest setup arms strict mode for every test file, with an afterEach backstop, so the offending test fails no matter which suite it lives in.
 - **Quota snapshot v1: a generic format any aggregator can emit** (`docs/quota-format.md`). The overlay no longer needs per-provider client code: backends declare labels, amounts, direction (`remaining_percent` vs `used_percent` vs `used`+`total`), and reset times, and Phi pretty-prints them. A runnable stdlib-only template lives at `examples/quota-aggregator.example.py` with JSON Schema at `docs/quota-schema.json`. Pre-v1 provider-dict snapshots keep rendering through a deprecated shim.
 
 ### Fixed

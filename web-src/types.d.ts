@@ -4,6 +4,13 @@ export interface ToastOptions {
     duration?: number;
     action?: { text: string; callback: () => void };
     readyPaneId?: string;
+    // Congressional toast discipline: a toast SHOULD carry the key it
+    // was registered under in web-src/toast-registry.ts (the ballot).
+    // Unkeyed toasts still render, but the discipline test freezes the
+    // total call-site count — adding a call site without registering a
+    // key and amending the count fails CI. The key also names the
+    // toast for the 2s duplicate-emission rate limit.
+    key?: string;
 }
 
 // AppLike is the minimal slice of the (unconverted) App class that

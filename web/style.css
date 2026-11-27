@@ -7351,10 +7351,14 @@ html[data-phi-config-page] .settings-modal {
 }
 
 /* ── Toast notifications ──────────────────────────────────────────────── */
+/* Toast discipline: every transient popup anchors bottom-left,
+notification-style. Top-right is forbidden: popups must never cover
+the tab/session controls that live top-right. Compact shells hide
+popups entirely (see the media query below) — the drawer owns them. */
 .toast-container {
     position: fixed;
-    top: 16px;
-    right: 16px;
+    bottom: 16px;
+    left: 16px;
     z-index: 9999;
     display: flex;
     flex-direction: column;
@@ -7379,7 +7383,7 @@ html[data-phi-config-page] .settings-modal {
     font-size: 1rem;
     line-height: 1.45;
     opacity: 0;
-    transform: translateX(12px);
+    transform: translateX(-12px);
     transition:
         opacity 0.18s ease,
         transform 0.18s ease;

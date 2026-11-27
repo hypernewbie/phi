@@ -32,6 +32,31 @@ function normalizeDuration(duration) {
     }
     return DEFAULT_DURATION;
 }
+// ── Congressional toast discipline: rate limit ─────────────────────
+// The same toast twice within TOAST_RATE_LIMIT_MS is a violation.
+// Production drops the duplicate (returns the live popup); strict
+// mode (tests, via the global vitest setup) THROWS, so the offending
+// test fails no matter which suite it lives in. Violations are always
+// logged (capped) to window.__phiToastViolations for the afterEach
+// backstop in the global setup.
+const TOAST_RATE_LIMIT_MS = 2000;
+const MAX_VIOLATION_LOG = 50;
+function toastStrictMode() {
+    return (typeof window !== 'undefined' &&
+        window.__phiToastStrict === true);
+}
+function recordToastViolation(sig, at) {
+    if (typeof window === 'undefined')
+        return;
+    const w = window;
+    const log = Array.isArray(w.__phiToastViolations)
+        ? w.__phiToastViolations
+        : [];
+    log.push({ sig, at });
+    while (log.length > MAX_VIOLATION_LOG)
+        log.shift();
+    w.__phiToastViolations = log;
+}
 function normalizeMetadata(value) {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
         return null;
@@ -297,6 +322,9 @@ export class NotificationManager {
     onReadyTabs;
     entries = [];
     entriesById = new Map();
+    // Last popup per toast signature (registered key, else type+title+
+    // message). Enforces the 2s duplicate-emission rate limit.
+    lastToastBySig = new Map();
     nodeEntries = new WeakMap();
     observer;
     dirtyStores = new Map();
@@ -699,6 +727,20 @@ export class NotificationManager {
         const type = normalizeType(options.type);
         const duration = normalizeDuration(options.duration);
         const title = options.title || DEFAULT_TITLES[type];
+        const toastSig = typeof options.key === 'string' && options.key !== ''
+            ? `key:${options.key}`
+            : `msg:${type}\0${title}\0${String(message ?? '')}`;
+        const sigNow = Date.now();
+        const prevSig = this.lastToastBySig.get(toastSig);
+        if (prevSig && sigNow - prevSig.at < TOAST_RATE_LIMIT_MS) {
+            recordToastViolation(toastSig, sigNow);
+            if (toastStrictMode()) {
+                throw new Error(`toast discipline: duplicate "${toastSig}" within ${TOAST_RATE_LIMIT_MS}ms`);
+            }
+            if (prevSig.toast.isConnected)
+                return prevSig.toast;
+            // Previous popup is gone; fall through and re-render.
+        }
         const action = options.action;
         const actionText = action && typeof action.callback === 'function'
             ? String(action.text)
@@ -736,6 +778,7 @@ export class NotificationManager {
         entry.popup = toast;
         this.nodeEntries.set(toast, entry);
         this.toastContainer.appendChild(toast);
+        this.lastToastBySig.set(toastSig, { at: sigNow, toast });
         this.scheduleShow(entry, toast);
         if (entry.deadline !== null)
             this.armDeadline(entry);
@@ -779,6 +822,9 @@ export class NotificationManager {
                 duration: READY_GROUP_DURATION,
             });
             const entry = this.nodeEntries.get(toast);
+            // Discipline note: if showOrdinary dropped this as a <2s
+            // duplicate, toast is the live popup and entry its record —
+            // adopting it as the ready group is intended coalescing.
             if (!entry || this.entriesById.get(entry.id) !== entry)
                 return toast;
             entry.readyMembers = new Map([[paneId, member]]);

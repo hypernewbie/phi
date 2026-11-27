@@ -12,6 +12,11 @@ export default defineConfig({
         ],
         exclude: ['e2e/**', 'packages/*/test/e2e/**', 'node_modules/**'],
 
+        // Congressional toast discipline: strict duplicate-toast
+        // rate limiting is on for EVERY test file under ALL
+        // circumstances. See test-js/toast-discipline-setup.js.
+        setupFiles: ['test-js/toast-discipline-setup.js'],
+
         // Default to a plain Node environment (fast, no DOM). Pure helpers do
         // not need a DOM. For a file that exercises document/window, add a
         // docblock at the top of that file:
