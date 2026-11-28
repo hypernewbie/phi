@@ -65,7 +65,7 @@ func newTestKanbanUpstream(t *testing.T) *testKanbanUpstream {
 // configureKanban points the server's vault at the mock instance.
 func configureKanban(t *testing.T, up *testKanbanUpstream) {
 	t.Helper()
-	enc, err := EncryptVault("secret")
+	enc, err := testServer.encryptVault("secret")
 	if err != nil {
 		t.Fatal(err)
 	}

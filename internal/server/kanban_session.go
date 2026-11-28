@@ -84,14 +84,14 @@ func (app *Server) kanbanCredentials() (baseURL, username, password string, err 
 			message: "No Kanban password is saved.",
 		}
 	}
-	password, decErr := DecryptVault(cfg.KanbanPasswordEnc)
+	secret, decErr := app.decryptVault(cfg.KanbanPasswordEnc)
 	if decErr != nil {
 		return "", "", "", &kanbanUpstreamError{
 			status:  http.StatusInternalServerError,
 			message: "The saved Kanban password could not be read.",
 		}
 	}
-	return baseURL, username, password, nil
+	return baseURL, username, secret.Plaintext, nil
 }
 
 // kanbanEnsureToken returns a usable Vikunja token. It logs in when the

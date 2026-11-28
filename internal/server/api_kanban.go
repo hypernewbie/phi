@@ -19,6 +19,17 @@ func (app *Server) handleKanbanVault(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		cfg := app.loadConfig()
+		secret, err := app.decryptVault(cfg.KanbanPasswordEnc)
+		if err != nil {
+			http.Error(w, "Failed to decrypt password: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// A vault written before the machine key existed is re-encrypted
+		// the first time it is read.
+		if secret.Reencrypted != "" {
+			cfg.KanbanPasswordEnc = secret.Reencrypted
+			app.saveConfig(cfg)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -39,7 +50,7 @@ func (app *Server) handleKanbanVault(w http.ResponseWriter, r *http.Request) {
 		}
 		cfg := app.loadConfig()
 		if req.Password != "" {
-			enc, err := EncryptVault(req.Password)
+			enc, err := app.encryptVault(req.Password)
 			if err != nil {
 				http.Error(w, "Failed to encrypt password: "+err.Error(), http.StatusInternalServerError)
 				return
