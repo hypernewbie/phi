@@ -74,6 +74,7 @@ class FakeChild {
 let processStartTime;
 let processExecutable;
 let listenerPid;
+let listenerOutput;
 let listenerQueryError;
 let realFetch;
 
@@ -87,6 +88,7 @@ beforeEach(() => {
     processStartTime = identity.startTime;
     processExecutable = identity.executable;
     listenerPid = identity.pid;
+    listenerOutput = undefined;
     listenerQueryError = false;
     execFile.mockImplementation((command, args, _options, callback) => {
         let stdout = '';
@@ -95,12 +97,38 @@ beforeEach(() => {
             stdout = `${processStartTime}\n`;
         } else if (command === 'lsof' && args.includes('-d')) {
             stdout = `p${identity.pid}\nf txt\nn${processExecutable}\n`;
-        } else if (command === 'lsof' && args.includes('-Fp')) {
+        } else if (
+            command === 'powershell.exe' &&
+            args.at(-1).includes('Get-CimInstance')
+        ) {
+            stdout = JSON.stringify({
+                CreationDate: processStartTime,
+                ExecutablePath: processExecutable,
+            });
+        } else if (
+            (command === 'lsof' && args.includes('-Fp')) ||
+            (command === 'powershell.exe' &&
+                args.at(-1).includes('Get-NetTCPConnection'))
+        ) {
             if (listenerQueryError) {
                 error = Object.assign(new Error('permission denied'), {
                     code: 1,
                     stderr: 'permission denied',
                 });
+            } else if (command === 'powershell.exe') {
+                stdout =
+                    listenerOutput ??
+                    JSON.stringify(
+                        listenerPid === null
+                            ? []
+                            : [
+                                  {
+                                      OwningProcess: listenerPid,
+                                      LocalAddress: identity.bindAddress,
+                                      LocalPort: identity.port,
+                                  },
+                              ],
+                    );
             } else {
                 stdout = listenerPid === null ? '' : `p${listenerPid}\n`;
                 if (!stdout) error = noMatch();
@@ -123,87 +151,121 @@ async function flushMicrotasks() {
     for (let i = 0; i < 20; i++) await Promise.resolve();
 }
 
-describe('owned e2e server checks', () => {
-    test('child exit interrupts a hanging health request', async () => {
-        vi.useFakeTimers();
-        const child = new FakeChild();
-        let signal;
-        global.fetch = vi.fn((_url, options) => {
-            signal = options.signal;
-            return new Promise(() => {});
+const hostPlatform = process.platform;
+
+describe.each(['linux', 'win32'])(
+    'owned e2e server checks (%s)',
+    (platform) => {
+        beforeEach(() => {
+            Object.defineProperty(process, 'platform', { value: platform });
         });
-        const pending = waitForOwnedServer(child, identity, '/tmp', 30_000);
-        await flushMicrotasks();
-        expect(global.fetch).toHaveBeenCalledTimes(1);
-        child.emit('exit', 1, null);
-        await expect(pending).rejects.toThrow('exited before health');
-        await vi.advanceTimersByTimeAsync(2_000);
-        expect(signal.aborted).toBe(true);
-    });
-
-    test('a hanging health request is aborted after two seconds', async () => {
-        vi.useFakeTimers();
-        const child = new FakeChild();
-        let signal;
-        global.fetch = vi.fn((_url, options) => {
-            signal = options.signal;
-            return new Promise(() => {});
+        afterEach(() => {
+            Object.defineProperty(process, 'platform', { value: hostPlatform });
         });
-        const pending = waitForOwnedServer(child, identity, '/tmp', 10_000);
-        await flushMicrotasks();
-        expect(global.fetch).toHaveBeenCalledTimes(1);
-        const assertion = expect(pending).rejects.toThrow(
-            'exited before health',
+
+        test('child exit interrupts a hanging health request', async () => {
+            vi.useFakeTimers();
+            const child = new FakeChild();
+            let signal;
+            global.fetch = vi.fn((_url, options) => {
+                signal = options.signal;
+                return new Promise(() => {});
+            });
+            const pending = waitForOwnedServer(child, identity, '/tmp', 30_000);
+            await flushMicrotasks();
+            expect(global.fetch).toHaveBeenCalledTimes(1);
+            child.emit('exit', 1, null);
+            await expect(pending).rejects.toThrow('exited before health');
+            await vi.advanceTimersByTimeAsync(2_000);
+            expect(signal.aborted).toBe(true);
+        });
+
+        test('a hanging health request is aborted after two seconds', async () => {
+            vi.useFakeTimers();
+            const child = new FakeChild();
+            let signal;
+            global.fetch = vi.fn((_url, options) => {
+                signal = options.signal;
+                return new Promise(() => {});
+            });
+            const pending = waitForOwnedServer(child, identity, '/tmp', 10_000);
+            await flushMicrotasks();
+            expect(global.fetch).toHaveBeenCalledTimes(1);
+            const assertion = expect(pending).rejects.toThrow(
+                'exited before health',
+            );
+            await vi.advanceTimersByTimeAsync(2_000);
+            expect(signal.aborted).toBe(true);
+            child.emit('exit', 1, null);
+            await assertion;
+            await vi.advanceTimersByTimeAsync(500);
+        });
+
+        test('process start-time mismatch blocks readiness', async () => {
+            processStartTime = 'different process';
+            const child = new FakeChild();
+            await expect(
+                waitForOwnedServer(child, identity, '/tmp', 100),
+            ).rejects.toThrow('process identity mismatch');
+            expect(global.fetch).not.toHaveBeenCalled();
+        });
+
+        test('foreign listener blocks readiness', async () => {
+            listenerPid = 99;
+            const child = new FakeChild();
+            await expect(
+                waitForOwnedServer(child, identity, '/tmp', 100),
+            ).rejects.toThrow('foreign listener PID 99');
+            expect(global.fetch).not.toHaveBeenCalled();
+        });
+
+        test('listener query errors fail readiness closed', async () => {
+            listenerQueryError = true;
+            const child = new FakeChild();
+            await expect(
+                waitForOwnedServer(child, identity, '/tmp', 100),
+            ).rejects.toThrow('permission denied');
+            expect(global.fetch).not.toHaveBeenCalled();
+        });
+
+        test('an exited child with no listener needs no signal', async () => {
+            const child = new FakeChild();
+            child.emit('exit', 0, null);
+            listenerPid = null;
+            await expect(
+                stopOwnedServer(child, identity, '/tmp'),
+            ).resolves.toBeUndefined();
+            expect(child.killCalls).toEqual([]);
+        });
+
+        test.skipIf(platform !== 'win32').each(['', 'null', '{}', '[null]'])(
+            'invalid Windows listener output (%j) does not authorize cleanup',
+            async (raw) => {
+                const child = new FakeChild();
+                listenerOutput = raw;
+                await expect(
+                    stopOwnedServer(child, identity, '/tmp'),
+                ).rejects.toThrow();
+                expect(child.killCalls).toEqual([]);
+            },
         );
-        await vi.advanceTimersByTimeAsync(2_000);
-        expect(signal.aborted).toBe(true);
-        child.emit('exit', 1, null);
-        await assertion;
-        await vi.advanceTimersByTimeAsync(500);
-    });
 
-    test('process start-time mismatch blocks readiness', async () => {
-        processStartTime = 'different process';
-        const child = new FakeChild();
-        await expect(
-            waitForOwnedServer(child, identity, '/tmp', 100),
-        ).rejects.toThrow('process identity mismatch');
-        expect(global.fetch).not.toHaveBeenCalled();
-    });
+        test('cleanup refuses a reused PID', async () => {
+            processStartTime = 'different process';
+            const child = new FakeChild();
+            await expect(
+                stopOwnedServer(child, identity, '/tmp'),
+            ).rejects.toThrow('process identity mismatch');
+            expect(child.killCalls).toEqual([]);
+        });
 
-    test('foreign listener blocks readiness', async () => {
-        listenerPid = 99;
-        const child = new FakeChild();
-        await expect(
-            waitForOwnedServer(child, identity, '/tmp', 100),
-        ).rejects.toThrow('foreign listener PID 99');
-        expect(global.fetch).not.toHaveBeenCalled();
-    });
-
-    test('listener query errors fail readiness closed', async () => {
-        listenerQueryError = true;
-        const child = new FakeChild();
-        await expect(
-            waitForOwnedServer(child, identity, '/tmp', 100),
-        ).rejects.toThrow('permission denied');
-        expect(global.fetch).not.toHaveBeenCalled();
-    });
-
-    test('cleanup refuses a reused PID', async () => {
-        processStartTime = 'different process';
-        const child = new FakeChild();
-        await expect(stopOwnedServer(child, identity, '/tmp')).rejects.toThrow(
-            'process identity mismatch',
-        );
-        expect(child.killCalls).toEqual([]);
-    });
-
-    test('cleanup refuses to signal a child when a foreign listener owns its port', async () => {
-        listenerPid = 99;
-        const child = new FakeChild();
-        await expect(stopOwnedServer(child, identity, '/tmp')).rejects.toThrow(
-            'foreign listener PID 99',
-        );
-        expect(child.killCalls).toEqual([]);
-    });
-});
+        test('cleanup refuses to signal a child when a foreign listener owns its port', async () => {
+            listenerPid = 99;
+            const child = new FakeChild();
+            await expect(
+                stopOwnedServer(child, identity, '/tmp'),
+            ).rejects.toThrow('foreign listener PID 99');
+            expect(child.killCalls).toEqual([]);
+        });
+    },
+);

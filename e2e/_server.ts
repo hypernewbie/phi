@@ -270,6 +270,34 @@ export function windowsListenerScript(address: string, port: number): string {
     );
 }
 
+function parseWindowsListenerRecords(raw: string): ListenerRecord[] {
+    // The script emits [] for no listeners. Missing or malformed output
+    // cannot prove that the port is clear.
+    const rows: unknown = JSON.parse(raw);
+    if (!Array.isArray(rows))
+        throw new Error('expected a Windows listener array');
+    return rows.map((row: unknown) => {
+        const {
+            OwningProcess: pid,
+            LocalAddress: address,
+            LocalPort: port,
+        } = (row ?? {}) as Record<string, unknown>;
+        if (
+            typeof address !== 'string' ||
+            typeof port !== 'number' ||
+            !Number.isInteger(port) ||
+            port <= 0 ||
+            port > 65535 ||
+            typeof pid !== 'number' ||
+            !Number.isInteger(pid) ||
+            pid < 0
+        ) {
+            throw new Error('invalid Windows listener record');
+        }
+        return { pid, address, port };
+    });
+}
+
 function sameExecutable(a: string, b: string): boolean {
     const clean = (value: string) =>
         resolve(value.startsWith('\\\\?\\') ? value.slice(4) : value);
@@ -335,21 +363,7 @@ async function listenerRecords(
             ['-NoProfile', '-NonInteractive', '-Command', script],
             cwd,
         );
-        const parsed = JSON.parse(raw || '[]') as
-            | { OwningProcess: number; LocalAddress: string; LocalPort: number }
-            | {
-                  OwningProcess: number;
-                  LocalAddress: string;
-                  LocalPort: number;
-              }[]
-            | null;
-        if (parsed === null) return [];
-        const rows = Array.isArray(parsed) ? parsed : [parsed];
-        return rows.map((row) => ({
-            pid: Number(row.OwningProcess),
-            address: row.LocalAddress,
-            port: Number(row.LocalPort),
-        }));
+        return parseWindowsListenerRecords(raw);
     }
 
     const raw = await outputOrNoMatch(
@@ -364,24 +378,11 @@ async function listenerRecords(
     }));
 }
 
-async function assertServerIdentity(
+function assertListenerOwnership(
     identity: PhiServerIdentity,
-    cwd: string,
+    listeners: ListenerRecord[],
     requireListener: boolean,
-): Promise<void> {
-    const processInfo = await processSnapshot(identity.pid, cwd);
-    if (
-        processInfo.startTime !== identity.startTime ||
-        !processInfo.executables.some((path) =>
-            sameExecutable(path, identity.executable),
-        )
-    ) {
-        throw new Error(
-            `fixture process identity mismatch for PID ${identity.pid}`,
-        );
-    }
-
-    const listeners = await listenerRecords(identity.port, cwd);
+): boolean {
     const mismatched = listeners.find(
         (listener) =>
             listener.address !== identity.bindAddress ||
@@ -404,6 +405,28 @@ async function assertServerIdentity(
             `fixture PID ${identity.pid} does not own its listener`,
         );
     }
+    return owned;
+}
+
+async function assertServerIdentity(
+    identity: PhiServerIdentity,
+    cwd: string,
+    requireListener: boolean,
+): Promise<void> {
+    const processInfo = await processSnapshot(identity.pid, cwd);
+    if (
+        processInfo.startTime !== identity.startTime ||
+        !processInfo.executables.some((path) =>
+            sameExecutable(path, identity.executable),
+        )
+    ) {
+        throw new Error(
+            `fixture process identity mismatch for PID ${identity.pid}`,
+        );
+    }
+
+    const listeners = await listenerRecords(identity.port, cwd);
+    const owned = assertListenerOwnership(identity, listeners, requireListener);
     if (owned && process.platform !== 'win32') {
         const raw = await output(
             'lsof',
@@ -692,34 +715,16 @@ function verifyOwnedServer(
             identity.bindAddress,
             identity.port,
         );
-        const listeners = JSON.parse(
-            execFileSync(
-                'powershell.exe',
-                ['-NoProfile', '-NonInteractive', '-Command', listenerScript],
-                opts,
-            ),
-        ) as
-            | {
-                  OwningProcess: number;
-                  LocalAddress: string;
-                  LocalPort: number;
-              }
-            | {
-                  OwningProcess: number;
-                  LocalAddress: string;
-                  LocalPort: number;
-              }[];
-        const rows = Array.isArray(listeners) ? listeners : [listeners];
-        if (
-            !rows.some(
-                (row) =>
-                    Number(row.OwningProcess) === identity.pid &&
-                    row.LocalAddress === identity.bindAddress &&
-                    Number(row.LocalPort) === identity.port,
-            )
-        ) {
-            throw new Error('phi fixture does not own its listener');
-        }
+        const raw = execFileSync(
+            'powershell.exe',
+            ['-NoProfile', '-NonInteractive', '-Command', listenerScript],
+            opts,
+        );
+        assertListenerOwnership(
+            identity,
+            parseWindowsListenerRecords(raw),
+            true,
+        );
         return;
     }
 

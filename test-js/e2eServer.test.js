@@ -114,6 +114,39 @@ const DIR = join('/fake-tmp', 'pe-ABCDEF');
 const HOME = join(DIR, 'home');
 const RUNTMP = join(DIR, 't');
 
+function powershellReply(script) {
+    if (script.includes('Get-CimInstance')) {
+        const pid = Number(/ProcessId = (\d+)/.exec(script)?.[1]);
+        const child = fakeChildren.get(pid);
+        return JSON.stringify({
+            CreationDate: `start-${pid}`,
+            ExecutablePath: child?.executable ?? '',
+        });
+    }
+    if (script.includes('Get-NetTCPConnection')) {
+        const port = Number(/-LocalPort (\d+)/.exec(script)?.[1]);
+        const child = [...fakeChildren.values()].find(
+            (entry) =>
+                entry.executable !== 'go' &&
+                entry.exitCode === null &&
+                entry.signalCode === null &&
+                entry.port === port,
+        );
+        return JSON.stringify(
+            child
+                ? [
+                      {
+                          OwningProcess: child.pid,
+                          LocalAddress: '127.0.0.1',
+                          LocalPort: port,
+                      },
+                  ]
+                : [],
+        );
+    }
+    throw new Error(`unexpected PowerShell script: ${script}`);
+}
+
 let realFetch;
 
 beforeEach(() => {
@@ -141,6 +174,7 @@ beforeEach(() => {
             const pid = Number(args[args.indexOf('-p') + 1]);
             return fakeChildren.has(pid) ? `p${pid}\n` : '';
         }
+        if (cmd === 'powershell.exe') return powershellReply(args.at(-1));
         throw new Error(`unexpected execFileSync: ${cmd}`);
     });
     net.createServer.mockImplementation(() => ({
@@ -193,35 +227,7 @@ beforeEach(() => {
             if (!stdout)
                 error = Object.assign(new Error('no listener'), { code: 1 });
         } else if (cmd === 'powershell.exe') {
-            const script = args.at(-1);
-            if (script.includes('Get-CimInstance')) {
-                const pid = Number(/ProcessId = (\d+)/.exec(script)?.[1]);
-                const child = fakeChildren.get(pid);
-                stdout = JSON.stringify({
-                    CreationDate: `start-${pid}`,
-                    ExecutablePath: child?.executable ?? '',
-                });
-            } else {
-                const port = Number(/-LocalPort (\d+)/.exec(script)?.[1]);
-                const child = [...fakeChildren.values()].find(
-                    (entry) =>
-                        entry.executable !== 'go' &&
-                        entry.exitCode === null &&
-                        entry.signalCode === null &&
-                        entry.port === port,
-                );
-                stdout = JSON.stringify(
-                    child
-                        ? [
-                              {
-                                  OwningProcess: child.pid,
-                                  LocalAddress: '127.0.0.1',
-                                  LocalPort: port,
-                              },
-                          ]
-                        : [],
-                );
-            }
+            stdout = powershellReply(args.at(-1));
         }
         if (error) callback(error, '', '');
         else callback(null, stdout, '');
@@ -289,19 +295,36 @@ describe('startPhi fixture isolation', () => {
         },
     );
 
-    test('windows skips POSIX mode and socket-budget checks', async () => {
+    test('Windows passes the canonical temp path to setup and skips Unix socket checks', async () => {
         const realPlatform = process.platform;
         Object.defineProperty(process, 'platform', { value: 'win32' });
         try {
-            // Both reject on Unix; named pipes need neither check.
-            tmpdir.mockReturnValue(`/${'l'.repeat(200)}`);
+            const alias = join('/PHIUSE~1/Temp', 'pe-ABCDEF');
+            const canonical = join(
+                '/Phi User/Temp',
+                'l'.repeat(200),
+                'pe-ABCDEF',
+            );
+            tmpdir.mockReturnValue('/PHIUSE~1/Temp');
+            realpathSync.native.mockReturnValue(canonical);
+            // This mode and the expanded path length would fail on Unix.
             statSync.mockReturnValue({
                 isDirectory: () => true,
                 mode: 0o40755,
             });
-            const phi = await startPhi();
-            expect(phi.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+            const setup = vi.fn();
+            const phi = await startPhi({ setup });
+            expect(realpathSync.native).toHaveBeenCalledExactlyOnceWith(alias);
+            expect(setup).toHaveBeenCalledExactlyOnceWith(canonical);
+            expect(phi.dir).toBe(canonical);
+            const [, , options] = serverSpawn();
+            expect(options.cwd).toBe(canonical);
+            expect(options.env.HOME).toBe(join(canonical, 'home'));
             await phi.stop();
+            expect(rmSync).toHaveBeenCalledWith(canonical, {
+                recursive: true,
+                force: true,
+            });
             expect(statSync).not.toHaveBeenCalled();
         } finally {
             Object.defineProperty(process, 'platform', {
@@ -450,12 +473,14 @@ describe('startPhi fixture isolation', () => {
         const log = appendFileSync.mock.calls
             .map(([, chunk]) => String(chunk))
             .join('');
-        expect(log).toContain('"revision":"fixture-revision"');
-        expect(log).toContain('"sha256":');
-        expect(log).toContain(`"pid":${child.pid}`);
-        expect(log).toContain(`"start":"start-${child.pid}"`);
-        expect(log).toContain(`"binary":"${join(DIR, 'phi')}"`);
-        expect(log).toContain('"bind":"127.0.0.1:45678"');
+        expect(JSON.parse(log)).toMatchObject({
+            revision: 'fixture-revision',
+            sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+            pid: child.pid,
+            start: `start-${child.pid}`,
+            binary: join(DIR, process.platform === 'win32' ? 'phi.exe' : 'phi'),
+            bind: '127.0.0.1:45678',
+        });
     });
 
     test('pid and verify follow the owned child across restart', async () => {
@@ -470,6 +495,29 @@ describe('startPhi fixture isolation', () => {
         await phi.stop();
         expect(phi.pid()).toBeUndefined();
         expect(() => phi.verify()).toThrow('phi fixture is not running');
+    });
+
+    test('Windows verify rejects a foreign row even if the owned listener is present', async () => {
+        const realPlatform = process.platform;
+        Object.defineProperty(process, 'platform', { value: 'win32' });
+        try {
+            const phi = await startPhi();
+            const runCommand = execFileSync.getMockImplementation();
+            expect(() => phi.verify()).not.toThrow();
+            execFileSync.mockImplementation((cmd, args, options) => {
+                const raw = runCommand(cmd, args, options);
+                if (!args.at(-1).includes('Get-NetTCPConnection')) return raw;
+                const rows = JSON.parse(raw);
+                return JSON.stringify([
+                    ...rows,
+                    { ...rows[0], OwningProcess: 9999 },
+                ]);
+            });
+            expect(() => phi.verify()).toThrow('foreign listener PID 9999');
+            await phi.stop();
+        } finally {
+            Object.defineProperty(process, 'platform', { value: realPlatform });
+        }
     });
 
     test('stop terminates the child and removes the dir exactly once', async () => {

@@ -21,15 +21,20 @@ function query(address, port) {
         ],
         // stderr is captured on the thrown error instead of leaking into
         // the suite output.
-        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
-    ).trim();
-    const parsed = JSON.parse(raw || '[]');
-    return Array.isArray(parsed) ? parsed : [parsed];
+        {
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'pipe'],
+            timeout: 10_000,
+        },
+    );
+    return JSON.parse(raw);
 }
 
 async function listening() {
     const server = createServer();
-    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    await new Promise((resolve, reject) =>
+        server.once('error', reject).listen(0, '127.0.0.1', resolve),
+    );
     return {
         port: server.address().port,
         close: () => new Promise((resolve) => server.close(resolve)),
@@ -42,7 +47,7 @@ describe.skipIf(skip)('Windows listener query', () => {
         const port = probe.port;
         await probe.close();
         expect(query('127.0.0.1', port)).toEqual([]);
-    });
+    }, 15_000);
 
     test('a listener is reported with its owning PID', async () => {
         const server = await listening();
@@ -57,9 +62,16 @@ describe.skipIf(skip)('Windows listener query', () => {
         } finally {
             await server.close();
         }
-    });
+    }, 15_000);
 
-    test('any other query failure still fails the command', () => {
-        expect(() => query('127.0.0.1', 99999)).toThrow();
-    });
+    test('a parameter error still fails the command', () => {
+        expect(() => query('127.0.0.1', 99999)).toThrow(
+            expect.objectContaining({
+                status: 1,
+                stderr: expect.stringContaining(
+                    'ParameterArgumentTransformationError',
+                ),
+            }),
+        );
+    }, 15_000);
 });
