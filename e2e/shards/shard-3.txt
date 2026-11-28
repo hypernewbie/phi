@@ -31,8 +31,10 @@ auth-transition.spec.ts › v1-only capability › a v1-only status negotiates t
 auth-transition.spec.ts › v1-only capability › an old-v2 server without the refresh route leaves no durable credential
 auth-transition.spec.ts › v2 bearer session › sends the bearer ahead of a legacy cookie and on auth routes
 auth-transition.spec.ts › v2 bearer session › signs in with the raw password, survives reload, and reuses the bearer
+diff-review-ux.spec.ts › desktop viewport › the enlarged pretty diff previews long lines and copies the full patch
 diff-review-ux.spec.ts › hovering unified old/new lines does not move diff rows; comments and modal sizing work
 diff-review-ux.spec.ts › modal size toggle remains an in-page dialog on a narrow viewport
+diff-review-ux.spec.ts › narrow touch viewport › the enlarged pretty diff previews long lines and copies the full patch
 diff-review-ux.spec.ts › touch diff maximize › touch maximizes and restores the loaded diff offline
 input-lock.spec.ts › input.html shows the shared sign-in dialog when cookie is missing
 mobile-modal-drawers.spec.ts › Markdown and diff modals sit above open mobile navigation drawers
