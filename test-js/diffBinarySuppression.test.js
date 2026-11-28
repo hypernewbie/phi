@@ -11,6 +11,7 @@
  *     rendering an empty panel
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { html, parse } from 'diff2html';
 import { setupDomHarness, stubWebSocket } from './_dom.js';
 import { DiffController } from '../web/diff.js';
 
@@ -62,34 +63,10 @@ function buildAppStub({
     };
 }
 
-/** Diff2Html stub that renders one `.d2h-file-wrapper` per `diff --git`
- *  section in the text it actually receives, so tests can prove which
- *  sections reached the renderer. */
 function installDiff2HtmlSpy() {
-    const html = vi.fn((text) => {
-        const headers = text
-            .split('\n')
-            .filter((line) => line.startsWith('diff --git '));
-        return `<div class="d2h-wrapper">${headers
-            .map(
-                (header) => `
-                <div class="d2h-file-wrapper">
-                    <div class="d2h-file-header">
-                        <span class="d2h-file-name">${header.split(' b/').pop()}</span>
-                    </div>
-                </div>`,
-            )
-            .join('')}</div>`;
-    });
-    const parse = vi.fn((text) =>
-        text
-            .split('\n')
-            .filter((line) => line.startsWith('diff --git '))
-            .map((header) => ({ newName: header.split(' b/').pop() })),
-    );
-    window.Diff2Html = { parse, html, sanitize: vi.fn((s) => s) };
-    window.DOMPurify = window.DOMPurify || { sanitize: vi.fn((s) => s) };
-    return { parse, html };
+    const renderer = { parse: vi.fn(parse), html: vi.fn(html) };
+    vi.stubGlobal('Diff2Html', renderer);
+    return renderer;
 }
 
 function buildController() {
@@ -123,14 +100,8 @@ describe('DiffController — binary sections are not rendered', () => {
         const diffCtrl = buildController();
         diffCtrl.renderRichDiff(`${BINARY_SECTION}\n${TEXT_SECTION}\n`);
 
-        const renderedText = html.mock.calls[0][0];
-        expect(renderedText).not.toContain('logo.png');
-        expect(renderedText).not.toContain('Binary files');
-        expect(renderedText).toContain(
-            'diff --git a/src/main.go b/src/main.go',
-        );
-        expect(renderedText).toContain('+new');
-        expect(parse.mock.calls[0][0]).toBe(renderedText);
+        expect(parse).toHaveBeenCalledExactlyOnceWith(`${TEXT_SECTION}\n`);
+        expect(html.mock.calls[0][0]).toBe(parse.mock.results[0].value);
 
         const wrappers =
             diffCtrl.diffModalBody.querySelectorAll('.d2h-file-wrapper');
@@ -240,10 +211,14 @@ describe('DiffController — _splitDiffChunks', () => {
 +new`;
         diffCtrl.renderRichDiff(`${BINARY_SECTION}\n${quoted}\n`);
 
-        const rendered = window.Diff2Html.html.mock.calls[0][0];
-        expect(rendered).toContain('caf');
-        expect(rendered).toContain('+new');
-        expect(rendered).not.toContain('logo.png');
+        const body = diffCtrl.diffModalBody;
+        expect(body.querySelector('.d2h-file-name').textContent).toContain(
+            'caf',
+        );
+        expect(
+            body.querySelector('.d2h-ins .d2h-code-line-ctn').textContent,
+        ).toBe('new');
+        expect(body.querySelectorAll('.d2h-file-wrapper')).toHaveLength(1);
     });
 
     it('splits merge-commit sections at diff --cc headers', () => {
@@ -298,10 +273,12 @@ diff --cc f.txt
 `;
         diffCtrl.renderRichDiff(mergeDiff);
 
-        const rendered = window.Diff2Html.html.mock.calls[0][0];
-        expect(rendered).toContain('diff --cc f.txt');
-        expect(rendered).toContain('+ SIDE');
-        expect(rendered).not.toContain('Binary files differ');
+        const body = diffCtrl.diffModalBody;
+        expect(body.querySelector('.d2h-file-name').textContent).toBe('f.txt');
+        expect(
+            body.querySelector('.d2h-ins .d2h-code-line-ctn').textContent,
+        ).toBe('SIDE');
+        expect(body.querySelectorAll('.d2h-file-wrapper')).toHaveLength(1);
         expect(
             diffCtrl.diffModalBody.querySelector('.git-binary-note')
                 .textContent,

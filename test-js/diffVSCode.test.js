@@ -82,7 +82,9 @@ function installMockDiff2Html(parsedFiles) {
         })
         .join('');
     window.Diff2Html = {
-        parse: vi.fn(() => parsedFiles),
+        parse: vi.fn(() =>
+            parsedFiles.map((file) => ({ blocks: [], ...file })),
+        ),
         html: vi.fn(() => html),
         sanitize: vi.fn((s) => s),
     };

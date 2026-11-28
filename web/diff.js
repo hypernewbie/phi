@@ -180,44 +180,34 @@ export function findReusableShellTab(tabs, activeTab, { useExistingTerminalTab, 
     }
     return null;
 }
-// DIFF_LINE_CLIP_CHARS bounds one hunk content line handed to the rich
-// diff. A generated file can put its whole content on a single line (a
-// minified search index is ~800k chars). Every 256px tile that touches
-// such a text run costs the compositor ~200 ms to raster, and a
-// full-window modal has nothing else to show, so the main thread blocks
-// on the commit and the UI freezes. No line a person reviews is this
-// long.
+// Limit the text runs sent to the browser. One generated line can contain
+// hundreds of thousands of glyphs, making compositor rasterization slow.
 export const DIFF_LINE_CLIP_CHARS = 4000;
-// clipDiffLines shortens hunk content lines longer than maxChars: the
-// marker leads the line, naming the full length, and the first maxChars
-// content chars follow. (A trailing marker would sit tens of thousands
-// of pixels off-screen to the right, past the kept text.) File headers,
-// hunk headers and binary markers pass through untouched. Returns the
-// input itself when no line is long enough. Pure.
-export function clipDiffLines(patch, maxChars = DIFF_LINE_CLIP_CHARS) {
-    if (!patch || patch.length <= maxChars)
-        return patch;
-    let inHunk = false;
-    let changed = false;
-    const lines = patch.split('\n').map((line) => {
-        const body = line.endsWith('\r') ? line.slice(0, -1) : line;
-        if (body.startsWith('diff --git ') ||
-            body.startsWith('diff --cc ') ||
-            body.startsWith('diff --combined ')) {
-            inHunk = false;
+/** Shorten the renderer's parsed lines, not the raw patch. The parser has
+ *  already assigned line types and numbers, including for combined diffs.
+ *  Put the marker first so it is visible without scrolling sideways. */
+function previewLongDiffLines(files) {
+    let clipped = false;
+    for (const file of files) {
+        const prefixLength = file.isCombined ? 2 : 1;
+        for (const block of file.blocks) {
+            for (const line of block.lines) {
+                const original = line.content;
+                let end = prefixLength + DIFF_LINE_CLIP_CHARS;
+                if (original.length <= end)
+                    continue;
+                // Do not cut a UTF-16 surrogate pair in half.
+                const last = original.charCodeAt(end - 1);
+                if (last >= 0xd800 && last <= 0xdbff)
+                    end--;
+                const length = original.length - prefixLength;
+                const shown = end - prefixLength;
+                line.content = `${original.slice(0, prefixLength)}…[${length.toLocaleString()}-char line, first ${shown.toLocaleString()} shown] ${original.slice(prefixLength, end)}`;
+                clipped = true;
+            }
         }
-        else if (body.startsWith('@@')) {
-            inHunk = true;
-        }
-        else if (inHunk &&
-            body.length - 1 > maxChars &&
-            (body[0] === ' ' || body[0] === '+' || body[0] === '-')) {
-            changed = true;
-            return `${body[0]}…[${(body.length - 1).toLocaleString()}-char line, first ${maxChars.toLocaleString()} shown] ${body.slice(1, 1 + maxChars)}`;
-        }
-        return line;
-    });
-    return changed ? lines.join('\n') : patch;
+    }
+    return clipped;
 }
 export class DiffController {
     app;
@@ -3681,6 +3671,19 @@ export class DiffController {
         note.textContent = `Skipped ${binaryNames.length} binary file${binaryNames.length === 1 ? '' : 's'}: ${shown}${rest > 0 ? `, +${rest} more` : ''}`;
         this.diffModalBody?.prepend(note);
     }
+    _insertDiffPreviewNote(rawDiffText) {
+        const note = document.createElement('div');
+        note.className = 'git-diff-preview-note';
+        const copy = document.createElement('button');
+        copy.className = 'diff-review-btn secondary';
+        copy.type = 'button';
+        copy.textContent = 'Copy full patch';
+        copy.addEventListener('click', () => {
+            this.app.tabManager.copyTextRobustly(rawDiffText);
+        });
+        note.append('Long lines are shown as previews.', copy);
+        this.diffModalBody?.prepend(note);
+    }
     renderRichDiff(rawDiffText) {
         if (!rawDiffText?.trim()) {
             this.diffModalBody.innerHTML =
@@ -3690,13 +3693,8 @@ export class DiffController {
             this._refreshDiffProjectActions();
             return;
         }
-        // Binary sections are dropped before diff2html sees them: a
-        // binary blob has no line structure to render. Filtering the
-        // patch text (not the rendered DOM) keeps parsed file records
-        // and wrapper indices aligned, so VS Code actions and review
-        // overlays still pair with the right file. Lines past the clip
-        // bound are shortened in the same pass for the same reason: the
-        // cached raw text and copy-diff keep the full patch.
+        // Skip binary sections before parsing, including older responses
+        // that leaked binary bytes instead of a Git binary marker.
         const binaryNames = [];
         const renderText = this._splitDiffChunks(rawDiffText)
             .filter((chunk) => {
@@ -3706,7 +3704,9 @@ export class DiffController {
                 binaryNames.push(chunk.name);
             return false;
         })
-            .map((chunk) => clipDiffLines(chunk.text))
+            // diff2html recognizes --combined, but not its --cc alias,
+            // as a file boundary. Keep adjacent merge files separate.
+            .map(({ text }) => text.replace(/^diff --cc /, 'diff --combined '))
             .join('\n');
         if (!renderText.trim()) {
             const message = binaryNames.length > 0
@@ -3719,26 +3719,15 @@ export class DiffController {
         }
         const isDrawer = isDiffDrawerViewport();
         const outputFormat = isDrawer ? 'line-by-line' : this.currentLayout;
-        // Parse once with diff2html so we can map rendered file
-        // headers / list entries to their parsed file records. Diff2Html
-        // can decorate names like "old -> new" (renames) and append
-        // binary/quoted decorations; reading those as labels would
-        // conflate "where the file is" with "what to render". The
-        // parsed records give us the newName / oldName / isDeleted /
-        // isBinary flags directly.
-        const parsedFiles = (() => {
-            try {
-                if (typeof window.Diff2Html?.parse !== 'function')
-                    return [];
-                return window.Diff2Html.parse(renderText);
-            }
-            catch {
-                return [];
-            }
-        })();
-        const diffHtml = window.Diff2Html.html(renderText, {
+        // Use the same parsed files for rendering and for VS Code targets.
+        const parsedFiles = window.Diff2Html.parse(renderText);
+        const clipped = previewLongDiffLines(parsedFiles);
+        const diffHtml = window.Diff2Html.html(parsedFiles, {
             drawFileList: !isDrawer,
             matching: 'lines',
+            // A preview (including its marker) is longer than this limit.
+            // Do not run the costly word diff on it just because we clipped it.
+            maxLineLengthHighlight: DIFF_LINE_CLIP_CHARS,
             outputFormat,
             colorScheme: 'dark',
         });
@@ -3775,6 +3764,9 @@ export class DiffController {
         this.diffModalBody?.replaceChildren(...Array.from(parsed.body.childNodes));
         if (binaryNames.length > 0) {
             this._insertBinaryNote(binaryNames);
+        }
+        if (clipped) {
+            this._insertDiffPreviewNote(rawDiffText);
         }
         if (this.syntaxHighlightEnabled) {
             this._applySyntaxHighlighting();

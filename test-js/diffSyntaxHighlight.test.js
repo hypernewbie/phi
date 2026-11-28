@@ -144,6 +144,7 @@ describe('DiffController syntax highlighting & context buttons', () => {
                 ),
             };
             window.Diff2Html = {
+                parse: vi.fn(() => []),
                 html: vi.fn(
                     () => `
                     <div class="d2h-wrapper">

@@ -6903,6 +6903,10 @@ html[data-phi-config-page] .settings-modal {
         max-width: 38vw;
     }
 
+    #diff-modal-title {
+        min-width: min-content;
+    }
+
     .diff-modal-body .d2h-file-wrapper {
         border-left: none !important;
         border-right: none !important;
@@ -6952,10 +6956,18 @@ html[data-phi-config-page] .settings-modal {
        (`outputFormat: 'line-by-line'`), so wrapping only makes a row taller
        and can't misalign two panes. Pin the line number column to the top
        visual row of a wrapped line. */
-    .diff-modal-body .d2h-code-line-ctn,
     .diff-modal-body .d2h-code-line {
+        display: flex;
+        gap: 0.5ch;
+        /* The vendor width still reserves 16em for absolute line numbers.
+           Ours sit in a separate table cell, so use the full code cell. */
+        width: auto;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+    .diff-modal-body .d2h-code-line-ctn {
+        min-width: 0;
         white-space: pre-wrap !important;
-        word-break: break-word !important;
         overflow-wrap: anywhere !important;
     }
     .diff-modal-body .d2h-code-linenumber,
@@ -8099,7 +8111,8 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 }
 
 #diff-modal .git-view-cache-note,
-#diff-modal .git-binary-note {
+#diff-modal .git-binary-note,
+#diff-modal .git-diff-preview-note {
     padding: 0.4286rem 0.8571rem;
     border-bottom: 1px solid var(--bg-border);
     color: var(--text-muted);
@@ -8111,6 +8124,19 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
    inside the modal instead of stretching it sideways. */
 #diff-modal .git-binary-note {
     overflow-wrap: anywhere;
+}
+
+#diff-modal .git-diff-preview-note {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4286rem;
+}
+
+@media (any-pointer: coarse) {
+    #diff-modal .git-diff-preview-note button {
+        min-height: 44px;
+    }
 }
 
 /* When the file list is hidden, the diff action bar still shows —

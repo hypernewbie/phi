@@ -242,6 +242,105 @@ test('hovering unified old/new lines does not move diff rows; comments and modal
     await expect(modal).toBeHidden();
 });
 
+for (const mobile of [false, true]) {
+    test.describe(mobile ? 'narrow touch viewport' : 'desktop viewport', () => {
+        test.use({
+            viewport: mobile
+                ? { width: 360, height: 800 }
+                : { width: 1600, height: 900 },
+            hasTouch: mobile,
+            isMobile: mobile,
+        });
+
+        test('the enlarged pretty diff previews long lines and copies the full patch', async ({
+            page,
+        }) => {
+            const raw = `${RAW_DIFF}@@ -150 +151 @@\n-${'a,'.repeat(400_000)}\n+${'b;'.repeat(400_000)}end of patch\n`;
+            if (mobile) {
+                await page.route('**/api/config', async (route) => {
+                    const response = await route.fetch();
+                    await route.fulfill({
+                        response,
+                        json: { ...(await response.json()), ui_font_size: 20 },
+                    });
+                });
+            }
+            await page.addInitScript(() => {
+                Object.defineProperty(navigator, 'clipboard', {
+                    value: {
+                        writeText: async (text: string) => {
+                            (
+                                window as Window & { copiedPatch?: string }
+                            ).copiedPatch = text;
+                        },
+                    },
+                });
+            });
+            await page.route('**/api/git/raw-diff?*', (route) =>
+                route.fulfill({
+                    contentType: 'text/plain',
+                    // Exercise the pretty viewer independently of the ANSI panel.
+                    body: new URL(route.request().url()).searchParams.has(
+                        'ansi',
+                    )
+                        ? RAW_DIFF
+                        : raw,
+                }),
+            );
+            await page.goto(phi.url);
+            await page
+                .locator('#diff-term-container .xterm')
+                .first()
+                .waitFor({ state: 'attached' });
+            if (mobile)
+                await expect(page.locator('html')).toHaveCSS(
+                    'font-size',
+                    '20px',
+                );
+            const panel = page.locator('#diff-panel');
+            if (
+                await panel.evaluate(
+                    (el, mobile) =>
+                        mobile
+                            ? !el.classList.contains('mobile-open')
+                            : el.classList.contains('hidden'),
+                    mobile,
+                )
+            ) {
+                await page.locator('#header-diff-toggle-btn').click();
+            }
+            await page.locator('.diff-tab-btn[data-tab="diff"]').click();
+            await page.locator('#rich-diff-btn').click();
+            const modal = page.locator('#diff-modal');
+            const copy = modal.getByRole('button', { name: 'Copy full patch' });
+            await expect(copy).toBeVisible();
+            const size = modal.locator('#diff-modal-size-btn');
+            await size.click();
+            await expect(size).toHaveAttribute('aria-pressed', 'true');
+            const preview = modal.locator('.d2h-ins .d2h-code-line-ctn').last();
+            await expect(preview).toBeVisible();
+            await expect(preview).toContainText('…[');
+            expect((await preview.textContent())?.length).toBeLessThan(4_100);
+            await expect(preview.locator('ins')).toHaveCount(0);
+            await expect(modal.locator('.d2h-diff-table')).not.toContainText(
+                'end of patch',
+            );
+            await expect(copy).toBeInViewport({ ratio: 1 });
+
+            if (mobile) await copy.tap();
+            else await copy.click();
+            expect(
+                await page.evaluate(
+                    (expected) =>
+                        (window as Window & { copiedPatch?: string })
+                            .copiedPatch === expected,
+                    raw,
+                ),
+            ).toBe(true);
+        });
+    });
+}
+
 test('modal size toggle remains an in-page dialog on a narrow viewport', async ({
     page,
 }) => {
