@@ -3,16 +3,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { setupDomHarness, mockFetch } from './_dom.js';
 import { KanbanManager } from '../web/kanban.js';
 
-// Covers the kanban API/transport fixes: apiRequest supports any method
-// (PUT used by moveTask/saveTaskDetail), 401 -> drop token, error messages
-// are normalized via extractVikunjaError, and DELETE/PUT bodies are sent
-// correctly. Never `new`s the controller: hand-built `this`.
+// Covers the kanban transport: apiRequest supports any method (PUT used by
+// moveTask/saveTaskDetail), a 401 asks for a new sign-in instead of
+// logging in again, error messages are normalized via extractVikunjaError, and
+// DELETE/PUT bodies are sent correctly.
+//
+// The session belongs to the server: the client sends no credential, and the
+// path is /api/kanban/v1<path>. Never `new`s the controller: hand-built `this`.
 
 setupDomHarness();
 
-function ctxWithSession({ token = 'tok', url = 'http://vik.local' } = {}) {
-    sessionStorage.setItem('vikunja_token', token);
-    localStorage.setItem('vikunja_url', url);
+function ctxWithSession() {
     const c = Object.create(KanbanManager.prototype);
     c.buckets = [{ id: 1, title: 'Doing' }];
     c.taskCache = {
@@ -25,7 +26,7 @@ function ctxWithSession({ token = 'tok', url = 'http://vik.local' } = {}) {
 beforeEach(() => vi.clearAllMocks());
 
 describe('KanbanManager.apiRequest', () => {
-    it('forwards the specified HTTP method to /api/proxy', async () => {
+    it('forwards the specified HTTP method to the server-side route', async () => {
         const c = ctxWithSession();
         mockFetch((_url, _opts) => ({
             ok: true,
@@ -34,26 +35,24 @@ describe('KanbanManager.apiRequest', () => {
         }));
         await c.apiPut('/tasks/42', { title: 'hi' });
         const [callUrl, callOpts] = fetch.mock.calls[0];
-        // proxy URL encodes the upstream URL
-        expect(callUrl).toContain('/api/proxy?url=');
+        expect(callUrl).toContain('/api/kanban/v1/tasks/42');
         expect(callOpts.method).toBe('PUT');
-        expect(callOpts.headers['X-Phi-Upstream-Authorization']).toBe(
-            'Bearer tok',
-        );
         expect(JSON.parse(callOpts.body)).toEqual({ title: 'hi' });
     });
 
-    it('builds the upstream URL as <vikunja_url>/api/v1<path>', async () => {
-        const c = ctxWithSession({ url: 'http://vik.local' });
+    it('never sends a Vikunja credential to the client side', async () => {
+        const c = ctxWithSession();
         mockFetch(() => ({ ok: true, json: { id: 1 } }));
         await c.apiPost('/projects/1/tasks', { title: 'x' });
-        const decoded = decodeURIComponent(
-            fetch.mock.calls[0][0].split('url=')[1],
-        );
-        expect(decoded).toBe('http://vik.local/api/v1/projects/1/tasks');
+        const [callUrl, callOpts] = fetch.mock.calls[0];
+        expect(callUrl).toBe('/api/kanban/v1/projects/1/tasks');
+        expect(
+            callOpts.headers?.['X-Phi-Upstream-Authorization'],
+        ).toBeUndefined();
+        expect(callOpts.headers?.Authorization).toBeUndefined();
     });
 
-    it('drops the token and throws on 401', async () => {
+    it('asks for a new sign-in on 401 and never retries', async () => {
         const c = ctxWithSession();
         mockFetch(() => ({
             ok: false,
@@ -61,7 +60,9 @@ describe('KanbanManager.apiRequest', () => {
             text: '{"message":"unauthorized"}',
         }));
         await expect(c.apiGet('/x')).rejects.toThrow(/Session expired/);
-        expect(sessionStorage.getItem('vikunja_token')).toBeNull();
+        // One request only: the server already refreshed the session once,
+        // and a client-side retry is what used to loop.
+        expect(fetch).toHaveBeenCalledTimes(1);
     });
 
     it('normalizes Vikunja error envelopes via extractVikunjaError', async () => {
@@ -101,12 +102,18 @@ describe('KanbanManager.apiRequest', () => {
         expect(await c.apiPut('/tasks/42', {})).toBeNull();
     });
 
-    it('omits upstream Authorization when no token is in sessionStorage', async () => {
-        const c = ctxWithSession({ token: null });
-        mockFetch(() => ({ ok: true, json: {} }));
-        await c.apiGet('/x');
-        const headers = fetch.mock.calls[0][1].headers;
-        expect(headers['X-Phi-Upstream-Authorization']).toBeUndefined();
+    it('turns a rate limit into a readable sentence with the wait', async () => {
+        const c = ctxWithSession();
+        mockFetch(() => ({
+            ok: false,
+            status: 429,
+            text: '{"message":"Too Many Requests"}',
+            headers: { 'Retry-After': '42' },
+        }));
+        const err = await c.apiGet('/x').catch((e) => e);
+        expect(err.message).toMatch(/rate-limiting/i);
+        expect(err.message).toMatch(/42s/);
+        expect(err.message).not.toMatch(/Too Many Requests/);
     });
 });
 
@@ -118,9 +125,8 @@ describe('KanbanManager.moveTask (uses Vikunja dedicated bucket-move endpoint)',
         mockFetch(() => ({ ok: true, json: null }));
         await c.moveTask(42, 1);
         const [callUrl, callOpts] = fetch.mock.calls[0];
-        const decoded = decodeURIComponent(callUrl.split('url=')[1]);
-        expect(decoded).toBe(
-            'http://vik.local/api/v1/projects/9/views/5/buckets/1/tasks',
+        expect(callUrl).toBe(
+            '/api/kanban/v1/projects/9/views/5/buckets/1/tasks',
         );
         expect(callOpts.method).toBe('POST');
         expect(JSON.parse(callOpts.body)).toEqual({ task_id: 42 });
@@ -145,9 +151,8 @@ describe('KanbanManager.moveTask (uses Vikunja dedicated bucket-move endpoint)',
 
     it('throws if the task is not in cache', async () => {
         const c = ctxWithSession();
-        c.currentProjectId = 9;
-        c.currentViewId = 5;
         c.taskCache = {};
+        mockFetch(() => ({ ok: true, json: null }));
         await expect(c.moveTask(999, 1)).rejects.toThrow(/not in cache/);
     });
 });
@@ -172,9 +177,7 @@ describe('KanbanManager.saveTaskDetail (UPDATE uses POST)', () => {
             container,
         );
         const [callUrl, callOpts] = fetch.mock.calls[0];
-        expect(decodeURIComponent(callUrl.split('url=')[1])).toBe(
-            'http://vik.local/api/v1/tasks/42',
-        );
+        expect(callUrl).toBe('/api/kanban/v1/tasks/42');
         expect(callOpts.method).toBe('POST');
         expect(JSON.parse(callOpts.body).title).toBe('new');
     });

@@ -102,3 +102,20 @@ export function stubWebSocket() {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     return FakeWebSocket;
 }
+
+// boardPath extracts the Vikunja path from one board request.
+//
+// The board goes through the server: /api/kanban/v1<path>. Older builds
+// proxied the instance directly: /api/proxy?url=<instance>/api/v1<path>.
+export function boardTarget(url) {
+    const raw = String(url);
+    if (raw.includes('/api/kanban/v1')) {
+        return raw.split('/api/kanban/v1')[1];
+    }
+    const proxied = decodeURIComponent(raw.split('url=')[1] || '');
+    return proxied.replace(/^.*\/api\/v1/, '');
+}
+
+export function boardPath(url) {
+    return boardTarget(url).split('?')[0];
+}

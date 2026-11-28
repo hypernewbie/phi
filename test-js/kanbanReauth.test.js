@@ -3,47 +3,48 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { setupDomHarness, mockFetch } from './_dom.js';
 import { KanbanManager } from '../web/kanban.js';
 
-// Vikunja hands out a JWT that expires while the board sits open. Only the
-// board-load path recovered from that, via initTabContainer's saved-vault
-// login, so the board itself would quietly come back but the next thing the
-// user touched -- opening a description, saving, dragging -- died with
-// "Session expired. Please reconnect."
+// The Kanban session belongs to the server.
 //
-// Re-auth now lives in apiRequest, so every call recovers.
+// It used to belong to the browser: the client held the Vikunja token and
+// logged in again whenever the instance expired it. A board refresh fires
+// several requests at once, all of them 401 together, and each one started
+// its own login: four logins for one board open, and the instance's rate
+// limit (10 logins a minute) was reached in three clicks.
+//
+// Now the client asks the server for a session, the server logs in once per
+// token lifetime, and the client never holds a credential.
 
 setupDomHarness();
 
-function manager() {
-    localStorage.setItem('vikunja_url', 'http://vik.local');
-    localStorage.setItem('vikunja_username', 'me');
-    sessionStorage.setItem('vikunja_token', 'stale');
-
+function manager(
+    vault = { hasPassword: true, username: 'me', url: 'http://vik.local' },
+) {
     const c = Object.create(KanbanManager.prototype);
     c.app = { showToast: vi.fn() };
     c.taskCache = {};
     c.buckets = [];
     c.currentProjectId = 9;
     c.currentViewId = 5;
-    c._reauthPromise = null;
-    c.getSavedVaultCredentials = vi.fn(async () => ({
-        password: 'hunter2',
-        username: 'me',
-        url: 'http://vik.local',
-    }));
-    c.getSavedVaultPassword = vi.fn(async () => 'hunter2');
-    c.attemptLogin = vi.fn(async () => 'fresh-token');
+    c._initPromise = null;
+    c.getSavedVaultCredentials = vi.fn(async () => vault);
+    c.loadAndRenderBoard = vi.fn(async () => {});
+    c.renderLoading = vi.fn();
+    c.renderLoginForm = vi.fn();
     return c;
 }
 
-// Fails every request with 401 until a fresh token shows up in the header.
-function expiringToken({ freshToken = 'fresh-token' } = {}) {
+// Counts the session requests the client makes.
+function countSessions(handler) {
     const calls = [];
     mockFetch((url, opts) => {
-        const auth = opts?.headers?.['X-Phi-Upstream-Authorization'] || '';
-        calls.push({ url: String(url), auth });
-        if (auth !== `Bearer ${freshToken}`)
-            return { ok: false, status: 401, text: 'expired' };
-        return { ok: true, json: { id: 1, title: 'Recovered' } };
+        const target = String(url);
+        calls.push({ url: target, method: opts?.method, body: opts?.body });
+        if (target.includes('/api/kanban/session')) {
+            return handler
+                ? handler(target, opts)
+                : { ok: true, json: { ok: true } };
+        }
+        return { ok: true, json: {} };
     });
     return calls;
 }
@@ -54,98 +55,166 @@ beforeEach(() => {
     sessionStorage.clear();
 });
 
-describe('an expired Vikunja session recovers itself', () => {
-    it('re-authenticates and replays the call that hit the 401', async () => {
+describe('the Kanban session lives on the server', () => {
+    it('asks the server for a session and never logs in itself', async () => {
         const c = manager();
-        const calls = expiringToken();
-
-        // This is the call the user reported failing: opening a description.
-        const task = await c.apiGet('/tasks/1');
-
-        expect(task).toEqual({ id: 1, title: 'Recovered' });
-        expect(c.attemptLogin).toHaveBeenCalledWith(
-            'http://vik.local',
-            'me',
-            'hunter2',
-        );
-        expect(sessionStorage.getItem('vikunja_token')).toBe('fresh-token');
-        // Original attempt with the stale token, then the replay.
-        expect(calls.map((c) => c.auth)).toEqual([
-            'Bearer stale',
-            'Bearer fresh-token',
-        ]);
+        const calls = countSessions();
+        await c.openServerSession();
+        expect(calls).toHaveLength(1);
+        expect(calls[0].url).toBe('/api/kanban/session');
+        expect(calls[0].method).toBe('POST');
+        // No credential anywhere in the request.
+        expect(calls[0].body).toBeUndefined();
     });
 
-    it('recovers a write, not just a read', async () => {
+    it('opens one session for a burst of concurrent requests', async () => {
         const c = manager();
-        expiringToken();
-
-        await expect(
-            c.apiPost('/tasks/1', { title: 'x' }),
-        ).resolves.toBeTruthy();
-        expect(c.attemptLogin).toHaveBeenCalledTimes(1);
-    });
-
-    it('logs in once for a burst of parallel 401s', async () => {
-        // A board refresh fires several requests together; they all 401.
-        const c = manager();
-        expiringToken();
-
+        const calls = countSessions();
         await Promise.all([
-            c.apiGet('/projects'),
-            c.apiGet('/tasks/1'),
-            c.apiGet('/tasks/2'),
+            c.openServerSession(),
+            c.openServerSession(),
+            c.openServerSession(),
         ]);
-
-        expect(c.attemptLogin).toHaveBeenCalledTimes(1);
+        expect(calls).toHaveLength(1);
     });
 
-    it('gives up after one retry rather than looping', async () => {
+    it('never sends a Vikunja token with a board request', async () => {
         const c = manager();
-        // Login "succeeds" but the token it returns is still rejected.
-        c.attemptLogin = vi.fn(async () => 'also-bad');
-        const calls = expiringToken();
-
-        await expect(c.apiGet('/tasks/1')).rejects.toThrow(/Session expired/);
-        expect(c.attemptLogin).toHaveBeenCalledTimes(1);
-        expect(calls).toHaveLength(2);
+        countSessions();
+        await c.apiGet('/projects');
+        const boardCall = fetch.mock.calls.find((call) =>
+            String(call[0]).includes('/api/kanban/v1/projects'),
+        );
+        expect(boardCall).toBeTruthy();
+        expect(
+            boardCall[1].headers?.['X-Phi-Upstream-Authorization'],
+        ).toBeUndefined();
     });
 
-    it('surfaces the original error when no vault credentials are saved', async () => {
+    it('surfaces a rate limit as a sentence with the wait', async () => {
         const c = manager();
-        c.getSavedVaultCredentials = vi.fn(async () => ({
-            password: null,
-            username: null,
-            url: null,
+        countSessions(() => ({
+            ok: false,
+            status: 429,
+            text: '{"message":"Too Many Requests"}',
+            headers: { 'Retry-After': '30' },
         }));
-        c.getSavedVaultPassword = vi.fn(async () => null);
-        expiringToken();
-
-        await expect(c.apiGet('/tasks/1')).rejects.toThrow(/Session expired/);
-        expect(c.attemptLogin).not.toHaveBeenCalled();
+        const err = await c.openServerSession().catch((e) => e);
+        expect(err.message).toMatch(/rate-limiting/i);
+        expect(err.message).toMatch(/30s/);
+        expect(err.message).not.toMatch(/Too Many Requests/);
     });
 
-    it('does not retry when the login itself throws', async () => {
+    it('surfaces a refused sign-in without the raw envelope', async () => {
         const c = manager();
-        c.attemptLogin = vi.fn(async () => {
-            throw new Error('vikunja down');
-        });
-        expiringToken();
+        countSessions(() => ({
+            ok: false,
+            status: 403,
+            text: '{"message":"Wrong username or password."}',
+        }));
+        const err = await c.openServerSession().catch((e) => e);
+        expect(err.message).toBe('Wrong username or password.');
+    });
+});
 
-        await expect(c.apiGet('/tasks/1')).rejects.toThrow(/Session expired/);
-        expect(c.attemptLogin).toHaveBeenCalledTimes(1);
+describe('a board init asks for one session, not one per click', () => {
+    it('connects once and renders the board', async () => {
+        const c = manager();
+        const calls = countSessions();
+        const container = document.createElement('div');
+        await c.initTabContainer(container);
+        expect(
+            calls.filter((call) => call.url.includes('/session')),
+        ).toHaveLength(1);
+        expect(c.loadAndRenderBoard).toHaveBeenCalledTimes(1);
     });
 
-    it('clears the single-flight guard so a later expiry can recover too', async () => {
+    it('does not ask twice when an init and a click land together', async () => {
         const c = manager();
-        expiringToken();
-        await c.apiGet('/tasks/1');
-        expect(c._reauthPromise).toBeNull();
+        const calls = countSessions();
+        const container = document.createElement('div');
+        await Promise.all([
+            c.initTabContainer(container),
+            c.initTabContainer(container),
+        ]);
+        expect(
+            calls.filter((call) => call.url.includes('/session')),
+        ).toHaveLength(1);
+    });
 
-        // Second expiry, later in the session.
-        sessionStorage.setItem('vikunja_token', 'stale-again');
-        expiringToken();
-        await expect(c.apiGet('/tasks/2')).resolves.toBeTruthy();
-        expect(c.attemptLogin).toHaveBeenCalledTimes(2);
+    it('shows the sign-in form when the session is refused', async () => {
+        const c = manager();
+        countSessions(() => ({
+            ok: false,
+            status: 403,
+            text: '{"message":"Wrong username or password."}',
+        }));
+        const container = document.createElement('div');
+        await c.initTabContainer(container);
+        expect(c.renderLoginForm).toHaveBeenCalledTimes(1);
+        expect(c.loadAndRenderBoard).not.toHaveBeenCalled();
+    });
+
+    it('shows the sign-in form when no credentials are saved', async () => {
+        const c = manager({ hasPassword: false, username: null, url: null });
+        const calls = countSessions();
+        const container = document.createElement('div');
+        await c.initTabContainer(container);
+        expect(
+            calls.filter((call) => call.url.includes('/session')),
+        ).toHaveLength(0);
+        expect(c.renderLoginForm).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('a backend switch keeps the board', () => {
+    it('does not delete the open flag when the backend changes', () => {
+        const c = manager();
+        c.activeDetailPanel = null;
+        c.activeOverlay = null;
+        c.escListener = null;
+        c._notesSaveTimer = null;
+        c.selectedNoteId = null;
+        c._notesEditorState = null;
+        c.boardContainer = null;
+        c.destroyStatsCharts = vi.fn();
+        c.unbindBoardDelegates = vi.fn();
+        localStorage.setItem('phi_kanban_open', '1');
+        c.resetForBackend();
+        expect(localStorage.getItem('phi_kanban_open')).toBe('1');
+    });
+
+    it('deletes the open flag when the tab is closed for good', () => {
+        const c = manager();
+        c.activeDetailPanel = null;
+        c.activeOverlay = null;
+        c.escListener = null;
+        c._notesSaveTimer = null;
+        c.selectedNoteId = null;
+        c._notesEditorState = null;
+        c.boardContainer = null;
+        c.destroyStatsCharts = vi.fn();
+        c.unbindBoardDelegates = vi.fn();
+        localStorage.setItem('phi_kanban_open', '1');
+        c.cleanup();
+        expect(localStorage.getItem('phi_kanban_open')).toBeNull();
+    });
+
+    it('keeps the open flag when the tab is only detached', () => {
+        const c = manager();
+        c.activeDetailPanel = null;
+        c.activeOverlay = null;
+        c.escListener = null;
+        c._notesSaveTimer = null;
+        c.selectedNoteId = null;
+        c._notesEditorState = null;
+        c.boardContainer = null;
+        c.destroyStatsCharts = vi.fn();
+        c.unbindBoardDelegates = vi.fn();
+        localStorage.setItem('phi_kanban_open', '1');
+        // A backend switch detaches the tab with the rest; the user did
+        // not close the board.
+        c.cleanup({ preserveOpenFlag: true });
+        expect(localStorage.getItem('phi_kanban_open')).toBe('1');
     });
 });

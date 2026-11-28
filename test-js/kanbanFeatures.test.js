@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import createDOMPurify from 'dompurify';
-import { setupDomHarness, mockFetch } from './_dom.js';
+import { setupDomHarness, mockFetch, boardTarget } from './_dom.js';
 import { KanbanManager } from '../web/kanban.js';
 import {
     buildFeatures,
@@ -687,7 +687,7 @@ describe('Feature loading keeps the Kanban bucket view authoritative', () => {
         sessionStorage.setItem('vikunja_token', 'tok');
         localStorage.setItem('vikunja_url', 'http://vik.local');
         mockFetch((url) => {
-            const upstream = decodeURIComponent(url.split('url=')[1]);
+            const upstream = boardTarget(url);
             if (upstream.endsWith('/projects?per_page=500'))
                 return [{ id: 9, title: 'Phi' }];
             if (upstream.endsWith('/projects/9/views?per_page=500'))
@@ -722,14 +722,12 @@ describe('Feature loading keeps the Kanban bucket view authoritative', () => {
 
         await c.loadAndRenderBoard(document.createElement('div'));
 
-        const upstreamUrls = fetch.mock.calls.map(([url]) =>
-            decodeURIComponent(url.split('url=')[1]),
+        const upstreamUrls = fetch.mock.calls.map(([url]) => boardTarget(url));
+        expect(upstreamUrls).toContain(
+            '/projects/9/views/5/tasks?per_page=500',
         );
         expect(upstreamUrls).toContain(
-            'http://vik.local/api/v1/projects/9/views/5/tasks?per_page=500',
-        );
-        expect(upstreamUrls).toContain(
-            'http://vik.local/api/v1/projects/9/tasks?per_page=500&expand=subtasks',
+            '/projects/9/tasks?per_page=500&expand=subtasks',
         );
         expect(c.buckets[0].tasks[0]).toMatchObject({
             id: 1,
@@ -758,9 +756,7 @@ describe('Feature API operations', () => {
 
         expect(fetch).toHaveBeenCalledTimes(2);
         const [createUrl, createOpts] = fetch.mock.calls[0];
-        expect(decodeURIComponent(createUrl.split('url=')[1])).toBe(
-            'http://vik.local/api/v1/projects/9/tasks',
-        );
+        expect(boardTarget(createUrl)).toBe('/projects/9/tasks');
         expect(createOpts.method).toBe('PUT');
         expect(JSON.parse(createOpts.body)).toEqual({
             title: 'Child',
@@ -768,9 +764,7 @@ describe('Feature API operations', () => {
             bucket_id: 7,
         });
         const [relationUrl, relationOpts] = fetch.mock.calls[1];
-        expect(decodeURIComponent(relationUrl.split('url=')[1])).toBe(
-            'http://vik.local/api/v1/tasks/1/relations',
-        );
+        expect(boardTarget(relationUrl)).toBe('/tasks/1/relations');
         expect(relationOpts.method).toBe('PUT');
         expect(JSON.parse(relationOpts.body)).toEqual({
             other_task_id: 22,
@@ -794,9 +788,7 @@ describe('Feature API operations', () => {
         );
 
         const [url, opts] = fetch.mock.calls[0];
-        expect(decodeURIComponent(url.split('url=')[1])).toBe(
-            'http://vik.local/api/v1/tasks/2',
-        );
+        expect(boardTarget(url)).toBe('/tasks/2');
         expect(opts.method).toBe('POST');
         expect(JSON.parse(opts.body).done).toBe(true);
         expect(updated.done_at).toBe('2026-07-03T00:00:00Z');

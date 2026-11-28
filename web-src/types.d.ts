@@ -88,7 +88,8 @@ export interface AppLike {
     // a known shape, so a wrong argument fails here rather than at runtime.
     kanbanManager?: {
         openBoard(): Promise<void>;
-        cleanup?(): void;
+        cleanup?(options?: { preserveOpenFlag?: boolean }): void;
+        resetForBackend?(): void;
     } | null;
     reviewManager?: {
         cleanup?(): void;

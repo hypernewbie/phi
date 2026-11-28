@@ -19,6 +19,18 @@ import {
 } from './kanban-features.js';
 import { sanitizeHtml } from './md-render.js';
 
+// KanbanError is one failed Kanban request with the sentence the user sees
+// and, when the instance is rate-limiting, the wait before a retry.
+export class KanbanError extends Error {
+    retryAfterSeconds: number;
+
+    constructor(message: string, retryAfterSeconds: number = 0) {
+        super(message);
+        this.name = 'KanbanError';
+        this.retryAfterSeconds = retryAfterSeconds;
+    }
+}
+
 export class KanbanManager {
     app: AppLike;
     activeDetailPanel: HTMLElement | null;
@@ -46,6 +58,11 @@ export class KanbanManager {
     _boardDelegateHost: HTMLElement | null;
     _taskWrites: Map<string, Promise<any>>;
     _reauthPromise: Promise<boolean> | null;
+    // One init at a time: a restore, a click and a backend switch can land
+    // together, and each one used to ask the instance for its own session.
+    _initPromise: Promise<void> | null;
+    // One session request at a time: the same callers, one flight.
+    _sessionPromise: Promise<void> | null;
 
     constructor(app: AppLike) {
         this.app = app;
@@ -64,6 +81,8 @@ export class KanbanManager {
         this._boardDelegateHost = null;
         this._taskWrites = new Map();
         this._reauthPromise = null;
+        this._initPromise = null;
+        this._sessionPromise = null;
         this.selectedNoteId = null;
         this._notesSaveTimer = null;
         this._notesEditorState = null;
@@ -79,10 +98,14 @@ export class KanbanManager {
         if (existing) {
             // BUG-4 fix: if the panel container was wiped (e.g. hot reload that
             // rebuilt the DOM but kept the tabs map), re-init it before showing.
+            // A panel that already shows something (the board, the sign-in
+            // form, an error with its own retry, or a load in flight) is left
+            // alone: re-initialising it would ask the instance for a session
+            // the user did not ask for.
             if (
                 existing.termContainer &&
                 !existing.termContainer.querySelector(
-                    '.kanban-toolbar, .kanban-login-form',
+                    '.kanban-toolbar, .kanban-login-form, .kanban-error-wrapper, .kanban-loading-wrapper',
                 )
             ) {
                 this.initTabContainer(existing.termContainer);
@@ -114,7 +137,25 @@ export class KanbanManager {
     // BUG-3 fix: tear down everything kanban added to the page when the tab closes.
     // Without this the ESC keydown listener, modal overlays, drag state, and
     // detail panel can outlive the tab and fire on the wrong pane.
-    cleanup(): void {
+    //
+    // preserveOpenFlag keeps the board's place across a backend switch: the
+    // tab is detached with the rest, but the user did not close the board.
+    cleanup(options: { preserveOpenFlag?: boolean } = {}): void {
+        this.teardownPanel();
+        if (options.preserveOpenFlag) return;
+        // The tab is gone: the board must not come back on its own.
+        localStorage.removeItem(serverKey('phi_kanban_open'));
+    }
+
+    // resetForBackend keeps the board and re-points it at the new backend.
+    // A backend switch must not delete the board: the user asked for the
+    // other server, not for a closed tab. The open flag stays, so the board
+    // comes back when this backend is shown again.
+    resetForBackend(): void {
+        this.teardownPanel();
+    }
+
+    private teardownPanel(): void {
         if (this.escListener) {
             document.removeEventListener('keydown', this.escListener);
             this.escListener = null;
@@ -139,12 +180,27 @@ export class KanbanManager {
         this.selectedNoteId = null;
         this._notesEditorState = null;
         this.boardContainer = null;
-        localStorage.removeItem(serverKey('phi_kanban_open'));
     }
 
     async initTabContainer(
         container: HTMLElement,
         isAutoRetry: boolean = false,
+    ): Promise<void> {
+        // One init at a time. A restore, a click and a backend switch can
+        // land together, and each one used to ask the instance for its own
+        // session: that is how the upstream rate limit was reached.
+        if (this._initPromise) return this._initPromise;
+        this._initPromise = this._initTabContainer(container, isAutoRetry);
+        try {
+            await this._initPromise;
+        } finally {
+            this._initPromise = null;
+        }
+    }
+
+    private async _initTabContainer(
+        container: HTMLElement,
+        isAutoRetry: boolean,
     ): Promise<void> {
         container.innerHTML = '';
         // Add kanban-panel without overwriting className — createTab →
@@ -155,66 +211,53 @@ export class KanbanManager {
         // paneId` early-return in switchTab, which never re-adds `.active`.
         container.classList.add('kanban-panel');
 
-        const token = sessionStorage.getItem('vikunja_token');
-        if (token) {
-            await this.loadAndRenderBoard(container, isAutoRetry);
-            return;
-        }
-
         this.renderLoading(container, 'Checking saved Kanban credentials...');
 
         const vault = await this.getSavedVaultCredentials();
-        // Vault is the durable cross-browser store; sync it to localStorage
-        // so a fresh browser/device gets the same username+url without
-        // re-typing. localStorage wins only when vault has nothing to say.
+        // The vault is the durable cross-browser store; the local copy is
+        // only a convenience for the form. Both are scoped per backend.
         if (vault.username)
-            localStorage.setItem('vikunja_username', vault.username);
-        if (vault.url) localStorage.setItem('vikunja_url', vault.url);
-        const savedPw = vault.password;
+            localStorage.setItem(serverKey('vikunja_username'), vault.username);
+        if (vault.url)
+            localStorage.setItem(serverKey('vikunja_url'), vault.url);
         const urlVal = (
             vault.url ||
-            localStorage.getItem('vikunja_url') ||
-            'http://charon:3456'
+            localStorage.getItem(serverKey('vikunja_url')) ||
+            ''
         ).replace(/\/$/, '');
         const userVal =
-            vault.username || localStorage.getItem('vikunja_username');
-        let autologinError: Error | null = null;
+            vault.username ||
+            localStorage.getItem(serverKey('vikunja_username'));
+        let sessionError: Error | null = null;
 
-        if (savedPw && userVal && urlVal) {
-            this.renderLoading(container, 'Logging in to Vikunja...');
+        if (vault.hasPassword && userVal && urlVal) {
+            this.renderLoading(container, 'Connecting to Vikunja...');
             try {
-                const loginToken = await this.attemptLogin(
-                    urlVal,
-                    userVal,
-                    savedPw,
-                );
-                sessionStorage.setItem('vikunja_token', loginToken);
+                // The server owns the session: one login serves every
+                // client of this backend, and no credential travels here.
+                await this.openServerSession();
                 await this.loadAndRenderBoard(container, isAutoRetry);
                 return;
             } catch (err) {
-                console.error('Headless autologin failed:', err);
-                autologinError = err as Error;
+                console.error('Kanban session failed:', err);
+                sessionError = err as Error;
             }
         }
 
-        // If no saved credentials or autologin failed, render login form prefilled
+        // If no saved credentials or the session failed, render login form prefilled
         this.renderLoginForm(container);
-        if (savedPw) {
-            const pwInput = container.querySelector(
-                '#kanban-password-input',
-            ) as HTMLInputElement | null;
+        if (vault.hasPassword) {
             const chkInput = container.querySelector(
                 '#kanban-remember-input',
             ) as HTMLInputElement | null;
-            if (pwInput) pwInput.value = savedPw;
             if (chkInput) chkInput.checked = true;
         }
-        if (autologinError) {
+        if (sessionError) {
             const errorEl = container.querySelector(
                 '#kanban-login-error',
             ) as HTMLElement | null;
             if (errorEl) {
-                errorEl.textContent = `Saved login failed: ${autologinError.message}`;
+                errorEl.textContent = sessionError.message;
                 errorEl.classList.remove('hidden');
             }
         }
@@ -230,54 +273,78 @@ export class KanbanManager {
     }
 
     async getSavedVaultCredentials(): Promise<{
-        password: string | null;
+        hasPassword: boolean;
         username: string | null;
         url: string | null;
     }> {
+        const empty = { hasPassword: false, username: null, url: null };
         try {
-            const res = await fetch('/api/config/kanban-vault');
-            if (!res.ok) return { password: null, username: null, url: null };
+            const res = await this.scopeFetch('/api/config/kanban-vault');
+            if (!res.ok) return empty;
             const data = await res.json();
             return {
-                password: data.password || null,
+                hasPassword: data.has_password === true,
                 username: data.username || null,
                 url: data.url || null,
             };
         } catch (e) {
             console.error('Failed to check kanban vault:', e);
-            return { password: null, username: null, url: null };
+            return empty;
         }
     }
 
-    async getSavedVaultPassword(): Promise<string | null> {
-        const c = await this.getSavedVaultCredentials();
-        return c.password;
+    // scopeFetch performs one request against the ACTIVE backend. The
+    // backend header rides along, so the request reaches the backend the
+    // user is looking at even in the window before the desktop host's
+    // active-profile claim lands.
+    private async scopeFetch(
+        path: string,
+        init: RequestInit = {},
+    ): Promise<Response> {
+        const scope = this.app?.scope;
+        if (scope && typeof scope.fetch === 'function') {
+            return scope.fetch(path, init);
+        }
+        return fetch(path, init);
     }
 
-    async attemptLogin(
-        url: string,
-        username: string,
-        password: string,
-    ): Promise<string> {
-        const proxyUrl = `/api/proxy?url=${encodeURIComponent(`${url}/api/v1/login`)}`;
-        const res = await fetch(proxyUrl, {
+    // openServerSession asks the server for the Kanban session. The server
+    // logs in at most once per token lifetime, so a new view, a reload or a
+    // backend switch never asks the instance for a new login.
+    //
+    // Single-flight: a burst of callers shares one request.
+    async openServerSession(): Promise<void> {
+        if (this._sessionPromise) return this._sessionPromise;
+        this._sessionPromise = this._openServerSession();
+        try {
+            await this._sessionPromise;
+        } finally {
+            this._sessionPromise = null;
+        }
+    }
+
+    private async _openServerSession(): Promise<void> {
+        const res = await this.scopeFetch('/api/kanban/session', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password }),
         });
+        if (!res.ok) throw await this.kanbanError(res);
+    }
 
-        if (!res.ok) {
-            const errText = await res.text();
-            throw new Error(
-                errText || `Login failed with status ${res.status}`,
-            );
+    // kanbanError turns one failed response into a readable error. The
+    // instance's own message is used when it has one, and a rate limit
+    // carries the wait it asked for.
+    private async kanbanError(res: Response): Promise<KanbanError> {
+        const text = await res.text().catch(() => '');
+        let message = extractVikunjaError(text, res.status);
+        const retryAfter = Number(res.headers.get('Retry-After') || '0') || 0;
+        if (res.status === 429) {
+            message =
+                message && !/too many requests/i.test(message)
+                    ? message
+                    : 'The Kanban server is rate-limiting logins. Try again shortly.';
+            if (retryAfter > 0) message = `${message} Retry in ${retryAfter}s.`;
         }
-
-        const data = await res.json();
-        if (!data.token) {
-            throw new Error('No token returned from server');
-        }
-        return data.token;
+        return new KanbanError(message, retryAfter);
     }
 
     renderLoginForm(container: HTMLElement): void {
@@ -288,11 +355,11 @@ export class KanbanManager {
                     <p class="kanban-login-desc">Enter your Vikunja instance URL and login credentials to view your boards.</p>
                     <div class="form-group">
                         <label for="kanban-url-input">Server URL</label>
-                        <input type="text" id="kanban-url-input" value="${localStorage.getItem('vikunja_url') || 'http://charon:3456'}" placeholder="http://localhost:3456">
+                        <input type="text" id="kanban-url-input" value="${localStorage.getItem(serverKey('vikunja_url')) || ''}" placeholder="http://localhost:3456">
                     </div>
                     <div class="form-group">
                         <label for="kanban-username-input">Username</label>
-                        <input type="text" id="kanban-username-input" value="${localStorage.getItem('vikunja_username') || ''}" placeholder="username">
+                        <input type="text" id="kanban-username-input" value="${localStorage.getItem(serverKey('vikunja_username')) || ''}" placeholder="username">
                     </div>
                     <div class="form-group">
                         <label for="kanban-password-input">Password</label>
@@ -350,21 +417,10 @@ export class KanbanManager {
             errorEl.classList.add('hidden');
 
             try {
-                const token = await this.attemptLogin(
-                    urlInput,
-                    usernameInput,
-                    passwordInput,
-                );
-                sessionStorage.setItem('vikunja_token', token);
-                localStorage.setItem('vikunja_url', urlInput);
-                localStorage.setItem('vikunja_username', usernameInput);
-
-                // Save or clear vault credentials (password + username + url).
-                // Vault is the durable store; localStorage is kept in sync
-                // for offline/autologin reads. Username/url now persist
-                // cross-browser via the backend so you don't retype USER.
+                // The server owns the session. Save the credentials first
+                // (the server logs in with them), then ask for the session.
                 if (rememberInput) {
-                    fetch('/api/config/kanban-vault', {
+                    await this.scopeFetch('/api/config/kanban-vault', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -372,16 +428,22 @@ export class KanbanManager {
                             username: usernameInput,
                             url: urlInput,
                         }),
-                    }).catch((e) => console.error('Vault save error:', e));
+                    });
                 } else {
-                    fetch('/api/config/kanban-vault', {
+                    await this.scopeFetch('/api/config/kanban-vault', {
                         method: 'DELETE',
-                    }).catch((e) => console.error('Vault delete error:', e));
+                    });
                 }
+                localStorage.setItem(serverKey('vikunja_url'), urlInput);
+                localStorage.setItem(
+                    serverKey('vikunja_username'),
+                    usernameInput,
+                );
 
+                await this.openServerSession();
                 await this.loadAndRenderBoard(container);
             } catch (err) {
-                errorEl.textContent = `Error: ${(err as Error).message}`;
+                errorEl.textContent = (err as Error).message;
                 errorEl.classList.remove('hidden');
                 loginBtn.disabled = false;
                 loginBtn.textContent = 'Connect';
@@ -443,7 +505,7 @@ export class KanbanManager {
             }
 
             let selectedProjectId: string | number = localStorage.getItem(
-                'vikunja_selected_project',
+                serverKey('vikunja_selected_project'),
             )!;
             let currentProject = projects.find(
                 (p: any) => String(p.id) === String(selectedProjectId),
@@ -456,7 +518,7 @@ export class KanbanManager {
                 // stored id at all; leaving it unwritten makes the rendered
                 // board and the stored selection disagree.
                 localStorage.setItem(
-                    'vikunja_selected_project',
+                    serverKey('vikunja_selected_project'),
                     String(selectedProjectId),
                 );
             }
@@ -554,10 +616,14 @@ export class KanbanManager {
                 (err as Error).message.includes('Session expired') &&
                 !isAutoRetry
             ) {
+                // The server refreshed the session once and the instance
+                // still refused it: the credentials are wrong or the
+                // instance forgot them. Ask for a fresh sign-in instead of
+                // logging in again — that loop is what reached the
+                // instance's rate limit.
                 console.log(
-                    'Session expired. Attempting automatic headless reconnect...',
+                    'Kanban session expired. Asking for a new sign-in...',
                 );
-                sessionStorage.removeItem('vikunja_token');
                 this.initTabContainer(container, true);
                 return;
             }
@@ -580,7 +646,11 @@ export class KanbanManager {
             container
                 .querySelector('#kanban-reconnect-btn')
                 ?.addEventListener('click', () => {
-                    sessionStorage.removeItem('vikunja_token');
+                    // Forget the saved credentials: the next init asks for
+                    // them again instead of failing on the same ones.
+                    void this.scopeFetch('/api/config/kanban-vault', {
+                        method: 'DELETE',
+                    }).catch((e) => console.error('Vault delete error:', e));
                     this.initTabContainer(container);
                 });
         } finally {
@@ -743,7 +813,7 @@ export class KanbanManager {
                 this.selectedNoteId = null;
             }
             localStorage.setItem(
-                'vikunja_selected_project',
+                serverKey('vikunja_selected_project'),
                 projectSelect.value,
             );
             this.loadAndRenderBoard(container);
@@ -898,10 +968,9 @@ export class KanbanManager {
         container
             .querySelector('#kanban-disconnect-btn')
             ?.addEventListener('click', () => {
-                sessionStorage.removeItem('vikunja_token');
-                fetch('/api/config/kanban-vault', { method: 'DELETE' }).catch(
-                    (e) => console.error('Vault delete error:', e),
-                );
+                void this.scopeFetch('/api/config/kanban-vault', {
+                    method: 'DELETE',
+                }).catch((e) => console.error('Vault delete error:', e));
                 this.initTabContainer(container);
             });
 
@@ -3709,50 +3778,9 @@ export class KanbanManager {
         existing.bucket_id = targetBucketId;
     }
 
-    // Vikunja's JWT expires while the board sits open, so the next thing the
-    // user touches 401s. Log back in from the saved vault credentials and let
-    // the caller retry, instead of making them reconnect by hand.
-    //
-    // Single-flight: a board refresh fires several requests at once, and all
-    // of them will 401 together. Without sharing the attempt they would each
-    // start their own login.
-    async reauthenticate(): Promise<boolean> {
-        if (this._reauthPromise) return this._reauthPromise;
-
-        this._reauthPromise = (async () => {
-            try {
-                const creds = await this.getSavedVaultCredentials();
-                // Keep localStorage in sync when vault adds a missing field
-                if (creds.username)
-                    localStorage.setItem('vikunja_username', creds.username);
-                if (creds.url) localStorage.setItem('vikunja_url', creds.url);
-                const password = creds.password;
-                const url = (
-                    creds.url ||
-                    localStorage.getItem('vikunja_url') ||
-                    ''
-                ).replace(/\/$/, '');
-                const username =
-                    creds.username || localStorage.getItem('vikunja_username');
-                if (!password || !username || !url) return false;
-
-                const token = await this.attemptLogin(url, username, password);
-                if (!token) return false;
-                sessionStorage.setItem('vikunja_token', token);
-                return true;
-            } catch (err) {
-                console.warn('Kanban re-authentication failed:', err);
-                return false;
-            }
-        })();
-
-        try {
-            return await this._reauthPromise;
-        } finally {
-            this._reauthPromise = null;
-        }
-    }
-
+    // Vikunja's session belongs to the server. It refreshes the token when
+    // the instance expires it, so the client never logs in and never holds a
+    // credential: the board simply asks the server for the data.
     async apiGet(path: string): Promise<any> {
         return this.apiRequest(path, 'GET');
     }
@@ -3769,10 +3797,11 @@ export class KanbanManager {
         return this.apiRequest(path, 'DELETE', body);
     }
 
-    // Make a request to the upstream Vikunja instance via the local
-    // /api/proxy. Handles auth, 401 -> drop token, and extracts a readable
-    // message from Vikunja's JSON error envelope instead of dumping raw
-    // HTML / JSON to the user.
+    // Make a request to the upstream Vikunja instance through the server.
+    // The server holds the session and refreshes it once on a 401, so the
+    // client never logs in and never carries a token. Errors are extracted
+    // from Vikunja's JSON error envelope instead of dumping raw HTML / JSON
+    // to the user.
     // assertAddressable refuses to put an unresolved id on the wire. Vikunja
     // answers /projects/NaN/tasks with a generic 400 "Invalid model provided.",
     // which tells the user nothing about the id that was never resolved. Fail
@@ -3800,47 +3829,25 @@ export class KanbanManager {
         }
     }
 
-    async apiRequest(
-        path: string,
-        method: string,
-        body?: any,
-        allowRetry: boolean = true,
-    ): Promise<any> {
+    async apiRequest(path: string, method: string, body?: any): Promise<any> {
         this.assertAddressable(path, body);
-        const token = sessionStorage.getItem('vikunja_token');
-        const url = localStorage.getItem('vikunja_url');
-        const proxyUrl = `/api/proxy?url=${encodeURIComponent(`${url}/api/v1${path}`)}`;
-
-        const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-        };
-        if (token && token !== 'null' && token !== 'undefined') {
-            // phi's own Authorization belongs to phi's access gate; the
-            // Vikunja token rides in a separate header that /api/proxy
-            // turns into the upstream's Authorization.
-            headers['X-Phi-Upstream-Authorization'] = `Bearer ${token}`;
-        }
-
-        const res = await fetch(proxyUrl, {
+        const res = await this.scopeFetch(`/api/kanban/v1${path}`, {
             method,
-            headers,
+            headers:
+                body == null
+                    ? undefined
+                    : { 'Content-Type': 'application/json' },
             body: body == null ? undefined : JSON.stringify(body),
         });
 
         if (res.status === 401) {
-            sessionStorage.removeItem('vikunja_token');
-            // One retry only: if the fresh token also 401s, the credentials
-            // are genuinely bad and looping would just hammer the server.
-            if (allowRetry && (await this.reauthenticate())) {
-                return this.apiRequest(path, method, body, false);
-            }
-            throw new Error('Session expired. Please reconnect.');
+            // The server already refreshed the session once and still saw a
+            // 401: the credentials are the problem, not the client. Asking
+            // for a new session here is what used to loop.
+            throw new KanbanError('Session expired. Sign in again.');
         }
 
-        if (!res.ok) {
-            const text = await res.text();
-            throw new Error(extractVikunjaError(text, res.status));
-        }
+        if (!res.ok) throw await this.kanbanError(res);
 
         // Some Vikunja endpoints return 204 No Content (e.g. some PUTs).
         const ctype = res.headers.get('content-type') || '';

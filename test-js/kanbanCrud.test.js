@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { setupDomHarness, mockFetch } from './_dom.js';
+import { setupDomHarness, mockFetch, boardPath } from './_dom.js';
 import { KanbanManager } from '../web/kanban.js';
 
 // Coverage for the v0.7.15 kanban feature-completeness additions:
@@ -43,8 +43,8 @@ describe('KanbanManager.deleteTask', () => {
         mockFetch(() => ({ ok: true, status: 204 }));
         await c.deleteTask(2);
         const [url, opts] = fetch.mock.calls[0];
-        const decoded = decodeURIComponent(url.split('url=')[1]);
-        expect(decoded).toBe('http://vik.local/api/v1/tasks/2');
+        const decoded = boardPath(url);
+        expect(decoded).toBe('/tasks/2');
         expect(opts.method).toBe('DELETE');
         expect(c.taskCache[2]).toBeUndefined();
         expect(c.taskCache[1]).toBeTruthy();
@@ -82,10 +82,8 @@ describe('KanbanManager.createBucket', () => {
         mockFetch(() => ({ ok: true, json: { id: 99, title: 'In Review' } }));
         await c.createBucket('In Review');
         const [url, opts] = fetch.mock.calls[0];
-        const decoded = decodeURIComponent(url.split('url=')[1]);
-        expect(decoded).toBe(
-            'http://vik.local/api/v1/projects/9/views/5/buckets',
-        );
+        const decoded = boardPath(url);
+        expect(decoded).toBe('/projects/9/views/5/buckets');
         expect(opts.method).toBe('PUT');
         expect(JSON.parse(opts.body)).toEqual({ title: 'In Review' });
     });
@@ -109,10 +107,8 @@ describe('KanbanManager.updateBucket', () => {
         mockFetch(() => ({ ok: true, json: {} }));
         await c.updateBucket(10, 'Renamed');
         const [url, opts] = fetch.mock.calls[0];
-        const decoded = decodeURIComponent(url.split('url=')[1]);
-        expect(decoded).toBe(
-            'http://vik.local/api/v1/projects/9/views/5/buckets/10',
-        );
+        const decoded = boardPath(url);
+        expect(decoded).toBe('/projects/9/views/5/buckets/10');
         expect(opts.method).toBe('POST');
         expect(JSON.parse(opts.body)).toEqual({ title: 'Renamed' });
     });
@@ -129,10 +125,8 @@ describe('KanbanManager.deleteBucket', () => {
         mockFetch(() => ({ ok: true, status: 204 }));
         await c.deleteBucket(10);
         const [url, opts] = fetch.mock.calls[0];
-        const decoded = decodeURIComponent(url.split('url=')[1]);
-        expect(decoded).toBe(
-            'http://vik.local/api/v1/projects/9/views/5/buckets/10',
-        );
+        const decoded = boardPath(url);
+        expect(decoded).toBe('/projects/9/views/5/buckets/10');
         expect(opts.method).toBe('DELETE');
         expect(c.taskCache[1]).toBeUndefined();
         expect(c.taskCache[2]).toBeUndefined();
@@ -157,8 +151,8 @@ describe('KanbanManager label management', () => {
         ]);
         const labels = await c.fetchAllLabels();
         const [url, opts] = fetch.mock.calls[0];
-        const decoded = decodeURIComponent(url.split('url=')[1]);
-        expect(decoded).toBe('http://vik.local/api/v1/labels');
+        const decoded = boardPath(url);
+        expect(decoded).toBe('/labels');
         expect(opts.method).toBe('GET');
         expect(labels).toHaveLength(2);
     });
@@ -169,8 +163,8 @@ describe('KanbanManager label management', () => {
         mockFetch(() => ({ ok: true, json: updated }));
         const ret = await c.addLabelToTask(1, 7);
         const [url, opts] = fetch.mock.calls[0];
-        const decoded = decodeURIComponent(url.split('url=')[1]);
-        expect(decoded).toBe('http://vik.local/api/v1/tasks/1/labels');
+        const decoded = boardPath(url);
+        expect(decoded).toBe('/tasks/1/labels');
         expect(opts.method).toBe('PUT');
         expect(JSON.parse(opts.body)).toEqual({ label_id: 7 });
         expect(ret).toEqual(updated);
@@ -186,8 +180,8 @@ describe('KanbanManager label management', () => {
         mockFetch(() => ({ ok: true, status: 204 }));
         await c.removeLabelFromTask(1, 7);
         const [url, opts] = fetch.mock.calls[0];
-        const decoded = decodeURIComponent(url.split('url=')[1]);
-        expect(decoded).toBe('http://vik.local/api/v1/tasks/1/labels/7');
+        const decoded = boardPath(url);
+        expect(decoded).toBe('/tasks/1/labels/7');
         expect(opts.method).toBe('DELETE');
         expect(c.taskCache[1].labels).toEqual([{ id: 8, title: 'b' }]);
     });

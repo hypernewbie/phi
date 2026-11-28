@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { setupDomHarness, mockFetch } from './_dom.js';
+import { setupDomHarness, mockFetch, boardTarget } from './_dom.js';
 import { KanbanManager } from '../web/kanban.js';
 
 // Incremental board rendering.
@@ -333,12 +333,8 @@ describe('the cache never keeps a value the server did not accept', () => {
         const { c } = mountBoard();
         const calls = [];
         mockFetch((url, opts) => {
-            const target = decodeURIComponent(
-                String(url).split('url=')[1] || '',
-            );
-            calls.push(
-                `${opts?.method || 'GET'} ${target.replace(/^.*\/api\/v1/, '')}`,
-            );
+            const target = boardTarget(url);
+            calls.push(`${opts?.method || 'GET'} ${target}`);
             if ((opts?.method || 'GET') === 'GET') {
                 return {
                     ok: true,
@@ -541,9 +537,7 @@ describe('feature roll-ups', () => {
 describe('refreshBoard', () => {
     function stubBoardFetch(_c, tasks) {
         mockFetch((url) => {
-            const target = decodeURIComponent(
-                String(url).split('url=')[1] || '',
-            );
+            const target = boardTarget(url);
             if (target.includes('/views?')) return { ok: true, json: [VIEW] };
             if (target.includes('/views/5/tasks')) {
                 return {

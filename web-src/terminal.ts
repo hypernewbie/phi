@@ -11606,7 +11606,11 @@ export class TabManager {
         }
 
         if (this.app?.kanbanManager && tab.isKanban) {
-            this.app.kanbanManager.cleanup?.();
+            // A detach that preserves storage is a backend switch, not a
+            // closed tab: the board keeps its place.
+            this.app.kanbanManager.cleanup?.({
+                preserveOpenFlag: preserveStorage,
+            });
         }
         if (this.app?.reviewManager && tab.isReview) {
             this.app.reviewManager.cleanup?.();

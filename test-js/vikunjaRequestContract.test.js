@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { setupDomHarness, mockFetch } from './_dom.js';
+import { setupDomHarness, mockFetch, boardPath } from './_dom.js';
 import { KanbanManager } from '../web/kanban.js';
 
 // Every request phi sends to Vikunja, validated against the vendored swagger.
@@ -80,13 +80,12 @@ function resolveBodySchema(op) {
 
 // Turn a captured fetch() call into the upstream Vikunja request.
 function decodeRequest([url, opts]) {
-    const proxied = decodeURIComponent(url.split('url=')[1]);
-    const path = proxied.replace(/^.*\/api\/v1/, '').split('?')[0];
+    const path = boardPath(url);
     return {
         path,
         method: (opts.method || 'GET').toUpperCase(),
         body: opts.body ? JSON.parse(opts.body) : null,
-        raw: proxied,
+        raw: String(url),
     };
 }
 

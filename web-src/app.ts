@@ -1259,7 +1259,11 @@ export class App {
         else document.querySelector('.settings-overlay')?.remove();
         this.sessionsManager?.closeWorkspaceModal?.();
         this.markdownManager?.closeModal?.();
-        this.kanbanManager?.cleanup?.();
+        // A backend switch is not a closed tab: the board keeps its place
+        // and is re-pointed at the new backend. cleanup() would delete the
+        // board and its open flag, and the user would come back to a tab
+        // that no longer existed.
+        this.kanbanManager?.resetForBackend?.();
         document
             .getElementById('sidebar-panel')
             ?.classList.remove('drawer-open');
@@ -1313,6 +1317,11 @@ export class App {
                 );
             }
             this.paintBackendFromStore(nextStore);
+            // The board is not a server terminal, so the per-backend store
+            // does not carry it and the switch drops the tab. Re-open it
+            // when the user had it open: the board belongs to the app, not
+            // to a backend.
+            this._restoreKanbanAfterSwitch(prevProfileId);
             const savedTheme = localStorage.getItem(
                 serverKey('phi_theme_color'),
             );
@@ -1386,6 +1395,27 @@ export class App {
         // background refresh stops at its next await boundary.
         void this.revalidate(scope).catch(() => {});
         return true;
+    }
+
+    // _restoreKanbanAfterSwitch re-opens the Kanban board on the backend the
+    // user just switched to. The board is a local tab, not a server
+    // terminal, so the per-backend store cannot restore it.
+    //
+    // The board belongs to the app, not to a backend: it was open before the
+    // switch, so it stays open. The open flag is per backend, so the flag of
+    // the backend we came from says whether the user had it.
+    private _restoreKanbanAfterSwitch(prevProfileId: string | null): void {
+        try {
+            if (!this.kanbanManager) return;
+            const wasOpen = prevProfileId
+                ? localStorage.getItem(`phi_kanban_open:${prevProfileId}`) ===
+                  '1'
+                : localStorage.getItem('phi_kanban_open') === '1';
+            if (!wasOpen) return;
+            void this.kanbanManager.openBoard();
+        } catch {
+            /* the board is optional */
+        }
     }
 
     forgetBackend(profileId: string) {
