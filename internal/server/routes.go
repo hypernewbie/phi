@@ -60,6 +60,8 @@ func (app *Server) registerRoutes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("/api/config/simplepush/test", app.handleTestSimplepush)
 	mux.HandleFunc("/api/config/kanban-vault", app.handleKanbanVault)
+	mux.HandleFunc("/api/kanban/session", app.handleKanbanSession)
+	mux.HandleFunc("/api/kanban/v1/", app.handleKanbanAPI)
 	mux.HandleFunc("/api/config/export", app.handleConfigExport)
 	mux.HandleFunc("/api/config/import", app.handleConfigImport)
 	mux.HandleFunc("/api/config/export-models", app.handleConfigExportModels)
@@ -131,7 +133,7 @@ func (app *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/clipboard", app.handleGetClipboard)
 	mux.HandleFunc("/api/system/cpu", app.handleSystemCPU)
 	mux.HandleFunc("/api/session-transcript", app.handleGetSessionTranscript)
-	mux.HandleFunc("/api/proxy", handleProxy)
+	mux.HandleFunc("/api/proxy", app.handleProxy)
 	mux.HandleFunc("/api/sync/messages/", app.handleSyncMessages)
 	mux.HandleFunc("/api/sync/messages", app.handleSyncMessages)
 	// Addressed messages, newest last. Local read only; the mesh holds them.

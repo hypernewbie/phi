@@ -103,6 +103,16 @@ type Server struct {
 	promptHistoryStore                 *prompt_history.Store
 	promptHistoryLoadErr               error
 	testCustomBackendsDir              string
+	// The Kanban (Vikunja) session belongs to the server: one login per
+	// token lifetime serves every client of this backend, and the upstream
+	// rate limit can never be walked into by a client.
+	kanbanMu            sync.Mutex
+	kanbanToken         string
+	kanbanTokenExpiry   time.Time
+	kanbanCooldownUntil time.Time
+	kanbanLastLogin     time.Time
+	kanbanLoginFailed   bool
+	kanbanLoginCall     *kanbanLoginCall
 }
 
 // New constructs an application without opening files, starting goroutines, or

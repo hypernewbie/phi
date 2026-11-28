@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -835,10 +836,48 @@ const (
 	proxyUpstreamMarkHeader = "X-Phi-Upstream"
 )
 
-func handleProxy(w http.ResponseWriter, r *http.Request) {
+// proxyAllowedHost reports whether the proxy may reach this target.
+//
+// The proxy exists for the operator's own peers: the Kanban instance and the
+// sync coordinator. Both are configured, so both are known. Anything else is
+// refused: a proxy that reaches any host is a server-side request forgery
+// waiting for a stray link.
+func (app *Server) proxyAllowedHost(target *url.URL) bool {
+	cfg := app.loadConfig()
+	for _, configured := range []string{cfg.KanbanURL, cfg.SyncCoordinator} {
+		configured = strings.TrimSpace(configured)
+		if configured == "" {
+			continue
+		}
+		parsed, err := url.Parse(configured)
+		if err != nil || parsed.Host == "" {
+			continue
+		}
+		if strings.EqualFold(parsed.Host, target.Host) {
+			return true
+		}
+	}
+	return false
+}
+
+// handleProxy forwards one request to an operator-configured peer.
+//
+// The upstream's own cookies never reach phi's origin: a Set-Cookie from the
+// peer would plant a foreign credential in the browser's jar for phi's
+// origin.
+func (app *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	target := r.URL.Query().Get("url")
 	if target == "" {
 		http.Error(w, "Missing url parameter", http.StatusBadRequest)
+		return
+	}
+	parsed, err := url.Parse(target)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		http.Error(w, "The proxy target must be an http(s) URL", http.StatusBadRequest)
+		return
+	}
+	if !app.proxyAllowedHost(parsed) {
+		http.Error(w, "The proxy target is not a configured peer", http.StatusForbidden)
 		return
 	}
 
@@ -876,8 +915,16 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// Copy headers from proxy response to client response
+	// Copy headers from the proxy response to the client response. An
+	// upstream cookie is never copied: it belongs to the upstream's origin,
+	// not to phi's.
 	for k, vv := range resp.Header {
+		switch http.CanonicalHeaderKey(k) {
+		case "Set-Cookie", "Connection", "Transfer-Encoding", "Keep-Alive",
+			"Proxy-Authenticate", "Proxy-Authorization", "Te", "Trailer",
+			"Upgrade", "Content-Length":
+			continue
+		}
 		for _, v := range vv {
 			w.Header().Add(k, v)
 		}

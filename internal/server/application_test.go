@@ -1490,6 +1490,7 @@ func TestHandleGetSessionTranscript_EmptyPi(t *testing.T) {
 }
 
 func TestHandleProxy_Success(t *testing.T) {
+	withTempConfig(t)
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Errorf("Expected method POST, got %s", r.Method)
@@ -1517,8 +1518,13 @@ func TestHandleProxy_Success(t *testing.T) {
 	req.Header.Set("Cookie", "phi_session=secret")
 	req.Header.Set("Content-Type", "application/json")
 
+	// The proxy only reaches the operator's configured peers.
+	cfg := testServer.loadConfig()
+	cfg.KanbanURL = mockServer.URL
+	testServer.saveConfig(cfg)
+
 	w := httptest.NewRecorder()
-	handleProxy(w, req)
+	testServer.handleProxy(w, req)
 	if w.Header().Get("X-Phi-Upstream") != "1" {
 		t.Errorf("response not marked as upstream answer")
 	}
@@ -1536,12 +1542,61 @@ func TestHandleProxy_Success(t *testing.T) {
 }
 
 func TestHandleProxy_MissingUrl(t *testing.T) {
+	withTempConfig(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/proxy", nil)
 	w := httptest.NewRecorder()
-	handleProxy(w, req)
+	testServer.handleProxy(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("Expected status 400 for missing url, got %d", w.Code)
+	}
+}
+
+// A proxy that reaches any host is a server-side request forgery waiting to
+// happen. Only the operator's configured peers are reachable.
+func TestHandleProxy_RefusesUnconfiguredTarget(t *testing.T) {
+	withTempConfig(t)
+	hit := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = true
+	}))
+	defer upstream.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/proxy?url="+url.QueryEscape(upstream.URL), nil)
+	w := httptest.NewRecorder()
+	testServer.handleProxy(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("Expected status 403 for an unconfigured target, got %d", w.Code)
+	}
+	if hit {
+		t.Error("the proxy reached an unconfigured target")
+	}
+}
+
+// An upstream cookie belongs to the upstream's origin. It must never be
+// planted in phi's origin, where any script on the page could read it.
+func TestHandleProxy_DropsUpstreamCookie(t *testing.T) {
+	withTempConfig(t)
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: "upstream_session", Value: "secret", Path: "/"})
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mockServer.Close()
+
+	cfg := testServer.loadConfig()
+	cfg.KanbanURL = mockServer.URL
+	testServer.saveConfig(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/proxy?url="+url.QueryEscape(mockServer.URL), nil)
+	w := httptest.NewRecorder()
+	testServer.handleProxy(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
+	}
+	if got := w.Header().Get("Set-Cookie"); got != "" {
+		t.Errorf("upstream cookie leaked into phi's origin: %q", got)
 	}
 }
 
@@ -2089,7 +2144,8 @@ func TestKanbanVaultAPI(t *testing.T) {
 		t.Errorf("Expected KanbanURL 'http://charon:3456', got %q", cfg.KanbanURL)
 	}
 
-	// GET password
+	// GET: the browser never receives the password. The server owns the
+	// session, so the client only needs to know that credentials exist.
 	reqGet := httptest.NewRequest(http.MethodGet, "/api/config/kanban-vault", nil)
 	wGet := httptest.NewRecorder()
 	testServer.handleKanbanVault(wGet, reqGet)
@@ -2097,10 +2153,13 @@ func TestKanbanVaultAPI(t *testing.T) {
 	if wGet.Code != http.StatusOK {
 		t.Fatalf("handleKanbanVault GET failed: %d", wGet.Code)
 	}
-	var getRes map[string]string
+	var getRes map[string]any
 	json.NewDecoder(wGet.Body).Decode(&getRes)
-	if getRes["password"] != "my_test_password" {
-		t.Errorf("Expected decrypted password 'my_test_password', got %q", getRes["password"])
+	if _, leaked := getRes["password"]; leaked {
+		t.Errorf("the vault handed the password to the browser: %v", getRes)
+	}
+	if getRes["has_password"] != true {
+		t.Errorf("Expected has_password true, got %v", getRes["has_password"])
 	}
 	if getRes["username"] != "alice" {
 		t.Errorf("Expected username 'alice', got %q", getRes["username"])
@@ -2769,7 +2828,7 @@ func TestHandleProxy_RequiresAccessAuthAndNeverForwardsPhiBearer(t *testing.T) {
 	}))
 	defer upstream.Close()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/proxy", handleProxy)
+	mux.HandleFunc("/api/proxy", testServer.handleProxy)
 	protected := testServer.accessManager.Middleware(mux)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/proxy?url="+url.QueryEscape(upstream.URL), nil)
